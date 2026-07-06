@@ -425,12 +425,12 @@ def _build_wrecking_ball() -> World:
     w.walls.append(floor)
     pivot = _add_body(w, -0.5, 3.4, 0.06, 1.0, locked=True,
                       color=(120, 125, 135))
-    ball = _add_body(w, -2.8, 2.2, 0.35, 22.0, e=0.2, mu=0.4,
+    ball = _add_body(w, -2.95, 2.15, 0.35, 22.0, e=0.2, mu=0.4,
                      color=(90, 95, 105), name="Wrecking ball")
     w.links.append(DistanceLink(pivot, ball))
     rng = Random(3)
     r = 0.16
-    tower_x = 1.25
+    tower_x = 0.90
     for col_i in range(3):
         for row in range(6):
             _add_body(w, tower_x + col_i * (2 * r + 0.01), r + row * (2 * r + 0.005),
