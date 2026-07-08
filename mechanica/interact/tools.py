@@ -23,6 +23,7 @@ import pygame
 from mechanica.core.vec import Vec2
 from mechanica.engine.body import Body, Wall
 from mechanica.engine.links import DistanceLink, SpringLink
+from mechanica.engine.world import safe_drag_speed
 from mechanica.render.draw import VEL_ARROW_SCALE, draw_velocity_handle, snap_step
 
 TOOLS = ["select", "pan", "body", "anchor", "wall", "rod", "rope", "spring", "eraser"]
@@ -52,10 +53,9 @@ class CanvasController:
         self.app = app
         self.tool = "select"
         self.hover: object | None = None
-        # transient interaction state
-        self._drag_items: list[tuple[Body, Vec2]] = []
+        # transient interaction state: (body, grab offset, max drag speed)
+        self._drag_items: list[tuple[Body, Vec2, float]] = []
         self._drag_moved = False
-        self._drag_trace: list[tuple[int, float, float]] = []  # (ms, wx, wy)
         self._panning = False
         self._pan_last = (0, 0)
         self._rubber: tuple[int, int] | None = None
@@ -79,6 +79,43 @@ class CanvasController:
             self._wall_start = None
             return True
         return False
+
+    def abort_drag(self) -> None:
+        """Drop any in-progress drag without a throw (e.g. world replaced)."""
+        for body, _, _ in self._drag_items:
+            body.held = False
+        self._drag_items = []
+        self._vel_drag = None
+        self._wall_drag = None
+        self._wall_grab = None
+        self.app.world.drag_pins.clear()
+
+    def update_drag(self, mouse) -> None:
+        """Refresh the drag every frame (mouse-motion events stop while the
+        cursor is parked, but the simulation keeps running).
+
+        While playing, held bodies are not teleported: the world moves each
+        one toward its pin target at a bounded, spring-aware speed inside
+        the physics substeps, so a fast flick cannot inject unbounded energy
+        into whatever the body is attached to. While paused it is pure
+        editing, so the body snaps straight to the cursor.
+        """
+        if not self._drag_items:
+            return
+        app = self.app
+        world_p = app.camera.to_world(*mouse)
+        if app.playing:
+            pins = app.world.drag_pins
+            for body, offset, v_max in self._drag_items:
+                t = self._snap(Vec2(world_p.x + offset.x, world_p.y + offset.y))
+                pins[body] = (t.x, t.y, v_max)
+        else:
+            app.world.drag_pins.clear()
+            for body, offset, _ in self._drag_items:
+                t = self._snap(Vec2(world_p.x + offset.x, world_p.y + offset.y))
+                body.pos.set_vec(t)
+                body.vel.set(0.0, 0.0)
+                body.omega = 0.0
 
     def _snap(self, p: Vec2) -> Vec2:
         if not self.app.view.snap:
@@ -223,14 +260,22 @@ class CanvasController:
         app = self.app
         shift = pygame.key.get_mods() & pygame.KMOD_SHIFT
 
-        # velocity handle of a single selected body?
+        # velocity handle of a single selected body? Only when the arrow tip
+        # sticks out of the body - otherwise a click on a resting body would
+        # grab the (zero-length) arrow and fling it instead of moving it.
         if len(app.selection) == 1 and isinstance(app.selection[0], Body):
             body = app.selection[0]
             if not body.locked:
                 s = VEL_ARROW_SCALE * app.view.vector_scale
                 tip = app.camera.to_screen_xy(body.pos.x + body.vel.x * s,
                                               body.pos.y + body.vel.y * s)
-                if abs(mouse[0] - tip[0]) <= 8 and abs(mouse[1] - tip[1]) <= 8:
+                centre = app.camera.to_screen(body.pos)
+                arrow_px = ((tip[0] - centre[0]) ** 2
+                            + (tip[1] - centre[1]) ** 2) ** 0.5
+                clear_px = body.radius * app.camera.zoom + 6.0
+                if (arrow_px > clear_px
+                        and abs(mouse[0] - tip[0]) <= 8
+                        and abs(mouse[1] - tip[1]) <= 8):
                     self._vel_drag = body
                     return True
 
@@ -242,7 +287,14 @@ class CanvasController:
             return True
 
         if isinstance(picked, Wall):
-            app.selection = [picked]
+            if shift:
+                if picked in app.selection:
+                    app.selection.remove(picked)
+                else:
+                    app.selection.append(picked)
+                return True
+            if picked not in app.selection:
+                app.selection = [picked]
             # endpoint handles
             for i, p in enumerate((picked.a, picked.b)):
                 sp = app.camera.to_screen(p)
@@ -254,7 +306,13 @@ class CanvasController:
             return True
 
         if isinstance(picked, (DistanceLink, SpringLink)):
-            app.selection = [picked]
+            if shift:
+                if picked in app.selection:
+                    app.selection.remove(picked)
+                else:
+                    app.selection.append(picked)
+            elif picked not in app.selection:
+                app.selection = [picked]
             return True
 
         # a body
@@ -265,11 +323,19 @@ class CanvasController:
                 app.selection.append(picked)
         elif picked not in app.selection:
             app.selection = [picked]
-        # begin dragging all selected bodies
-        self._drag_items = [(b, b.pos - world_p) for b in app.selection
-                            if isinstance(b, Body)]
+        # begin dragging all selected bodies; held bodies act as infinite
+        # mass so they stay put while everything else collides with them.
+        # The base drag speed scales with the view (a few screen-widths per
+        # second) and is tightened per body by its attached springs.
+        base_speed = 2.5 * app.canvas_rect().w / app.camera.zoom
+        self._drag_items = [
+            (b, b.pos - world_p, safe_drag_speed(app.world, b, base_speed))
+            for b in app.selection if isinstance(b, Body)]
+        for b, _, _ in self._drag_items:
+            b.held = True
+            b.vel.set(0.0, 0.0)
+            b.omega = 0.0
         self._drag_moved = False
-        self._drag_trace = [(pygame.time.get_ticks(), world_p.x, world_p.y)]
         return True
 
     # ------------------------------------------------------------------ motion
@@ -301,15 +367,9 @@ class CanvasController:
             self._drag_moved = True
             return True
         if self._drag_items:
-            for body, offset in self._drag_items:
-                target = self._snap(Vec2(world_p.x + offset.x, world_p.y + offset.y))
-                body.pos.set_vec(target)
-                body.vel.set(0, 0)
-                body.omega = 0.0
+            # update_drag() moves the bodies once per frame; here we only
+            # note that the drag actually moved (for undo and throwing)
             self._drag_moved = True
-            self._drag_trace.append((pygame.time.get_ticks(), world_p.x, world_p.y))
-            if len(self._drag_trace) > 6:
-                del self._drag_trace[0]
             return True
         if self._rubber is not None:
             return True
@@ -324,15 +384,21 @@ class CanvasController:
             self._panning = False
             handled = True
         if self._vel_drag is not None or self._wall_drag is not None or self._drag_items:
-            if self._drag_items and self._drag_moved and app.playing:
-                self._throw_bodies()
+            # While playing, a held body's velocity is already the speed its
+            # pin was moving at (zero if the cursor was parked), so releasing
+            # mid-swing throws it and releasing at rest just lets it go.
+            throw = app.playing and self._drag_moved
+            for body, _, _ in self._drag_items:
+                body.held = False
+                if not throw:
+                    body.vel.set(0.0, 0.0)
+            app.world.drag_pins.clear()
             if self._drag_moved:
                 app.push_undo()
             self._vel_drag = None
             self._wall_drag = None
             self._wall_grab = None
             self._drag_items = []
-            self._drag_trace = []
             handled = True
         if self._rubber is not None:
             x0, y0 = self._rubber
@@ -340,14 +406,11 @@ class CanvasController:
             rect = pygame.Rect(min(x0, x1), min(y0, y1), abs(x1 - x0), abs(y1 - y0))
             if rect.w > 4 and rect.h > 4:
                 shift = pygame.key.get_mods() & pygame.KMOD_SHIFT
-                found = []
-                for body in app.world.bodies:
-                    if rect.collidepoint(app.camera.to_screen(body.pos)):
-                        found.append(body)
+                found = self._box_contents(rect)
                 if shift:
-                    for b in found:
-                        if b not in app.selection:
-                            app.selection.append(b)
+                    for obj in found:
+                        if obj not in app.selection:
+                            app.selection.append(obj)
                 else:
                     app.selection = found
             self._rubber = None
@@ -363,27 +426,32 @@ class CanvasController:
             handled = True
         return handled
 
-    def _throw_bodies(self) -> None:
-        """Give dragged bodies the velocity of the mouse at release, so a
-        drag while the simulation runs behaves like a throw."""
-        trace = self._drag_trace
-        if len(trace) < 2:
-            return
-        now = pygame.time.get_ticks()
-        t0, x0, y0 = trace[0]
-        t1, x1, y1 = trace[-1]
-        span = (t1 - t0) / 1000.0
-        if span < 0.02 or now - t1 > 120:   # too short, or mouse was parked
-            return
-        vx = (x1 - x0) / span
-        vy = (y1 - y0) / span
-        speed = (vx * vx + vy * vy) ** 0.5
-        if speed > 50.0:                    # tame numerical spikes
-            vx *= 50.0 / speed
-            vy *= 50.0 / speed
-        for body, _ in self._drag_items:
-            if not body.locked:
-                body.vel.set(vx, vy)
+    def _box_contents(self, rect: pygame.Rect) -> list:
+        """Everything inside a rubber-band rect, honouring the type filter
+        the user set in the Inspector (bodies / walls / springs / rods).
+        Bodies count by centre; walls and links need both ends inside."""
+        app = self.app
+        cam = app.camera
+        flt = app.box_filter
+        found: list = []
+        if flt.get("bodies", True):
+            for body in app.world.bodies:
+                if rect.collidepoint(cam.to_screen(body.pos)):
+                    found.append(body)
+        if flt.get("walls", True):
+            for wall in app.world.walls:
+                if (rect.collidepoint(cam.to_screen(wall.a))
+                        and rect.collidepoint(cam.to_screen(wall.b))):
+                    found.append(wall)
+        want_springs = flt.get("springs", True)
+        want_rods = flt.get("rods", True)
+        if want_springs or want_rods:
+            for link in app.world.links:
+                if want_springs if isinstance(link, SpringLink) else want_rods:
+                    if (rect.collidepoint(cam.to_screen(link.a.pos))
+                            and rect.collidepoint(cam.to_screen(link.b.pos))):
+                        found.append(link)
+        return found
 
     def _constrained_wall_end(self, mouse) -> Vec2:
         end = self._snap(self.app.camera.to_world(*mouse))

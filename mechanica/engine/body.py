@@ -32,7 +32,8 @@ class Body:
     __slots__ = (
         "id", "name", "pos", "vel", "angle", "omega", "mass", "radius",
         "restitution", "friction", "const_force", "locked", "color",
-        "collides", "acc", "_acc0", "_prev", "_corr_x", "_corr_y",
+        "collides", "held", "acc", "_prev", "_corr_x", "_corr_y",
+        "_idx",
     )
 
     _next_id = 1
@@ -53,18 +54,23 @@ class Body:
         self.const_force = Vec2()   # user-applied constant force, N
         self.locked = False
         self.collides = True
+        # transient: True while the user holds the mouse on this body. A held
+        # body acts as infinite mass (it stays pinned under the cursor) but
+        # everything else still collides with it. Never serialized.
+        self.held = False
         self.color = color or BODY_PALETTE[self.id % len(BODY_PALETTE)]
         # scratch state used by the solver
         self.acc = Vec2()
-        self._acc0 = Vec2()
         self._prev = Vec2()
         self._corr_x = 0.0
         self._corr_y = 0.0
+        self._idx = 0   # position in World.bodies, stamped each step
 
     # --- derived quantities ------------------------------------------------
     @property
     def inv_mass(self) -> float:
-        return 0.0 if (self.locked or self.mass <= 0.0) else 1.0 / self.mass
+        return 0.0 if (self.locked or self.held or self.mass <= 0.0) \
+            else 1.0 / self.mass
 
     @property
     def inertia(self) -> float:
@@ -73,7 +79,7 @@ class Body:
 
     @property
     def inv_inertia(self) -> float:
-        if self.locked or self.mass <= 0.0 or self.radius <= 0.0:
+        if self.locked or self.held or self.mass <= 0.0 or self.radius <= 0.0:
             return 0.0
         return 2.0 / (self.mass * self.radius * self.radius)
 

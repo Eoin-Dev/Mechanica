@@ -23,6 +23,7 @@ class UIState:
         self.tooltip: str = ""
         self.tooltip_timer: float = 0.0
         self._last_hover_key: object = None
+        self._hovered_this_frame = False
 
     def set_focus(self, widget: "TextEdit | None") -> None:
         if self.focus is widget:
@@ -31,13 +32,25 @@ class UIState:
             self.focus.blur(commit=True)
         self.focus = widget
 
+    def begin_frame(self) -> None:
+        self._hovered_this_frame = False
+
     def note_hover(self, key: object, tooltip: str, dt: float) -> None:
+        self._hovered_this_frame = True
         if key == self._last_hover_key:
             self.tooltip_timer += dt
         else:
             self._last_hover_key = key
             self.tooltip_timer = 0.0
         self.tooltip = tooltip if self.tooltip_timer > 0.45 else ""
+
+    def end_frame(self, blocked: bool = False) -> None:
+        """Drop the tooltip once the cursor leaves every widget (or a modal
+        overlay covers the panels), so it can never stick around."""
+        if blocked or not self._hovered_this_frame:
+            self.tooltip = ""
+            self.tooltip_timer = 0.0
+            self._last_hover_key = None
 
 
 class Widget:

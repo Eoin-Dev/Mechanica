@@ -73,8 +73,9 @@ class Toolbar(PanelBase):
         self.widgets.append(Slider((x, y + 3, 190, 24), "Speed",
                                    lambda: app.speed,
                                    lambda v: setattr(app, "speed", v),
-                                   0.05, 5.0, app.ui, "x", "{:.2f}", log=True,
-                                   tooltip="Simulation speed multiplier"))
+                                   0.01, 20.0, app.ui, "x", "{:.2f}", log=True,
+                                   tooltip="Simulation speed multiplier "
+                                           "(0.01x slow motion to 20x fast-forward)"))
         x += 200
         self.widgets.append(Label((x, 0, 30, TOOLBAR_H), "t =", 13, theme.TEXT_DIM))
         self._time_edit = TextEdit((x + 26, y + 3, 78, 24),
@@ -236,6 +237,25 @@ class Inspector(PanelBase):
         self.tab = t
         self.scroll = 0
 
+    # -- name helper
+    def _name_edit(self, obj) -> None:
+        row = self._row(24)
+        self.widgets.append(Label((row.x, row.y, 44, row.h), "Name", 12,
+                                  theme.TEXT_DIM))
+
+        def commit(s: str) -> bool:
+            s = s.strip()
+            if not s:
+                return False
+            obj.name = s
+            self.app.push_undo()
+            return True
+
+        te = TextEdit((row.x + 48, row.y, row.w - 48, row.h),
+                      lambda: obj.name, commit, self.app.ui)
+        te.tooltip = "Rename this object (shown with 'Body labels' in View)"
+        self.widgets.append(te)
+
     # -- numeric helper
     def _num_edit(self, rect, label: str, get, set_, unit: str = "") -> None:
         self.widgets.append(Label((rect.x, rect.y, 44, rect.h), label, 12,
@@ -268,36 +288,43 @@ class Inspector(PanelBase):
         if not sel:
             for line in ["Nothing selected.", "",
                          "Click an object with the Select tool,",
-                         "or drag a box around several bodies.",
-                         "Shift-click adds to the selection.", "",
-                         "Use the left palette to add bodies,",
-                         "walls, rods, ropes and springs."]:
+                         "or drag a box around several objects.",
+                         "Shift-click adds to the selection."]:
                 self.widgets.append(Label(self._row(18), line, 12, theme.TEXT_DIM))
+            self.widgets.append(SectionLabel(self._row(22), "Box select picks up"))
+            for key, label in (("bodies", "Bodies / particles"),
+                               ("walls", "Walls"),
+                               ("springs", "Springs"),
+                               ("rods", "Rods & ropes")):
+                self.widgets.append(Checkbox(
+                    self._row(22), label,
+                    (lambda k=key: app.box_filter[k]),
+                    (lambda v, k=key: app.box_filter.__setitem__(k, v)),
+                    "Object types included when you drag a selection box"))
             return
-        bodies = [o for o in sel if isinstance(o, Body)]
         if len(sel) == 1 and isinstance(sel[0], Body):
             self._build_single_body(sel[0])
         elif len(sel) == 1 and isinstance(sel[0], Wall):
             self._build_wall(sel[0])
         elif len(sel) == 1:
             self._build_link(sel[0])
-        elif bodies:
-            self._build_multi(bodies)
+        else:
+            self._build_multi(sel)
 
     def _commit(self) -> None:
         self.app.push_undo()
 
     def _build_single_body(self, b: Body) -> None:
         app = self.app
-        self.widgets.append(Label(self._row(22), lambda: b.name, 14, theme.TEXT,
-                                  True))
+        self._name_edit(b)
         u = app.ui
         self.widgets.append(Slider(self._row(), "Mass", lambda: b.mass,
-                                   lambda v: setattr(b, "mass", v), 0.01, 100.0,
+                                   lambda v: setattr(b, "mass", v),
+                                   0.001, 10000.0,
                                    u, "kg", "{:.3g}", log=True,
                                    on_commit=self._commit))
         self.widgets.append(Slider(self._row(), "Radius", lambda: b.radius,
-                                   lambda v: setattr(b, "radius", v), 0.02, 2.0,
+                                   lambda v: setattr(b, "radius", v), 0.01, 10.0,
                                    u, "m", "{:.3g}", log=True,
                                    on_commit=self._commit))
         r1, r2 = self._half_rows()
@@ -307,7 +334,7 @@ class Inspector(PanelBase):
         self._num_edit(r1, "vx", lambda: b.vel.x, lambda v: setattr(b.vel, "x", v))
         self._num_edit(r2, "vy", lambda: b.vel.y, lambda v: setattr(b.vel, "y", v))
         self.widgets.append(Slider(self._row(), "Spin", lambda: b.omega,
-                                   lambda v: setattr(b, "omega", v), -30.0, 30.0,
+                                   lambda v: setattr(b, "omega", v), -100.0, 100.0,
                                    u, "rad/s", "{:.2f}", on_commit=self._commit))
         r1, r2 = self._half_rows()
         chk1 = Checkbox(r1, "Locked", lambda: b.locked,
@@ -326,7 +353,7 @@ class Inspector(PanelBase):
                                    tooltip="Restitution: fraction of speed kept per bounce"))
         self.widgets.append(Slider(self._row(), "Friction", lambda: b.friction,
                                    lambda v: setattr(b, "friction", v),
-                                   0.0, 2.0, u, "", "{:.2f}",
+                                   0.0, 3.0, u, "", "{:.2f}",
                                    on_commit=self._commit))
         names = [n for n in MATERIALS if n != "Custom"]
         per_row = 3
@@ -360,12 +387,12 @@ class Inspector(PanelBase):
             self.widgets.append(Slider(self._row(), "Amplitude",
                                        lambda: drv.amplitude,
                                        lambda v: setattr(drv, "amplitude", v),
-                                       0.0, 50.0, u, "N", "{:.2f}",
+                                       0.0, 500.0, u, "N", "{:.2f}",
                                        on_commit=self._commit))
             self.widgets.append(Slider(self._row(), "Frequency",
                                        lambda: drv.frequency,
                                        lambda v: setattr(drv, "frequency", v),
-                                       0.01, 10.0, u, "Hz", "{:.3g}", log=True,
+                                       0.001, 100.0, u, "Hz", "{:.3g}", log=True,
                                        on_commit=self._commit))
             self.widgets.append(Slider(self._row(), "Direction",
                                        lambda: drv.angle * 180 / pi,
@@ -387,43 +414,110 @@ class Inspector(PanelBase):
         self.app.world.drivers.remove(drv)
         self.app.push_undo()
 
-    def _build_multi(self, bodies: list[Body]) -> None:
+    def _build_multi(self, sel: list) -> None:
+        """Bulk editor for a mixed selection: every type present gets its own
+        section, and each control writes to all selected objects of that type."""
         app = self.app
         u = app.ui
-        first = bodies[0]
-        self.widgets.append(Label(self._row(22), f"{len(bodies)} bodies selected",
-                                  14, theme.TEXT, True))
+        bodies = [o for o in sel if isinstance(o, Body)]
+        walls = [o for o in sel if isinstance(o, Wall)]
+        springs = [o for o in sel if isinstance(o, SpringLink)]
+        rods = [o for o in sel if isinstance(o, DistanceLink)]
+        summary = ", ".join(
+            f"{len(group)} {plural if len(group) != 1 else singular}"
+            for group, singular, plural in (
+                (bodies, "body", "bodies"), (walls, "wall", "walls"),
+                (springs, "spring", "springs"), (rods, "rod/rope", "rods/ropes"))
+            if group)
+        self.widgets.append(Label(self._row(22), summary + " selected", 13,
+                                  theme.TEXT, True))
 
-        def set_all(attr):
+        def set_all(objs, attr):
             def s(v):
-                for b in bodies:
-                    setattr(b, attr, v)
+                for o in objs:
+                    setattr(o, attr, v)
             return s
 
-        self.widgets.append(Slider(self._row(), "Mass", lambda: first.mass,
-                                   set_all("mass"), 0.01, 100.0, u, "kg",
-                                   "{:.3g}", log=True, on_commit=self._commit))
-        self.widgets.append(Slider(self._row(), "Radius", lambda: first.radius,
-                                   set_all("radius"), 0.02, 2.0, u, "m",
-                                   "{:.3g}", log=True, on_commit=self._commit))
-        self.widgets.append(Slider(self._row(), "Bounce", lambda: first.restitution,
-                                   set_all("restitution"), 0.0, 1.0, u, "",
-                                   "{:.2f}", on_commit=self._commit))
-        self.widgets.append(Slider(self._row(), "Friction", lambda: first.friction,
-                                   set_all("friction"), 0.0, 2.0, u, "",
-                                   "{:.2f}", on_commit=self._commit))
-        self.widgets.append(SectionLabel(self._row(20), "Align"))
-        r = self._row(24)
-        w = (r.w - 12) // 4
-        for i, (label, fn) in enumerate([
-                ("|x", lambda: self._align(bodies, "x")),
-                ("y-", lambda: self._align(bodies, "y")),
-                ("<->", lambda: self._distribute(bodies, "x")),
-                ("^v", lambda: self._distribute(bodies, "y"))]):
-            tip = ["Align to the same x", "Align to the same y",
-                   "Space evenly in x", "Space evenly in y"][i]
-            self.widgets.append(Button((r.x + i * (w + 4), r.y, w, 24),
-                                       fn, label, size=12, tooltip=tip))
+        if bodies:
+            first = bodies[0]
+            self.widgets.append(SectionLabel(self._row(20),
+                                             f"Bodies ({len(bodies)})"))
+            self.widgets.append(Slider(self._row(), "Mass", lambda: first.mass,
+                                       set_all(bodies, "mass"), 0.001, 10000.0,
+                                       u, "kg", "{:.3g}", log=True,
+                                       on_commit=self._commit))
+            self.widgets.append(Slider(self._row(), "Radius",
+                                       lambda: first.radius,
+                                       set_all(bodies, "radius"), 0.01, 10.0,
+                                       u, "m", "{:.3g}", log=True,
+                                       on_commit=self._commit))
+            self.widgets.append(Slider(self._row(), "Bounce",
+                                       lambda: first.restitution,
+                                       set_all(bodies, "restitution"),
+                                       0.0, 1.0, u, "", "{:.2f}",
+                                       on_commit=self._commit))
+            self.widgets.append(Slider(self._row(), "Friction",
+                                       lambda: first.friction,
+                                       set_all(bodies, "friction"), 0.0, 3.0,
+                                       u, "", "{:.2f}", on_commit=self._commit))
+            if len(bodies) >= 2:
+                self.widgets.append(SectionLabel(self._row(20), "Align"))
+                r = self._row(24)
+                w = (r.w - 12) // 4
+                for i, (label, fn) in enumerate([
+                        ("|x", lambda: self._align(bodies, "x")),
+                        ("y-", lambda: self._align(bodies, "y")),
+                        ("<->", lambda: self._distribute(bodies, "x")),
+                        ("^v", lambda: self._distribute(bodies, "y"))]):
+                    tip = ["Align to the same x", "Align to the same y",
+                           "Space evenly in x", "Space evenly in y"][i]
+                    self.widgets.append(Button((r.x + i * (w + 4), r.y, w, 24),
+                                               fn, label, size=12, tooltip=tip))
+
+        if walls:
+            wfirst = walls[0]
+            self.widgets.append(SectionLabel(self._row(20),
+                                             f"Walls ({len(walls)})"))
+            self.widgets.append(Slider(self._row(), "Thickness",
+                                       lambda: wfirst.thickness,
+                                       set_all(walls, "thickness"), 0.01, 2.0,
+                                       u, "m", "{:.2f}", log=True,
+                                       on_commit=self._commit))
+            self.widgets.append(Slider(self._row(), "Bounce",
+                                       lambda: wfirst.restitution,
+                                       set_all(walls, "restitution"), 0.0, 1.0,
+                                       u, "", "{:.2f}", on_commit=self._commit))
+            self.widgets.append(Slider(self._row(), "Friction",
+                                       lambda: wfirst.friction,
+                                       set_all(walls, "friction"), 0.0, 3.0,
+                                       u, "", "{:.2f}", on_commit=self._commit))
+
+        if springs:
+            sfirst = springs[0]
+            self.widgets.append(SectionLabel(self._row(20),
+                                             f"Springs ({len(springs)})"))
+            self.widgets.append(Slider(self._row(), "Stiffness",
+                                       lambda: sfirst.stiffness,
+                                       set_all(springs, "stiffness"),
+                                       0.01, 100000.0, u, "N/m", "{:.3g}",
+                                       log=True, on_commit=self._commit,
+                                       tooltip="Applied to every selected spring"))
+            self.widgets.append(Slider(self._row(), "Damping",
+                                       lambda: sfirst.damping,
+                                       set_all(springs, "damping"), 0.0, 500.0,
+                                       u, "Ns/m", "{:.2f}",
+                                       on_commit=self._commit,
+                                       tooltip="Applied to every selected spring"))
+
+        if rods:
+            rfirst = rods[0]
+            self.widgets.append(SectionLabel(self._row(20),
+                                             f"Rods & ropes ({len(rods)})"))
+            self.widgets.append(Checkbox(self._row(24), "Behave as rope (no push)",
+                                         lambda: rfirst.is_rope,
+                                         lambda v: (set_all(rods, "is_rope")(v),
+                                                    self._commit())))
+
         self._action_buttons()
 
     def _align(self, bodies: list[Body], axis: str) -> None:
@@ -445,7 +539,7 @@ class Inspector(PanelBase):
     def _build_wall(self, w: Wall) -> None:
         app = self.app
         u = app.ui
-        self.widgets.append(Label(self._row(22), lambda: w.name, 14, theme.TEXT, True))
+        self._name_edit(w)
         r1, r2 = self._half_rows()
         self._num_edit(r1, "x1", lambda: w.a.x, lambda v: setattr(w.a, "x", v), "m")
         self._num_edit(r2, "y1", lambda: w.a.y, lambda v: setattr(w.a, "y", v), "m")
@@ -454,14 +548,14 @@ class Inspector(PanelBase):
         self._num_edit(r2, "y2", lambda: w.b.y, lambda v: setattr(w.b, "y", v), "m")
         self.widgets.append(Slider(self._row(), "Thickness", lambda: w.thickness,
                                    lambda v: setattr(w, "thickness", v),
-                                   0.02, 0.6, u, "m", "{:.2f}",
+                                   0.01, 2.0, u, "m", "{:.2f}", log=True,
                                    on_commit=self._commit))
         self.widgets.append(Slider(self._row(), "Bounce", lambda: w.restitution,
                                    lambda v: setattr(w, "restitution", v),
                                    0.0, 1.0, u, "", "{:.2f}", on_commit=self._commit))
         self.widgets.append(Slider(self._row(), "Friction", lambda: w.friction,
                                    lambda v: setattr(w, "friction", v),
-                                   0.0, 2.0, u, "", "{:.2f}", on_commit=self._commit))
+                                   0.0, 3.0, u, "", "{:.2f}", on_commit=self._commit))
         self._action_buttons()
 
     def _build_link(self, link) -> None:
@@ -472,24 +566,24 @@ class Inspector(PanelBase):
             self.widgets.append(Slider(self._row(), "Rest len",
                                        lambda: link.rest_length,
                                        lambda v: setattr(link, "rest_length", v),
-                                       0.05, 10.0, u, "m", "{:.3g}", log=True,
+                                       0.01, 50.0, u, "m", "{:.3g}", log=True,
                                        on_commit=self._commit))
             self.widgets.append(Slider(self._row(), "Stiffness",
                                        lambda: link.stiffness,
                                        lambda v: setattr(link, "stiffness", v),
-                                       0.1, 2000.0, u, "N/m", "{:.3g}", log=True,
+                                       0.01, 100000.0, u, "N/m", "{:.3g}", log=True,
                                        on_commit=self._commit))
             self.widgets.append(Slider(self._row(), "Damping",
                                        lambda: link.damping,
                                        lambda v: setattr(link, "damping", v),
-                                       0.0, 50.0, u, "Ns/m", "{:.2f}",
+                                       0.0, 500.0, u, "Ns/m", "{:.2f}",
                                        on_commit=self._commit))
         elif isinstance(link, DistanceLink):
             title = "Rope" if link.is_rope else "Rod"
             self.widgets.append(Label(self._row(22), title, 14, theme.TEXT, True))
             self.widgets.append(Slider(self._row(), "Length", lambda: link.length,
                                        lambda v: setattr(link, "length", v),
-                                       0.05, 20.0, u, "m", "{:.3g}", log=True,
+                                       0.01, 100.0, u, "m", "{:.3g}", log=True,
                                        on_commit=self._commit))
             self.widgets.append(Checkbox(self._row(24), "Behave as rope (no push)",
                                          lambda: link.is_rope,
@@ -523,9 +617,10 @@ class Inspector(PanelBase):
         self.widgets.append(SectionLabel(self._row(20), "Gravity"))
         self.widgets.append(Slider(self._row(), "g", lambda: world.gravity,
                                    lambda v: setattr(world, "gravity", v),
-                                   -20.0, 20.0, u, "m/s²", "{:.2f}",
+                                   -100.0, 100.0, u, "m/s²", "{:.2f}",
                                    on_commit=self._commit,
-                                   tooltip="Uniform downward gravity. 9.81 = Earth, 0 = space"))
+                                   tooltip="Uniform downward gravity. 9.81 = Earth, "
+                                           "24.8 = Jupiter, 0 = space, negative = upward"))
         self.widgets.append(Checkbox(self._row(24), "Bodies attract each other",
                                      lambda: world.mutual_gravity,
                                      lambda v: (setattr(world, "mutual_gravity", v),
@@ -534,13 +629,13 @@ class Inspector(PanelBase):
         if world.mutual_gravity:
             self.widgets.append(Slider(self._row(), "G", lambda: world.G,
                                        lambda v: setattr(world, "G", v),
-                                       0.01, 1000.0, u, "", "{:.3g}", log=True,
+                                       0.0001, 100000.0, u, "", "{:.3g}", log=True,
                                        on_commit=self._commit,
                                        tooltip="Gravitational constant (scaled units)"))
             self.widgets.append(Slider(self._row(), "Softening",
                                        lambda: world.softening,
                                        lambda v: setattr(world, "softening", v),
-                                       0.001, 0.5, u, "m", "{:.3g}", log=True,
+                                       0.0001, 2.0, u, "m", "{:.3g}", log=True,
                                        on_commit=self._commit,
                                        tooltip="Smooths the force at tiny separations"))
 
@@ -548,19 +643,19 @@ class Inspector(PanelBase):
         self.widgets.append(Slider(self._row(), "Linear drag",
                                    lambda: world.drag_linear,
                                    lambda v: setattr(world, "drag_linear", v),
-                                   0.0, 5.0, u, "", "{:.2f}",
+                                   0.0, 20.0, u, "", "{:.2f}",
                                    on_commit=self._commit,
                                    tooltip="F = -c v (Stokes drag)"))
         self.widgets.append(Slider(self._row(), "Quad. drag",
                                    lambda: world.drag_quadratic,
                                    lambda v: setattr(world, "drag_quadratic", v),
-                                   0.0, 5.0, u, "", "{:.2f}",
+                                   0.0, 20.0, u, "", "{:.2f}",
                                    on_commit=self._commit,
                                    tooltip="F = -c |v| v (aerodynamic drag)"))
         self.widgets.append(Slider(self._row(), "Damping",
                                    lambda: world.global_damping,
                                    lambda v: setattr(world, "global_damping", v),
-                                   0.0, 5.0, u, "1/s", "{:.2f}",
+                                   0.0, 20.0, u, "1/s", "{:.2f}",
                                    on_commit=self._commit,
                                    tooltip="Exponential decay applied to all velocities"))
 
@@ -577,13 +672,14 @@ class Inspector(PanelBase):
         self.widgets.append(Slider(self._row(), "Substeps",
                                    lambda: world.substeps,
                                    lambda v: setattr(world, "substeps", int(v)),
-                                   1, 16, u, "", "{:.0f}", step=1,
+                                   1, 128, u, "", "{:.0f}", step=1, log=True,
                                    on_commit=self._commit,
-                                   tooltip="Physics substeps per frame: more = more accurate"))
+                                   tooltip="Physics substeps per frame, up to 128: "
+                                           "more = more accurate but slower"))
         self.widgets.append(Slider(self._row(), "Iterations",
                                    lambda: world.iterations,
                                    lambda v: setattr(world, "iterations", int(v)),
-                                   1, 30, u, "", "{:.0f}", step=1,
+                                   1, 64, u, "", "{:.0f}", step=1, log=True,
                                    on_commit=self._commit,
                                    tooltip="Solver iterations per substep for links "
                                            "and contacts (they exit early once converged)"))
@@ -675,14 +771,15 @@ class Inspector(PanelBase):
         self.widgets.append(Slider(self._row(), "Vector size",
                                    lambda: view.vector_scale,
                                    lambda v: setattr(view, "vector_scale", v),
-                                   0.2, 5.0, u, "x", "{:.2f}", log=True))
+                                   0.02, 20.0, u, "x", "{:.2f}", log=True))
 
         self.widgets.append(SectionLabel(self._row(20), "Analysis"))
         chk("Motion trails", "trails", "Fading path behind each moving body (T)")
         self.widgets.append(Slider(self._row(), "Trail length",
                                    lambda: view.trail_len,
                                    lambda v: setattr(view, "trail_len", int(v)),
-                                   50, 2000, u, "pts", "{:.0f}", step=25))
+                                   10, 10000, u, "pts", "{:.0f}", step=10,
+                                   log=True))
         chk("Centre of mass", "com")
         chk("Contact normals", "contacts", "Arrow at every collision this frame")
         chk("Broadphase grid", "spatial_grid", "Spatial-hash cells used by the collision engine (G)")

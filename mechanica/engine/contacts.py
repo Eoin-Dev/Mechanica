@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from math import isfinite
 
+import numpy as np
+
 from mechanica.engine.body import Body, Wall
 
 # Below this approach speed a bounce is treated as perfectly inelastic, which
@@ -30,6 +32,10 @@ PENETRATION_SLOP = 0.0005   # m of overlap tolerated before projection
 PROJECTION_PERCENT = 0.8    # fraction of the remaining overlap removed per pass
 POSITION_ITERATIONS = 3     # projection passes per substep (stacks settle)
 IMPULSE_EPSILON = 1e-9      # convergence threshold for early exit
+
+# At/above this many colliders, candidate pairs come from one vectorized
+# numpy distance test instead of the Python spatial hash.
+VEC_MIN_COLLIDERS = 48
 
 
 class Contact:
@@ -221,7 +227,15 @@ def _solve_position(manifolds: list[_Manifold]) -> None:
             break
 
 
-def _pair_manifold(a: Body, b: Body, out: list[_Manifold]) -> None:
+_NO_EXCLUSIONS: frozenset = frozenset()
+
+
+def _pair_manifold(a: Body, b: Body, out: list[_Manifold],
+                   excl=_NO_EXCLUSIONS) -> None:
+    if excl:
+        key = (a.id, b.id) if a.id < b.id else (b.id, a.id)
+        if key in excl:
+            return  # directly linked: the link governs their separation
     dx = b.pos.x - a.pos.x
     dy = b.pos.y - a.pos.y
     r_sum = a.radius + b.radius
@@ -243,9 +257,72 @@ def _pair_manifold(a: Body, b: Body, out: list[_Manifold]) -> None:
     out.append(_Manifold(a, b, nx, ny, penetration, px, py, e, mu))
 
 
-def _detect_bodies(bodies: list[Body], out: list[_Manifold]) -> None:
-    colliders = [b for b in bodies
-                 if b.collides and isfinite(b.pos.x) and isfinite(b.pos.y)]
+def _detect_bodies_vec(colliders: list[Body], out: list[_Manifold],
+                       static: dict) -> None:
+    """All-pairs candidate search as one numpy distance test. O(n^2) memory
+    but tiny constants: far faster than Python loops up to many hundreds of
+    bodies, and link-excluded pairs are masked out for free.
+
+    Radii, links and mobility cannot change during a step, so their combined
+    pair mask is built once per step (`static` cache) and only the positions
+    are re-gathered each substep. NaN positions compare False and therefore
+    drop out of the candidate set on their own.
+    """
+    n = len(colliders)
+    pair_mask = static.get("pair_mask")
+    if pair_mask is None:
+        r = np.fromiter((b.radius for b in colliders), np.float64, n)
+        movable = np.fromiter((b.inv_mass != 0.0 for b in colliders), bool, n)
+        mask = np.triu(np.ones((n, n), bool), 1)
+        mask &= movable[None, :] | movable[:, None]
+        excl = static.get("no_collide")
+        if excl:
+            id2i = {b.id: k for k, b in enumerate(colliders)}
+            for ida, idb in excl:
+                i = id2i.get(ida)
+                j = id2i.get(idb)
+                if i is not None and j is not None:
+                    mask[i, j] = False
+                    mask[j, i] = False
+        static["pair_mask"] = pair_mask = mask
+        static["r_sum2"] = (r[None, :] + r[:, None]) ** 2
+    px = np.array([b.pos.x for b in colliders])
+    py = np.array([b.pos.y for b in colliders])
+    dx = px[None, :] - px[:, None]
+    dy = py[None, :] - py[:, None]
+    hit = dx * dx + dy * dy < static["r_sum2"]
+    hit &= pair_mask
+    ii, jj = np.nonzero(hit)
+    for i, j in zip(ii.tolist(), jj.tolist()):
+        _pair_manifold(colliders[i], colliders[j], out)
+
+
+def _detect_bodies(bodies: list[Body], out: list[_Manifold],
+                   static: dict) -> None:
+    colliders = static.get("colliders")
+    if colliders is None:
+        static["colliders"] = colliders = [b for b in bodies if b.collides]
+    n = len(colliders)
+    if n < 2:
+        return
+    excl = static.get("no_collide") or _NO_EXCLUSIONS
+    if n >= VEC_MIN_COLLIDERS:
+        # all-pairs numpy beats the spatial hash for the dense clusters that
+        # spring lattices form (their linked pairs are masked out wholesale);
+        # sparse unlinked scenes like gases stay on the O(n) hash
+        use_vec = static.get("use_vec")
+        if use_vec is None:
+            linked_ids = set()
+            for ida, idb in excl:
+                linked_ids.add(ida)
+                linked_ids.add(idb)
+            linked = sum(1 for b in colliders if b.id in linked_ids)
+            static["use_vec"] = use_vec = linked * 2 >= n
+        if use_vec:
+            _detect_bodies_vec(colliders, out, static)
+            return
+    colliders = [b for b in colliders
+                 if isfinite(b.pos.x) and isfinite(b.pos.y)]
     n = len(colliders)
     if n < 2:
         return
@@ -253,7 +330,7 @@ def _detect_bodies(bodies: list[Body], out: list[_Manifold]) -> None:
         for i in range(n):
             a = colliders[i]
             for j in range(i + 1, n):
-                _pair_manifold(a, colliders[j], out)
+                _pair_manifold(a, colliders[j], out, excl)
         return
 
     # split off outsize bodies so they don't inflate the hash cells
@@ -267,9 +344,9 @@ def _detect_bodies(bodies: list[Body], out: list[_Manifold]) -> None:
 
     for i, a in enumerate(large):
         for b in large[i + 1:]:
-            _pair_manifold(a, b, out)
+            _pair_manifold(a, b, out, excl)
         for b in small:
-            _pair_manifold(a, b, out)
+            _pair_manifold(a, b, out, excl)
 
     if len(small) < 2:
         return
@@ -293,23 +370,95 @@ def _detect_bodies(bodies: list[Body], out: list[_Manifold]) -> None:
         for i in range(ln):
             a = bucket[i]
             for j in range(i + 1, ln):
-                _pair_manifold(a, bucket[j], out)
+                _pair_manifold(a, bucket[j], out, excl)
         for ox, oy in ((1, 0), (1, 1), (0, 1), (-1, 1)):
             other = grid_get((gx + ox, gy + oy))
             if other:
                 for a in bucket:
                     for b in other:
-                        _pair_manifold(a, b, out)
+                        _pair_manifold(a, b, out, excl)
+
+
+def _wall_manifold(body: Body, w: Wall, ax: float, ay: float, sx: float,
+                   sy: float, seg_len2: float, half_t: float,
+                   out: list[_Manifold]) -> None:
+    """Narrowphase circle-vs-capsule test; appends a manifold on overlap."""
+    px, py = body.pos.x, body.pos.y
+    # closest point on the segment to the body centre
+    if seg_len2 > 0.0:
+        t = ((px - ax) * sx + (py - ay) * sy) / seg_len2
+        if t < 0.0:
+            t = 0.0
+        elif t > 1.0:
+            t = 1.0
+    else:
+        t = 0.0
+    cx, cy = ax + sx * t, ay + sy * t
+    dx, dy = px - cx, py - cy
+    reach = body.radius + half_t
+    d2 = dx * dx + dy * dy
+    if d2 >= reach * reach:
+        return
+    d = d2 ** 0.5
+    if d < 1e-9:
+        # centre exactly on the segment: push out along the normal
+        inv = 1.0 / (seg_len2 ** 0.5) if seg_len2 > 0 else 1.0
+        nx, ny = -sy * inv, sx * inv
+    else:
+        nx, ny = dx / d, dy / d
+    penetration = reach - d
+    cpx = px - nx * (body.radius - penetration * 0.5)
+    cpy = py - ny * (body.radius - penetration * 0.5)
+    e = body.restitution if body.restitution < w.restitution else w.restitution
+    mu = (body.friction * w.friction) ** 0.5
+    # manifold normal points from the body (a) into the wall
+    m = _Manifold(body, None, -nx, -ny, penetration, cpx, cpy, e, mu)
+    m.key = (body.id, -w.id)
+    out.append(m)
 
 
 def _detect_walls(bodies: list[Body], walls: list[Wall],
-                  out: list[_Manifold]) -> None:
+                  out: list[_Manifold], static: dict) -> None:
     if not walls:
         return
-    max_r = 0.0
-    for b in bodies:
-        if b.collides and b.radius > max_r:
-            max_r = b.radius
+    movers = static.get("movers")
+    if movers is None:
+        # NaN positions drop out of both paths' comparisons on their own
+        static["movers"] = movers = [b for b in bodies
+                                     if b.collides and b.inv_mass != 0.0]
+    if not movers:
+        return
+
+    if len(movers) >= VEC_MIN_COLLIDERS:
+        # vectorized candidate pass: one closest-point test per wall over
+        # all bodies at once, then exact narrowphase on the few hits
+        n = len(movers)
+        r = static.get("mover_r")
+        if r is None:
+            static["mover_r"] = r = np.fromiter(
+                (b.radius for b in movers), np.float64, n)
+        px = np.array([b.pos.x for b in movers])
+        py = np.array([b.pos.y for b in movers])
+        for w in walls:
+            ax, ay = w.a.x, w.a.y
+            sx, sy = w.b.x - ax, w.b.y - ay
+            seg_len2 = sx * sx + sy * sy
+            half_t = w.thickness * 0.5
+            if seg_len2 > 0.0:
+                t = ((px - ax) * sx + (py - ay) * sy) / seg_len2
+                np.clip(t, 0.0, 1.0, out=t)
+            else:
+                t = 0.0
+            dx = px - (ax + sx * t)
+            dy = py - (ay + sy * t)
+            reach = r + half_t
+            hits = np.nonzero(dx * dx + dy * dy < reach * reach)[0]
+            for i in hits.tolist():
+                _wall_manifold(movers[i], w, ax, ay, sx, sy, seg_len2,
+                               half_t, out)
+        return
+
+    max_r = max(b.radius for b in movers)
     for w in walls:
         ax, ay = w.a.x, w.a.y
         bx, by = w.b.x, w.b.y
@@ -321,43 +470,10 @@ def _detect_walls(bodies: list[Body], walls: list[Wall],
         hi_x = (ax if ax > bx else bx) + reach_max
         lo_y = (ay if ay < by else by) - reach_max
         hi_y = (ay if ay > by else by) + reach_max
-        for body in bodies:
+        for body in movers:
             px, py = body.pos.x, body.pos.y
-            if (px < lo_x or px > hi_x or py < lo_y or py > hi_y
-                    or not body.collides or body.inv_mass == 0.0
-                    or not isfinite(px) or not isfinite(py)):
-                continue
-            # closest point on the segment to the body centre
-            if seg_len2 > 0.0:
-                t = ((px - ax) * sx + (py - ay) * sy) / seg_len2
-                if t < 0.0:
-                    t = 0.0
-                elif t > 1.0:
-                    t = 1.0
-            else:
-                t = 0.0
-            cx, cy = ax + sx * t, ay + sy * t
-            dx, dy = px - cx, py - cy
-            reach = body.radius + half_t
-            d2 = dx * dx + dy * dy
-            if d2 >= reach * reach:
-                continue
-            d = d2 ** 0.5
-            if d < 1e-9:
-                # centre exactly on the segment: push out along the normal
-                inv = 1.0 / (seg_len2 ** 0.5) if seg_len2 > 0 else 1.0
-                nx, ny = -sy * inv, sx * inv
-            else:
-                nx, ny = dx / d, dy / d
-            penetration = reach - d
-            cpx = px - nx * (body.radius - penetration * 0.5)
-            cpy = py - ny * (body.radius - penetration * 0.5)
-            e = body.restitution if body.restitution < w.restitution else w.restitution
-            mu = (body.friction * w.friction) ** 0.5
-            # manifold normal points from the body (a) into the wall
-            m = _Manifold(body, None, -nx, -ny, penetration, cpx, cpy, e, mu)
-            m.key = (body.id, -w.id)
-            out.append(m)
+            if lo_x <= px <= hi_x and lo_y <= py <= hi_y:
+                _wall_manifold(body, w, ax, ay, sx, sy, seg_len2, half_t, out)
 
 
 def _warm_start(manifolds: list[_Manifold], cache: dict) -> None:
@@ -388,15 +504,21 @@ def _warm_start(manifolds: list[_Manifold], cache: dict) -> None:
 
 def solve_contacts(bodies: list[Body], walls: list[Wall],
                    contacts: list[Contact], iterations: int,
-                   cache: dict | None = None) -> None:
+                   cache: dict | None = None,
+                   static: dict | None = None) -> None:
     """Detect all contacts this substep and resolve them together.
 
     `cache` is an optional persistent dict carrying accumulated impulses
     between substeps (warm starting); pass the same dict every substep.
+    `static` is an optional per-step dict for detection state that cannot
+    change within a step (collider lists, radii, link exclusions); pass a fresh
+    dict at the start of every step.
     """
     manifolds: list[_Manifold] = []
-    _detect_bodies(bodies, manifolds)
-    _detect_walls(bodies, walls, manifolds)
+    if static is None:
+        static = {}
+    _detect_bodies(bodies, manifolds, static)
+    _detect_walls(bodies, walls, manifolds, static)
     if cache is not None:
         if manifolds:
             _warm_start(manifolds, cache)

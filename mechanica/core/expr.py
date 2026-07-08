@@ -5,6 +5,10 @@ ternaries and whitelisted math functions) into a fast callable. Anything
 outside the whitelist -- attribute access, subscripts, lambdas, imports --
 is rejected at compile time, so user input can never execute arbitrary code.
 
+The whitelisted functions are numpy ufuncs, so a compiled expression works
+both per-body (scalar env) and vectorized over every body at once (array
+env) -- the engine uses the array form for large scenes.
+
 Allowed variables: x, y (position, m), vx, vy (velocity, m/s),
 t (time, s), m (mass, kg), r (distance from origin, m).
 """
@@ -14,14 +18,27 @@ import ast
 import math
 from typing import Callable
 
+import numpy as np
+
+
+def _reduce(ufunc, *args):
+    """Fold a binary ufunc over 2+ arguments (min/max take any arity)."""
+    out = args[0]
+    for a in args[1:]:
+        out = ufunc(out, a)
+    return out
+
+
 ALLOWED_NAMES = {"x", "y", "vx", "vy", "t", "m", "r"}
 ALLOWED_FUNCS: dict[str, Callable] = {
-    "sin": math.sin, "cos": math.cos, "tan": math.tan,
-    "asin": math.asin, "acos": math.acos, "atan": math.atan,
-    "atan2": math.atan2, "sqrt": math.sqrt, "exp": math.exp,
-    "log": math.log, "abs": abs, "min": min, "max": max,
-    "sign": lambda v: (v > 0) - (v < 0), "floor": math.floor,
-    "ceil": math.ceil, "hypot": math.hypot,
+    "sin": np.sin, "cos": np.cos, "tan": np.tan,
+    "asin": np.arcsin, "acos": np.arccos, "atan": np.arctan,
+    "atan2": np.arctan2, "sqrt": np.sqrt, "exp": np.exp,
+    "log": np.log, "abs": np.abs,
+    "min": lambda *a: _reduce(np.minimum, *a),
+    "max": lambda *a: _reduce(np.maximum, *a),
+    "sign": np.sign, "floor": np.floor,
+    "ceil": np.ceil, "hypot": np.hypot,
 }
 ALLOWED_CONSTS = {"pi": math.pi, "e": math.e, "tau": math.tau, "g": 9.81}
 
@@ -76,14 +93,21 @@ def compile_expr(source: str) -> Callable[[dict], float]:
     static_env.update(ALLOWED_CONSTS)
 
     def fn(env: dict) -> float:
-        return eval(code, static_env, env)  # noqa: S307 - AST whitelisted above
+        with np.errstate(all="ignore"):
+            return eval(code, static_env, env)  # noqa: S307 - AST whitelisted above
 
     # Probe once so obviously broken expressions fail at compile time.
     probe = {"x": 0.1, "y": 0.1, "vx": 0.0, "vy": 0.0, "t": 0.0, "m": 1.0, "r": 0.14}
     try:
-        float(fn(probe))
+        val = float(fn(probe))
+        if math.isnan(val):
+            # numpy signals domain errors (sqrt of a negative, log of zero)
+            # with NaN instead of raising; reject those like math would
+            raise ExprError("expression is undefined (NaN) at the test point")
     except ZeroDivisionError:
         pass  # may only divide by zero at specific points; allow
+    except ExprError:
+        raise
     except Exception as exc:
         raise ExprError(str(exc)) from exc
     return fn

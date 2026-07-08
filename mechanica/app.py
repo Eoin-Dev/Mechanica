@@ -8,7 +8,7 @@ from math import isfinite
 
 import pygame
 
-from mechanica.engine.body import Body
+from mechanica.engine.body import Body, Wall
 from mechanica.engine.world import World
 from mechanica.interact.tools import TOOL_KEYS, CanvasController
 from mechanica.render.camera import MAX_ZOOM, MIN_ZOOM, Camera
@@ -27,7 +27,7 @@ from mechanica.ui.theme import blit_text
 from mechanica.ui.widgets import UIState
 
 PHYSICS_DT = 1.0 / 120.0
-MAX_STEPS_PER_FRAME = 10
+MAX_STEPS_PER_FRAME = 24   # bounds catch-up work per frame at high speeds
 SETTINGS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "settings.json")
 
@@ -48,6 +48,9 @@ class App:
         self.camera = Camera(self.width, self.height)
         self.view = ViewSettings()
         self.selection: list = []
+        # which object types a box (rubber-band) selection picks up
+        self.box_filter = {"bodies": True, "walls": True,
+                           "springs": True, "rods": True}
         self.canvas = CanvasController(self)
 
         self.playing = False
@@ -186,6 +189,7 @@ class App:
         self.world = world
         self.selection = []
         self.canvas.hover = None
+        self.canvas.abort_drag()
         self.trails.clear()
         self.energy_series.clear()
         self.momentum_series.clear()
@@ -308,9 +312,10 @@ class App:
         cam.centre.y = cy + (rect.centery - self.height * 0.5) / cam.zoom
 
     def nudge_selection(self, dx: int, dy: int) -> None:
-        """Move selected bodies one small step with the arrow keys."""
+        """Move selected bodies and walls one small step with the arrow keys."""
         bodies = [o for o in self.selection if isinstance(o, Body)]
-        if not bodies:
+        walls = [o for o in self.selection if isinstance(o, Wall)]
+        if not bodies and not walls:
             return
         from mechanica.render.draw import snap_step
         step = snap_step(self.camera.zoom) if self.view.snap \
@@ -318,6 +323,11 @@ class App:
         for b in bodies:
             b.pos.x += dx * step
             b.pos.y += dy * step
+        for w in walls:
+            w.a.x += dx * step
+            w.a.y += dy * step
+            w.b.x += dx * step
+            w.b.y += dy * step
         # commit to undo once the burst of key repeats ends
         self._nudge_dirty = True
         self._nudge_deadline = time.monotonic() + 0.5
@@ -385,6 +395,8 @@ class App:
             mouse = pygame.mouse.get_pos()
             for event in pygame.event.get():
                 self._route_event(event, mouse)
+            # keep held bodies pinned even when the mouse isn't moving
+            self.canvas.update_drag(mouse)
             self._update(self.dt_frame)
             self._render(mouse)
             pygame.display.flip()
@@ -549,6 +561,7 @@ class App:
     def _render(self, mouse) -> None:
         screen = self.screen
         screen.fill(theme.BG)
+        self.ui.begin_frame()
         area = self.canvas_rect()
         clip = screen.get_clip()
         screen.set_clip(area)
@@ -576,6 +589,9 @@ class App:
         self.help.draw(screen, mouse)
         self.tour.draw(screen, mouse)
         self._draw_toasts()
+        # tooltips from panels underneath a modal overlay must not show through
+        self.ui.end_frame(blocked=self.library.visible or self.help.visible
+                          or self.tour.visible)
         self._draw_tooltip(mouse)
 
     def _draw_toasts(self) -> None:
