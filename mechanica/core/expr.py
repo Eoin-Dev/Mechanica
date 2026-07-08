@@ -63,6 +63,12 @@ def compile_expr(source: str) -> Callable[[dict], float]:
             name = node.id
             if name not in ALLOWED_NAMES and name not in ALLOWED_FUNCS and name not in ALLOWED_CONSTS:
                 raise ExprError(f"unknown name '{name}' (use x, y, vx, vy, t, m, r)")
+        if isinstance(node, ast.Constant):
+            if not isinstance(node.value, (int, float)):
+                raise ExprError("only numeric constants are allowed")
+            # ints become floats so e.g. 9**9**9 overflows immediately
+            # instead of grinding out an astronomically large integer
+            node.value = float(node.value)
 
     code = compile(tree, "<force-field>", "eval")
     static_env = {"__builtins__": {}}

@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from math import isfinite
 
 import pygame
 
 from mechanica.engine.body import Body
 from mechanica.engine.world import World
 from mechanica.interact.tools import TOOL_KEYS, CanvasController
-from mechanica.render.camera import Camera
+from mechanica.render.camera import MAX_ZOOM, MIN_ZOOM, Camera
 from mechanica.render.draw import (ViewSettings, draw_grid, draw_scale_bar,
                                    draw_world)
 from mechanica.scene import snapshot as snap
@@ -72,6 +74,10 @@ class App:
 
         self.toasts: list[list] = []
 
+        self._nudge_dirty = False
+        self._nudge_deadline = 0.0
+        self._diverge_cooldown = 0.0
+
         self.toolbar = Toolbar(self)
         self.palette = Palette(self)
         self.inspector = Inspector(self)
@@ -83,6 +89,9 @@ class App:
         self.relayout_all()
 
         self.settings = self._load_settings()
+        if self.settings.get("fps_cap") in ("30", "60", "120", "Max"):
+            self.set_fps_cap(self.settings["fps_cap"])
+        self.view.antialias = bool(self.settings.get("antialias", True))
         if not self.settings.get("tour_done"):
             self.tour.start()
         self.load_preset(PRESETS[0], announce=False)
@@ -134,7 +143,9 @@ class App:
     def step_once(self) -> None:
         self.ensure_initial()
         self.playing = False
-        self.world.step(PHYSICS_DT * 2)  # one 60 Hz frame
+        # one 60 Hz frame, stepped at the normal rate so accuracy matches play
+        self.world.step(PHYSICS_DT)
+        self.world.step(PHYSICS_DT)
         self._after_physics()
 
     def ensure_initial(self) -> None:
@@ -154,7 +165,7 @@ class App:
             target = float(text)
         except ValueError:
             return False
-        if target < 0:
+        if target < 0 or not isfinite(target):
             return False
         self.ensure_initial()
         world = snap.restore(self.initial_snapshot)
@@ -265,6 +276,64 @@ class App:
             self.push_undo()
             self.toast(f"Pasted properties onto {len(bodies)} body(ies)")
 
+    # ------------------------------------------------------------ view helpers
+    def zoom_to_fit(self) -> None:
+        """Frame every body and wall in the canvas (F)."""
+        pts: list[tuple[float, float, float]] = []   # (x, y, pad radius)
+        for b in self.world.bodies:
+            if isfinite(b.pos.x) and isfinite(b.pos.y):
+                pts.append((b.pos.x, b.pos.y, b.radius))
+        for w in self.world.walls:
+            half = w.thickness * 0.5
+            pts.append((w.a.x, w.a.y, half))
+            pts.append((w.b.x, w.b.y, half))
+        cam = self.camera
+        if not pts:
+            cam.centre.set(0.0, 0.0)
+            cam.zoom = 88.0
+            return
+        min_x = min(p[0] - p[2] for p in pts)
+        max_x = max(p[0] + p[2] for p in pts)
+        min_y = min(p[1] - p[2] for p in pts)
+        max_y = max(p[1] + p[2] for p in pts)
+        rect = self.canvas_rect()
+        span_x = max(max_x - min_x, 1e-6)
+        span_y = max(max_y - min_y, 1e-6)
+        zoom = min(rect.w / span_x, rect.h / span_y) * 0.85
+        cam.zoom = min(MAX_ZOOM, max(MIN_ZOOM, zoom))
+        # place the bounds centre at the canvas centre (canvas != window centre)
+        cx = (min_x + max_x) * 0.5
+        cy = (min_y + max_y) * 0.5
+        cam.centre.x = cx - (rect.centerx - self.width * 0.5) / cam.zoom
+        cam.centre.y = cy + (rect.centery - self.height * 0.5) / cam.zoom
+
+    def nudge_selection(self, dx: int, dy: int) -> None:
+        """Move selected bodies one small step with the arrow keys."""
+        bodies = [o for o in self.selection if isinstance(o, Body)]
+        if not bodies:
+            return
+        from mechanica.render.draw import snap_step
+        step = snap_step(self.camera.zoom) if self.view.snap \
+            else 8.0 / self.camera.zoom
+        for b in bodies:
+            b.pos.x += dx * step
+            b.pos.y += dy * step
+        # commit to undo once the burst of key repeats ends
+        self._nudge_dirty = True
+        self._nudge_deadline = time.monotonic() + 0.5
+
+    def quick_save(self) -> None:
+        name = time.strftime("scene %Y-%m-%d %H%M%S")
+        saved = snap.save_scene(self.world, name)
+        self.toast(f"Saved scene '{saved}' - press L to browse scenes")
+
+    def toggle_follow(self) -> None:
+        self.view.follow = not self.view.follow
+        if self.view.follow and not any(isinstance(o, Body) for o in self.selection):
+            self.toast("Camera follow is on - select a body to track")
+        else:
+            self.toast(f"Camera follow {'on' if self.view.follow else 'off'}")
+
     # ---------------------------------------------------------------- misc UI
     def set_graph_mode(self, mode: str) -> None:
         self.graph_mode = mode
@@ -274,6 +343,15 @@ class App:
     def set_fps_cap(self, label: str) -> None:
         self.fps_cap_label = label
         self.fps_cap = {"30": 30, "60": 60, "120": 120, "Max": 240}[label]
+        if getattr(self, "settings", None) is not None \
+                and self.settings.get("fps_cap") != label:
+            self.settings["fps_cap"] = label
+            self._save_settings()
+
+    def set_antialias(self, on: bool) -> None:
+        self.view.antialias = on
+        self.settings["antialias"] = on
+        self._save_settings()
 
     def toggle_library(self) -> None:
         if self.library.visible:
@@ -357,6 +435,8 @@ class App:
                 self.copy_props()
             elif key == pygame.K_v:
                 self.paste_props()
+            elif key == pygame.K_s:
+                self.quick_save()
             else:
                 return False
             return True
@@ -375,12 +455,22 @@ class App:
             self.view.trails = not self.view.trails
         elif key == pygame.K_g:
             self.view.spatial_grid = not self.view.spatial_grid
+        elif key == pygame.K_f:
+            self.zoom_to_fit()
+        elif key == pygame.K_c:
+            self.toggle_follow()
         elif key == pygame.K_l:
             self.toggle_library()
         elif key == pygame.K_F1:
             self.toggle_help()
+        elif key in (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT):
+            self.nudge_selection(
+                (key == pygame.K_RIGHT) - (key == pygame.K_LEFT),
+                (key == pygame.K_UP) - (key == pygame.K_DOWN))
         elif key == pygame.K_ESCAPE:
-            self.selection = []
+            # cancel an in-progress link/wall first, then clear the selection
+            if not self.canvas.cancel_pending():
+                self.selection = []
         else:
             return False
         return True
@@ -391,6 +481,10 @@ class App:
         for t in self.toasts:
             t[1] -= dt_frame
         self.toasts = [t for t in self.toasts if t[1] > 0]
+
+        if self._nudge_dirty and time.monotonic() > self._nudge_deadline:
+            self._nudge_dirty = False
+            self.push_undo()
 
         if self.playing:
             self.accumulator += dt_frame * self.speed
@@ -403,6 +497,21 @@ class App:
             if self.overloaded:
                 self.accumulator = 0.0
             self._after_physics()
+            if self.world.diverged and time.monotonic() > self._diverge_cooldown:
+                self._diverge_cooldown = time.monotonic() + 5.0
+                names = ", ".join(self.world.diverged[:3])
+                self.toast(f"{names} hit a numerical blow-up and was frozen "
+                           "- check extreme forces or fields")
+
+        if self.view.follow:
+            body = next((o for o in self.selection
+                         if isinstance(o, Body) and isfinite(o.pos.x)
+                         and isfinite(o.pos.y)), None)
+            if body is not None:
+                cam = self.camera
+                blend = min(1.0, dt_frame * 8.0)
+                cam.centre.x += (body.pos.x - cam.centre.x) * blend
+                cam.centre.y += (body.pos.y - cam.centre.y) * blend
 
     def _after_physics(self) -> None:
         # trails

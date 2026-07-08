@@ -5,6 +5,11 @@ from math import cos, sin
 
 import pygame
 
+try:
+    import pygame.gfxdraw as _gfx
+except ImportError:          # pragma: no cover - gfxdraw ships with pygame
+    _gfx = None
+
 from mechanica.core.vec import Vec2
 from mechanica.engine.body import Body, Wall
 from mechanica.engine.links import DistanceLink, SpringLink
@@ -17,6 +22,9 @@ from mechanica.ui.theme import blit_text
 VEL_ARROW_SCALE = 0.15
 ACC_ARROW_SCALE = 0.05
 FORCE_ARROW_SCALE = 0.05
+
+# gfxdraw uses 16-bit coordinates; stay well inside them
+_GFX_LIMIT = 16000
 
 
 class ViewSettings:
@@ -35,6 +43,8 @@ class ViewSettings:
         self.labels = False
         self.vector_scale = 1.0
         self.trail_len = 350
+        self.follow = False
+        self.antialias = True
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -43,6 +53,28 @@ class ViewSettings:
         for k, v in d.items():
             if hasattr(self, k):
                 setattr(self, k, v)
+
+
+def fill_circle(surface: pygame.Surface, color, cx: float, cy: float,
+                r: int, aa: bool) -> None:
+    """Filled circle, antialiased when possible."""
+    x, y = int(cx), int(cy)
+    if (aa and _gfx is not None and 2 <= r < _GFX_LIMIT
+            and -_GFX_LIMIT < x < _GFX_LIMIT and -_GFX_LIMIT < y < _GFX_LIMIT):
+        _gfx.filled_circle(surface, x, y, r, color)
+        _gfx.aacircle(surface, x, y, r, color)
+    else:
+        pygame.draw.circle(surface, color, (x, y), r)
+
+
+def ring_circle(surface: pygame.Surface, color, cx: float, cy: float,
+                r: int, width: int, aa: bool) -> None:
+    """Circle outline with an antialiased outer rim when possible."""
+    x, y = int(cx), int(cy)
+    pygame.draw.circle(surface, color, (x, y), r, width)
+    if (aa and _gfx is not None and 2 <= r < _GFX_LIMIT
+            and -_GFX_LIMIT < x < _GFX_LIMIT and -_GFX_LIMIT < y < _GFX_LIMIT):
+        _gfx.aacircle(surface, x, y, r, color)
 
 
 def _nice_spacing(zoom: float) -> float:
@@ -103,7 +135,8 @@ def draw_arrow(surface: pygame.Surface, start: tuple[float, float],
 
 
 def _draw_spring(surface: pygame.Surface, a: tuple[float, float],
-                 b: tuple[float, float], color, coils: int = 8) -> None:
+                 b: tuple[float, float], color, coils: int = 8,
+                 aa: bool = False) -> None:
     dx, dy = b[0] - a[0], b[1] - a[1]
     length = (dx * dx + dy * dy) ** 0.5
     if length < 4:
@@ -123,7 +156,10 @@ def _draw_spring(surface: pygame.Surface, a: tuple[float, float],
                     a[1] + uy * (lead + inner * f) + py * off))
     pts.append((b[0] - ux * lead, b[1] - uy * lead))
     pts.append(b)
-    pygame.draw.lines(surface, color, False, pts, 2)
+    if aa:
+        pygame.draw.aalines(surface, color, False, pts)
+    else:
+        pygame.draw.lines(surface, color, False, pts, 2)
 
 
 def draw_world(surface: pygame.Surface, cam: Camera, world: World,
@@ -159,7 +195,7 @@ def draw_world(surface: pygame.Surface, cam: Camera, world: World,
         if isinstance(link, SpringLink):
             color = theme.SELECTION if selected else \
                 (200, 205, 215) if hovered else (135, 142, 152)
-            _draw_spring(surface, pa, pb, color)
+            _draw_spring(surface, pa, pb, color, aa=view.antialias)
         else:
             if link.is_rope:
                 color = theme.SELECTION if selected else \
@@ -171,6 +207,7 @@ def draw_world(surface: pygame.Surface, cam: Camera, world: World,
                 pygame.draw.line(surface, color, pa, pb, 3)
 
     # --- walls ----------------------------------------------------------------
+    aa = view.antialias
     for wall in world.walls:
         pa = cam.to_screen(wall.a)
         pb = cam.to_screen(wall.b)
@@ -181,12 +218,12 @@ def draw_world(surface: pygame.Surface, cam: Camera, world: World,
         pygame.draw.line(surface, color, pa, pb, w_px)
         r = w_px // 2
         if r >= 1:
-            pygame.draw.circle(surface, color, pa, r)
-            pygame.draw.circle(surface, color, pb, r)
+            fill_circle(surface, color, pa[0], pa[1], r, aa)
+            fill_circle(surface, color, pb[0], pb[1], r, aa)
         if selected:  # endpoint handles for direct manipulation
             for p in (pa, pb):
-                pygame.draw.circle(surface, (255, 255, 255), p, 5)
-                pygame.draw.circle(surface, theme.ACCENT, p, 5, 2)
+                fill_circle(surface, (255, 255, 255), p[0], p[1], 5, aa)
+                ring_circle(surface, theme.ACCENT, p[0], p[1], 5, 2, aa)
 
     # --- bodies ----------------------------------------------------------------
     for body in world.bodies:
@@ -199,9 +236,9 @@ def draw_world(surface: pygame.Surface, cam: Camera, world: World,
         color = body.color
         if body is hover and body not in selection:
             color = tuple(min(255, c + 35) for c in color)
-        pygame.draw.circle(surface, color, (sx, sy), pr)
+        fill_circle(surface, color, sx, sy, pr, aa)
         edge = tuple(int(c * 0.55) for c in color)
-        pygame.draw.circle(surface, edge, (sx, sy), pr, max(1, pr // 9))
+        ring_circle(surface, edge, sx, sy, pr, max(1, pr // 9), aa)
         if pr >= 5 and not body.locked:
             # rotation marker so spin/rolling is visible
             ex = sx + cos(body.angle) * pr * 0.85
@@ -209,12 +246,10 @@ def draw_world(surface: pygame.Surface, cam: Camera, world: World,
             pygame.draw.line(surface, edge, (sx, sy), (ex, ey),
                              max(1, pr // 8))
         if body.locked:
-            pygame.draw.circle(surface, (230, 233, 240), (sx, sy),
-                               max(2, pr // 3))
-            pygame.draw.circle(surface, (90, 95, 105), (sx, sy),
-                               max(2, pr // 3), 1)
+            fill_circle(surface, (230, 233, 240), sx, sy, max(2, pr // 3), aa)
+            ring_circle(surface, (90, 95, 105), sx, sy, max(2, pr // 3), 1, aa)
         if body in selection:
-            pygame.draw.circle(surface, theme.SELECTION, (sx, sy), pr + 3, 2)
+            ring_circle(surface, theme.SELECTION, sx, sy, pr + 3, 2, aa)
         if view.labels and pr >= 3:
             blit_text(surface, body.name, (sx, sy - pr - 12), 11,
                       theme.TEXT_DIM, False, "center")

@@ -2,29 +2,40 @@
 
 Stepping pipeline (per substep of length h):
   1. Evaluate smooth forces (gravity, N-body, drag, springs, drivers, custom
-     fields) and integrate them with the selected integrator:
+     fields), then solve rod/rope tensions at the acceleration level
+     (warm-started Gauss-Seidel). Integrate with the selected integrator:
        - Symplectic Euler: 1st order, symplectic. Very robust.
        - Velocity Verlet:  2nd order, symplectic. Default -- excellent
          long-term energy behaviour for orbits and oscillators.
        - RK4: 4th order, non-symplectic. Best short-term accuracy for smooth
          systems (e.g. projectiles with drag); may slowly drift on orbits.
-  2. Solve rigid links (XPBD position constraints, several iterations),
-     then feed the corrections back into velocities.
-  3. Detect and resolve contacts (impulses + friction + projection).
+  2. Remove the tiny residual link drift with an XPBD position solve and
+     feed the corrections back into velocities.
+  3. Detect all contacts, then resolve them together with iterated
+     sequential impulses (restitution + Coulomb friction) and split-impulse
+     positional projection.
   4. Apply global velocity damping, advance time.
 
-Substepping does most of the heavy lifting for accuracy: 4 substeps at 120 Hz
-gives an effective 480 Hz solver rate.
+Solving the rod tension as a *force* before integrating (step 1) rather than
+only projecting positions afterwards is what makes pendulums and chains
+energy-conserving: pure projection would systematically discard the radial
+velocity gained within each substep and drain energy.
 """
 from __future__ import annotations
+
+from math import isfinite
 
 from mechanica.core.expr import ExprError, compile_expr
 from mechanica.core.vec import Vec2
 from mechanica.engine.body import Body, Wall
-from mechanica.engine.contacts import Contact, collide_bodies, collide_walls
+from mechanica.engine.contacts import Contact, solve_contacts
 from mechanica.engine.links import DistanceLink, SpringLink, link_from_dict
 
 INTEGRATORS = ("Velocity Verlet", "Symplectic Euler", "RK4")
+
+# Gauss-Seidel passes for the acceleration-level rod tension solve. Warm
+# starting makes a handful of passes enough even for long chains.
+ROD_FORCE_PASSES = 4
 
 
 class ForceField:
@@ -108,11 +119,13 @@ class World:
 
         self.integrator = "Velocity Verlet"
         self.substeps = 4
-        self.iterations = 8          # XPBD iterations per substep
+        self.iterations = 8          # solver iterations (links and contacts)
 
         self.time = 0.0
         self.contacts: list[Contact] = []
         self.step_count = 0
+        self.diverged: list[str] = []   # names of bodies frozen this step
+        self._contact_cache: dict = {}  # warm-start impulses between substeps
 
     # ------------------------------------------------------------------ forces
     def _accumulate_forces(self, t: float) -> None:
@@ -124,14 +137,15 @@ class World:
             if b.inv_mass == 0.0:
                 b.acc.set(0.0, 0.0)
                 continue
-            ax = b.const_force.x * b.inv_mass
-            ay = b.const_force.y * b.inv_mass - g
+            inv_m = b.inv_mass
+            ax = b.const_force.x * inv_m
+            ay = b.const_force.y * inv_m - g
             if c1 != 0.0 or c2 != 0.0:
                 vx, vy = b.vel.x, b.vel.y
                 speed = (vx * vx + vy * vy) ** 0.5
-                drag = c1 + c2 * speed
-                ax -= drag * vx * b.inv_mass
-                ay -= drag * vy * b.inv_mass
+                drag = (c1 + c2 * speed) * inv_m
+                ax -= drag * vx
+                ay -= drag * vy
             b.acc.set(ax, ay)
 
         if self.mutual_gravity and self.G != 0.0:
@@ -141,26 +155,32 @@ class World:
             eps2 = self.softening * self.softening
             for i in range(n):
                 bi = bodies[i]
+                bix = bi.pos.x
+                biy = bi.pos.y
+                bi_acc = bi.acc
+                bi_movable = bi.inv_mass != 0.0
+                bi_mass = bi.mass
                 for j in range(i + 1, n):
                     bj = bodies[j]
-                    dx = bj.pos.x - bi.pos.x
-                    dy = bj.pos.y - bi.pos.y
+                    dx = bj.pos.x - bix
+                    dy = bj.pos.y - biy
                     d2 = dx * dx + dy * dy + eps2
-                    inv_d = 1.0 / (d2 ** 0.5)
-                    s = G * inv_d * inv_d * inv_d  # G / d^3
-                    if bi.inv_mass != 0.0:
-                        bi.acc.x += s * bj.mass * dx
-                        bi.acc.y += s * bj.mass * dy
+                    s = G / (d2 * d2 ** 0.5)  # G / d^3
+                    if bi_movable:
+                        m = s * bj.mass
+                        bi_acc.x += m * dx
+                        bi_acc.y += m * dy
                     if bj.inv_mass != 0.0:
-                        bj.acc.x -= s * bi.mass * dx
-                        bj.acc.y -= s * bi.mass * dy
+                        m = s * bi_mass
+                        bj.acc.x -= m * dx
+                        bj.acc.y -= m * dy
 
         for link in self.links:
             if isinstance(link, SpringLink):
                 link.apply_forces()
 
         if self.drivers:
-            from math import sin, tau, cos
+            from math import cos, sin, tau
             by_id = {b.id: b for b in self.bodies}
             for drv in self.drivers:
                 if not drv.enabled:
@@ -188,6 +208,76 @@ class World:
                 except Exception:
                     pass  # singular point (e.g. 1/r at origin): skip this sample
 
+        self._solve_rod_forces()
+
+    def _solve_rod_forces(self) -> None:
+        """Add the analytic rod/rope constraint forces to the accelerations.
+
+        Solves d^2C/dt^2 = n.(a_b - a_a) + |v_t|^2/d = 0 for every rod's
+        tension with warm-started Gauss-Seidel. The warm start (last solve's
+        tension as the initial guess) makes a few passes sufficient even for
+        long chains; the XPBD position pass mops up the O(h^2) residual.
+        """
+        rows = []
+        for ln in self.links:
+            if type(ln) is not DistanceLink:
+                continue
+            a = ln.a
+            b = ln.b
+            wa = a.inv_mass
+            wb = b.inv_mass
+            w_sum = wa + wb
+            if w_sum == 0.0:
+                continue
+            dx = b.pos.x - a.pos.x
+            dy = b.pos.y - a.pos.y
+            d2 = dx * dx + dy * dy
+            if d2 < 1e-18:
+                continue
+            d = d2 ** 0.5
+            if ln.is_rope and d < ln.length - 1e-9:
+                ln._mu = 0.0    # slack: no tension, drop the warm start
+                continue
+            nx = dx / d
+            ny = dy / d
+            mu = ln._mu
+            if ln.is_rope and mu < 0.0:
+                mu = 0.0
+            if mu != 0.0:   # apply the warm-start guess immediately
+                a.acc.x += mu * wa * nx
+                a.acc.y += mu * wa * ny
+                b.acc.x -= mu * wb * nx
+                b.acc.y -= mu * wb * ny
+            rows.append([ln, a, b, wa, wb, w_sum, nx, ny, d, mu])
+        if not rows:
+            return
+        for _ in range(ROD_FORCE_PASSES):
+            worst = 0.0
+            for row in rows:
+                ln, a, b, wa, wb, w_sum, nx, ny, d, mu = row
+                rvx = b.vel.x - a.vel.x
+                rvy = b.vel.y - a.vel.y
+                vn = rvx * nx + rvy * ny
+                vt2 = rvx * rvx + rvy * rvy - vn * vn
+                an = (b.acc.x - a.acc.x) * nx + (b.acc.y - a.acc.y) * ny
+                new_mu = mu + (an + vt2 / d) / w_sum
+                if ln.is_rope and new_mu < 0.0:
+                    new_mu = 0.0
+                dmu = new_mu - mu
+                row[9] = mu = new_mu
+                if dmu != 0.0:
+                    a.acc.x += dmu * wa * nx
+                    a.acc.y += dmu * wa * ny
+                    b.acc.x -= dmu * wb * nx
+                    b.acc.y -= dmu * wb * ny
+                    d_abs = dmu if dmu > 0.0 else -dmu
+                    if d_abs > worst:
+                        worst = d_abs
+            if worst < 1e-9:
+                break
+        for row in rows:
+            row[0]._mu = row[9]
+
     # -------------------------------------------------------------- integrators
     def _integrate(self, h: float) -> None:
         name = self.integrator
@@ -198,6 +288,7 @@ class World:
             for b in self.bodies:
                 if b.inv_mass == 0.0:
                     continue
+                b.angle += b.omega * h
                 b.vel.x += b.acc.x * h
                 b.vel.y += b.acc.y * h
                 b.pos.x += b.vel.x * h
@@ -208,6 +299,7 @@ class World:
             for b in self.bodies:
                 if b.inv_mass == 0.0:
                     continue
+                b.angle += b.omega * h
                 b._acc0.set_vec(b.acc)
                 b.vel.x += b.acc.x * half
                 b.vel.y += b.acc.y * half
@@ -224,6 +316,8 @@ class World:
         movers = [b for b in self.bodies if b.inv_mass != 0.0]
         if not movers:
             return
+        for b in movers:
+            b.angle += b.omega * h
         x0 = [(b.pos.x, b.pos.y, b.vel.x, b.vel.y) for b in movers]
 
         def eval_acc(t: float) -> list[tuple[float, float]]:
@@ -263,32 +357,24 @@ class World:
         """Advance the world by dt seconds using the configured substeps."""
         n = max(1, self.substeps)
         h = dt / n
+        inv_h = 1.0 / h
         self.contacts = []
-        rigid = [ln for ln in self.links if isinstance(ln, DistanceLink)]
+        self.diverged = []
+        for b in self.bodies:
+            b._prev.x = b.pos.x
+            b._prev.y = b.pos.y
+        rigid = [ln for ln in self.links if type(ln) is DistanceLink]
+        iters = self.iterations
         for _ in range(n):
-            # spin integration (torque only arises from contacts, applied there)
-            for b in self.bodies:
-                if b.inv_mass != 0.0:
-                    b.angle += b.omega * h
+            # (spin integration happens inside the integrator body loops;
+            # torque only arises from contacts, applied there)
             self._integrate(h)
 
             if rigid:
-                for ln in rigid:
-                    ln._lambda = 0.0
-                for b in self.bodies:
-                    b._corr_x = 0.0
-                    b._corr_y = 0.0
-                for _ in range(self.iterations):
-                    for ln in rigid:
-                        ln.solve(h)
-                inv_h = 1.0 / h
-                for b in self.bodies:
-                    if b._corr_x != 0.0 or b._corr_y != 0.0:
-                        b.vel.x += b._corr_x * inv_h
-                        b.vel.y += b._corr_y * inv_h
+                self._solve_rod_positions(rigid, h, inv_h, iters)
 
-            collide_bodies(self.bodies, self.contacts)
-            collide_walls(self.bodies, self.walls, self.contacts)
+            solve_contacts(self.bodies, self.walls, self.contacts, iters,
+                           self._contact_cache)
 
             if self.global_damping > 0.0:
                 decay = max(0.0, 1.0 - self.global_damping * h)
@@ -298,7 +384,88 @@ class World:
                     b.omega *= decay
 
             self.time += h
+        self._sanitize()
         self.step_count += 1
+
+    def _solve_rod_positions(self, rigid: list[DistanceLink], h: float,
+                             inv_h: float, iterations: int) -> None:
+        """XPBD position solve for the residual link drift, with the
+        corrections fed back into velocities."""
+        rows = []
+        for ln in rigid:
+            a = ln.a
+            b = ln.b
+            wa = a.inv_mass
+            wb = b.inv_mass
+            if wa + wb == 0.0:
+                continue
+            ln._lambda = 0.0
+            rows.append((ln, a, b, wa, wb, wa + wb,
+                         ln.compliance * inv_h * inv_h))
+        if not rows:
+            return
+        touched: dict[int, Body] = {}
+        for _, a, b, _, _, _, _ in rows:
+            if a.id not in touched:
+                touched[a.id] = a
+                a._corr_x = 0.0
+                a._corr_y = 0.0
+            if b.id not in touched:
+                touched[b.id] = b
+                b._corr_x = 0.0
+                b._corr_y = 0.0
+        for _ in range(iterations):
+            worst = 0.0
+            for ln, a, b, wa, wb, w_sum, alpha in rows:
+                dx = b.pos.x - a.pos.x
+                dy = b.pos.y - a.pos.y
+                dist = (dx * dx + dy * dy) ** 0.5
+                if dist < 1e-12:
+                    continue
+                c = dist - ln.length
+                if ln.is_rope and c <= 0.0:
+                    continue
+                nx = dx / dist
+                ny = dy / dist
+                dlam = (-c - alpha * ln._lambda) / (w_sum + alpha)
+                ln._lambda += dlam
+                d = dlam if dlam > 0.0 else -dlam
+                if d > worst:
+                    worst = d
+                ax = -wa * dlam * nx
+                ay = -wa * dlam * ny
+                bx = wb * dlam * nx
+                by = wb * dlam * ny
+                a.pos.x += ax
+                a.pos.y += ay
+                b.pos.x += bx
+                b.pos.y += by
+                a._corr_x += ax
+                a._corr_y += ay
+                b._corr_x += bx
+                b._corr_y += by
+            if worst < 1e-10:   # converged: links are exact to sub-nanometre
+                break
+        for body in touched.values():
+            if body._corr_x != 0.0 or body._corr_y != 0.0:
+                body.vel.x += body._corr_x * inv_h
+                body.vel.y += body._corr_y * inv_h
+
+    def _sanitize(self) -> None:
+        """Freeze any body whose state became non-finite (a numerical
+        blow-up, e.g. from an extreme custom field) instead of crashing."""
+        for b in self.bodies:
+            # any inf/nan component makes the sum non-finite
+            if isfinite(b.pos.x + b.pos.y + b.vel.x + b.vel.y + b.omega):
+                continue
+            if isfinite(b._prev.x) and isfinite(b._prev.y):
+                b.pos.set_vec(b._prev)
+            else:
+                b.pos.set(0.0, 0.0)
+            b.vel.set(0.0, 0.0)
+            b.omega = 0.0
+            b.acc.set(0.0, 0.0)
+            self.diverged.append(b.name)
 
     # ------------------------------------------------------------- diagnostics
     def energy(self) -> dict[str, float]:
@@ -313,11 +480,17 @@ class World:
                    if isinstance(ln, SpringLink))
         pe_n = 0.0
         if self.mutual_gravity and self.G != 0.0:
+            # softened potential, consistent with the softened force
             bodies = self.bodies
+            eps2 = self.softening * self.softening
             for i in range(len(bodies)):
+                bi = bodies[i]
                 for j in range(i + 1, len(bodies)):
-                    d = bodies[i].pos.dist_to(bodies[j].pos)
-                    pe_n -= self.G * bodies[i].mass * bodies[j].mass / max(d, 1e-9)
+                    bj = bodies[j]
+                    dx = bj.pos.x - bi.pos.x
+                    dy = bj.pos.y - bi.pos.y
+                    pe_n -= self.G * bi.mass * bj.mass / (
+                        (dx * dx + dy * dy + eps2) ** 0.5)
         return {"ke": ke, "pe": pe_g + pe_s + pe_n, "total": ke + pe_g + pe_s + pe_n}
 
     def momentum(self) -> Vec2:

@@ -2,7 +2,7 @@
 library / help / tour overlays and the hint bar."""
 from __future__ import annotations
 
-from math import pi
+from math import isfinite, pi
 
 import pygame
 
@@ -167,8 +167,10 @@ class Inspector(PanelBase):
     def _structure_key(self) -> tuple:
         app = self.app
         sel_ids = tuple(id(o) for o in app.selection)
-        return (self.tab, sel_ids, len(app.world.fields), len(app.world.drivers),
-                self.scroll, app.width, app.height, app.graph_mode)
+        field_errors = tuple(f.error for f in app.world.fields)
+        return (self.tab, sel_ids, len(app.world.fields), field_errors,
+                len(app.world.drivers), self.scroll, app.width, app.height,
+                app.graph_mode)
 
     def maybe_rebuild(self) -> None:
         key = self._structure_key()
@@ -242,9 +244,12 @@ class Inspector(PanelBase):
 
         def commit(s: str, set_=set_) -> bool:
             try:
-                set_(float(s))
+                v = float(s)
             except ValueError:
                 return False
+            if not isfinite(v) or abs(v) > 1e9:
+                return False
+            set_(v)
             self.app.push_undo()
             return True
 
@@ -566,8 +571,9 @@ class Inspector(PanelBase):
                                       lambda: short[world.integrator],
                                       lambda v: (setattr(world, "integrator", rev[v]),
                                                  self._commit()),
-                                      tooltip="Verlet: symplectic, best all-round. "
-                                              "RK4: highest accuracy for smooth forces."))
+                                      tooltip="Verlet: symplectic, best all-round choice. "
+                                              "Euler: fastest, less accurate. RK4: highest "
+                                              "short-term accuracy for smooth forces."))
         self.widgets.append(Slider(self._row(), "Substeps",
                                    lambda: world.substeps,
                                    lambda v: setattr(world, "substeps", int(v)),
@@ -579,7 +585,8 @@ class Inspector(PanelBase):
                                    lambda v: setattr(world, "iterations", int(v)),
                                    1, 30, u, "", "{:.0f}", step=1,
                                    on_commit=self._commit,
-                                   tooltip="Constraint solver iterations (rods/ropes)"))
+                                   tooltip="Solver iterations per substep for links "
+                                           "and contacts (they exit early once converged)"))
 
         self.widgets.append(SectionLabel(self._row(20), "Custom force fields"))
         for field in list(world.fields):
@@ -593,14 +600,13 @@ class Inspector(PanelBase):
                                           theme.TEXT_DIM))
 
                 def commit(s, f=field, a=attr) -> bool:
-                    old = getattr(f, a)
+                    # keep the text either way so the user can fix it; a bad
+                    # expression just disables the field and shows the error
                     setattr(f, a, s)
-                    if f.compile():
+                    ok = f.compile()
+                    if ok:
                         self.app.push_undo()
-                        return True
-                    setattr(f, a, old)
-                    f.compile()
-                    return False
+                    return ok
 
                 self.widgets.append(TextEdit((row.x + 24, row.y, row.w - 24, 24),
                                              lambda f=field, a=attr: getattr(f, a),
@@ -656,6 +662,11 @@ class Inspector(PanelBase):
         chk("Grid", "grid")
         chk("Snap to grid", "snap", "New and dragged objects snap to grid points (N)")
         chk("Body labels", "labels")
+        chk("Follow selection", "follow",
+            "Keep the camera centred on the selected body (C)")
+        self.widgets.append(Button(self._row(24), app.zoom_to_fit,
+                                   "Zoom to fit scene", size=12,
+                                   tooltip="Frame every object in view (F)"))
 
         self.widgets.append(SectionLabel(self._row(20), "Vectors"))
         chk("Velocity vectors", "vel_vectors", "Green arrows (also editable by dragging)")
@@ -687,6 +698,9 @@ class Inspector(PanelBase):
                                       lambda: app.fps_cap_label,
                                       app.set_fps_cap,
                                       tooltip="Frame-rate cap"))
+        self.widgets.append(Checkbox(self._row(24), "Antialiased rendering",
+                                     lambda: view.antialias, app.set_antialias,
+                                     "Smooth circle edges. Turn off on slow machines."))
 
     def draw(self, surface, mouse) -> None:
         pygame.draw.rect(surface, theme.PANEL, self.rect)
@@ -932,14 +946,16 @@ class LibraryOverlay(PanelBase):
 # -------------------------------------------------------------------- help
 HELP_SHORTCUTS = [
     ("Space", "Play / pause"), (".", "Step one frame"),
-    ("Ctrl+R", "Reset simulation"), ("Ctrl+Z / Ctrl+Y", "Undo / redo"),
+    ("Ctrl+R", "Reset simulation"), ("Ctrl+Z / Y", "Undo / redo"),
     ("Ctrl+D", "Duplicate selection"), ("Del", "Delete selection"),
-    ("Ctrl+C / Ctrl+V", "Copy / paste properties"),
-    ("V H B A W R E S X", "Choose tool"), ("N", "Toggle grid snapping"),
-    ("T", "Toggle motion trails"), ("G", "Toggle broadphase grid"),
-    ("L", "Open the library"), ("F1", "This help"),
-    ("Scroll", "Zoom at cursor"), ("Middle/right drag", "Pan the view"),
+    ("Ctrl+C / V", "Copy / paste properties"), ("Ctrl+S", "Save scene"),
+    ("V H B A W R E S X", "Choose tool"), ("Arrows", "Nudge selected bodies"),
+    ("F", "Zoom to fit the scene"), ("C", "Follow the selected body"),
+    ("N", "Toggle grid snapping"), ("T", "Toggle motion trails"),
+    ("G", "Toggle broadphase grid"), ("L", "Open the library"),
+    ("Scroll", "Zoom at cursor"), ("Mid/right drag", "Pan the view"),
     ("Shift+click", "Add to selection"), ("Shift+drag wall", "Snap wall angle"),
+    ("Drag body (playing)", "Throw it"), ("F1", "This help"),
 ]
 
 
@@ -950,7 +966,9 @@ class HelpOverlay(PanelBase):
 
     def relayout(self) -> None:
         app = self.app
-        w, h = min(640, app.width - 80), min(560, app.height - 60)
+        rows = (len(HELP_SHORTCUTS) + 1) // 2
+        w = min(860, app.width - 80)
+        h = min(rows * 26 + 110, app.height - 60)
         self.rect = pygame.Rect((app.width - w) // 2, (app.height - h) // 2, w, h)
         self.widgets = [
             Button((self.rect.right - 36, self.rect.y + 10, 26, 26),
@@ -989,11 +1007,14 @@ class HelpOverlay(PanelBase):
         pygame.draw.rect(surface, theme.OUTLINE, self.rect, 1, 10)
         blit_text(surface, "Help & keyboard shortcuts",
                   (self.rect.x + 16, self.rect.y + 12), 16, theme.TEXT, True)
-        y = self.rect.y + 52
-        for keys, desc in HELP_SHORTCUTS:
-            blit_text(surface, keys, (self.rect.x + 24, y), 12, theme.ACCENT, True)
-            blit_text(surface, desc, (self.rect.x + 220, y), 12, theme.TEXT_DIM)
-            y += 24
+        rows = (len(HELP_SHORTCUTS) + 1) // 2
+        col_w = (self.rect.w - 48) // 2
+        for i, (keys, desc) in enumerate(HELP_SHORTCUTS):
+            col, row = divmod(i, rows)
+            x = self.rect.x + 24 + col * (col_w + 12)
+            y = self.rect.y + 52 + row * 26
+            blit_text(surface, keys, (x, y), 12, theme.ACCENT, True)
+            blit_text(surface, desc, (x + 150, y), 12, theme.TEXT_DIM)
         self.draw_widgets(surface, mouse)
 
 
@@ -1019,9 +1040,10 @@ class TourOverlay:
              "springs. Hover any icon for its shortcut.",
              app.palette.rect),
             ("The canvas",
-             "Scroll to zoom, drag with the right mouse button to pan. With "
-             "the Select tool, drag bodies to move them and drag the green "
-             "arrow tip to set a velocity.",
+             "Scroll to zoom, drag with the right mouse button to pan, press "
+             "F to frame everything. With the Select tool, drag bodies to "
+             "move them (throw them while playing!) and drag the green arrow "
+             "tip to set a velocity.",
              app.canvas_rect()),
             ("Playback",
              "Play, pause, single-step and reset here. The speed slider "
