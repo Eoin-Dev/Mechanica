@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from math import isfinite
 
+import numpy as np
+
 from mechanica.core.expr import ExprError, compile_expr
 from mechanica.core.vec import Vec2
 from mechanica.engine.body import Body, Wall
@@ -36,6 +38,40 @@ INTEGRATORS = ("Velocity Verlet", "Symplectic Euler", "RK4")
 # Gauss-Seidel passes for the acceleration-level rod tension solve. Warm
 # starting makes a handful of passes enough even for long chains.
 ROD_FORCE_PASSES = 4
+
+# Mouse-drag speed limit tuning: a held body may not chase the cursor faster
+# than DRAG_GAMMA * rest_length * omega of its stiffest attached spring, so a
+# fast drag can never stretch a spring faster than it can respond - which is
+# what used to scramble soft bodies (measured: wild swinging leaves the
+# lattice pristine at 0.3; above ~0.5 it starts to crease). The floor keeps
+# dragging responsive even on extremely stiff/light lattices.
+DRAG_GAMMA = 0.3
+DRAG_SPEED_FLOOR = 2.5   # m/s
+
+
+def safe_drag_speed(world: "World", body: Body, base: float) -> float:
+    """Maximum speed at which `body` may be dragged through the world.
+
+    `base` is the caller's scale-derived cap (e.g. a few screen-widths per
+    second); it is tightened for bodies with springs attached so the drag
+    cannot outrun the spring response of whatever it is anchored to.
+    """
+    v = base
+    for ln in world.links:
+        if not isinstance(ln, SpringLink):
+            continue
+        if ln.a is body:
+            other = ln.b
+        elif ln.b is body:
+            other = ln.a
+        else:
+            continue
+        iw = other.inv_mass
+        if iw <= 0.0 or ln.stiffness <= 0.0:
+            continue  # anchored to something immovable: no response to outrun
+        omega = (ln.stiffness * iw) ** 0.5
+        v = min(v, DRAG_GAMMA * max(ln.rest_length, 0.05) * omega)
+    return max(v, DRAG_SPEED_FLOOR)
 
 
 class ForceField:
@@ -102,6 +138,12 @@ class Driver:
 
 
 class World:
+    # Scenes at/above these sizes switch the smooth-force pass to vectorized
+    # numpy array math (a big win for soft bodies and N-body swarms); below
+    # them plain Python loops are faster than the numpy call overhead.
+    VEC_MIN_BODIES = 24
+    VEC_MIN_SPRINGS = 12
+
     def __init__(self) -> None:
         self.bodies: list[Body] = []
         self.walls: list[Wall] = []
@@ -125,11 +167,81 @@ class World:
         self.contacts: list[Contact] = []
         self.step_count = 0
         self.diverged: list[str] = []   # names of bodies frozen this step
+        # transient mouse-drag pins: held body -> (target_x, target_y, v_max).
+        # Each substep the body travels toward its target at up to v_max, so
+        # a fast drag stays a smooth, bounded motion instead of a teleport.
+        self.drag_pins: dict[Body, tuple[float, float, float]] = {}
         self._contact_cache: dict = {}  # warm-start impulses between substeps
+        self._vec: dict | None = None   # numpy scratch, rebuilt each step()
+        self._rods: list[DistanceLink] = []      # per-step caches, see
+        self._movers: list[Body] = []            # _prepare_step()
+        self._contact_static: dict = {}
 
     # ------------------------------------------------------------------ forces
+    def _prepare_step(self) -> None:
+        """Rebuild the per-step numpy scratch arrays (or drop them for small
+        scenes). Body/link lists cannot change during a step, so quantities
+        that only the UI edits (mass, stiffness, ...) are gathered once here
+        instead of every force evaluation."""
+        bodies = self.bodies
+        n = len(bodies)
+        springs = []
+        rods = []
+        no_collide: set[tuple[int, int]] = set()
+        for ln in self.links:
+            if type(ln) is DistanceLink:
+                rods.append(ln)
+            elif isinstance(ln, SpringLink):
+                springs.append(ln)
+            a, b = ln.a.id, ln.b.id
+            no_collide.add((a, b) if a < b else (b, a))
+        self._rods = rods
+        self._movers = [b for b in bodies if b.inv_mass != 0.0]
+        # directly linked bodies never collide with each other (their link
+        # already governs their separation); everything else does, which is
+        # what stops soft bodies from tangling through themselves
+        self._contact_static: dict = {"no_collide": no_collide}
+        # arrays pay off only when there is real vector work to do: many
+        # springs, or many bodies under N-body gravity / custom fields
+        # (plain gravity+drag alone is cheaper as a Python loop)
+        heavy = (self.mutual_gravity and self.G != 0.0) or any(
+            f.enabled and f._fx is not None for f in self.fields)
+        if len(springs) < self.VEC_MIN_SPRINGS and not (
+                heavy and n >= self.VEC_MIN_BODIES):
+            self._vec = None
+            return
+        for i, b in enumerate(bodies):
+            b._idx = i
+        inv_m = np.fromiter((b.inv_mass for b in bodies), np.float64, n)
+        v: dict = {
+            "n": n,
+            "mass": np.fromiter((b.mass for b in bodies), np.float64, n),
+            "inv_m": inv_m,
+            "movable": (inv_m > 0.0).astype(np.float64),
+            "cfx": np.fromiter((b.const_force.x for b in bodies), np.float64, n),
+            "cfy": np.fromiter((b.const_force.y for b in bodies), np.float64, n),
+            "px": np.empty(n), "py": np.empty(n),
+            "vx": np.empty(n), "vy": np.empty(n),
+        }
+        if self.drivers:
+            v["id2i"] = {b.id: i for i, b in enumerate(bodies)}
+        if springs:
+            ns = len(springs)
+            v["sa"] = np.fromiter((s.a._idx for s in springs), np.intp, ns)
+            v["sb"] = np.fromiter((s.b._idx for s in springs), np.intp, ns)
+            v["sk"] = np.fromiter((s.stiffness for s in springs), np.float64, ns)
+            v["sr"] = np.fromiter((s.rest_length for s in springs), np.float64, ns)
+            # negative damping would inject energy; the scalar path ignores it
+            v["sc"] = np.maximum(
+                np.fromiter((s.damping for s in springs), np.float64, ns), 0.0)
+        self._vec = v
+
     def _accumulate_forces(self, t: float) -> None:
         """Fill body.acc with the total smooth acceleration at the current state."""
+        if self._vec is not None:
+            self._accumulate_forces_vec(t)
+            self._solve_rod_forces()
+            return
         g = self.gravity
         c1 = self.drag_linear
         c2 = self.drag_quadratic
@@ -210,6 +322,108 @@ class World:
 
         self._solve_rod_forces()
 
+    def _accumulate_forces_vec(self, t: float) -> None:
+        """Vectorized twin of the scalar force pass: gravity, drag, N-body,
+        springs, drivers and fields computed with numpy over every body at
+        once, then scattered back into body.acc."""
+        v = self._vec
+        bodies = self.bodies
+        n = v["n"]
+        px, py, vx, vy = v["px"], v["py"], v["vx"], v["vy"]
+        px[:] = [b.pos.x for b in bodies]
+        py[:] = [b.pos.y for b in bodies]
+        vx[:] = [b.vel.x for b in bodies]
+        vy[:] = [b.vel.y for b in bodies]
+        inv_m = v["inv_m"]
+
+        ax = v["cfx"] * inv_m
+        ay = v["cfy"] * inv_m - self.gravity
+        c1 = self.drag_linear
+        c2 = self.drag_quadratic
+        if c1 != 0.0 or c2 != 0.0:
+            drag = (c1 + c2 * np.hypot(vx, vy)) * inv_m
+            ax -= drag * vx
+            ay -= drag * vy
+
+        if self.mutual_gravity and self.G != 0.0:
+            dx = px[None, :] - px[:, None]
+            dy = py[None, :] - py[:, None]
+            d2 = dx * dx + dy * dy + self.softening * self.softening
+            np.fill_diagonal(d2, np.inf)
+            s = self.G * d2 ** -1.5
+            m = v["mass"]
+            ax += (s * dx) @ m
+            ay += (s * dy) @ m
+
+        sa = v.get("sa")
+        if sa is not None:
+            sb = v["sb"]
+            dx = px[sb] - px[sa]
+            dy = py[sb] - py[sa]
+            dist = np.hypot(dx, dy)
+            safe = np.maximum(dist, 1e-9)
+            nx = dx / safe
+            ny = dy / safe
+            f = v["sk"] * (dist - v["sr"])
+            f += v["sc"] * ((vx[sb] - vx[sa]) * nx + (vy[sb] - vy[sa]) * ny)
+            f[dist < 1e-9] = 0.0    # coincident ends: no defined direction
+            fx = f * nx
+            fy = f * ny
+            # positive f pulls the ends together (a += f n, b -= f n)
+            ax += (np.bincount(sa, fx, n) - np.bincount(sb, fx, n)) * inv_m
+            ay += (np.bincount(sa, fy, n) - np.bincount(sb, fy, n)) * inv_m
+
+        if self.drivers:
+            from math import cos, sin, tau
+            id2i = v["id2i"]
+            for drv in self.drivers:
+                if not drv.enabled:
+                    continue
+                i = id2i.get(drv.body_id)
+                if i is None or inv_m[i] == 0.0:
+                    continue
+                f = drv.amplitude * sin(tau * drv.frequency * t + drv.phase)
+                ax[i] += f * cos(drv.angle) * inv_m[i]
+                ay[i] += f * sin(drv.angle) * inv_m[i]
+
+        for field in self.fields:
+            if not field.enabled or field._fx is None:
+                continue
+            env = {"x": px, "y": py, "vx": vx, "vy": vy, "t": t,
+                   "m": v["mass"], "r": np.hypot(px, py)}
+            try:
+                fxv = np.asarray(field._fx(env), np.float64)
+                fyv = np.asarray(field._fy(env), np.float64)
+                if not (np.all(np.isfinite(fxv)) and np.all(np.isfinite(fyv))):
+                    # singular samples (e.g. 1/r at the origin): skip them
+                    fxv = np.where(np.isfinite(fxv), fxv, 0.0)
+                    fyv = np.where(np.isfinite(fyv), fyv, 0.0)
+                ax += fxv * inv_m
+                ay += fyv * inv_m
+            except Exception:
+                # not vectorizable (e.g. uses `and`/`or`): evaluate per body
+                for i, b in enumerate(bodies):
+                    if inv_m[i] == 0.0:
+                        continue
+                    e = {"x": b.pos.x, "y": b.pos.y, "vx": b.vel.x,
+                         "vy": b.vel.y, "t": t, "m": b.mass,
+                         "r": (b.pos.x * b.pos.x + b.pos.y * b.pos.y) ** 0.5}
+                    try:
+                        ax[i] += float(field._fx(e)) * inv_m[i]
+                        ay[i] += float(field._fy(e)) * inv_m[i]
+                    except Exception:
+                        pass  # singular point: skip this sample
+
+        movable = v["movable"]
+        ax *= movable
+        ay *= movable
+        axl = ax.tolist()   # plain floats keep the scalar solvers fast
+        ayl = ay.tolist()
+        for i, b in enumerate(bodies):
+            acc = b.acc
+            acc.x = axl[i]
+            acc.y = ayl[i]
+
     def _solve_rod_forces(self) -> None:
         """Add the analytic rod/rope constraint forces to the accelerations.
 
@@ -219,9 +433,7 @@ class World:
         long chains; the XPBD position pass mops up the O(h^2) residual.
         """
         rows = []
-        for ln in self.links:
-            if type(ln) is not DistanceLink:
-                continue
+        for ln in self._rods:
             a = ln.a
             b = ln.b
             wa = a.inv_mass
@@ -281,13 +493,12 @@ class World:
     # -------------------------------------------------------------- integrators
     def _integrate(self, h: float) -> None:
         name = self.integrator
+        movers = self._movers
         if name == "RK4":
             self._integrate_rk4(h)
         elif name == "Symplectic Euler":
             self._accumulate_forces(self.time)
-            for b in self.bodies:
-                if b.inv_mass == 0.0:
-                    continue
+            for b in movers:
                 b.angle += b.omega * h
                 b.vel.x += b.acc.x * h
                 b.vel.y += b.acc.y * h
@@ -296,24 +507,19 @@ class World:
         else:  # Velocity Verlet
             self._accumulate_forces(self.time)
             half = 0.5 * h
-            for b in self.bodies:
-                if b.inv_mass == 0.0:
-                    continue
+            for b in movers:
                 b.angle += b.omega * h
-                b._acc0.set_vec(b.acc)
                 b.vel.x += b.acc.x * half
                 b.vel.y += b.acc.y * half
                 b.pos.x += b.vel.x * h
                 b.pos.y += b.vel.y * h
             self._accumulate_forces(self.time + h)
-            for b in self.bodies:
-                if b.inv_mass == 0.0:
-                    continue
+            for b in movers:
                 b.vel.x += b.acc.x * half
                 b.vel.y += b.acc.y * half
 
     def _integrate_rk4(self, h: float) -> None:
-        movers = [b for b in self.bodies if b.inv_mass != 0.0]
+        movers = self._movers
         if not movers:
             return
         for b in movers:
@@ -358,14 +564,18 @@ class World:
         n = max(1, self.substeps)
         h = dt / n
         inv_h = 1.0 / h
+        self._prepare_step()
         self.contacts = []
         self.diverged = []
         for b in self.bodies:
             b._prev.x = b.pos.x
             b._prev.y = b.pos.y
-        rigid = [ln for ln in self.links if type(ln) is DistanceLink]
+        rigid = self._rods
         iters = self.iterations
         for _ in range(n):
+            if self.drag_pins:
+                self._move_drag_pins(h, inv_h)
+
             # (spin integration happens inside the integrator body loops;
             # torque only arises from contacts, applied there)
             self._integrate(h)
@@ -374,7 +584,7 @@ class World:
                 self._solve_rod_positions(rigid, h, inv_h, iters)
 
             solve_contacts(self.bodies, self.walls, self.contacts, iters,
-                           self._contact_cache)
+                           self._contact_cache, self._contact_static)
 
             if self.global_damping > 0.0:
                 decay = max(0.0, 1.0 - self.global_damping * h)
@@ -386,6 +596,32 @@ class World:
             self.time += h
         self._sanitize()
         self.step_count += 1
+
+    def _move_drag_pins(self, h: float, inv_h: float) -> None:
+        """Advance held bodies toward their drag targets, at most v_max each.
+
+        The body keeps infinite mass (nothing can push it) but moves
+        kinematically with a real velocity, so springs stretch smoothly,
+        spring damping sees the true relative speed, and contacts treat it
+        like a moving platform that carries other bodies along.
+        """
+        for b, (tx, ty, v_max) in self.drag_pins.items():
+            if not b.held:
+                continue    # released this frame; controller clears soon
+            dx = tx - b.pos.x
+            dy = ty - b.pos.y
+            dist = (dx * dx + dy * dy) ** 0.5
+            step_len = v_max * h
+            if dist <= step_len:
+                b.pos.set(tx, ty)
+                b.vel.set(dx * inv_h, dy * inv_h)
+            else:
+                s = step_len / dist
+                mx = dx * s
+                my = dy * s
+                b.pos.x += mx
+                b.pos.y += my
+                b.vel.set(mx * inv_h, my * inv_h)
 
     def _solve_rod_positions(self, rigid: list[DistanceLink], h: float,
                              inv_h: float, iterations: int) -> None:
@@ -483,14 +719,24 @@ class World:
             # softened potential, consistent with the softened force
             bodies = self.bodies
             eps2 = self.softening * self.softening
-            for i in range(len(bodies)):
-                bi = bodies[i]
-                for j in range(i + 1, len(bodies)):
-                    bj = bodies[j]
-                    dx = bj.pos.x - bi.pos.x
-                    dy = bj.pos.y - bi.pos.y
-                    pe_n -= self.G * bi.mass * bj.mass / (
-                        (dx * dx + dy * dy + eps2) ** 0.5)
+            if len(bodies) >= self.VEC_MIN_BODIES:
+                px = np.fromiter((b.pos.x for b in bodies), np.float64)
+                py = np.fromiter((b.pos.y for b in bodies), np.float64)
+                m = np.fromiter((b.mass for b in bodies), np.float64)
+                dx = px[None, :] - px[:, None]
+                dy = py[None, :] - py[:, None]
+                d2 = dx * dx + dy * dy + eps2
+                np.fill_diagonal(d2, np.inf)
+                pe_n = -0.5 * self.G * float(m @ (d2 ** -0.5) @ m)
+            else:
+                for i in range(len(bodies)):
+                    bi = bodies[i]
+                    for j in range(i + 1, len(bodies)):
+                        bj = bodies[j]
+                        dx = bj.pos.x - bi.pos.x
+                        dy = bj.pos.y - bi.pos.y
+                        pe_n -= self.G * bi.mass * bj.mass / (
+                            (dx * dx + dy * dy + eps2) ** 0.5)
         return {"ke": ke, "pe": pe_g + pe_s + pe_n, "total": ke + pe_g + pe_s + pe_n}
 
     def momentum(self) -> Vec2:

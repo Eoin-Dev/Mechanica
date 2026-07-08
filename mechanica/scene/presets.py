@@ -6,7 +6,7 @@ double as the educational blurb shown on the preset card.
 """
 from __future__ import annotations
 
-from math import cos, pi, radians, sin
+from math import cos, pi, radians, sin, sqrt, tau
 from random import Random
 
 from mechanica.core.vec import Vec2
@@ -510,7 +510,224 @@ def _build_terminal_velocity() -> World:
     return w
 
 
-# -------------------------------------------------------------------- chaos
+# --------------------------------------------------------------- soft bodies
+# Soft bodies are lattices of evenly spaced particles joined by damped
+# springs: a structural mesh carries the shape, shear/diagonal springs stop
+# it collapsing. Directly linked particles never collide with each other
+# (the engine excludes linked pairs; their springs govern the separation),
+# but everything else does - so a lattice can squash yet never tangle
+# through itself.
+
+def _soft_spring(w: World, a: Body, b: Body, k: float, damp: float) -> None:
+    w.links.append(SpringLink(a, b, a.pos.dist_to(b.pos), k, damp))
+
+
+def _soft_grid(w: World, x0: float, y0: float, cols: int, rows: int,
+               spacing: float, mass_total: float, k: float, damp: float,
+               color, e: float = 0.2, mu: float = 0.5,
+               particle_r: float | None = None) -> list[list[Body]]:
+    """Rectangular particle lattice with structural + crossed shear springs."""
+    m = mass_total / (cols * rows)
+    r = particle_r if particle_r is not None else spacing * 0.35
+    grid: list[list[Body]] = []
+    for j in range(rows):
+        row = []
+        for i in range(cols):
+            b = _add_body(w, x0 + i * spacing, y0 + j * spacing, r, m,
+                          e=e, mu=mu, color=color)
+            row.append(b)
+        grid.append(row)
+    for j in range(rows):
+        for i in range(cols):
+            if i + 1 < cols:
+                _soft_spring(w, grid[j][i], grid[j][i + 1], k, damp)
+            if j + 1 < rows:
+                _soft_spring(w, grid[j][i], grid[j + 1][i], k, damp)
+            if i + 1 < cols and j + 1 < rows:
+                _soft_spring(w, grid[j][i], grid[j + 1][i + 1], k, damp)
+                _soft_spring(w, grid[j][i + 1], grid[j + 1][i], k, damp)
+    return grid
+
+
+def _soft_blob(w: World, cx: float, cy: float, radius: float, spacing: float,
+               mass_total: float, k: float, damp: float, color,
+               e: float = 0.3, mu: float = 0.5) -> list[Body]:
+    """Disc of hex-packed particles, each sprung to its ~6 nearest
+    neighbours: a fully triangulated (and therefore shear-stiff) blob."""
+    pts: list[tuple[float, float]] = []
+    row_h = spacing * sqrt(3) / 2
+    j = 0
+    y = -radius
+    while y <= radius + 1e-9:
+        x = -radius + (spacing / 2 if j % 2 else 0.0)
+        while x <= radius + 1e-9:
+            if x * x + y * y <= radius * radius + 1e-9:
+                pts.append((x, y))
+            x += spacing
+        y += row_h
+        j += 1
+    m = mass_total / len(pts)
+    bodies = []
+    for (x, y) in pts:
+        b = _add_body(w, cx + x, cy + y, spacing * 0.38, m, e=e, mu=mu,
+                      color=color)
+        bodies.append(b)
+    cutoff = spacing * 1.25
+    for i in range(len(bodies)):
+        for j2 in range(i + 1, len(bodies)):
+            if bodies[i].pos.dist_to(bodies[j2].pos) <= cutoff:
+                _soft_spring(w, bodies[i], bodies[j2], k, damp)
+    return bodies
+
+
+def _build_jelly_block() -> World:
+    w = World()
+    w.substeps = 8
+    floor = Wall(Vec2(-4.5, 0), Vec2(4.5, 0), 0.14)
+    floor.friction = 0.6
+    floor.restitution = 0.1
+    w.walls.append(floor)
+    for x in (-4.5, 4.5):
+        side = Wall(Vec2(x, 0), Vec2(x, 4.0), 0.14)
+        side.restitution = 0.4
+        w.walls.append(side)
+    _soft_grid(w, -0.9, 1.6, 9, 7, 0.225, mass_total=4.0, k=1000.0, damp=3.0,
+               color=(120, 200, 140))
+    return w
+
+
+def _build_squishy_ball() -> World:
+    w = World()
+    w.substeps = 8
+    # a V-shaped ramp: the ball splats at the bottom, oozes and settles
+    left = Wall(Vec2(-4.0, 3.0), Vec2(0.0, 0.0), 0.14)
+    right = Wall(Vec2(0.0, 0.0), Vec2(4.0, 3.0), 0.14)
+    for wall in (left, right):
+        wall.friction = 0.35
+        wall.restitution = 0.15
+        w.walls.append(wall)
+    _soft_blob(w, -2.2, 4.4, 0.75, 0.26, mass_total=3.0, k=900.0, damp=3.5,
+               color=(230, 140, 160))
+    return w
+
+
+def _build_cloth_curtain() -> World:
+    w = World()
+    w.substeps = 8
+    floor = Wall(Vec2(-5.0, -1.8), Vec2(5.0, -1.8), 0.14)
+    floor.friction = 0.6
+    floor.restitution = 0.2
+    w.walls.append(floor)
+    for x in (-5.0, 5.0):
+        side = Wall(Vec2(x, -1.8), Vec2(x, 2.2), 0.14)
+        side.restitution = 0.4
+        w.walls.append(side)
+    cols, rows, spacing = 13, 8, 0.2
+    grid = _soft_grid(w, -1.2, -0.4, cols, rows, spacing, mass_total=1.5,
+                      k=200.0, damp=1.0, color=(150, 170, 230),
+                      e=0.05, mu=0.3, particle_r=0.04)
+    for b in grid[rows - 1]:    # pin the whole top edge
+        b.locked = True
+        b.color = (120, 125, 135)
+    # a gusting breeze that only stirs the light fabric (selected by mass),
+    # then a ball lobbed into the middle of the curtain
+    w.fields.append(ForceField("Breeze (light bodies)",
+                               "0.6*sin(1.1*t + 0.8*y)*(m < 0.1)", "0"))
+    ball = _add_body(w, -3.8, 0.2, 0.28, 1.2, vx=3.6, vy=3.2, e=0.3, mu=0.3,
+                     color=(235, 200, 90), name="Cannonball")
+    ball.collides = True
+    return w
+
+
+def _build_trampoline() -> World:
+    w = World()
+    w.substeps = 10
+    n, spacing = 21, 0.18
+    x0 = -(n - 1) * spacing / 2
+    left = _add_body(w, x0 - spacing, 0.0, 0.07, 1.0, locked=True,
+                     color=(120, 125, 135))
+    right = _add_body(w, -x0 + spacing, 0.0, 0.07, 1.0, locked=True,
+                      color=(120, 125, 135))
+    prev = left
+    sheet = []
+    for i in range(n):
+        b = _add_body(w, x0 + i * spacing, 0.0, 0.055, 0.1, e=0.2, mu=0.5,
+                      color=(110, 200, 210))
+        sheet.append(b)
+        _soft_spring(w, prev, b, 2500.0, 4.0)
+        prev = b
+    _soft_spring(w, prev, right, 2500.0, 4.0)
+    for a, b in zip(sheet, sheet[2:]):   # bend springs keep the bed smooth
+        _soft_spring(w, a, b, 500.0, 1.5)
+    # side bumpers keep the bouncer over the bed
+    for x in (-3.2, 3.2):
+        side = Wall(Vec2(x, -0.6), Vec2(x, 3.2), 0.12)
+        side.restitution = 0.5
+        w.walls.append(side)
+    _add_body(w, 0.0, 2.6, 0.3, 2.0, e=0.2, mu=0.4, color=(220, 130, 90),
+              name="Gymnast")
+    return w
+
+
+def _build_soft_wheel() -> World:
+    w = World()
+    w.substeps = 10
+    ang = radians(-14)
+    length = 11.0
+    ramp = Wall(Vec2(0, 0), Vec2(length * cos(ang), length * sin(ang)), 0.14)
+    ramp.friction = 1.0
+    ramp.restitution = 0.05
+    w.walls.append(ramp)
+    run_out = Wall(Vec2(length * cos(ang), length * sin(ang)),
+                   Vec2(length * cos(ang) + 6, length * sin(ang)), 0.14)
+    run_out.friction = 0.9
+    run_out.restitution = 0.05
+    w.walls.append(run_out)
+    bumper = Wall(Vec2(length * cos(ang) + 6, length * sin(ang)),
+                  Vec2(length * cos(ang) + 6, length * sin(ang) + 2.5), 0.14)
+    bumper.restitution = 0.4
+    w.walls.append(bumper)
+
+    n, radius = 22, 0.6
+    nrm = Vec2(-sin(ang), cos(ang))
+    centre = Vec2(0.9 * cos(ang), 0.9 * sin(ang)) + nrm * (radius + 0.13)
+    hub = _add_body(w, centre.x, centre.y, 0.13, 0.8, color=(200, 150, 90),
+                    name="Hub")
+    ring = []
+    for i in range(n):
+        th = tau * i / n
+        b = _add_body(w, centre.x + radius * cos(th),
+                      centre.y + radius * sin(th), 0.075, 0.09,
+                      e=0.15, mu=1.0, color=(235, 170, 90))
+        ring.append(b)
+    for i in range(n):
+        _soft_spring(w, ring[i], ring[(i + 1) % n], 2200.0, 3.0)   # tread
+        _soft_spring(w, ring[i], ring[(i + 2) % n], 900.0, 1.5)    # bend
+        _soft_spring(w, ring[i], hub, 450.0, 2.0)                  # spokes
+    # start it rolling: v = omega x r about the contact point
+    omega = -3.0
+    for b in ring + [hub]:
+        rx = b.pos.x - centre.x
+        ry = b.pos.y - centre.y
+        b.vel.set(-omega * ry + 1.0 * cos(ang), omega * rx + 1.0 * sin(ang))
+    return w
+
+
+def _build_jelly_smash() -> World:
+    w = World()
+    w.substeps = 8
+    floor = Wall(Vec2(-5.0, 0), Vec2(5.0, 0), 0.14)
+    floor.friction = 0.7
+    floor.restitution = 0.1
+    w.walls.append(floor)
+    _soft_grid(w, -1.0, 0.12, 8, 6, 0.24, mass_total=3.5, k=1100.0, damp=3.2,
+               color=(170, 140, 230))
+    pivot = _add_body(w, -3.2, 3.6, 0.06, 1.0, locked=True,
+                      color=(120, 125, 135))
+    ball = _add_body(w, -5.6, 1.4, 0.4, 18.0, e=0.2, mu=0.4,
+                     color=(90, 95, 105), name="Wrecking ball")
+    w.links.append(DistanceLink(pivot, ball))
+    return w
 def _build_butterfly() -> World:
     w = World()
     w.substeps = 12
@@ -675,6 +892,37 @@ PRESETS: list[Preset] = [
            "A load dropped onto a hanging chain of rigid links. The chain "
            "sags into a catenary-like curve under the weight.",
            _build_chain_bridge, {"zoom": 110}),
+
+    Preset("Jelly block", "Soft Bodies",
+           "A 9 x 7 lattice of particles joined by structural and shear "
+           "springs - a jelly cube. Drop it, watch it splat, wobble and "
+           "settle. Grab and throw it with the mouse!",
+           _build_jelly_block, {"zoom": 95, "centre": (0, 1.4)}),
+    Preset("Squishy ball", "Soft Bodies",
+           "A hex-packed disc of particles, each sprung to its six "
+           "neighbours, rolls and splats down a V-ramp. Fully triangulated, "
+           "so it keeps its round shape - mostly.",
+           _build_squishy_ball, {"zoom": 85, "centre": (0, 2.0)}),
+    Preset("Cloth curtain", "Soft Bodies",
+           "A 15 x 10 spring lattice pinned along its top edge sways in a "
+           "gusting breeze - until a cannonball flies into it. Drag any "
+           "particle to tug the fabric around.",
+           _build_cloth_curtain, {"zoom": 110, "centre": (0, 0.4)}),
+    Preset("Trampoline", "Soft Bodies",
+           "A springy bed of particles strung between two anchors. The "
+           "ball's energy trades between gravity and spring tension every "
+           "bounce. Try changing the ball's mass!",
+           _build_trampoline, {"zoom": 110, "centre": (0, 1.0), "graph": "energy"}),
+    Preset("Soft wheel", "Soft Bodies",
+           "A deformable tyre: a sprung tread ring with spokes to a hub. It "
+           "flattens against the ramp as it rolls, just like a real tyre at "
+           "low pressure.",
+           _build_soft_wheel, {"zoom": 80, "centre": (5.0, -1.0), "trails": False}),
+    Preset("Jelly smash", "Soft Bodies",
+           "A rigid wrecking ball meets a soft jelly block: constraints, "
+           "contacts and 200-odd springs all at once. The jelly absorbs the "
+           "blow and jiggles it away as heat (spring damping).",
+           _build_jelly_smash, {"zoom": 80, "centre": (-0.5, 1.4)}),
 
     Preset("Butterfly effect", "Chaos",
            "Three double pendulums released 0.01 degrees apart. They track "

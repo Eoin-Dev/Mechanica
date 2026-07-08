@@ -342,6 +342,95 @@ def test_rolling() -> None:
           f"v={speed:.3f} m/s, omega*r/v={ratio:.3f}")
 
 
+# ---------------------------------------------------------------- soft bodies
+def test_soft_body_presets() -> None:
+    """Every soft-body preset must run without blowing up or escaping."""
+    from mechanica.scene.presets import PRESETS
+    for name in ("Jelly block", "Squishy ball", "Cloth curtain",
+                 "Trampoline", "Soft wheel", "Jelly smash"):
+        w = [p for p in PRESETS if p.name == name][0].build()
+        run(w, 3.0)
+        spans = [abs(b.pos.x) + abs(b.pos.y) for b in w.bodies]
+        ok = (all(math.isfinite(s) for s in spans) and max(spans) < 50.0
+              and not w.diverged)
+        check(f"soft body '{name}' stays coherent over 3 s", ok,
+              f"max |x|+|y|={max(spans):.1f} m")
+
+
+def test_soft_body_momentum() -> None:
+    """Vectorized spring forces are internal: they must conserve momentum."""
+    w = World()
+    w.gravity = 0.0
+    w.substeps = 8
+    bodies = []
+    for j in range(5):
+        for i in range(6):
+            b = body(w, i * 0.3, j * 0.3, r=0.1, m=0.2, vx=1.0, vy=0.5)
+            bodies.append(b)
+    for j in range(5):
+        for i in range(6):
+            a = bodies[j * 6 + i]
+            if i + 1 < 6:
+                w.links.append(SpringLink(a, bodies[j * 6 + i + 1],
+                                          stiffness=150.0, damping=0.5))
+            if j + 1 < 5:
+                w.links.append(SpringLink(a, bodies[(j + 1) * 6 + i],
+                                          stiffness=150.0, damping=0.5))
+    p0 = w.momentum()
+    run(w, 5.0)
+    p1 = w.momentum()
+    err = math.hypot(p1.x - p0.x, p1.y - p0.y)
+    check("soft lattice: momentum conserved (numpy springs)", err < 1e-9,
+          f"|dp|={err:.2e}")
+
+
+def test_drag_speed_limit() -> None:
+    """Swinging a grabbed particle wildly must not scramble its lattice."""
+    from mechanica.engine.world import safe_drag_speed
+    from mechanica.scene.presets import PRESETS
+    w = [p for p in PRESETS if p.name == "Jelly block"][0].build()
+    parts = [b for b in w.bodies if not b.locked]
+    grab = parts[len(parts) // 2]
+    grab.held = True
+    vmax = safe_drag_speed(w, grab, 60.0)
+    for i in range(int(1.0 / DT)):   # two fast loops, cursor at ~23 m/s
+        ang = 2.0 * math.tau * i * DT
+        w.drag_pins[grab] = (1.8 * math.cos(ang), 1.8 + 1.8 * math.sin(ang),
+                             vmax)
+        w.step(DT)
+    grab.held = False
+    w.drag_pins.clear()
+    run(w, 5.0)
+    springs = [ln for ln in w.links if isinstance(ln, SpringLink)]
+    worst = max(abs(ln.a.pos.dist_to(ln.b.pos) - ln.rest_length)
+                / ln.rest_length for ln in springs)
+    check("violent drag: jelly lattice stays pristine", worst < 0.2,
+          f"worst residual strain={worst * 100:.1f}%")
+
+
+def test_vectorized_matches_scalar() -> None:
+    """The numpy fast path must reproduce the pure-Python physics."""
+    from mechanica.engine import contacts as contacts_mod
+    from mechanica.scene.presets import PRESETS
+    build = [p for p in PRESETS if p.name == "Jelly block"][0].build
+    saved = (World.VEC_MIN_BODIES, World.VEC_MIN_SPRINGS,
+             contacts_mod.VEC_MIN_COLLIDERS)
+    try:
+        World.VEC_MIN_BODIES = World.VEC_MIN_SPRINGS = 10 ** 9
+        contacts_mod.VEC_MIN_COLLIDERS = 10 ** 9
+        w_scalar = build()
+        run(w_scalar, 1.5)
+    finally:
+        (World.VEC_MIN_BODIES, World.VEC_MIN_SPRINGS,
+         contacts_mod.VEC_MIN_COLLIDERS) = saved
+    w_vec = build()
+    run(w_vec, 1.5)
+    err = max(math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y)
+              for a, b in zip(w_scalar.bodies, w_vec.bodies))
+    check("numpy path matches the Python path", err < 1e-9,
+          f"max deviation={err:.2e} m")
+
+
 # -------------------------------------------------------------- infrastructure
 def test_expression_sandbox() -> None:
     ok = True
@@ -409,6 +498,10 @@ def main() -> int:
     test_nonfinite_survival()
     test_spring_period()
     test_rolling()
+    test_soft_body_presets()
+    test_soft_body_momentum()
+    test_drag_speed_limit()
+    test_vectorized_matches_scalar()
     test_expression_sandbox()
     test_serialization_roundtrip()
     test_determinism()

@@ -25,7 +25,6 @@ SELECTION = (110, 180, 240)
 VEL_COLOR = (120, 210, 130)
 ACC_COLOR = (235, 170, 90)
 FORCE_COLOR = (235, 110, 110)
-TRAIL_ALPHA = 150
 
 RADIUS = 6  # default corner radius
 
@@ -171,10 +170,6 @@ def draw_icon(surface: pygame.Surface, name: str, rect: pygame.Rect,
                                   s - 1, s - 1), 0, 2)
     elif name == "help":
         blit_text(surface, "?", (cx, cy), int(s * 2.6), color, True, "center")
-    elif name == "save":
-        pygame.draw.rect(surface, color, (cx - s, cy - s, 2 * s, 2 * s), 2, 2)
-        pygame.draw.rect(surface, color, (cx - s * 0.45, cy + s * 0.15, s * 0.9, s * 0.85), 1)
-        pygame.draw.rect(surface, color, (cx - s * 0.45, cy - s, s * 0.9, s * 0.5))
     elif name == "trash":
         pygame.draw.rect(surface, color, (cx - s * 0.7, cy - s * 0.5, s * 1.4, s * 1.5), 2)
         line(surface, color, (cx - s, cy - s * 0.5), (cx + s, cy - s * 0.5), 2)
@@ -185,12 +180,3 @@ def draw_icon(surface: pygame.Surface, name: str, rect: pygame.Rect,
     elif name == "close":
         line(surface, color, (cx - s * 0.8, cy - s * 0.8), (cx + s * 0.8, cy + s * 0.8), 2)
         line(surface, color, (cx - s * 0.8, cy + s * 0.8), (cx + s * 0.8, cy - s * 0.8), 2)
-    elif name == "camera":
-        pygame.draw.rect(surface, color, (cx - s, cy - s * 0.6, 2 * s, s * 1.4), 2, 2)
-        pygame.draw.circle(surface, color, (cx, cy + s * 0.1), s * 0.4, 2)
-    elif name == "graph":
-        line(surface, color, (cx - s, cy + s), (cx - s, cy - s), 2)
-        line(surface, color, (cx - s, cy + s), (cx + s, cy + s), 2)
-        pygame.draw.lines(surface, color, False,
-                          [(cx - s * 0.8, cy + s * 0.5), (cx - s * 0.2, cy - s * 0.4),
-                           (cx + s * 0.3, cy + s * 0.1), (cx + s * 0.9, cy - s * 0.8)], 2)

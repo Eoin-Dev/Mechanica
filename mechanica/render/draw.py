@@ -46,14 +46,6 @@ class ViewSettings:
         self.follow = False
         self.antialias = True
 
-    def to_dict(self) -> dict:
-        return dict(self.__dict__)
-
-    def apply(self, d: dict) -> None:
-        for k, v in d.items():
-            if hasattr(self, k):
-                setattr(self, k, v)
-
 
 def fill_circle(surface: pygame.Surface, color, cx: float, cy: float,
                 r: int, aa: bool) -> None:
@@ -135,19 +127,42 @@ def draw_arrow(surface: pygame.Surface, start: tuple[float, float],
 
 
 def _draw_spring(surface: pygame.Surface, a: tuple[float, float],
-                 b: tuple[float, float], color, coils: int = 8,
-                 aa: bool = False) -> None:
+                 b: tuple[float, float], color, aa: bool = False,
+                 rest_px: float = 0.0) -> None:
+    """Zigzag coil between two anchor points.
+
+    The coil count comes from the spring's rest length, so it stays constant
+    while the spring works; the amplitude fattens under compression and
+    thins under tension, like a real coil. Springs too short on screen to
+    read as coils degrade to a plain line.
+    """
     dx, dy = b[0] - a[0], b[1] - a[1]
     length = (dx * dx + dy * dy) ** 0.5
-    if length < 4:
+    if length < 2.0:
+        return
+    if rest_px <= 0.0:
+        rest_px = length
+    if length < 7.0 or rest_px < 11.0:      # sub-coil scale: plain line
+        pygame.draw.line(surface, color, a, b, 1 if length < 4 else 2)
         return
     ux, uy = dx / length, dy / length
     px, py = -uy, ux
-    amp = max(3.0, min(9.0, length * 0.06))
-    pts = [a]
-    lead = min(12.0, length * 0.15)
-    pts.append((a[0] + ux * lead, a[1] + uy * lead))
-    inner = length - 2 * lead
+    lead = min(9.0, length * 0.15, rest_px * 0.15)
+    inner = length - 2.0 * lead
+    coils = int(rest_px * 0.12)             # one coil per ~8 px at rest
+    if coils < 2:
+        coils = 2
+    elif coils > 10:
+        coils = 10
+    ratio = rest_px / length                # >1 compressed, <1 stretched
+    if ratio > 1.8:
+        ratio = 1.8
+    elif ratio < 0.45:
+        ratio = 0.45
+    amp = (2.2 + rest_px * 0.05) * ratio
+    if amp > 9.0:
+        amp = 9.0
+    pts = [a, (a[0] + ux * lead, a[1] + uy * lead)]
     n = coils * 2
     for i in range(1, n):
         f = i / n
@@ -187,6 +202,9 @@ def draw_world(surface: pygame.Surface, cam: Camera, world: World,
                                   screen_pts[i:i + seg + 1], 1)
 
     # --- links ---------------------------------------------------------------
+    # antialiased coils are pretty but pricey; past a few hundred springs
+    # (dense soft bodies) plain polylines keep the frame rate up
+    aa_springs = view.antialias and len(world.links) <= 300
     for link in world.links:
         pa = cam.to_screen(link.a.pos)
         pb = cam.to_screen(link.b.pos)
@@ -195,7 +213,8 @@ def draw_world(surface: pygame.Surface, cam: Camera, world: World,
         if isinstance(link, SpringLink):
             color = theme.SELECTION if selected else \
                 (200, 205, 215) if hovered else (135, 142, 152)
-            _draw_spring(surface, pa, pb, color, aa=view.antialias)
+            _draw_spring(surface, pa, pb, color, aa=aa_springs,
+                         rest_px=link.rest_length * cam.zoom)
         else:
             if link.is_rope:
                 color = theme.SELECTION if selected else \
