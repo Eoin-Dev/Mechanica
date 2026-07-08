@@ -827,8 +827,9 @@ class Inspector(PanelBase):
 class GraphDock(PanelBase):
     def relayout(self) -> None:
         app = self.app
+        # full width (the inspector stops at the dock's top edge)
         self.rect = pygame.Rect(PALETTE_W, app.height - HINT_H - DOCK_H,
-                                app.width - PALETTE_W - INSPECTOR_W, DOCK_H)
+                                app.width - PALETTE_W, DOCK_H)
         self.widgets = [Button((self.rect.right - 30, self.rect.y + 6, 24, 24),
                                lambda: app.set_graph_mode("Off"), "",
                                icon="close", style="ghost", tooltip="Close graphs")]
@@ -845,7 +846,7 @@ class GraphDock(PanelBase):
         elif app.graph_mode == "Phase":
             body = next((o for o in app.selection if isinstance(o, Body)), None)
             title = f"Phase space: {body.name}" if body else "Phase space"
-            app.phase_plot.draw(surface, plot_rect, title, "x (m)", "vx (m/s)")
+            app.phase_plot.draw(surface, plot_rect, title)
         self.draw_widgets(surface, mouse)
 
 

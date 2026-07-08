@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import deque
+from math import isfinite
 
 import pygame
 
@@ -26,6 +27,10 @@ class TimeSeries:
             d.clear()
 
     def add(self, t: float, values: dict[str, float]) -> None:
+        # a single inf/NaN sample (a body mid-blow-up) would wreck the
+        # autoscale for the whole rolling window: drop it instead
+        if not isfinite(t) or any(not isfinite(v) for v in values.values()):
+            return
         if self.t and t < self.t[-1]:
             self.clear()  # simulation was reset/rewound
         self.t.append(t)
@@ -63,7 +68,8 @@ class TimeSeries:
             blit_text(surface, f"{lo + frac * (hi - lo):.3g}",
                       (plot.x + 2, y - 7), 10, theme.TEXT_FAINT)
 
-        step = max(1, len(ts) // max(plot.w, 1))
+        # ~one sample per 2 px is visually lossless and halves the line work
+        step = max(1, (2 * len(ts)) // max(plot.w, 1))
         for ci, c in enumerate(self.channels):
             d = self.data[c]
             pts = []
@@ -74,8 +80,8 @@ class TimeSeries:
             if len(pts) >= 2:
                 pygame.draw.aalines(surface, SERIES_COLORS[ci % len(SERIES_COLORS)],
                                     False, pts)
-        # legend
-        lx = rect.right - 10
+        # legend (inset so it never runs under the dock's close button)
+        lx = rect.right - 34
         for ci in range(len(self.channels) - 1, -1, -1):
             c = self.channels[ci]
             val = self.data[c][-1] if self.data[c] else 0.0
@@ -88,19 +94,25 @@ class TimeSeries:
 
 
 class PhasePlot:
-    """Trajectory in a 2D state space (e.g. x vs vx of a selected body)."""
+    """Position-velocity trajectory of a selected body.
+
+    Both axes are recorded and the plot shows whichever one the body
+    actually moves along, so a vertical oscillator traces its y-vy orbit
+    instead of collapsing to a single stationary x-vx dot.
+    """
 
     def __init__(self, maxlen: int = 1500) -> None:
-        self.points: deque[tuple[float, float]] = deque(maxlen=maxlen)
+        self.points: deque[tuple[float, float, float, float]] = deque(maxlen=maxlen)
 
     def clear(self) -> None:
         self.points.clear()
 
-    def add(self, x: float, y: float) -> None:
-        self.points.append((x, y))
+    def add(self, x: float, vx: float, y: float, vy: float) -> None:
+        if isfinite(x + vx + y + vy):
+            self.points.append((x, vx, y, vy))
 
-    def draw(self, surface: pygame.Surface, rect: pygame.Rect, title: str,
-             xlabel: str, ylabel: str) -> None:
+    def draw(self, surface: pygame.Surface, rect: pygame.Rect,
+             title: str) -> None:
         pygame.draw.rect(surface, (28, 30, 36), rect, 0, 6)
         pygame.draw.rect(surface, theme.OUTLINE, rect, 1, 6)
         blit_text(surface, title, (rect.x + 10, rect.y + 4), 12, theme.TEXT_DIM, True)
@@ -110,8 +122,19 @@ class PhasePlot:
             return
         plot = rect.inflate(-20, -34)
         plot.y += 14
-        xs = [p[0] for p in self.points]
-        ys = [p[1] for p in self.points]
+        samples = list(self.points)
+        pos_x = [p[0] for p in samples]
+        pos_y = [p[2] for p in samples]
+        # plot the axis with the larger positional spread (slight bias to x,
+        # the classic phase-portrait choice, so ties don't flicker)
+        if max(pos_y) - min(pos_y) > 1.2 * (max(pos_x) - min(pos_x)):
+            xs = pos_y
+            ys = [p[3] for p in samples]
+            xlabel, ylabel = "y (m)", "vy (m/s)"
+        else:
+            xs = pos_x
+            ys = [p[1] for p in samples]
+            xlabel, ylabel = "x (m)", "vx (m/s)"
         lo_x, hi_x = min(xs), max(xs)
         lo_y, hi_y = min(ys), max(ys)
         if hi_x - lo_x < 1e-9:
@@ -134,7 +157,7 @@ class PhasePlot:
             y0 = to_px(0, 0)[1]
             pygame.draw.line(surface, theme.GRID_MAJOR, (plot.x, y0), (plot.right, y0))
 
-        pts = [to_px(px, py) for px, py in self.points]
+        pts = [to_px(x, y) for x, y in zip(xs, ys)]
         pygame.draw.aalines(surface, theme.ACCENT, False, pts)
         pygame.draw.circle(surface, theme.WARN, pts[-1], 3)
         blit_text(surface, xlabel, (plot.centerx, rect.bottom - 14), 10,
