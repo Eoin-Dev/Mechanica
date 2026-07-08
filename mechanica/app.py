@@ -555,7 +555,8 @@ class App:
                 if body.id != self._phase_body_id:
                     self._phase_body_id = body.id
                     self.phase_plot.clear()
-                self.phase_plot.add(body.pos.x, body.vel.x)
+                self.phase_plot.add(body.pos.x, body.vel.x,
+                                    body.pos.y, body.vel.y)
 
     # ---------------------------------------------------------------- render
     def _render(self, mouse) -> None:
