@@ -175,7 +175,7 @@ def _build_triple_pendulum() -> World:
 def _build_rope() -> World:
     w = World()
     w.substeps = 12
-    w.iterations = 12
+    w.iterations = 8
     _pendulum_chain(w, 0, 1.8, 12, 0.22, mass=0.2, r=0.05, angle_deg=85,
                     color=(170, 140, 230))
     return w
@@ -409,10 +409,13 @@ def _build_galileo() -> World:
     floor = Wall(Vec2(-2.5, 0), Vec2(2.5, 0), 0.12)
     floor.restitution = 0.15
     w.walls.append(floor)
-    _add_body(w, -0.8, 3.4, 0.28, 10.0, e=0.15, color=(150, 160, 175),
-              name="10 kg")
-    _add_body(w, 0.8, 3.4, 0.1, 0.5, e=0.15, color=(220, 130, 90),
-              name="0.5 kg")
+    # bottoms aligned (y = drop + r + floor half-thickness), so both fall
+    # exactly the same distance and touch down together
+    drop = 3.2
+    _add_body(w, -0.8, drop + 0.28 + 0.06, 0.28, 10.0, e=0.15,
+              color=(150, 160, 175), name="10 kg")
+    _add_body(w, 0.8, drop + 0.1 + 0.06, 0.1, 0.5, e=0.15,
+              color=(220, 130, 90), name="0.5 kg")
     return w
 
 
@@ -456,6 +459,54 @@ def _build_chain_bridge() -> World:
     w.links.append(DistanceLink(prev, right))
     _add_body(w, 0, 3.0, 0.3, 6.0, e=0.2, mu=0.5, color=(220, 130, 90),
               name="Load")
+    return w
+
+
+def _build_projectile_angles() -> World:
+    w = World()
+    w.substeps = 4
+    floor = Wall(Vec2(-1, 0), Vec2(14, 0), 0.12)
+    floor.restitution = 0.05
+    floor.friction = 0.8
+    w.walls.append(floor)
+    v0 = 10.0
+    for ang_deg, col in [(30, (110, 200, 210)), (45, (120, 190, 120)),
+                         (60, (220, 130, 90)), (75, (200, 110, 180))]:
+        a = radians(ang_deg)
+        b = _add_body(w, 0, 0.2, 0.09, 1.0, vx=v0 * cos(a), vy=v0 * sin(a),
+                      e=0.05, mu=0.8, color=col, name=f"{ang_deg} deg")
+        b.collides = True
+    return w
+
+
+def _build_elastic_vs_inelastic() -> World:
+    w = World()
+    w.gravity = 0.0
+    w.substeps = 4
+    for lane, (e, label_a, label_b, col) in enumerate([
+            (1.0, "Elastic 2 m/s", "Elastic at rest", (86, 156, 214)),
+            (0.0, "Inelastic 2 m/s", "Inelastic at rest", (220, 130, 90))]):
+        y = 0.8 - lane * 1.6
+        a = _add_body(w, -2.2, y, 0.15, 1.0, vx=2.0, e=e, mu=0.0, color=col,
+                      name=label_a)
+        b = _add_body(w, 0.6, y, 0.15, 1.0, e=e, mu=0.0,
+                      color=tuple(min(255, c + 40) for c in col), name=label_b)
+        a.collides = b.collides = True
+    return w
+
+
+def _build_terminal_velocity() -> World:
+    w = World()
+    w.substeps = 6
+    w.integrator = "RK4"
+    w.drag_quadratic = 0.4
+    _add_body(w, -1.0, 8.0, 0.12, 0.3, e=0.2, color=(110, 200, 210),
+              name="Light (0.3 kg)")
+    _add_body(w, 1.0, 8.0, 0.12, 3.0, e=0.2, color=(220, 130, 90),
+              name="Heavy (3 kg)")
+    floor = Wall(Vec2(-3, 0), Vec2(3, 0), 0.12)
+    floor.restitution = 0.2
+    w.walls.append(floor)
     return w
 
 
@@ -506,8 +557,9 @@ PRESETS: list[Preset] = [
            _build_binary, {"zoom": 48, "trails": True}),
     Preset("Three-body figure-8", "Gravity & Orbits",
            "The celebrated Chenciner-Montgomery choreography: three equal "
-           "masses chase each other around a figure-eight. Chaotic yet "
-           "perfectly periodic - a razor-thin solution of the 3-body problem.",
+           "masses chase each other around a figure-eight forever. A "
+           "razor-thin periodic solution - almost any other three-body "
+           "start turns chaotic.",
            _build_figure8, {"zoom": 220, "trails": True, "graph": "energy"}),
     Preset("Gravity slingshot", "Gravity & Orbits",
            "A tiny probe steals momentum from a moving planet in a flyby, "
@@ -566,11 +618,18 @@ PRESETS: list[Preset] = [
            _build_billiards, {"zoom": 110, "graph": "momentum"}),
     Preset("Restitution ladder", "Collisions & Gas",
            "Six balls with restitution 0.5 to 1.0 dropped together. Each "
-           "keeps that fraction of its speed per bounce; e = 1 never stops.",
+           "bounce returns to e² of the previous height, so the e = 1 ball "
+           "keeps (almost) all of it.",
            _build_restitution_ladder, {"zoom": 110}),
+    Preset("Elastic vs inelastic", "Collisions & Gas",
+           "Equal masses, head-on. Elastic (top): the mover stops dead and "
+           "hands its velocity over. Perfectly inelastic (bottom): they "
+           "stick and share it. Momentum is conserved in both - kinetic "
+           "energy only in the first.",
+           _build_elastic_vs_inelastic, {"zoom": 130, "graph": "momentum"}),
     Preset("Gas in a box (50)", "Collisions & Gas",
-           "Fifty elastic particles in zero gravity - the original "
-           "simulator's premade world. Total energy and momentum are conserved.",
+           "Fifty particles bouncing elastically in zero gravity - a toy "
+           "ideal gas. Total energy and momentum are conserved.",
            lambda: _gas_world(50, 2.0, 1), {"zoom": 130, "graph": "energy"}),
     Preset("Gas in a box (200)", "Collisions & Gas",
            "Two hundred particles stress-test the collision engine. The "
@@ -578,7 +637,8 @@ PRESETS: list[Preset] = [
            lambda: _gas_world(200, 6.0, 2), {"zoom": 45, "graph": "energy"}),
     Preset("Brownian motion", "Collisions & Gas",
            "A heavy grain jostled by a swarm of light, fast particles - the "
-           "random walk Einstein used to prove atoms exist. Turn on trails.",
+           "random walk Einstein explained in 1905, cementing the case that "
+           "atoms exist. Turn on trails.",
            _build_brownian, {"zoom": 105, "trails": True}),
 
     Preset("Projectile drag race", "Projectiles & Friction",
@@ -591,9 +651,22 @@ PRESETS: list[Preset] = [
            "with friction it rolls - contact torque sets it spinning.",
            _build_friction_ramp, {"zoom": 70}),
     Preset("Galileo's drop", "Projectiles & Friction",
-           "A 10 kg ball and a 0.5 kg ball dropped together land together - "
-           "gravitational acceleration doesn't depend on mass.",
+           "A 10 kg ball and a 0.5 kg ball fall the same distance and land "
+           "together - without air, gravitational acceleration doesn't "
+           "depend on mass.",
            _build_galileo, {"zoom": 110, "vectors": True}),
+    Preset("Projectile angles", "Projectiles & Friction",
+           "Four launches at 10 m/s. 45 degrees flies farthest, and the "
+           "30/60 pair lands on the same spot: range goes as sin(2*theta), "
+           "so complementary angles match.",
+           _build_projectile_angles, {"zoom": 55, "trails": True,
+                                      "centre": (5.0, 2.2)}),
+    Preset("Terminal velocity", "Projectiles & Friction",
+           "Two same-size balls falling with quadratic air drag. Drag "
+           "balances weight at v = sqrt(mg/c), so the 10x heavier ball "
+           "falls about 3x faster - Galileo needs a vacuum.",
+           _build_terminal_velocity, {"zoom": 60, "trails": True,
+                                      "centre": (0, 4.0), "vectors": True}),
     Preset("Wrecking ball", "Projectiles & Friction",
            "A 22 kg pendulum ball demolishes a stack. Combines constraints, "
            "collisions, friction and gravity in one scene.",

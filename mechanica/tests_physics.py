@@ -199,14 +199,32 @@ def test_rod_constraint_drift() -> None:
     l1 = DistanceLink(pivot, b1)
     l2 = DistanceLink(b1, b2)
     w.links.extend((l1, l2))
+    e0 = w.energy()["total"]
     run(w, 20.0)  # chaotic double pendulum
     err1 = abs(pivot.pos.dist_to(b1.pos) - l1.length) / l1.length
     err2 = abs(b1.pos.dist_to(b2.pos) - l2.length) / l2.length
     check("double pendulum: rod length drift < 0.1%", max(err1, err2) < 1e-3,
           f"err={max(err1, err2) * 100:.4f}%")
-    e = w.energy()
-    check("double pendulum: energy bounded", abs(e["total"]) < 1e3,
-          f"E={e['total']:.3f} J")
+    e1 = w.energy()["total"]
+    drift = abs(e1 - e0) / abs(e0)
+    check("double pendulum: energy drift < 0.5% over 20 s", drift < 5e-3,
+          f"dE={100 * (e1 - e0) / e0:+.4f}%")
+
+
+def test_pendulum_energy_conservation() -> None:
+    """The flagship fix: rigid-link systems must not bleed energy."""
+    from mechanica.scene.presets import PRESETS
+
+    for name, seconds, tol in [("Simple pendulum", 60.0, 1e-3),
+                               ("Triple pendulum", 30.0, 5e-3),
+                               ("Swinging rope", 15.0, 3e-2)]:
+        w = [p for p in PRESETS if p.name == name][0].build()
+        e0 = w.energy()["total"]
+        run(w, seconds)
+        e1 = w.energy()["total"]
+        drift = abs(e1 - e0) / max(abs(e0), 1e-9)
+        check(f"{name}: |dE| < {tol * 100:g}% over {seconds:.0f} s",
+              drift < tol, f"dE={100 * (e1 - e0) / e0:+.4f}%")
 
 
 # -------------------------------------------------------------------- spring
@@ -234,6 +252,72 @@ def test_spring_period() -> None:
     err = abs(measured - exact) / exact
     check("spring-mass period vs 2*pi*sqrt(m/k)", err < 0.01,
           f"measured={measured:.4f}s exact={exact:.4f}s err={100 * err:.2f}%")
+
+
+def test_newtons_cradle() -> None:
+    from mechanica.scene.presets import PRESETS
+    w = [p for p in PRESETS if p.name == "Newton's cradle"][0].build()
+    run(w, 1.2)  # first ball swings down and strikes the row
+    balls = [b for b in w.bodies if not b.locked]
+    moving = sum(1 for b in balls if b.vel.length() > 0.3)
+    check("Newton's cradle: one ball in, one ball out", moving == 1,
+          f"speeds={[round(b.vel.length(), 2) for b in balls]}")
+
+
+def test_stack_comes_to_rest() -> None:
+    w = World()
+    w.substeps = 8
+    floor = Wall(Vec2(-3, 0), Vec2(3, 0), 0.12)
+    floor.friction = 0.7
+    floor.restitution = 0.05
+    w.walls.append(floor)
+    r = 0.16
+    for col in range(3):
+        for row in range(5):
+            b = body(w, col * (2 * r + 0.01), r + row * (2 * r + 0.005), r=r, m=0.4)
+            b.restitution = 0.1
+            b.friction = 0.6
+    run(w, 4.0)
+    vmax = max(b.vel.length() for b in w.bodies)
+    check("stacked tower comes to rest (no jitter)", vmax < 0.01,
+          f"max residual speed={vmax:.4f} m/s")
+
+
+def test_restitution_accuracy() -> None:
+    """A dropped ball must rebound to e^2 of its drop height."""
+    w = World()
+    w.substeps = 8
+    floor = Wall(Vec2(-2, 0), Vec2(2, 0), 0.1)
+    floor.restitution = 1.0
+    w.walls.append(floor)
+    b = body(w, 0, 1.0 + 0.15 + 0.05, r=0.15)
+    b.restitution = 0.9
+    b.friction = 0.0
+    peak, bounced = 0.0, False
+    for _ in range(int(3.0 / DT)):
+        w.step(DT)
+        if b.vel.y > 0:
+            bounced = True
+        if bounced:
+            peak = max(peak, b.pos.y)
+    rebound = (peak - 0.15 - 0.05) / 1.0
+    check("bounce rebound height ~ e^2 h", abs(rebound - 0.81) < 0.02,
+          f"rebound={rebound:.3f} (ideal 0.810)")
+
+
+def test_nonfinite_survival() -> None:
+    """Bodies with inf/NaN state must be frozen, not crash the engine."""
+    w = World()
+    b1 = body(w, float("1e999"), 0)          # +inf x
+    b2 = body(w, 0, 0)
+    try:
+        run(w, 0.5)
+        ok = math.isfinite(b1.pos.x) and math.isfinite(b2.pos.y)
+        check("non-finite body state is contained", ok,
+              f"b1.x={b1.pos.x}, diverged={w.diverged}")
+    except Exception as exc:  # noqa: BLE001
+        check("non-finite body state is contained", False,
+              f"{type(exc).__name__}: {exc}")
 
 
 # ------------------------------------------------------------------- rolling
@@ -271,7 +355,8 @@ def test_expression_sandbox() -> None:
         ok, detail = False, str(exc)
     check("expression: valid force compiles and evaluates", ok, detail)
     for bad in ("__import__('os').system('x')", "().__class__", "x.__dict__",
-                "open('f')", "[1 for _ in range(9)]", "lambda: 1"):
+                "open('f')", "[1 for _ in range(9)]", "lambda: 1",
+                "9**9**9", "'a'*99999999"):
         try:
             compile_expr(bad)
             check(f"expression rejects: {bad[:30]}", False, "was accepted!")
@@ -317,6 +402,11 @@ def main() -> int:
     test_nbody_momentum()
     test_pendulum_period()
     test_rod_constraint_drift()
+    test_pendulum_energy_conservation()
+    test_newtons_cradle()
+    test_stack_comes_to_rest()
+    test_restitution_accuracy()
+    test_nonfinite_survival()
     test_spring_period()
     test_rolling()
     test_expression_sandbox()

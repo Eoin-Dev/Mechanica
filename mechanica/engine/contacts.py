@@ -1,22 +1,35 @@
 """Collision detection and response.
 
-Broadphase: uniform spatial hash rebuilt per step (O(n) build, O(1) queries;
-simpler and faster in pure Python than the quadtree it replaces).
+Broadphase: uniform spatial hash rebuilt per substep. Bodies of typical size
+are binned into cells (one cell each, cell = largest small-body diameter) and
+pairs are found by scanning each cell against itself and its four forward
+neighbours, so no pair is tested twice. The few bodies much larger than the
+median (planets among dust, the Brownian grain) would bloat the cells, so
+they are tested by brute force instead.
+
 Narrowphase: circle-circle and circle-capsule (wall) tests.
-Response: sequential impulses with restitution and Coulomb friction. Friction
-impulses are applied at the contact point and produce torque, so rolling
-emerges naturally. Penetration is removed with split-impulse positional
-projection, which does not inject kinetic energy.
+
+Response: iterated sequential impulses with accumulated-impulse clamping
+(the Box2D scheme). Restitution enters as a velocity bias captured before
+the solve, so stacked/simultaneous contacts converge to a consistent
+solution instead of depending on resolution order. Friction impulses act at
+the contact point and produce torque, so rolling emerges naturally.
+Penetration is removed afterwards by split-impulse positional projection,
+which does not change velocities and therefore cannot inject kinetic energy.
 """
 from __future__ import annotations
 
+from math import isfinite
+
 from mechanica.engine.body import Body, Wall
 
-# Below this approach speed the bounce is treated as inelastic to stop
-# resting objects from jittering (matches the original simulator's intent).
+# Below this approach speed a bounce is treated as perfectly inelastic, which
+# stops resting objects from jittering on the floor.
 RESTING_SPEED = 0.10
 PENETRATION_SLOP = 0.0005   # m of overlap tolerated before projection
-PROJECTION_PERCENT = 0.8
+PROJECTION_PERCENT = 0.8    # fraction of the remaining overlap removed per pass
+POSITION_ITERATIONS = 3     # projection passes per substep (stacks settle)
+IMPULSE_EPSILON = 1e-9      # convergence threshold for early exit
 
 
 class Contact:
@@ -28,95 +41,99 @@ class Contact:
         self.px, self.py, self.nx, self.ny, self.impulse = px, py, nx, ny, impulse
 
 
-class SpatialHash:
-    __slots__ = ("cell", "grid")
+class _Manifold:
+    """One contact point with precomputed effective masses and accumulators.
 
-    def __init__(self, cell: float) -> None:
-        self.cell = cell
-        self.grid: dict[tuple[int, int], list[Body]] = {}
+    The normal (nx, ny) points from body a toward body b; for walls b is None
+    and the normal points from the body into the wall (infinite mass side).
+    """
 
-    def insert(self, body: Body) -> None:
-        c = self.cell
-        r = body.radius
-        x0 = int((body.pos.x - r) // c)
-        x1 = int((body.pos.x + r) // c)
-        y0 = int((body.pos.y - r) // c)
-        y1 = int((body.pos.y + r) // c)
-        grid = self.grid
-        for gx in range(x0, x1 + 1):
-            for gy in range(y0, y1 + 1):
-                key = (gx, gy)
-                bucket = grid.get(key)
-                if bucket is None:
-                    grid[key] = [body]
-                else:
-                    bucket.append(body)
+    __slots__ = (
+        "a", "b", "nx", "ny", "px", "py", "pen", "mu",
+        "inv_ma", "inv_mb", "inv_ia", "inv_ib", "inv_m_sum",
+        "ra_x_n", "rb_x_n", "k_n", "ra_x_t", "rb_x_t", "k_t",
+        "ray", "rax", "rbx", "rby", "target_vn", "pn", "pt", "sep_base",
+        "key",
+    )
 
-    def query_rect(self, min_x: float, min_y: float, max_x: float, max_y: float) -> set[Body]:
-        c = self.cell
-        found: set[Body] = set()
-        for gx in range(int(min_x // c), int(max_x // c) + 1):
-            for gy in range(int(min_y // c), int(max_y // c) + 1):
-                bucket = self.grid.get((gx, gy))
-                if bucket:
-                    found.update(bucket)
-        return found
+    def __init__(self, a: Body, b: Body | None, nx: float, ny: float,
+                 pen: float, px: float, py: float, e: float, mu: float) -> None:
+        self.a = a
+        self.b = b
+        self.nx = nx
+        self.ny = ny
+        self.px = px
+        self.py = py
+        self.pen = pen
+        self.mu = mu
+        inv_ma = a.inv_mass
+        inv_ia = a.inv_inertia
+        if b is not None:
+            inv_mb = b.inv_mass
+            inv_ib = b.inv_inertia
+        else:
+            inv_mb = inv_ib = 0.0
+        self.inv_ma, self.inv_mb = inv_ma, inv_mb
+        self.inv_ia, self.inv_ib = inv_ia, inv_ib
+        self.inv_m_sum = inv_ma + inv_mb
 
+        rax = px - a.pos.x
+        ray = py - a.pos.y
+        if b is not None:
+            rbx = px - b.pos.x
+            rby = py - b.pos.y
+        else:
+            rbx = rby = 0.0
+        self.rax, self.ray, self.rbx, self.rby = rax, ray, rbx, rby
 
-def _resolve(a: Body, b: Body | None, nx: float, ny: float, penetration: float,
-             px: float, py: float, e: float, mu: float,
-             contacts: list[Contact]) -> None:
-    """Resolve a contact with normal n pointing from a toward b (or into the
-    wall when b is None, in which case the wall is treated as infinite mass)."""
-    inv_ma = a.inv_mass
-    inv_ia = a.inv_inertia
-    if b is not None:
-        inv_mb = b.inv_mass
-        inv_ib = b.inv_inertia
-    else:
-        inv_mb = 0.0
-        inv_ib = 0.0
-    inv_m_sum = inv_ma + inv_mb
-    if inv_m_sum == 0.0:
-        return
-
-    # contact-point offsets from each centre
-    rax, ray = px - a.pos.x, py - a.pos.y
-    if b is not None:
-        rbx, rby = px - b.pos.x, py - b.pos.y
-    else:
-        rbx = rby = 0.0
-
-    # relative velocity of b w.r.t. a at the contact point (omega x r in 2D)
-    vax = a.vel.x - a.omega * ray
-    vay = a.vel.y + a.omega * rax
-    if b is not None:
-        vbx = b.vel.x - b.omega * rby
-        vby = b.vel.y + b.omega * rbx
-    else:
-        vbx = vby = 0.0
-    rvx, rvy = vbx - vax, vby - vay
-    vn = rvx * nx + rvy * ny
-
-    jn = 0.0
-    if vn < 0.0:
-        if -vn < RESTING_SPEED:
-            e = 0.0
         ra_x_n = rax * ny - ray * nx
         rb_x_n = rbx * ny - rby * nx
-        k_normal = inv_m_sum + ra_x_n * ra_x_n * inv_ia + rb_x_n * rb_x_n * inv_ib
-        jn = -(1.0 + e) * vn / k_normal
-        a.vel.x -= jn * nx * inv_ma
-        a.vel.y -= jn * ny * inv_ma
-        a.omega -= ra_x_n * jn * inv_ia
-        if b is not None:
-            b.vel.x += jn * nx * inv_mb
-            b.vel.y += jn * ny * inv_mb
-            b.omega += rb_x_n * jn * inv_ib
+        self.ra_x_n, self.rb_x_n = ra_x_n, rb_x_n
+        self.k_n = self.inv_m_sum + ra_x_n * ra_x_n * inv_ia + rb_x_n * rb_x_n * inv_ib
+        tx, ty = -ny, nx
+        ra_x_t = rax * ty - ray * tx
+        rb_x_t = rbx * ty - rby * tx
+        self.ra_x_t, self.rb_x_t = ra_x_t, rb_x_t
+        self.k_t = self.inv_m_sum + ra_x_t * ra_x_t * inv_ia + rb_x_t * rb_x_t * inv_ib
 
-        # Coulomb friction along the tangent, applied at the contact point
-        if mu > 0.0:
-            # recompute contact velocities after the normal impulse
+        # restitution bias from the pre-solve approach speed
+        vn0 = self._normal_velocity()
+        self.target_vn = -e * vn0 if vn0 < -RESTING_SPEED else 0.0
+        self.pn = 0.0
+        self.pt = 0.0
+        self.key = (a.id, b.id) if b is not None else (a.id, 0)
+        # separation along n measured from current positions, so the position
+        # pass can track how much overlap remains as bodies get pushed apart:
+        # pen_now = pen + sep_base - ((b - a) . n)
+        if b is not None:
+            self.sep_base = ((b.pos.x - a.pos.x) * nx + (b.pos.y - a.pos.y) * ny)
+        else:
+            self.sep_base = -(a.pos.x * nx + a.pos.y * ny)
+
+    def _normal_velocity(self) -> float:
+        a, b = self.a, self.b
+        vax = a.vel.x - a.omega * self.ray
+        vay = a.vel.y + a.omega * self.rax
+        if b is not None:
+            vbx = b.vel.x - b.omega * self.rby
+            vby = b.vel.y + b.omega * self.rbx
+        else:
+            vbx = vby = 0.0
+        return (vbx - vax) * self.nx + (vby - vay) * self.ny
+
+
+def _solve_velocity(manifolds: list[_Manifold], iterations: int) -> None:
+    """Iterated sequential impulses with accumulated clamping."""
+    for _ in range(iterations):
+        worst = 0.0
+        for m in manifolds:
+            a, b = m.a, m.b
+            nx, ny = m.nx, m.ny
+            rax, ray, rbx, rby = m.rax, m.ray, m.rbx, m.rby
+            inv_ma, inv_mb = m.inv_ma, m.inv_mb
+            inv_ia, inv_ib = m.inv_ia, m.inv_ib
+
+            # --- normal impulse -------------------------------------------
             vax = a.vel.x - a.omega * ray
             vay = a.vel.y + a.omega * rax
             if b is not None:
@@ -124,94 +141,195 @@ def _resolve(a: Body, b: Body | None, nx: float, ny: float, penetration: float,
                 vby = b.vel.y + b.omega * rbx
             else:
                 vbx = vby = 0.0
-            rvx, rvy = vbx - vax, vby - vay
-            tx, ty = -ny, nx
-            vt = rvx * tx + rvy * ty
-            if vt != 0.0:
-                ra_x_t = rax * ty - ray * tx
-                rb_x_t = rbx * ty - rby * tx
-                k_tangent = inv_m_sum + ra_x_t * ra_x_t * inv_ia + rb_x_t * rb_x_t * inv_ib
-                jt = -vt / k_tangent
-                max_jt = mu * jn
-                if jt > max_jt:
-                    jt = max_jt
-                elif jt < -max_jt:
-                    jt = -max_jt
-                a.vel.x -= jt * tx * inv_ma
-                a.vel.y -= jt * ty * inv_ma
-                a.omega -= ra_x_t * jt * inv_ia
+            vn = (vbx - vax) * nx + (vby - vay) * ny
+            dpn = -(vn - m.target_vn) / m.k_n
+            new_pn = m.pn + dpn
+            if new_pn < 0.0:
+                new_pn = 0.0
+            dpn = new_pn - m.pn
+            m.pn = new_pn
+            if dpn != 0.0:
+                a.vel.x -= dpn * nx * inv_ma
+                a.vel.y -= dpn * ny * inv_ma
+                a.omega -= m.ra_x_n * dpn * inv_ia
                 if b is not None:
-                    b.vel.x += jt * tx * inv_mb
-                    b.vel.y += jt * ty * inv_mb
-                    b.omega += rb_x_t * jt * inv_ib
+                    b.vel.x += dpn * nx * inv_mb
+                    b.vel.y += dpn * ny * inv_mb
+                    b.omega += m.rb_x_n * dpn * inv_ib
+                d = dpn if dpn > 0.0 else -dpn
+                if d > worst:
+                    worst = d
 
-    # positional projection (split impulse: no velocity change)
-    depth = penetration - PENETRATION_SLOP
-    if depth > 0.0:
-        corr = depth * PROJECTION_PERCENT / inv_m_sum
-        a.pos.x -= corr * nx * inv_ma
-        a.pos.y -= corr * ny * inv_ma
-        if b is not None:
-            b.pos.x += corr * nx * inv_mb
-            b.pos.y += corr * ny * inv_mb
+            # --- friction impulse ------------------------------------------
+            if m.mu > 0.0:
+                vax = a.vel.x - a.omega * ray
+                vay = a.vel.y + a.omega * rax
+                if b is not None:
+                    vbx = b.vel.x - b.omega * rby
+                    vby = b.vel.y + b.omega * rbx
+                else:
+                    vbx = vby = 0.0
+                tx, ty = -ny, nx
+                vt = (vbx - vax) * tx + (vby - vay) * ty
+                dpt = -vt / m.k_t
+                max_f = m.mu * m.pn
+                new_pt = m.pt + dpt
+                if new_pt > max_f:
+                    new_pt = max_f
+                elif new_pt < -max_f:
+                    new_pt = -max_f
+                dpt = new_pt - m.pt
+                m.pt = new_pt
+                if dpt != 0.0:
+                    a.vel.x -= dpt * tx * inv_ma
+                    a.vel.y -= dpt * ty * inv_ma
+                    a.omega -= m.ra_x_t * dpt * inv_ia
+                    if b is not None:
+                        b.vel.x += dpt * tx * inv_mb
+                        b.vel.y += dpt * ty * inv_mb
+                        b.omega += m.rb_x_t * dpt * inv_ib
+                    d = dpt if dpt > 0.0 else -dpt
+                    if d > worst:
+                        worst = d
+        if worst < IMPULSE_EPSILON:
+            break
 
-    contacts.append(Contact(px, py, nx, ny, jn))
+
+def _solve_position(manifolds: list[_Manifold]) -> None:
+    """Split-impulse projection: push overlapping bodies apart without
+    touching velocities. Iterated so stacks resolve mutual overlap."""
+    for _ in range(POSITION_ITERATIONS):
+        done = True
+        for m in manifolds:
+            a, b = m.a, m.b
+            nx, ny = m.nx, m.ny
+            if b is not None:
+                sep = ((b.pos.x - a.pos.x) * nx + (b.pos.y - a.pos.y) * ny)
+            else:
+                sep = -(a.pos.x * nx + a.pos.y * ny)
+            depth = m.pen + m.sep_base - sep - PENETRATION_SLOP
+            if depth <= 0.0:
+                continue
+            done = False
+            corr = depth * PROJECTION_PERCENT / m.inv_m_sum
+            a.pos.x -= corr * nx * m.inv_ma
+            a.pos.y -= corr * ny * m.inv_ma
+            if b is not None:
+                b.pos.x += corr * nx * m.inv_mb
+                b.pos.y += corr * ny * m.inv_mb
+        if done:
+            break
 
 
-def collide_bodies(bodies: list[Body], contacts: list[Contact]) -> None:
-    """Detect and resolve all body-body collisions via the spatial hash."""
-    colliders = [b for b in bodies if b.collides]
+def _pair_manifold(a: Body, b: Body, out: list[_Manifold]) -> None:
+    dx = b.pos.x - a.pos.x
+    dy = b.pos.y - a.pos.y
+    r_sum = a.radius + b.radius
+    d2 = dx * dx + dy * dy
+    if d2 >= r_sum * r_sum:
+        return
+    if a.inv_mass == 0.0 and b.inv_mass == 0.0:
+        return
+    d = d2 ** 0.5
+    if d < 1e-9:
+        nx, ny = 1.0, 0.0
+    else:
+        nx, ny = dx / d, dy / d
+    penetration = r_sum - d
+    px = a.pos.x + nx * (a.radius - penetration * 0.5)
+    py = a.pos.y + ny * (a.radius - penetration * 0.5)
+    e = a.restitution if a.restitution < b.restitution else b.restitution
+    mu = (a.friction * b.friction) ** 0.5
+    out.append(_Manifold(a, b, nx, ny, penetration, px, py, e, mu))
+
+
+def _detect_bodies(bodies: list[Body], out: list[_Manifold]) -> None:
+    colliders = [b for b in bodies
+                 if b.collides and isfinite(b.pos.x) and isfinite(b.pos.y)]
     n = len(colliders)
     if n < 2:
         return
-    max_r = max(b.radius for b in colliders)
-    hash_ = SpatialHash(max(4.0 * max_r, 0.05))
+    if n <= 6:
+        for i in range(n):
+            a = colliders[i]
+            for j in range(i + 1, n):
+                _pair_manifold(a, colliders[j], out)
+        return
+
+    # split off outsize bodies so they don't inflate the hash cells
+    radii = sorted(b.radius for b in colliders)
+    r_med = radii[n // 2]
+    big_cut = 3.0 * r_med
+    small: list[Body] = []
+    large: list[Body] = []
     for b in colliders:
-        hash_.insert(b)
+        (large if b.radius > big_cut else small).append(b)
 
-    seen: set[tuple[int, int]] = set()
-    for a in colliders:
-        r = a.radius + max_r
-        near = hash_.query_rect(a.pos.x - r, a.pos.y - r, a.pos.x + r, a.pos.y + r)
-        for b in near:
-            if b is a or b.id <= a.id:
-                continue
-            key = (a.id, b.id)
-            if key in seen:
-                continue
-            seen.add(key)
-            dx = b.pos.x - a.pos.x
-            dy = b.pos.y - a.pos.y
-            r_sum = a.radius + b.radius
-            d2 = dx * dx + dy * dy
-            if d2 >= r_sum * r_sum:
-                continue
-            d = d2 ** 0.5
-            if d < 1e-9:
-                nx, ny, d = 1.0, 0.0, 1e-9
-            else:
-                nx, ny = dx / d, dy / d
-            penetration = r_sum - d
-            px = a.pos.x + nx * (a.radius - penetration * 0.5)
-            py = a.pos.y + ny * (a.radius - penetration * 0.5)
-            e = min(a.restitution, b.restitution)
-            mu = (a.friction * b.friction) ** 0.5
-            _resolve(a, b, nx, ny, penetration, px, py, e, mu, contacts)
+    for i, a in enumerate(large):
+        for b in large[i + 1:]:
+            _pair_manifold(a, b, out)
+        for b in small:
+            _pair_manifold(a, b, out)
+
+    if len(small) < 2:
+        return
+    cell = 2.0 * max(b.radius for b in small)
+    if cell <= 1e-9:
+        return
+    inv_cell = 1.0 / cell
+    grid: dict[tuple[int, int], list[Body]] = {}
+    for b in small:
+        key = (int(b.pos.x * inv_cell) if b.pos.x >= 0 else int(b.pos.x * inv_cell) - 1,
+               int(b.pos.y * inv_cell) if b.pos.y >= 0 else int(b.pos.y * inv_cell) - 1)
+        bucket = grid.get(key)
+        if bucket is None:
+            grid[key] = [b]
+        else:
+            bucket.append(b)
+    grid_get = grid.get
+    # forward half-neighbourhood: every unordered cell pair visited once
+    for (gx, gy), bucket in grid.items():
+        ln = len(bucket)
+        for i in range(ln):
+            a = bucket[i]
+            for j in range(i + 1, ln):
+                _pair_manifold(a, bucket[j], out)
+        for ox, oy in ((1, 0), (1, 1), (0, 1), (-1, 1)):
+            other = grid_get((gx + ox, gy + oy))
+            if other:
+                for a in bucket:
+                    for b in other:
+                        _pair_manifold(a, b, out)
 
 
-def collide_walls(bodies: list[Body], walls: list[Wall], contacts: list[Contact]) -> None:
-    """Detect and resolve collisions between bodies and static wall capsules."""
+def _detect_walls(bodies: list[Body], walls: list[Wall],
+                  out: list[_Manifold]) -> None:
+    if not walls:
+        return
+    max_r = 0.0
+    for b in bodies:
+        if b.collides and b.radius > max_r:
+            max_r = b.radius
     for w in walls:
         ax, ay = w.a.x, w.a.y
-        sx, sy = w.b.x - ax, w.b.y - ay
+        bx, by = w.b.x, w.b.y
+        sx, sy = bx - ax, by - ay
         seg_len2 = sx * sx + sy * sy
         half_t = w.thickness * 0.5
+        reach_max = max_r + half_t
+        lo_x = (ax if ax < bx else bx) - reach_max
+        hi_x = (ax if ax > bx else bx) + reach_max
+        lo_y = (ay if ay < by else by) - reach_max
+        hi_y = (ay if ay > by else by) + reach_max
         for body in bodies:
-            if not body.collides or body.inv_mass == 0.0:
+            px, py = body.pos.x, body.pos.y
+            if (px < lo_x or px > hi_x or py < lo_y or py > hi_y
+                    or not body.collides or body.inv_mass == 0.0
+                    or not isfinite(px) or not isfinite(py)):
                 continue
             # closest point on the segment to the body centre
             if seg_len2 > 0.0:
-                t = ((body.pos.x - ax) * sx + (body.pos.y - ay) * sy) / seg_len2
+                t = ((px - ax) * sx + (py - ay) * sy) / seg_len2
                 if t < 0.0:
                     t = 0.0
                 elif t > 1.0:
@@ -219,23 +337,75 @@ def collide_walls(bodies: list[Body], walls: list[Wall], contacts: list[Contact]
             else:
                 t = 0.0
             cx, cy = ax + sx * t, ay + sy * t
-            dx, dy = body.pos.x - cx, body.pos.y - cy
+            dx, dy = px - cx, py - cy
             reach = body.radius + half_t
             d2 = dx * dx + dy * dy
             if d2 >= reach * reach:
                 continue
             d = d2 ** 0.5
             if d < 1e-9:
-                # centre exactly on the segment: push out along the segment normal
+                # centre exactly on the segment: push out along the normal
                 inv = 1.0 / (seg_len2 ** 0.5) if seg_len2 > 0 else 1.0
                 nx, ny = -sy * inv, sx * inv
-                d = 1e-9
             else:
                 nx, ny = dx / d, dy / d
             penetration = reach - d
-            # normal from wall toward the body; _resolve expects a->b, so flip
-            px, py = body.pos.x - nx * (body.radius - penetration * 0.5), \
-                     body.pos.y - ny * (body.radius - penetration * 0.5)
-            e = min(body.restitution, w.restitution)
+            cpx = px - nx * (body.radius - penetration * 0.5)
+            cpy = py - ny * (body.radius - penetration * 0.5)
+            e = body.restitution if body.restitution < w.restitution else w.restitution
             mu = (body.friction * w.friction) ** 0.5
-            _resolve(body, None, -nx, -ny, penetration, px, py, e, mu, contacts)
+            # manifold normal points from the body (a) into the wall
+            m = _Manifold(body, None, -nx, -ny, penetration, cpx, cpy, e, mu)
+            m.key = (body.id, -w.id)
+            out.append(m)
+
+
+def _warm_start(manifolds: list[_Manifold], cache: dict) -> None:
+    """Re-apply the impulses each persistent contact carried last substep.
+
+    Resting stacks then start each substep already near equilibrium, so a
+    couple of polish iterations converge instead of rebuilding the whole
+    load-bearing impulse chain from zero every substep (Box2D's scheme)."""
+    for m in manifolds:
+        cached = cache.get(m.key)
+        if cached is None:
+            continue
+        pn, pt = cached
+        m.pn = pn
+        m.pt = pt
+        nx, ny = m.nx, m.ny
+        ix = pn * nx - pt * ny
+        iy = pn * ny + pt * nx
+        a, b = m.a, m.b
+        a.vel.x -= ix * m.inv_ma
+        a.vel.y -= iy * m.inv_ma
+        a.omega -= (m.ra_x_n * pn + m.ra_x_t * pt) * m.inv_ia
+        if b is not None:
+            b.vel.x += ix * m.inv_mb
+            b.vel.y += iy * m.inv_mb
+            b.omega += (m.rb_x_n * pn + m.rb_x_t * pt) * m.inv_ib
+
+
+def solve_contacts(bodies: list[Body], walls: list[Wall],
+                   contacts: list[Contact], iterations: int,
+                   cache: dict | None = None) -> None:
+    """Detect all contacts this substep and resolve them together.
+
+    `cache` is an optional persistent dict carrying accumulated impulses
+    between substeps (warm starting); pass the same dict every substep.
+    """
+    manifolds: list[_Manifold] = []
+    _detect_bodies(bodies, manifolds)
+    _detect_walls(bodies, walls, manifolds)
+    if cache is not None:
+        if manifolds:
+            _warm_start(manifolds, cache)
+        cache.clear()
+    if not manifolds:
+        return
+    _solve_velocity(manifolds, iterations)
+    _solve_position(manifolds)
+    for m in manifolds:
+        contacts.append(Contact(m.px, m.py, m.nx, m.ny, m.pn))
+        if cache is not None:
+            cache[m.key] = (m.pn, m.pt)

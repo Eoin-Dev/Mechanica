@@ -32,8 +32,9 @@ TOOL_KEYS = {pygame.K_v: "select", pygame.K_h: "pan", pygame.K_b: "body",
              pygame.K_e: "rope", pygame.K_s: "spring", pygame.K_x: "eraser"}
 
 TOOL_INFO = {
-    "select": ("Select (V)", "Click to select, drag to move. Shift-click adds. "
-               "Drag empty space for a box select. Drag the green arrow to set velocity."),
+    "select": ("Select (V)", "Click to select, drag to move (drag while playing "
+               "to throw). Shift-click adds. Drag empty space for a box select. "
+               "Drag the green arrow to set velocity."),
     "pan": ("Pan (H)", "Drag to move the view. Middle/right mouse drag pans in any tool."),
     "body": ("Add body (B)", "Click to place a dynamic body. Edit it in the Inspector."),
     "anchor": ("Add anchor (A)", "Click to place a fixed anchor - a pivot for rods and springs."),
@@ -54,6 +55,7 @@ class CanvasController:
         # transient interaction state
         self._drag_items: list[tuple[Body, Vec2]] = []
         self._drag_moved = False
+        self._drag_trace: list[tuple[int, float, float]] = []  # (ms, wx, wy)
         self._panning = False
         self._pan_last = (0, 0)
         self._rubber: tuple[int, int] | None = None
@@ -62,7 +64,6 @@ class CanvasController:
         self._vel_drag: Body | None = None
         self._wall_drag: tuple[Wall, int] | None = None  # wall, endpoint (0/1/2=whole)
         self._wall_grab: Vec2 | None = None
-        self._space_held = False
 
     # ------------------------------------------------------------------ helpers
     def set_tool(self, tool: str) -> None:
@@ -70,6 +71,14 @@ class CanvasController:
         self._link_first = None
         self._wall_start = None
         self._rubber = None
+
+    def cancel_pending(self) -> bool:
+        """Cancel an in-progress link or wall draw. Returns True if one was."""
+        if self._link_first is not None or self._wall_start is not None:
+            self._link_first = None
+            self._wall_start = None
+            return True
+        return False
 
     def _snap(self, p: Vec2) -> Vec2:
         if not self.app.view.snap:
@@ -114,8 +123,6 @@ class CanvasController:
     # ------------------------------------------------------------------ events
     def handle_event(self, event: pygame.event.Event, mouse) -> bool:
         app = self.app
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-            self._space_held = False  # space is play/pause; kept for API clarity
         if event.type == pygame.MOUSEBUTTONDOWN:
             if event.button in (2, 3):  # middle/right: always pan
                 self._panning = True
@@ -262,6 +269,7 @@ class CanvasController:
         self._drag_items = [(b, b.pos - world_p) for b in app.selection
                             if isinstance(b, Body)]
         self._drag_moved = False
+        self._drag_trace = [(pygame.time.get_ticks(), world_p.x, world_p.y)]
         return True
 
     # ------------------------------------------------------------------ motion
@@ -299,6 +307,9 @@ class CanvasController:
                 body.vel.set(0, 0)
                 body.omega = 0.0
             self._drag_moved = True
+            self._drag_trace.append((pygame.time.get_ticks(), world_p.x, world_p.y))
+            if len(self._drag_trace) > 6:
+                del self._drag_trace[0]
             return True
         if self._rubber is not None:
             return True
@@ -313,12 +324,15 @@ class CanvasController:
             self._panning = False
             handled = True
         if self._vel_drag is not None or self._wall_drag is not None or self._drag_items:
+            if self._drag_items and self._drag_moved and app.playing:
+                self._throw_bodies()
             if self._drag_moved:
                 app.push_undo()
             self._vel_drag = None
             self._wall_drag = None
             self._wall_grab = None
             self._drag_items = []
+            self._drag_trace = []
             handled = True
         if self._rubber is not None:
             x0, y0 = self._rubber
@@ -349,6 +363,28 @@ class CanvasController:
             handled = True
         return handled
 
+    def _throw_bodies(self) -> None:
+        """Give dragged bodies the velocity of the mouse at release, so a
+        drag while the simulation runs behaves like a throw."""
+        trace = self._drag_trace
+        if len(trace) < 2:
+            return
+        now = pygame.time.get_ticks()
+        t0, x0, y0 = trace[0]
+        t1, x1, y1 = trace[-1]
+        span = (t1 - t0) / 1000.0
+        if span < 0.02 or now - t1 > 120:   # too short, or mouse was parked
+            return
+        vx = (x1 - x0) / span
+        vy = (y1 - y0) / span
+        speed = (vx * vx + vy * vy) ** 0.5
+        if speed > 50.0:                    # tame numerical spikes
+            vx *= 50.0 / speed
+            vy *= 50.0 / speed
+        for body, _ in self._drag_items:
+            if not body.locked:
+                body.vel.set(vx, vy)
+
     def _constrained_wall_end(self, mouse) -> Vec2:
         end = self._snap(self.app.camera.to_world(*mouse))
         if pygame.key.get_mods() & pygame.KMOD_SHIFT and self._wall_start:
@@ -364,6 +400,7 @@ class CanvasController:
         app = self.app
         if isinstance(obj, Body):
             app.world.remove_body(obj)
+            app.trails.pop(obj.id, None)
         elif isinstance(obj, Wall):
             app.world.remove_wall(obj)
         else:

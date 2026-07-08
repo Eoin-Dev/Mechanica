@@ -337,6 +337,8 @@ class Slider(Widget):
             v = float(s)
         except ValueError:
             return False
+        if v != v or v in (float("inf"), float("-inf")):   # NaN / infinity
+            return False
         self.set(min(self.hi, max(self.lo, v)) if self.step is None else
                  round(min(self.hi, max(self.lo, v)) / self.step) * self.step)
         if self.on_commit:
