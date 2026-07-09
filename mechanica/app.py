@@ -233,12 +233,28 @@ class App:
         self.ensure_initial()
         self.playing = not self.playing
 
+    @staticmethod
+    def _safe_step(world: World, dt: float) -> bool:
+        """Step the world, converting a mid-step numerical blow-up (e.g.
+        absurd user settings overflowing a float) into frozen bodies via
+        _sanitize instead of crashing the app."""
+        try:
+            world.step(dt)
+            return True
+        except (OverflowError, ValueError, FloatingPointError,
+                ZeroDivisionError):
+            world._contact_cache.clear()   # may hold junk impulses
+            world._sanitize()
+            if not world.diverged:
+                world.diverged.append("a body")
+            return False
+
     def step_once(self) -> None:
         self.ensure_initial()
         self.playing = False
         # one 60 Hz frame, stepped at the normal rate so accuracy matches play
-        self.world.step(PHYSICS_DT)
-        self.world.step(PHYSICS_DT)
+        self._safe_step(self.world, PHYSICS_DT)
+        self._safe_step(self.world, PHYSICS_DT)
         self._after_physics()
 
     def ensure_initial(self) -> None:
@@ -270,7 +286,8 @@ class App:
             self.toast("Time jump capped at "
                        f"{world.time + steps * PHYSICS_DT:.0f} s")
         for _ in range(steps):
-            world.step(PHYSICS_DT)
+            if not self._safe_step(world, PHYSICS_DT):
+                break
         self.replace_world(world, keep_initial=True)
         self.playing = False
         return True
@@ -371,8 +388,9 @@ class App:
             self.toast(f"Pasted properties onto {len(bodies)} body(ies)")
 
     # ------------------------------------------------------------ view helpers
-    def zoom_to_fit(self) -> None:
-        """Frame every body and wall in the canvas (F)."""
+    def _fit_target(self) -> tuple[float, float, float] | None:
+        """Camera (centre_x, centre_y, zoom) that frames every body and wall,
+        or None for an empty scene."""
         pts: list[tuple[float, float, float]] = []   # (x, y, pad radius)
         for b in self.world.bodies:
             if isfinite(b.pos.x) and isfinite(b.pos.y):
@@ -381,11 +399,8 @@ class App:
             half = w.thickness * 0.5
             pts.append((w.a.x, w.a.y, half))
             pts.append((w.b.x, w.b.y, half))
-        cam = self.camera
         if not pts:
-            cam.centre.set(0.0, 0.0)
-            cam.zoom = 88.0
-            return
+            return None
         min_x = min(p[0] - p[2] for p in pts)
         max_x = max(p[0] + p[2] for p in pts)
         min_y = min(p[1] - p[2] for p in pts)
@@ -394,12 +409,23 @@ class App:
         span_x = max(max_x - min_x, 1e-6)
         span_y = max(max_y - min_y, 1e-6)
         zoom = min(rect.w / span_x, rect.h / span_y) * 0.85
-        cam.zoom = min(MAX_ZOOM, max(MIN_ZOOM, zoom))
+        zoom = min(MAX_ZOOM, max(MIN_ZOOM, zoom))
         # place the bounds centre at the canvas centre (canvas != window centre)
         cx = (min_x + max_x) * 0.5
         cy = (min_y + max_y) * 0.5
-        cam.centre.x = cx - (rect.centerx - self.width * 0.5) / cam.zoom
-        cam.centre.y = cy + (rect.centery - self.height * 0.5) / cam.zoom
+        return (cx - (rect.centerx - self.width * 0.5) / zoom,
+                cy + (rect.centery - self.height * 0.5) / zoom, zoom)
+
+    def zoom_to_fit(self) -> None:
+        """Frame every body and wall in the canvas (F)."""
+        cam = self.camera
+        target = self._fit_target()
+        if target is None:
+            cam.centre.set(0.0, 0.0)
+            cam.zoom = 88.0
+            return
+        cam.centre.set(target[0], target[1])
+        cam.zoom = target[2]
 
     def nudge_selection(self, dx: int, dy: int) -> None:
         """Move selected bodies and walls one small step with the arrow keys."""
@@ -598,7 +624,7 @@ class App:
             self.accumulator += dt_frame * self.speed
             steps = 0
             while self.accumulator >= PHYSICS_DT and steps < MAX_STEPS_PER_FRAME:
-                self.world.step(PHYSICS_DT)
+                self._safe_step(self.world, PHYSICS_DT)
                 self.accumulator -= PHYSICS_DT
                 steps += 1
             self.overloaded = self.accumulator >= PHYSICS_DT
@@ -611,7 +637,19 @@ class App:
                 self.toast(f"{names} hit a numerical blow-up and was frozen "
                            "- check extreme forces or fields")
 
-        if self.view.follow:
+        if self.view.auto_fit:
+            target = self._fit_target()
+            if target is not None:
+                cam = self.camera
+                # zoom out quickly so escapers stay in frame; zoom back in
+                # gently so bounces don't make the view pump
+                rate = 6.0 if target[2] < cam.zoom else 1.2
+                k = min(1.0, dt_frame * rate)
+                cam.zoom *= (target[2] / cam.zoom) ** k
+                blend = min(1.0, dt_frame * 4.0)
+                cam.centre.x += (target[0] - cam.centre.x) * blend
+                cam.centre.y += (target[1] - cam.centre.y) * blend
+        elif self.view.follow:
             body = next((o for o in self.selection
                          if isinstance(o, Body) and isfinite(o.pos.x)
                          and isfinite(o.pos.y)), None)

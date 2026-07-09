@@ -178,7 +178,7 @@ class World:
         self._contact_static: dict = {}
 
     # ------------------------------------------------------------------ forces
-    def _prepare_step(self) -> None:
+    def _prepare_step(self, h: float) -> None:
         """Rebuild the per-step numpy scratch arrays (or drop them for small
         scenes). Body/link lists cannot change during a step, so quantities
         that only the UI edits (mass, stiffness, ...) are gathered once here
@@ -196,6 +196,25 @@ class World:
             a, b = ln.a.id, ln.b.id
             no_collide.add((a, b) if a < b else (b, a))
         self._rods = rods
+        # Stability clamp: an explicit spring is only stable while
+        # h*omega stays small (omega^2 = k*(1/ma + 1/mb)), and likewise
+        # h*c*(1/ma + 1/mb) for damping. Clamp the *effective* k and c to
+        # those limits each substep so extreme user settings behave like
+        # "as stiff as this timestep can carry" instead of blowing up.
+        h2 = h * h
+        for s in springs:
+            w_sum = s.a.inv_mass + s.b.inv_mass
+            k = s.stiffness
+            c = s.damping if s.damping > 0.0 else 0.0
+            if w_sum > 0.0:
+                k_lim = 1.0 / (h2 * w_sum)      # keeps h*omega <= 1
+                if k > k_lim:
+                    k = k_lim
+                c_lim = 0.5 / (h * w_sum)       # no single-step overshoot
+                if c > c_lim:
+                    c = c_lim
+            s._k_eff = k
+            s._c_eff = c
         self._movers = [b for b in bodies if b.inv_mass != 0.0]
         # directly linked bodies never collide with each other (their link
         # already governs their separation); everything else does, which is
@@ -229,11 +248,14 @@ class World:
             ns = len(springs)
             v["sa"] = np.fromiter((s.a._idx for s in springs), np.intp, ns)
             v["sb"] = np.fromiter((s.b._idx for s in springs), np.intp, ns)
-            v["sk"] = np.fromiter((s.stiffness for s in springs), np.float64, ns)
+            # _k_eff/_c_eff are the stability-clamped coefficients computed
+            # above (negative damping is already floored to zero there)
+            v["sk"] = np.fromiter((s._k_eff for s in springs), np.float64, ns)
             v["sr"] = np.fromiter((s.rest_length for s in springs), np.float64, ns)
-            # negative damping would inject energy; the scalar path ignores it
-            v["sc"] = np.maximum(
-                np.fromiter((s.damping for s in springs), np.float64, ns), 0.0)
+            v["sc"] = np.fromiter((s._c_eff for s in springs), np.float64, ns)
+            if any(s.tension_only for s in springs):
+                v["s_ten"] = np.fromiter((s.tension_only for s in springs),
+                                         bool, ns)
         self._vec = v
 
     def _accumulate_forces(self, t: float) -> None:
@@ -366,6 +388,10 @@ class World:
             ny = dy / safe
             f = v["sk"] * (dist - v["sr"])
             f += v["sc"] * ((vx[sb] - vx[sa]) * nx + (vy[sb] - vy[sa]) * ny)
+            ten = v.get("s_ten")
+            if ten is not None:
+                # slack strings transmit nothing (no push, no damping)
+                f[ten & (dist <= v["sr"])] = 0.0
             f[dist < 1e-9] = 0.0    # coincident ends: no defined direction
             fx = f * nx
             fy = f * ny
@@ -564,7 +590,7 @@ class World:
         n = max(1, self.substeps)
         h = dt / n
         inv_h = 1.0 / h
-        self._prepare_step()
+        self._prepare_step(h)
         self.contacts = []
         self.diverged = []
         for b in self.bodies:
@@ -688,13 +714,19 @@ class World:
                 body.vel.y += body._corr_y * inv_h
 
     def _sanitize(self) -> None:
-        """Freeze any body whose state became non-finite (a numerical
-        blow-up, e.g. from an extreme custom field) instead of crashing."""
+        """Freeze any body whose state became non-finite or absurdly large
+        (a numerical blow-up, e.g. from an extreme custom field) instead of
+        crashing. The size bounds also keep positions inside the range the
+        renderer can convert to pixel integers."""
         for b in self.bodies:
-            # any inf/nan component makes the sum non-finite
-            if isfinite(b.pos.x + b.pos.y + b.vel.x + b.vel.y + b.omega):
+            # any inf/nan component makes the sum non-finite; huge-but-finite
+            # values are just as fatal one step later, so they count too
+            if (isfinite(b.pos.x + b.pos.y + b.vel.x + b.vel.y + b.omega)
+                    and -1e6 < b.pos.x < 1e6 and -1e6 < b.pos.y < 1e6
+                    and -1e7 < b.vel.x < 1e7 and -1e7 < b.vel.y < 1e7):
                 continue
-            if isfinite(b._prev.x) and isfinite(b._prev.y):
+            if (isfinite(b._prev.x) and isfinite(b._prev.y)
+                    and -1e6 < b._prev.x < 1e6 and -1e6 < b._prev.y < 1e6):
                 b.pos.set_vec(b._prev)
             else:
                 b.pos.set(0.0, 0.0)
@@ -825,7 +857,7 @@ class World:
         w.drag_quadratic = s.get("drag_quadratic", 0.0)
         w.global_damping = s.get("global_damping", 0.0)
         w.integrator = s.get("integrator", "Velocity Verlet")
-        w.substeps = int(s.get("substeps", 4))
+        w.substeps = max(1, min(64, int(s.get("substeps", 4))))
         w.iterations = int(s.get("iterations", 8))
         w.time = s.get("time", 0.0)
         w.bodies = [Body.from_dict(d) for d in data.get("bodies", [])]

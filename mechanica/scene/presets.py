@@ -114,12 +114,14 @@ def _build_inner_planets() -> World:
 
 def _build_binary() -> World:
     w = _space_world(substeps=8)
-    m, d = 500.0, 1.6
-    v = 0.5 * (w.G * m / d) ** 0.5  # circular mutual orbit of equal masses
+    m, d = 500.0, 2.4
+    # each star circles the barycentre (radius d/2) under the pull
+    # G m^2/d^2, so the circular speed is v = sqrt(G m / (2 d))
+    v = (w.G * m / (2.0 * d)) ** 0.5
     _add_body(w, -d / 2, 0, 0.35, m, vy=-v, color=(235, 170, 90), name="Star A")
     _add_body(w, d / 2, 0, 0.35, m, vy=v, color=(140, 180, 235), name="Star B")
-    p = _add_body(w, 6.0, 0, 0.1, 0.5, color=(120, 200, 140), name="Planet")
-    p.vel.set(0, (w.G * 2 * m / 6.0) ** 0.5)
+    p = _add_body(w, 7.0, 0, 0.1, 0.5, color=(120, 200, 140), name="Planet")
+    p.vel.set(0, (w.G * 2 * m / 7.0) ** 0.5)
     return w
 
 
@@ -147,6 +149,98 @@ def _build_slingshot() -> World:
     probe = _add_body(w, 9.0, -2.4, 0.07, 0.001, vx=-4.0, color=(200, 220, 240),
                       name="Probe")
     probe.collides = planet.collides = False
+    return w
+
+
+def _build_newtons_cannon() -> World:
+    """Newton's mountain thought experiment: the same cannonball at ever
+    higher launch speeds falls short, orbits, or escapes."""
+    w = _space_world(substeps=6)
+    planet = _add_body(w, 0, 0, 0.8, 80.0, locked=True, e=0.1, mu=0.4,
+                       color=(96, 150, 110), name="Planet")
+    alt = 1.15
+    v_circ = (w.G * planet.mass / alt) ** 0.5
+    shots = [(0.55, "0.55 v: falls short", (220, 130, 90)),
+             (0.80, "0.8 v: further, still falls", (230, 200, 90)),
+             (1.00, "1.0 v: circular orbit", (120, 190, 120)),
+             (1.20, "1.2 v: elliptical orbit", (110, 200, 210)),
+             (1.45, "1.45 v: escapes (v > sqrt(2))", (200, 110, 180))]
+    for frac, label, col in shots:
+        _add_body(w, 0, alt, 0.05, 0.001, vx=frac * v_circ, e=0.1, mu=0.4,
+                  color=col, name=label)
+    return w
+
+
+def _build_trojans() -> World:
+    """Asteroids librating around Jupiter's L4/L5 Lagrange points."""
+    w = _space_world(substeps=6)
+    sun = _add_body(w, 0, 0, 0.5, 1000.0, locked=True, color=(235, 200, 90),
+                    name="Sun")
+    a = 3.5
+    v = (w.G * sun.mass / a) ** 0.5
+    _add_body(w, a, 0, 0.22, 8.0, vy=v, color=(210, 160, 110), name="Jupiter")
+    rng = Random(5)
+    for k in range(12):
+        base = pi / 3 if k < 6 else -pi / 3   # L4 leads, L5 trails
+        th = base + rng.uniform(-0.15, 0.15)
+        rr = a * (1.0 + rng.uniform(-0.03, 0.03))
+        b = _add_body(w, rr * cos(th), rr * sin(th), 0.045, 0.001,
+                      vx=-v * sin(th), vy=v * cos(th),
+                      color=(160 + rng.randint(0, 60),) * 3)
+        b.collides = False
+        b.name = f"Trojan {k + 1}"
+    return w
+
+
+def _build_sun_earth_moon() -> World:
+    """Hierarchical three-body: the Moon orbits the Earth orbiting the Sun.
+
+    The moon's orbit must sit well inside Earth's Hill sphere
+    (r_H = a_e * (m_e / 3 M_sun)^(1/3) ~ 0.6 here; prograde orbits are
+    long-term stable only inside roughly half of that), or the Sun's tide
+    strips it away."""
+    w = _space_world(substeps=10)
+    sun = _add_body(w, 0, 0, 0.5, 2000.0, locked=True, color=(235, 200, 90),
+                    name="Sun")
+    a_e = 4.0
+    v_e = (w.G * sun.mass / a_e) ** 0.5
+    earth = _add_body(w, a_e, 0, 0.13, 20.0, vy=v_e, color=(86, 156, 214),
+                      name="Earth")
+    a_m = 0.22
+    v_m = (w.G * earth.mass / a_m) ** 0.5
+    moon = _add_body(w, a_e + a_m, 0, 0.05, 0.02, vy=v_e + v_m,
+                     color=(190, 190, 200), name="Moon")
+    moon.collides = False
+    return w
+
+
+def _build_galaxy_collision() -> World:
+    """Two 'galaxies' (heavy cores dressed with rings of test stars) swing
+    past each other; the pass strips stars into tidal bridges and tails.
+
+    The impact parameter is chosen so the cores' periapsis (~1.4) is
+    comparable to the disc radius: close enough for strong tides, wide
+    enough that the discs aren't simply shredded head-on."""
+    w = _space_world(substeps=6)
+    w.softening = 0.05
+
+    def galaxy(cx: float, cy: float, vx: float, vy: float, name: str,
+               core_col, star_col) -> None:
+        core = _add_body(w, cx, cy, 0.24, 120.0, vx=vx, vy=vy,
+                         color=core_col, name=name)
+        core.collides = False
+        for radius, n in ((0.6, 5), (0.95, 8), (1.3, 11), (1.65, 14)):
+            vv = (w.G * core.mass / radius) ** 0.5
+            for i in range(n):
+                th = tau * i / n + radius  # offset rings so spokes don't align
+                b = _add_body(w, cx + radius * cos(th), cy + radius * sin(th),
+                              0.035, 0.001,
+                              vx=vx - vv * sin(th), vy=vy + vv * cos(th),
+                              color=star_col)
+                b.collides = False
+
+    galaxy(-7.0, -3.8, 2.0, 0.0, "Core A", (235, 170, 90), (225, 195, 150))
+    galaxy(7.0, 3.8, -2.0, 0.0, "Core B", (140, 180, 235), (170, 195, 235))
     return w
 
 
@@ -450,13 +544,17 @@ def _build_chain_bridge() -> World:
     right = _add_body(w, 2.4, 1.0, 0.07, 1.0, locked=True, color=(120, 125, 135))
     n = 11
     prev = left
+    # elastic strings: taut segments stretch slightly under the load,
+    # slack ones carry nothing - exactly how a real cable bridge hangs
     for i in range(1, n):
         x = -2.4 + 4.8 * i / n
         b = _add_body(w, x, 1.0, 0.07, 0.3, e=0.2, mu=0.6,
                       color=(170, 140, 230))
-        w.links.append(DistanceLink(prev, b))
+        w.links.append(SpringLink(prev, b, stiffness=4000.0, damping=6.0,
+                                  tension_only=True))
         prev = b
-    w.links.append(DistanceLink(prev, right))
+    w.links.append(SpringLink(prev, right, stiffness=4000.0, damping=6.0,
+                              tension_only=True))
     _add_body(w, 0, 3.0, 0.3, 6.0, e=0.2, mu=0.5, color=(220, 130, 90),
               name="Load")
     return w
@@ -738,6 +836,51 @@ def _build_butterfly() -> World:
     return w
 
 
+def _build_sinai_billiard() -> World:
+    """Sinai billiard: a box with a circular scatterer. The curved wall
+    stretches nearby trajectories apart exponentially - textbook chaos."""
+    w = World()
+    w.gravity = 0.0
+    w.substeps = 4
+    _add_box(w, 2.4, 2.4, e=1.0, mu=0.0)
+    _add_body(w, 0, 0, 0.75, 1.0, locked=True, e=1.0, mu=0.0,
+              color=(120, 125, 135), name="Scatterer")
+    for i, col in enumerate([(230, 120, 120), (110, 200, 210)]):
+        _add_body(w, -1.7, -0.40 + i * 0.13, 0.055, 1.0,
+                  vx=3.2, vy=1.1 + i * 0.01, e=1.0, mu=0.0, color=col,
+                  name=f"Ball {i + 1}")
+    return w
+
+
+def _build_magnetic_pendulum() -> World:
+    """A pendulum swinging over three attractors with light air drag.
+
+    It wanders chaotically before settling over one 'magnet'; which one it
+    picks depends so sensitively on the release point that the basins of
+    attraction form a fractal."""
+    w = World()
+    w.substeps = 10
+    w.mutual_gravity = True     # the magnets attract via N-body gravity
+    w.G = 0.02
+    w.softening = 0.08
+    w.drag_linear = 0.3
+    pivot = _add_body(w, 0, 2.2, 0.06, 1.0, locked=True,
+                      color=(120, 125, 135), name="Pivot")
+    ang = radians(75)
+    bob = _add_body(w, 1.9 * sin(ang), 2.2 - 1.9 * cos(ang), 0.11, 1.0,
+                    color=(235, 235, 225), name="Bob")
+    bob.collides = False
+    w.links.append(DistanceLink(pivot, bob))
+    magnets = [((0.0, 0.18), (230, 120, 120)),
+               ((-1.05, 0.50), (120, 190, 120)),
+               ((1.05, 0.50), (120, 160, 230))]
+    for i, ((mx, my), col) in enumerate(magnets):
+        mag = _add_body(w, mx, my, 0.09, 25.0, locked=True, color=col,
+                        name=f"Magnet {i + 1}")
+        mag.collides = False
+    return w
+
+
 def _build_orbit_dance() -> World:
     w = _space_world(substeps=8)
     w.softening = 0.02
@@ -773,7 +916,7 @@ PRESETS: list[Preset] = [
     Preset("Binary stars", "Gravity & Orbits",
            "Two equal stars orbit their barycentre while a distant planet "
            "circles the pair - a circumbinary orbit like Kepler-16b.",
-           _build_binary, {"zoom": 48, "trails": True}),
+           _build_binary, {"zoom": 42, "trails": True}),
     Preset("Three-body figure-8", "Gravity & Orbits",
            "The celebrated Chenciner-Montgomery choreography: three equal "
            "masses chase each other around a figure-eight forever. A "
@@ -784,6 +927,26 @@ PRESETS: list[Preset] = [
            "A tiny probe steals momentum from a moving planet in a flyby, "
            "leaving faster than it arrived - how Voyager toured the planets.",
            _build_slingshot, {"zoom": 40, "trails": True, "vectors": True}),
+    Preset("Newton's cannon", "Gravity & Orbits",
+           "Newton's thought experiment: fire a cannonball sideways from a "
+           "mountain. Too slow and it falls; at circular speed it orbits; "
+           "past sqrt(2) times that, it escapes forever.",
+           _build_newtons_cannon, {"zoom": 105, "trails": True}),
+    Preset("Trojan asteroids", "Gravity & Orbits",
+           "Asteroids sharing Jupiter's orbit, 60 degrees ahead (L4) and "
+           "behind (L5). These Lagrange points are gravitationally stable, "
+           "so the swarms slowly librate around them instead of drifting off.",
+           _build_trojans, {"zoom": 55, "trails": True}),
+    Preset("Sun, Earth & Moon", "Gravity & Orbits",
+           "A hierarchical three-body system: the Moon circles the Earth "
+           "while both circle the Sun. Stable because the Moon sits deep "
+           "inside Earth's Hill sphere, where Earth's pull dominates.",
+           _build_sun_earth_moon, {"zoom": 62, "trails": True}),
+    Preset("Colliding galaxies", "Gravity & Orbits",
+           "Two galaxy cores dressed with rings of test stars fall together. "
+           "The close pass strips stars into tidal bridges and tails, like "
+           "the Antennae galaxies. About 80 bodies of pure N-body gravity.",
+           _build_galaxy_collision, {"zoom": 40, "trails": True}),
 
     Preset("Simple pendulum", "Pendulums",
            "A small-angle pendulum. Its period is 2*pi*sqrt(L/g), roughly 2.46 s "
@@ -891,8 +1054,9 @@ PRESETS: list[Preset] = [
            "collisions, friction and gravity in one scene.",
            _build_wrecking_ball, {"zoom": 90}),
     Preset("Chain bridge", "Projectiles & Friction",
-           "A load dropped onto a hanging chain of rigid links. The chain "
-           "sags into a catenary-like curve under the weight.",
+           "A load dropped onto a bridge of elastic string segments. Taut "
+           "strings stretch slightly and pull; slack ones carry nothing - "
+           "so the bridge sags into a catenary-like curve under the weight.",
            _build_chain_bridge, {"zoom": 110}),
 
     Preset("Jelly block", "Soft Bodies",
@@ -934,6 +1098,19 @@ PRESETS: list[Preset] = [
            "Fourteen tiny moons on eccentric orbits around one star. Long-"
            "term structure emerges from simple inverse-square gravity.",
            _build_orbit_dance, {"zoom": 55, "trails": True}),
+    Preset("Sinai billiard", "Chaos",
+           "Two balls launched a hair apart in a box with a circular "
+           "scatterer. Every bounce off the curved wall stretches their "
+           "separation - exponential divergence, while energy stays exactly "
+           "flat. The founding example of provable chaos.",
+           _build_sinai_billiard, {"zoom": 125, "trails": True,
+                                   "graph": "energy"}),
+    Preset("Magnetic pendulum", "Chaos",
+           "A pendulum swings over three attracting 'magnets' with light "
+           "air drag. It wanders unpredictably before settling over one - "
+           "and which one depends so sensitively on the release point that "
+           "the basins of attraction form a fractal. Try nudging the bob.",
+           _build_magnetic_pendulum, {"zoom": 110, "trails": True}),
 ]
 
 CATEGORIES = ["All"] + sorted({p.category for p in PRESETS},

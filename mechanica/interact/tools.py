@@ -43,7 +43,9 @@ TOOL_INFO = {
     "wall": ("Draw wall (W)", "Click and drag to draw a static wall. Shift snaps the angle."),
     "rod": ("Connect rod (R)", "Click two bodies to join them rigidly. "
             "Click empty space to create an anchor/body automatically."),
-    "rope": ("Connect rope (E)", "Like a rod, but only resists stretching."),
+    "rope": ("Connect string (E)", "An elastic string: pulls when stretched "
+             "past its natural length, completely slack when shorter. Can be "
+             "made inelastic (fixed length) in the Inspector."),
     "spring": ("Connect spring (S)", "Click two bodies to join them with a spring."),
     "eraser": ("Eraser (X)", "Click bodies, walls or links to delete them."),
 }
@@ -65,9 +67,10 @@ class CanvasController:
         self._vel_drag: Body | None = None
         self._wall_drag: tuple[Wall, int] | None = None  # wall, endpoint (0/1/2=whole)
         self._wall_grab: Vec2 | None = None
-        # velocities at grab time, so a plain click can restore them
-        self._press_vel: dict[int, tuple[float, float, float]] = {}
-        self._press_ms = 0
+        # a body drag only *activates* (holds/pins the body) once the cursor
+        # moves a few pixels; a plain inspect-click never touches the physics
+        self._drag_press = (0, 0)
+        self._drag_active = False
 
     # ------------------------------------------------------------------ helpers
     def set_tool(self, tool: str) -> None:
@@ -89,6 +92,7 @@ class CanvasController:
         for body, _, _ in self._drag_items:
             body.held = False
         self._drag_items = []
+        self._drag_active = False
         self._vel_drag = None
         self._wall_drag = None
         self._wall_grab = None
@@ -104,7 +108,7 @@ class CanvasController:
         into whatever the body is attached to. While paused it is pure
         editing, so the body snaps straight to the cursor.
         """
-        if not self._drag_items:
+        if not self._drag_items or not self._drag_active:
             return
         app = self.app
         world_p = app.camera.to_world(*mouse)
@@ -256,9 +260,13 @@ class CanvasController:
             elif target is not self._link_first:
                 if self.tool == "spring":
                     link = SpringLink(self._link_first, target)
+                elif self.tool == "rope":
+                    # an elastic string: a tension-only spring
+                    link = SpringLink(self._link_first, target,
+                                      stiffness=1000.0, damping=2.0,
+                                      tension_only=True)
                 else:
-                    link = DistanceLink(self._link_first, target,
-                                        is_rope=(self.tool == "rope"))
+                    link = DistanceLink(self._link_first, target)
                 app.world.links.append(link)
                 app.selection = [link]
                 self._link_first = None
@@ -348,12 +356,10 @@ class CanvasController:
         self._drag_items = [
             (b, b.pos - world_p, safe_drag_speed(app.world, b, base_speed))
             for b in app.selection if isinstance(b, Body)]
-        # remember the grab-time motion so a plain click can put it back
-        self._press_ms = pygame.time.get_ticks()
-        self._press_vel = {b.id: (b.vel.x, b.vel.y, b.omega)
-                           for b, _, _ in self._drag_items}
-        for b, _, _ in self._drag_items:
-            b.held = True
+        # bodies are NOT held yet: the drag arms here and only activates
+        # once the cursor moves, so an inspect-click leaves the physics alone
+        self._drag_press = mouse
+        self._drag_active = False
         self._drag_moved = False
         return True
 
@@ -386,6 +392,14 @@ class CanvasController:
             self._drag_moved = True
             return True
         if self._drag_items:
+            if not self._drag_active:
+                dx = mouse[0] - self._drag_press[0]
+                dy = mouse[1] - self._drag_press[1]
+                if dx * dx + dy * dy < 16:   # a click's jitter never grabs
+                    return True
+                self._drag_active = True
+                for b, _, _ in self._drag_items:
+                    b.held = True
             # update_drag() moves the bodies once per frame; here we only
             # note that the drag actually moved (for undo and throwing)
             self._drag_moved = True
@@ -403,25 +417,13 @@ class CanvasController:
             self._panning = False
             handled = True
         if self._vel_drag is not None or self._wall_drag is not None or self._drag_items:
-            # While playing, a held body's velocity is already the speed its
-            # pin was moving at (zero if the cursor was parked), so releasing
-            # mid-swing throws it and releasing at rest just lets it go.
-            # A plain click (no movement, brief press) restores the velocity
-            # the body had at grab time instead of stopping it dead.
-            throw = app.playing and self._drag_moved
-            quick = pygame.time.get_ticks() - self._press_ms <= 350
+            # An inactive (never-moved) press was a pure inspect-click: the
+            # bodies were never held or pinned, so there is nothing to undo.
+            # An active drag while playing releases at the pin's velocity -
+            # moving pin = a throw, parked pin = let go at rest. While
+            # paused it is pure editing and the velocity stays untouched.
             for body, _, _ in self._drag_items:
                 body.held = False
-                if throw:
-                    continue
-                if not self._drag_moved and quick:
-                    v = self._press_vel.get(body.id)
-                    if v is not None:
-                        body.vel.set(v[0], v[1])
-                        body.omega = v[2]
-                elif app.playing:
-                    body.vel.set(0.0, 0.0)  # held parked, released at rest
-                # paused: leave the velocity untouched (pure editing)
             app.world.drag_pins.clear()
             if self._drag_moved:
                 app.push_undo()
@@ -429,6 +431,7 @@ class CanvasController:
             self._wall_drag = None
             self._wall_grab = None
             self._drag_items = []
+            self._drag_active = False
             handled = True
         if self._rubber is not None:
             x0, y0 = self._rubber
@@ -535,7 +538,8 @@ class CanvasController:
             if link.a.id in mapping and link.b.id in mapping:
                 if isinstance(link, SpringLink):
                     nl = SpringLink(mapping[link.a.id], mapping[link.b.id],
-                                    link.rest_length, link.stiffness, link.damping)
+                                    link.rest_length, link.stiffness,
+                                    link.damping, link.tension_only)
                 else:
                     nl = DistanceLink(mapping[link.a.id], mapping[link.b.id],
                                       link.length, link.is_rope, link.compliance)
