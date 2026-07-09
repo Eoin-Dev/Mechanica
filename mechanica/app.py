@@ -340,8 +340,6 @@ class App:
         self.playing = False
         self.undo_stack.reset(self.world)
         hints = preset.hints
-        self.camera.centre.set(*hints.get("centre", (0, 0)))
-        self.camera.zoom = hints.get("zoom", 88)
         self.view.trails = hints.get("trails", False)
         if hints.get("vectors"):
             self.view.vel_vectors = True
@@ -349,9 +347,39 @@ class App:
         self.set_graph_mode({"energy": "Energy", "momentum": "Mom.",
                              "phase": "Phase"}.get(graph, self.graph_mode)
                             if graph else self.graph_mode)
+        self._frame_preset(hints)   # after the graph dock resizes the canvas
         self.ensure_initial()
         if announce:
             self.toast(f"Loaded '{preset.name}' - press Space to run")
+
+    def _frame_preset(self, hints: dict) -> None:
+        """Frame a freshly loaded preset so nothing starts off-screen.
+
+        The zoom is never tighter than a full fit of the initial scene; a
+        hint zoom may only widen it (anticipating where the action will go).
+        A hint centre is honoured but clamped so the whole scene stays in
+        the canvas."""
+        cam = self.camera
+        bounds = self._scene_bounds()
+        if bounds is None:
+            cam.centre.set(*hints.get("centre", (0, 0)))
+            cam.zoom = hints.get("zoom", 88.0)
+            return
+        fit_zoom = self._frame_for_bounds(bounds)[2]
+        zoom = min(float(hints.get("zoom", fit_zoom)), fit_zoom)
+        cx, cy, _ = self._frame_for_bounds(bounds, zoom)
+        if "centre" in hints:
+            hx, hy = hints["centre"]
+            # clamp so every bound stays inside the canvas (guaranteed
+            # feasible because zoom <= fit_zoom leaves 15% slack)
+            rect = self.canvas_rect()
+            min_x, max_x, min_y, max_y = bounds
+            cx = min(max(hx, max_x - (rect.right - self.width * 0.5) / zoom),
+                     min_x + (self.width * 0.5 - rect.left) / zoom)
+            cy = min(max(hy, max_y + (rect.top - self.height * 0.5) / zoom),
+                     min_y + (rect.bottom - self.height * 0.5) / zoom)
+        cam.zoom = zoom
+        cam.centre.set(cx, cy)
 
     def load_saved_scene(self, name: str) -> None:
         try:
@@ -388,9 +416,8 @@ class App:
             self.toast(f"Pasted properties onto {len(bodies)} body(ies)")
 
     # ------------------------------------------------------------ view helpers
-    def _fit_target(self) -> tuple[float, float, float] | None:
-        """Camera (centre_x, centre_y, zoom) that frames every body and wall,
-        or None for an empty scene."""
+    def _scene_bounds(self) -> tuple[float, float, float, float] | None:
+        """(min_x, max_x, min_y, max_y) enclosing every body and wall."""
         pts: list[tuple[float, float, float]] = []   # (x, y, pad radius)
         for b in self.world.bodies:
             if isfinite(b.pos.x) and isfinite(b.pos.y):
@@ -401,20 +428,31 @@ class App:
             pts.append((w.b.x, w.b.y, half))
         if not pts:
             return None
-        min_x = min(p[0] - p[2] for p in pts)
-        max_x = max(p[0] + p[2] for p in pts)
-        min_y = min(p[1] - p[2] for p in pts)
-        max_y = max(p[1] + p[2] for p in pts)
+        return (min(p[0] - p[2] for p in pts), max(p[0] + p[2] for p in pts),
+                min(p[1] - p[2] for p in pts), max(p[1] + p[2] for p in pts))
+
+    def _frame_for_bounds(self, bounds, zoom: float | None = None
+                          ) -> tuple[float, float, float]:
+        """Camera (centre_x, centre_y, zoom) framing `bounds` in the canvas.
+        With an explicit zoom, only the centre is computed."""
+        min_x, max_x, min_y, max_y = bounds
         rect = self.canvas_rect()
-        span_x = max(max_x - min_x, 1e-6)
-        span_y = max(max_y - min_y, 1e-6)
-        zoom = min(rect.w / span_x, rect.h / span_y) * 0.85
-        zoom = min(MAX_ZOOM, max(MIN_ZOOM, zoom))
+        if zoom is None:
+            span_x = max(max_x - min_x, 1e-6)
+            span_y = max(max_y - min_y, 1e-6)
+            zoom = min(rect.w / span_x, rect.h / span_y) * 0.85
+            zoom = min(MAX_ZOOM, max(MIN_ZOOM, zoom))
         # place the bounds centre at the canvas centre (canvas != window centre)
         cx = (min_x + max_x) * 0.5
         cy = (min_y + max_y) * 0.5
         return (cx - (rect.centerx - self.width * 0.5) / zoom,
                 cy + (rect.centery - self.height * 0.5) / zoom, zoom)
+
+    def _fit_target(self) -> tuple[float, float, float] | None:
+        """Camera (centre_x, centre_y, zoom) that frames every body and wall,
+        or None for an empty scene."""
+        bounds = self._scene_bounds()
+        return None if bounds is None else self._frame_for_bounds(bounds)
 
     def zoom_to_fit(self) -> None:
         """Frame every body and wall in the canvas (F)."""
@@ -621,13 +659,18 @@ class App:
             self.push_undo()
 
         if self.playing:
+            # Below 1x, keep stepping at the normal 120 Hz real-time rate but
+            # with a proportionally smaller dt: slow motion then produces a
+            # fresh state every frame (glassy smooth, and *more* accurate)
+            # instead of one full-size step every few frames (choppy).
+            eff_dt = PHYSICS_DT * min(self.speed, 1.0)
             self.accumulator += dt_frame * self.speed
             steps = 0
-            while self.accumulator >= PHYSICS_DT and steps < MAX_STEPS_PER_FRAME:
-                self._safe_step(self.world, PHYSICS_DT)
-                self.accumulator -= PHYSICS_DT
+            while self.accumulator >= eff_dt and steps < MAX_STEPS_PER_FRAME:
+                self._safe_step(self.world, eff_dt)
+                self.accumulator -= eff_dt
                 steps += 1
-            self.overloaded = self.accumulator >= PHYSICS_DT
+            self.overloaded = self.accumulator >= eff_dt
             if self.overloaded:
                 self.accumulator = 0.0
             self._after_physics()

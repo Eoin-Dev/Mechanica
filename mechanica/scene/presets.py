@@ -200,48 +200,80 @@ def _build_sun_earth_moon() -> World:
     long-term stable only inside roughly half of that), or the Sun's tide
     strips it away."""
     w = _space_world(substeps=10)
-    sun = _add_body(w, 0, 0, 0.5, 2000.0, locked=True, color=(235, 200, 90),
+    sun = _add_body(w, 0, 0, 0.4, 2000.0, locked=True, color=(235, 200, 90),
                     name="Sun")
     a_e = 4.0
     v_e = (w.G * sun.mass / a_e) ** 0.5
-    earth = _add_body(w, a_e, 0, 0.13, 20.0, vy=v_e, color=(86, 156, 214),
+    # small drawn radii: the moon's orbit (0.24) must read as clear space
+    # between the two discs, not as the moon scraping the earth
+    earth = _add_body(w, a_e, 0, 0.09, 20.0, vy=v_e, color=(86, 156, 214),
                       name="Earth")
-    a_m = 0.22
+    a_m = 0.24
     v_m = (w.G * earth.mass / a_m) ** 0.5
-    moon = _add_body(w, a_e + a_m, 0, 0.05, 0.02, vy=v_e + v_m,
+    moon = _add_body(w, a_e + a_m, 0, 0.03, 0.02, vy=v_e + v_m,
                      color=(190, 190, 200), name="Moon")
     moon.collides = False
     return w
 
 
-def _build_galaxy_collision() -> World:
-    """Two 'galaxies' (heavy cores dressed with rings of test stars) swing
-    past each other; the pass strips stars into tidal bridges and tails.
-
-    The impact parameter is chosen so the cores' periapsis (~1.4) is
-    comparable to the disc radius: close enough for strong tides, wide
-    enough that the discs aren't simply shredded head-on."""
-    w = _space_world(substeps=6)
-    w.softening = 0.05
-
-    def galaxy(cx: float, cy: float, vx: float, vy: float, name: str,
-               core_col, star_col) -> None:
-        core = _add_body(w, cx, cy, 0.24, 120.0, vx=vx, vy=vy,
-                         color=core_col, name=name)
-        core.collides = False
-        for radius, n in ((0.6, 5), (0.95, 8), (1.3, 11), (1.65, 14)):
-            vv = (w.G * core.mass / radius) ** 0.5
-            for i in range(n):
-                th = tau * i / n + radius  # offset rings so spokes don't align
-                b = _add_body(w, cx + radius * cos(th), cy + radius * sin(th),
-                              0.035, 0.001,
-                              vx=vx - vv * sin(th), vy=vy + vv * cos(th),
-                              color=star_col)
-                b.collides = False
-
-    galaxy(-7.0, -3.8, 2.0, 0.0, "Core A", (235, 170, 90), (225, 195, 150))
-    galaxy(7.0, 3.8, -2.0, 0.0, "Core B", (140, 180, 235), (170, 195, 235))
+def _build_pythagorean() -> World:
+    """Burrau's Pythagorean problem (1913): masses 3, 4 and 5 released at
+    rest from the corners of a 3-4-5 right triangle. A celebrated chaotic
+    free-fall dance of close encounters; eventually two bodies bind into a
+    binary and fling the third away."""
+    w = _space_world(substeps=32)
+    w.softening = 0.01
+    for x, y, m, col in ((1.0, 3.0, 3.0, (230, 120, 120)),
+                         (-2.0, -1.0, 4.0, (120, 190, 120)),
+                         (1.0, -1.0, 5.0, (120, 160, 230))):
+        b = _add_body(w, x, y, 0.07 * m ** (1 / 3), m, color=col,
+                      name=f"m = {m:g}")
+        b.collides = False
     return w
+
+
+def _build_lagrange_triangle() -> World:
+    """Lagrange's equilateral-triangle solution: three masses at the corners
+    of an equilateral triangle can rotate rigidly forever. For equal masses
+    the configuration is *unstable*, so numerical noise eventually grows and
+    the dance breaks into chaos."""
+    w = _space_world(substeps=12)
+    side = 2.4
+    m = 100.0
+    r_orbit = side / 3 ** 0.5
+    # rigid rotation: omega^2 = 3 G m / side^3
+    omega = (3.0 * w.G * m / side ** 3) ** 0.5
+    v = omega * r_orbit
+    for i, col in enumerate([(230, 120, 120), (120, 190, 120),
+                             (120, 160, 230)]):
+        th = pi / 2 + i * tau / 3
+        b = _add_body(w, r_orbit * cos(th), r_orbit * sin(th), 0.14, m,
+                      vx=-v * sin(th), vy=v * cos(th), color=col,
+                      name=f"Mass {i + 1}")
+        b.collides = False
+    return w
+
+
+def _choreography(p1: float, p2: float, substeps: int = 32) -> World:
+    """Zero-angular-momentum three-body choreography (Suvakov &
+    Dmitrasinovic 2013): equal masses at (-1,0), (1,0), (0,0) with
+    v1 = v2 = (p1, p2) and v3 = (-2 p1, -2 p2), G = m = 1."""
+    w = _space_world(substeps=substeps)
+    w.softening = 0.001
+    cols = [(230, 120, 120), (120, 190, 120), (120, 160, 230)]
+    for (x, vx, vy), col in zip([(-1.0, p1, p2), (1.0, p1, p2),
+                                 (0.0, -2 * p1, -2 * p2)], cols):
+        b = _add_body(w, x, 0.0, 0.06, 1.0, vx=vx, vy=vy, color=col)
+        b.collides = False
+    return w
+
+
+def _build_moth() -> World:
+    return _choreography(0.46444, 0.39606)
+
+
+def _build_butterfly_orbit() -> World:
+    return _choreography(0.30689, 0.12551)
 
 
 # ----------------------------------------------------------------- pendulums
@@ -941,12 +973,25 @@ PRESETS: list[Preset] = [
            "A hierarchical three-body system: the Moon circles the Earth "
            "while both circle the Sun. Stable because the Moon sits deep "
            "inside Earth's Hill sphere, where Earth's pull dominates.",
-           _build_sun_earth_moon, {"zoom": 62, "trails": True}),
-    Preset("Colliding galaxies", "Gravity & Orbits",
-           "Two galaxy cores dressed with rings of test stars fall together. "
-           "The close pass strips stars into tidal bridges and tails, like "
-           "the Antennae galaxies. About 80 bodies of pure N-body gravity.",
-           _build_galaxy_collision, {"zoom": 40, "trails": True}),
+           _build_sun_earth_moon, {"zoom": 95, "centre": (0, 0),
+                                   "trails": True}),
+    Preset("Lagrange's triangle", "Gravity & Orbits",
+           "Lagrange proved three bodies at an equilateral triangle can "
+           "rotate rigidly forever. For equal masses it is unstable: watch "
+           "the perfect waltz hold for a while, then shatter into chaos. "
+           "(Stable versions of these points host the Trojan asteroids.)",
+           _build_lagrange_triangle, {"zoom": 150, "trails": True}),
+    Preset("Choreography: moth", "Gravity & Orbits",
+           "A zero-angular-momentum periodic three-body orbit (Suvakov & "
+           "Dmitrasinovic, 2013): three equal masses chase each other along "
+           "one moth-shaped track. Delicate - numerical noise eventually "
+           "tips it into chaos.",
+           _build_moth, {"zoom": 220, "trails": True}),
+    Preset("Choreography: butterfly", "Gravity & Orbits",
+           "Another of the 2013 zero-angular-momentum solutions: the three "
+           "bodies trace a butterfly-wing figure. Like all of these "
+           "choreographies it sits on a knife edge between order and chaos.",
+           _build_butterfly_orbit, {"zoom": 220, "trails": True}),
 
     Preset("Simple pendulum", "Pendulums",
            "A small-angle pendulum. Its period is 2*pi*sqrt(L/g), roughly 2.46 s "
@@ -1098,6 +1143,13 @@ PRESETS: list[Preset] = [
            "Fourteen tiny moons on eccentric orbits around one star. Long-"
            "term structure emerges from simple inverse-square gravity.",
            _build_orbit_dance, {"zoom": 55, "trails": True}),
+    Preset("Pythagorean three-body", "Chaos",
+           "Burrau's 1913 problem: masses 3, 4 and 5 dropped at rest from a "
+           "3-4-5 triangle. They swing through wild close encounters until "
+           "two bind into a binary and eject the third - the fate of almost "
+           "every three-body system.",
+           _build_pythagorean, {"zoom": 70, "centre": (-0.5, 1.0),
+                                "trails": True, "graph": "energy"}),
     Preset("Sinai billiard", "Chaos",
            "Two balls launched a hair apart in a box with a circular "
            "scatterer. Every bounce off the curved wall stretches their "

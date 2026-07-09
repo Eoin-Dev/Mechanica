@@ -194,13 +194,16 @@ def draw_world(surface: pygame.Surface, cam: Camera, world: World,
             screen_pts = [cam.to_screen_xy(px, py) for px, py in pts]
             n = len(screen_pts)
             seg = max(1, n // 24)
-            for i in range(0, n - seg, seg):
+            # the final chunk is usually shorter than seg: draw it anyway,
+            # so the trail always connects right up to the body
+            for i in range(0, n - 1, seg):
+                j = min(i + seg, n - 1)
                 f = i / n
                 col = (int(theme.BG[0] + (base[0] - theme.BG[0]) * f),
                        int(theme.BG[1] + (base[1] - theme.BG[1]) * f),
                        int(theme.BG[2] + (base[2] - theme.BG[2]) * f))
                 pygame.draw.lines(surface, col, False,
-                                  screen_pts[i:i + seg + 1], 1)
+                                  screen_pts[i:j + 1], 1)
 
     # --- links ---------------------------------------------------------------
     # antialiased coils are pretty but pricey; past a few hundred springs

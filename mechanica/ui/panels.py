@@ -175,7 +175,8 @@ class Inspector(PanelBase):
         return (self.tab, sel_ids, len(app.world.fields), field_errors,
                 len(app.world.drivers), self.scroll, app.width, app.height,
                 app.graph_mode, app.inspector_w, app.inspector_visible,
-                app.dock_h, self.show_formula_help)
+                app.dock_h, self.show_formula_help, len(app.world.bodies),
+                len(app.world.walls), len(app.world.links))
 
     def maybe_rebuild(self) -> None:
         key = self._structure_key()
@@ -327,6 +328,25 @@ class Inspector(PanelBase):
                     (lambda k=key: app.box_filter[k]),
                     (lambda v, k=key: app.box_filter.__setitem__(k, v)),
                     "Object types included when you drag a selection box"))
+            world = app.world
+            groups = [(g, lbl) for g, lbl in (
+                (list(world.bodies), "bodies"),
+                (list(world.walls), "walls"),
+                ([ln for ln in world.links if isinstance(ln, SpringLink)],
+                 "springs & strings"),
+                ([ln for ln in world.links if isinstance(ln, DistanceLink)],
+                 "rods"))
+                if g]
+            if groups:
+                self.widgets.append(SectionLabel(self._row(22),
+                                                 "Delete every ..."))
+                for grp, lbl in groups:
+                    self.widgets.append(Button(
+                        self._row(24),
+                        (lambda g=grp, s=lbl: self._delete_objs(g, s)),
+                        f"All {lbl} ({len(grp)})", style="danger", size=11,
+                        tooltip=f"Remove every {lbl.rstrip('s')} in the scene "
+                                "(undo with Ctrl+Z)"))
             return
         if len(sel) == 1 and isinstance(sel[0], Body):
             self._build_single_body(sel[0])
@@ -492,11 +512,48 @@ class Inspector(PanelBase):
                                        lambda: first.restitution,
                                        set_all(bodies, "restitution"),
                                        0.0, 1.0, u, "", "{:.2f}",
-                                       on_commit=self._commit))
+                                       on_commit=self._commit,
+                                       tooltip="Coefficient of restitution e, "
+                                               "applied to every selected body"))
             self.widgets.append(Slider(self._row(), "Friction",
                                        lambda: first.friction,
                                        set_all(bodies, "friction"), 0.0, 3.0,
-                                       u, "", "{:.2f}", on_commit=self._commit))
+                                       u, "", "{:.2f}", on_commit=self._commit,
+                                       tooltip="Coefficient of friction mu, "
+                                               "applied to every selected body"))
+            names = [n for n in MATERIALS if n != "Custom"]
+            per_row = 3
+            for i in range(0, len(names), per_row):
+                row = self._row(22)
+                bw = (row.w - 8) // per_row
+                for j, name in enumerate(names[i:i + per_row]):
+                    e_, mu_ = MATERIALS[name]
+                    self.widgets.append(Button(
+                        (row.x + j * (bw + 4), row.y, bw, 22),
+                        (lambda e_=e_, mu_=mu_: (set_all(bodies, "restitution")(e_),
+                                                 set_all(bodies, "friction")(mu_),
+                                                 self._commit())),
+                        name, size=11,
+                        tooltip=f"Set every selected body to bounce {e_}, "
+                                f"friction {mu_}"))
+            r1, r2 = self._half_rows()
+            self.widgets.append(Checkbox(
+                r1, "Locked", lambda: first.locked,
+                lambda v: (set_all(bodies, "locked")(v), self._commit()),
+                "Lock / unlock every selected body"))
+            self.widgets.append(Checkbox(
+                r2, "Collides", lambda: first.collides,
+                lambda v: (set_all(bodies, "collides")(v), self._commit()),
+                "Enable / disable collisions for every selected body"))
+            self.widgets.append(SectionLabel(self._row(20), "Constant force"))
+            r1, r2 = self._half_rows()
+            self._num_edit(r1, "Fx", lambda: first.const_force.x,
+                           lambda v: [setattr(o.const_force, "x", v)
+                                      for o in bodies], "N")
+            self._num_edit(r2, "Fy", lambda: first.const_force.y,
+                           lambda v: [setattr(o.const_force, "y", v)
+                                      for o in bodies], "N")
+            self._build_multi_drivers(bodies)
             if len(bodies) >= 2:
                 self.widgets.append(SectionLabel(self._row(20), "Align"))
                 r = self._row(24)
@@ -558,6 +615,92 @@ class Inspector(PanelBase):
                                                     self._commit())))
 
         self._action_buttons()
+        # selective deletion: remove just one kind of thing from the selection
+        groups = [(g, lbl) for g, lbl in
+                  ((bodies, "bodies"), (walls, "walls"),
+                   (springs, "springs"), (rods, "rods"))
+                  if g]
+        if len(groups) >= 2:
+            self.widgets.append(SectionLabel(self._row(20),
+                                             "Delete only ..."))
+            for i in range(0, len(groups), 2):
+                r1, r2 = self._half_rows(24)
+                for rect, (grp, lbl) in zip((r1, r2), groups[i:i + 2]):
+                    self.widgets.append(Button(
+                        rect, (lambda g=grp, s=lbl: self._delete_objs(g, s)),
+                        f"{lbl.capitalize()} ({len(grp)})", style="danger",
+                        size=11,
+                        tooltip=f"Delete only the selected {lbl}, keeping "
+                                "everything else"))
+
+    def _build_multi_drivers(self, bodies: list[Body]) -> None:
+        """Edit the sinusoidal drivers of every selected body at once."""
+        app = self.app
+        u = app.ui
+        ids = {b.id for b in bodies}
+        drvs = [d for d in app.world.drivers if d.body_id in ids]
+        self.widgets.append(SectionLabel(
+            self._row(20), f"Driving force ({len(drvs)}/{len(bodies)} driven)"))
+        if not drvs:
+            self.widgets.append(Button(
+                self._row(24), lambda: self._add_drivers(bodies),
+                "Add driver to all selected", icon="plus", size=12,
+                tooltip="Apply F = A sin(2 pi f t) to every selected body"))
+            return
+        first = drvs[0]
+
+        def set_all_drv(attr):
+            def s(v):
+                for d in drvs:
+                    setattr(d, attr, v)
+            return s
+
+        self.widgets.append(Slider(self._row(), "Amplitude",
+                                   lambda: first.amplitude,
+                                   set_all_drv("amplitude"), 0.0, 500.0,
+                                   u, "N", "{:.2f}", on_commit=self._commit,
+                                   tooltip="Applied to every selected driver"))
+        self.widgets.append(Slider(self._row(), "Frequency",
+                                   lambda: first.frequency,
+                                   set_all_drv("frequency"), 0.001, 100.0,
+                                   u, "Hz", "{:.3g}", log=True,
+                                   on_commit=self._commit,
+                                   tooltip="Applied to every selected driver"))
+        self.widgets.append(Slider(self._row(), "Direction",
+                                   lambda: first.angle * 180 / pi,
+                                   lambda v: set_all_drv("angle")(v * pi / 180),
+                                   -180.0, 180.0, u, "deg", "{:.0f}",
+                                   on_commit=self._commit,
+                                   tooltip="Applied to every selected driver"))
+        r1, r2 = self._half_rows(24)
+        if len(drvs) < len(bodies):
+            self.widgets.append(Button(r1, lambda: self._add_drivers(bodies),
+                                       "Drive rest", size=11,
+                                       tooltip="Add drivers to the selected "
+                                               "bodies that lack one"))
+        self.widgets.append(Button(r2, lambda: self._remove_drivers(drvs),
+                                   "Remove all", style="danger", size=11,
+                                   tooltip="Remove every selected body's driver"))
+
+    def _add_drivers(self, bodies: list[Body]) -> None:
+        world = self.app.world
+        driven = {d.body_id for d in world.drivers}
+        for b in bodies:
+            if b.id not in driven and not b.locked:
+                world.drivers.append(Driver(b.id))
+        self.app.push_undo()
+
+    def _remove_drivers(self, drvs: list[Driver]) -> None:
+        world = self.app.world
+        world.drivers = [d for d in world.drivers if d not in drvs]
+        self.app.push_undo()
+
+    def _delete_objs(self, objs: list, label: str) -> None:
+        """Delete only one kind of object (used by the selective buttons)."""
+        for o in list(objs):
+            self.app.canvas._delete_object(o)
+        self.app.push_undo()
+        self.app.toast(f"Deleted {len(objs)} {label} - Ctrl+Z restores them")
 
     def _align(self, bodies: list[Body], axis: str) -> None:
         avg = sum(getattr(b.pos, axis) for b in bodies) / len(bodies)
@@ -1369,14 +1512,14 @@ class TourOverlay:
              "click Next to continue.", None),
             ("Tool palette",
              "Pick a tool here: select and move things, add bodies and "
-             "anchors, draw walls, or connect bodies with rods, ropes and "
+             "anchors, draw walls, or connect bodies with rods, strings and "
              "springs. Hover any icon for its shortcut.",
              app.palette.rect),
             ("The canvas",
-             "Scroll to zoom, drag with the right mouse button to pan, press "
-             "F to frame everything. With the Select tool, drag bodies to "
-             "move them (throw them while playing!) and drag the green arrow "
-             "tip to set a velocity.",
+             "Scroll to zoom, middle-drag to pan, press F to frame "
+             "everything. Drag bodies to move them (throw them while "
+             "playing!), and right-drag a body - or its green arrow tip - "
+             "to aim its velocity.",
              app.canvas_rect()),
             ("Playback",
              "Play, pause, single-step and reset here. The speed slider "
@@ -1385,17 +1528,20 @@ class TourOverlay:
             ("Inspector",
              "Everything about the selected object - mass, velocity, "
              "materials, forces - plus world settings (gravity, drag, the "
-             "solver) and view overlays live in these three tabs.",
+             "solver, custom force fields) and view overlays live in these "
+             "three tabs. Drag the panel's edge to resize it, or press Tab "
+             "to hide it.",
              app.inspector.rect),
             ("Library",
-             "Nearly thirty ready-made simulations: orbits, chaotic "
-             "pendulums, resonance, gases and more. Your own scenes can be "
-             "saved there too. Press L any time.",
+             "Almost fifty ready-made simulations: orbits, three-body "
+             "chaos, springs, soft bodies, gases and more. Your own scenes "
+             "can be saved there too. Press L any time.",
              pygame.Rect(app.width - 320, 0, 200, TOOLBAR_H)),
             ("Analyse",
              "In the View tab you can show velocity and force vectors, "
-             "motion trails and live graphs of energy, momentum and phase "
-             "space. Have fun experimenting!",
+             "motion trails, an auto-fit camera, and live graphs of energy, "
+             "momentum and phase space (resizable, along the bottom). Have "
+             "fun experimenting!",
              app.inspector.rect),
         ]
 
