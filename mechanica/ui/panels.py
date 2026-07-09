@@ -1188,7 +1188,8 @@ HELP_SHORTCUTS = [
     ("N", "Toggle grid snapping"), ("T", "Toggle motion trails"),
     ("G", "Toggle broadphase grid"), ("L", "Open the library"),
     ("Tab", "Show / hide the right panel"),
-    ("Scroll", "Zoom at cursor"), ("Mid/right drag", "Pan the view"),
+    ("Scroll", "Zoom at cursor"), ("Mid/right drag", "Pan (right: empty space)"),
+    ("Right-drag body", "Aim its velocity"),
     ("Shift+click", "Add to selection"), ("Shift+drag wall", "Snap wall angle"),
     ("Drag body (playing)", "Throw it"), ("F1", "This help"),
 ]

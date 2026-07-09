@@ -716,11 +716,13 @@ def _build_soft_wheel() -> World:
 def _build_jelly_smash() -> World:
     w = World()
     w.substeps = 8
-    floor = Wall(Vec2(-5.0, 0), Vec2(5.0, 0), 0.14)
+    # floor sits below the swing arc's lowest point (y = 0.344 minus the
+    # ball radius), so the ball reaches the jelly before touching ground
+    floor = Wall(Vec2(-5.0, -0.5), Vec2(5.0, -0.5), 0.14)
     floor.friction = 0.7
     floor.restitution = 0.1
     w.walls.append(floor)
-    _soft_grid(w, -1.0, 0.12, 8, 6, 0.24, mass_total=3.5, k=1100.0, damp=3.2,
+    _soft_grid(w, -1.6, -0.34, 8, 6, 0.24, mass_total=3.5, k=1100.0, damp=3.2,
                color=(170, 140, 230))
     pivot = _add_body(w, -3.2, 3.6, 0.06, 1.0, locked=True,
                       color=(120, 125, 135))
@@ -922,7 +924,7 @@ PRESETS: list[Preset] = [
            "A rigid wrecking ball meets a soft jelly block: constraints, "
            "contacts and 200-odd springs all at once. The jelly absorbs the "
            "blow and jiggles it away as heat (spring damping).",
-           _build_jelly_smash, {"zoom": 80, "centre": (-0.5, 1.4)}),
+           _build_jelly_smash, {"zoom": 80, "centre": (-0.5, 1.0)}),
 
     Preset("Butterfly effect", "Chaos",
            "Three double pendulums released 0.01 degrees apart. They track "
