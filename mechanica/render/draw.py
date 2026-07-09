@@ -44,6 +44,7 @@ class ViewSettings:
         self.vector_scale = 1.0
         self.trail_len = 350
         self.follow = False
+        self.auto_fit = False   # camera continuously frames the whole scene
         self.antialias = True
 
 
@@ -211,15 +212,26 @@ def draw_world(surface: pygame.Surface, cam: Camera, world: World,
         selected = link in selection
         hovered = link is hover
         if isinstance(link, SpringLink):
-            color = theme.SELECTION if selected else \
-                (200, 205, 215) if hovered else (135, 142, 152)
-            _draw_spring(surface, pa, pb, color, aa=aa_springs,
-                         rest_px=link.rest_length * cam.zoom)
+            if link.tension_only:
+                # elastic string: a plain line, thinner while slack
+                slack = link.a.pos.dist_to(link.b.pos) < link.rest_length
+                color = theme.SELECTION if selected else \
+                    (215, 190, 150) if hovered else \
+                    (140, 125, 100) if slack else (170, 150, 115)
+                pygame.draw.line(surface, color, pa, pb, 1 if slack else 2)
+            else:
+                color = theme.SELECTION if selected else \
+                    (200, 205, 215) if hovered else (135, 142, 152)
+                _draw_spring(surface, pa, pb, color, aa=aa_springs,
+                             rest_px=link.rest_length * cam.zoom)
         else:
             if link.is_rope:
+                # inelastic string: rigid in tension, free when slack
+                slack = link.a.pos.dist_to(link.b.pos) < link.length - 1e-9
                 color = theme.SELECTION if selected else \
-                    (215, 190, 150) if hovered else (170, 150, 115)
-                pygame.draw.line(surface, color, pa, pb, 2)
+                    (215, 190, 150) if hovered else \
+                    (140, 125, 100) if slack else (170, 150, 115)
+                pygame.draw.line(surface, color, pa, pb, 1 if slack else 2)
             else:
                 color = theme.SELECTION if selected else \
                     (200, 205, 215) if hovered else (150, 156, 166)

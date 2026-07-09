@@ -11,6 +11,8 @@ env) -- the engine uses the array form for large scenes.
 
 Allowed variables: x, y (position, m), vx, vy (velocity, m/s),
 t (time, s), m (mass, kg), r (distance from origin, m).
+`^` is accepted as the power operator (rewritten to `**`), so users can
+write x^2 the way they would on paper.
 """
 from __future__ import annotations
 
@@ -63,6 +65,10 @@ def compile_expr(source: str) -> Callable[[dict], float]:
     source = source.strip()
     if not source:
         raise ExprError("empty expression")
+    # mathy convenience: `^` means power (x^2 == x**2). Substituted in the
+    # text before parsing so it gets **'s precedence: x^2 + 1 is (x^2) + 1,
+    # not Python's x ^ (2 + 1). `^` has no other legal meaning here.
+    source = source.replace("^", "**")
     try:
         tree = ast.parse(source, mode="eval")
     except SyntaxError as exc:

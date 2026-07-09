@@ -156,6 +156,7 @@ class Inspector(PanelBase):
         self.content_h = 0
         self.tabs: Segmented | None = None
         self._hide_btn: Button | None = None
+        self.show_formula_help = False
         self._key: tuple = ()
 
     def _content_rect(self) -> pygame.Rect:
@@ -174,7 +175,7 @@ class Inspector(PanelBase):
         return (self.tab, sel_ids, len(app.world.fields), field_errors,
                 len(app.world.drivers), self.scroll, app.width, app.height,
                 app.graph_mode, app.inspector_w, app.inspector_visible,
-                app.dock_h)
+                app.dock_h, self.show_formula_help)
 
     def maybe_rebuild(self) -> None:
         key = self._structure_key()
@@ -319,8 +320,8 @@ class Inspector(PanelBase):
             self.widgets.append(SectionLabel(self._row(22), "Box select picks up"))
             for key, label in (("bodies", "Bodies / particles"),
                                ("walls", "Walls"),
-                               ("springs", "Springs"),
-                               ("rods", "Rods & ropes")):
+                               ("springs", "Springs & strings"),
+                               ("rods", "Rods")):
                 self.widgets.append(Checkbox(
                     self._row(22), label,
                     (lambda k=key: app.box_filter[k]),
@@ -347,11 +348,14 @@ class Inspector(PanelBase):
                                    lambda v: setattr(b, "mass", v),
                                    0.001, 10000.0,
                                    u, "kg", "{:.3g}", log=True,
-                                   on_commit=self._commit))
+                                   on_commit=self._commit,
+                                   tooltip="Inertial (and gravitational) mass m"))
         self.widgets.append(Slider(self._row(), "Radius", lambda: b.radius,
                                    lambda v: setattr(b, "radius", v), 0.01, 10.0,
                                    u, "m", "{:.3g}", log=True,
-                                   on_commit=self._commit))
+                                   on_commit=self._commit,
+                                   tooltip="Collision radius (mass is "
+                                           "independent of size here)"))
         r1, r2 = self._half_rows()
         self._num_edit(r1, "x", lambda: b.pos.x, lambda v: setattr(b.pos, "x", v), "m")
         self._num_edit(r2, "y", lambda: b.pos.y, lambda v: setattr(b.pos, "y", v), "m")
@@ -360,7 +364,9 @@ class Inspector(PanelBase):
         self._num_edit(r2, "vy", lambda: b.vel.y, lambda v: setattr(b.vel, "y", v))
         self.widgets.append(Slider(self._row(), "Spin", lambda: b.omega,
                                    lambda v: setattr(b, "omega", v), -100.0, 100.0,
-                                   u, "rad/s", "{:.2f}", on_commit=self._commit))
+                                   u, "rad/s", "{:.2f}", on_commit=self._commit,
+                                   tooltip="Angular velocity omega about the "
+                                           "body's centre"))
         r1, r2 = self._half_rows()
         chk1 = Checkbox(r1, "Locked", lambda: b.locked,
                         lambda v: (setattr(b, "locked", v), self._commit()),
@@ -375,11 +381,16 @@ class Inspector(PanelBase):
                                    lambda v: setattr(b, "restitution", v),
                                    0.0, 1.0, u, "", "{:.2f}",
                                    on_commit=self._commit,
-                                   tooltip="Restitution: fraction of speed kept per bounce"))
+                                   tooltip="Coefficient of restitution e: "
+                                           "fraction of approach speed kept "
+                                           "after a bounce (1 = perfectly "
+                                           "elastic, 0 = perfectly inelastic)"))
         self.widgets.append(Slider(self._row(), "Friction", lambda: b.friction,
                                    lambda v: setattr(b, "friction", v),
                                    0.0, 3.0, u, "", "{:.2f}",
-                                   on_commit=self._commit))
+                                   on_commit=self._commit,
+                                   tooltip="Coefficient of friction mu "
+                                           "(Coulomb model: |F_t| <= mu N)"))
         names = [n for n in MATERIALS if n != "Custom"]
         per_row = 3
         for i in range(0, len(names), per_row):
@@ -452,7 +463,8 @@ class Inspector(PanelBase):
             f"{len(group)} {plural if len(group) != 1 else singular}"
             for group, singular, plural in (
                 (bodies, "body", "bodies"), (walls, "wall", "walls"),
-                (springs, "spring", "springs"), (rods, "rod/rope", "rods/ropes"))
+                (springs, "spring/string", "springs/strings"),
+                (rods, "rod", "rods"))
             if group)
         self.widgets.append(Label(self._row(22), summary + " selected", 13,
                                   theme.TEXT, True))
@@ -520,25 +532,27 @@ class Inspector(PanelBase):
         if springs:
             sfirst = springs[0]
             self.widgets.append(SectionLabel(self._row(20),
-                                             f"Springs ({len(springs)})"))
+                                             f"Springs & strings ({len(springs)})"))
             self.widgets.append(Slider(self._row(), "Stiffness",
                                        lambda: sfirst.stiffness,
                                        set_all(springs, "stiffness"),
                                        0.01, 100000.0, u, "N/m", "{:.3g}",
                                        log=True, on_commit=self._commit,
-                                       tooltip="Applied to every selected spring"))
+                                       tooltip="Spring constant k, applied to "
+                                               "every selected spring/string"))
             self.widgets.append(Slider(self._row(), "Damping",
                                        lambda: sfirst.damping,
                                        set_all(springs, "damping"), 0.0, 500.0,
                                        u, "Ns/m", "{:.2f}",
                                        on_commit=self._commit,
-                                       tooltip="Applied to every selected spring"))
+                                       tooltip="Damping coefficient c, applied "
+                                               "to every selected spring/string"))
 
         if rods:
             rfirst = rods[0]
             self.widgets.append(SectionLabel(self._row(20),
-                                             f"Rods & ropes ({len(rods)})"))
-            self.widgets.append(Checkbox(self._row(24), "Behave as rope (no push)",
+                                             f"Rods & inelastic strings ({len(rods)})"))
+            self.widgets.append(Checkbox(self._row(24), "No push (taut string)",
                                          lambda: rfirst.is_rope,
                                          lambda v: (set_all(rods, "is_rope")(v),
                                                     self._commit())))
@@ -583,37 +597,79 @@ class Inspector(PanelBase):
                                    0.0, 3.0, u, "", "{:.2f}", on_commit=self._commit))
         self._action_buttons()
 
+    def _replace_link(self, old, new) -> None:
+        """Swap a link object in place (elastic string <-> inelastic string)."""
+        world = self.app.world
+        if old in world.links:
+            world.links[world.links.index(old)] = new
+        self.app.selection = [new]
+        self.app.push_undo()
+
     def _build_link(self, link) -> None:
         app = self.app
         u = app.ui
         if isinstance(link, SpringLink):
-            self.widgets.append(Label(self._row(22), "Spring", 14, theme.TEXT, True))
-            self.widgets.append(Slider(self._row(), "Rest len",
+            is_string = link.tension_only
+            title = "String (elastic)" if is_string else "Spring"
+            self.widgets.append(Label(self._row(22), title, 14, theme.TEXT, True))
+            self.widgets.append(Slider(self._row(), "Nat. len",
                                        lambda: link.rest_length,
                                        lambda v: setattr(link, "rest_length", v),
                                        0.01, 50.0, u, "m", "{:.3g}", log=True,
-                                       on_commit=self._commit))
+                                       on_commit=self._commit,
+                                       tooltip="Natural (rest) length L0: the "
+                                               "length at which it exerts no force"))
             self.widgets.append(Slider(self._row(), "Stiffness",
                                        lambda: link.stiffness,
                                        lambda v: setattr(link, "stiffness", v),
                                        0.01, 100000.0, u, "N/m", "{:.3g}", log=True,
-                                       on_commit=self._commit))
+                                       on_commit=self._commit,
+                                       tooltip="Spring constant k (Hooke's law "
+                                               "F = -k times extension) - the 1-D "
+                                               "analogue of the modulus of elasticity"))
             self.widgets.append(Slider(self._row(), "Damping",
                                        lambda: link.damping,
                                        lambda v: setattr(link, "damping", v),
                                        0.0, 500.0, u, "Ns/m", "{:.2f}",
-                                       on_commit=self._commit))
+                                       on_commit=self._commit,
+                                       tooltip="Damping coefficient c: axial "
+                                               "force F = -c times the stretch rate"))
+            if is_string:
+                self.widgets.append(Checkbox(
+                    self._row(24), "Inelastic (fixed length)",
+                    lambda: False,
+                    lambda v: self._replace_link(
+                        link, DistanceLink(link.a, link.b,
+                                           length=link.rest_length,
+                                           is_rope=True)),
+                    "Replace with a perfectly inelastic string: rigid at its "
+                    "natural length when taut, still slack when shorter"))
         elif isinstance(link, DistanceLink):
-            title = "Rope" if link.is_rope else "Rod"
+            title = "String (inelastic)" if link.is_rope else "Rod"
             self.widgets.append(Label(self._row(22), title, 14, theme.TEXT, True))
-            self.widgets.append(Slider(self._row(), "Length", lambda: link.length,
+            self.widgets.append(Slider(self._row(), "Nat. len", lambda: link.length,
                                        lambda v: setattr(link, "length", v),
                                        0.01, 100.0, u, "m", "{:.3g}", log=True,
-                                       on_commit=self._commit))
-            self.widgets.append(Checkbox(self._row(24), "Behave as rope (no push)",
-                                         lambda: link.is_rope,
-                                         lambda v: (setattr(link, "is_rope", v),
-                                                    self._commit())))
+                                       on_commit=self._commit,
+                                       tooltip="Natural length L0 the constraint "
+                                               "maintains"))
+            self.widgets.append(Checkbox(
+                self._row(24), "No push (taut string)",
+                lambda: link.is_rope,
+                lambda v: (setattr(link, "is_rope", v), self._commit()),
+                "On: resists stretching only (an inelastic string). "
+                "Off: rigid both ways (a rod)."))
+            if link.is_rope:
+                self.widgets.append(Checkbox(
+                    self._row(24), "Inelastic (fixed length)",
+                    lambda: True,
+                    lambda v: self._replace_link(
+                        link, SpringLink(link.a, link.b,
+                                         rest_length=link.length,
+                                         stiffness=1000.0, damping=2.0,
+                                         tension_only=True)),
+                    "Untick to make the string elastic: it stretches under "
+                    "load following Hooke's law (adds stiffness and damping)"))
         self.widgets.append(Button(self._row(26), app.canvas.delete_selection,
                                    "Delete", icon="trash", style="danger", size=12))
 
@@ -644,7 +700,8 @@ class Inspector(PanelBase):
                                    lambda v: setattr(world, "gravity", v),
                                    -100.0, 100.0, u, "m/s²", "{:.2f}",
                                    on_commit=self._commit,
-                                   tooltip="Uniform downward gravity. 9.81 = Earth, "
+                                   tooltip="Gravitational field strength g "
+                                           "(uniform, downward). 9.81 = Earth, "
                                            "24.8 = Jupiter, 0 = space, negative = upward"))
         self.widgets.append(Checkbox(self._row(24), "Bodies attract each other",
                                      lambda: world.mutual_gravity,
@@ -697,10 +754,11 @@ class Inspector(PanelBase):
         self.widgets.append(Slider(self._row(), "Substeps",
                                    lambda: world.substeps,
                                    lambda v: setattr(world, "substeps", int(v)),
-                                   1, 128, u, "", "{:.0f}", step=1, log=True,
+                                   1, 64, u, "", "{:.0f}", step=1, log=True,
                                    on_commit=self._commit,
-                                   tooltip="Physics substeps per frame, up to 128: "
-                                           "more = more accurate but slower"))
+                                   tooltip="Physics substeps per 1/120 s step, "
+                                           "up to 64: more = more accurate but "
+                                           "slower. Takes effect immediately."))
         self.widgets.append(Slider(self._row(), "Iterations",
                                    lambda: world.iterations,
                                    lambda v: setattr(world, "iterations", int(v)),
@@ -742,8 +800,41 @@ class Inspector(PanelBase):
                                        style="danger", size=11))
         self.widgets.append(Button(self._row(24), self._add_field, "Add force field",
                                    icon="plus", size=12,
-                                   tooltip="Force in N as f(x, y, vx, vy, t, m, r). "
-                                           "Try Fy = -y*5 for a spring field."))
+                                   tooltip="A force (in N) applied to every body, "
+                                           "written as plain math. Try Fy = -y*5 "
+                                           "for a spring field. See the formula "
+                                           "reference below for all the symbols."))
+        self.widgets.append(Button(
+            self._row(22), self._toggle_formula_help,
+            ("Hide formula reference" if self.show_formula_help
+             else "Formula reference"),
+            size=11, style="ghost",
+            tooltip="Every variable, function and operator you can use in "
+                    "force-field formulas"))
+        if self.show_formula_help:
+            for line in [
+                    "Write plain math, e.g.:",
+                    "  -0.5*vx           drag along x",
+                    "  -10*x             spring toward x = 0",
+                    "  3*sin(2*t)        oscillating push",
+                    "  -5*x/r^3          inverse-square pull",
+                    "  -0.4*m*(y > 2)    only above y = 2",
+                    "Variables:",
+                    "  x, y    position (m)",
+                    "  vx, vy  velocity (m/s)",
+                    "  t  time    m  mass    r  distance from (0,0)",
+                    "Functions:",
+                    "  sin cos tan asin acos atan atan2",
+                    "  sqrt exp log abs min max",
+                    "  sign floor ceil hypot",
+                    "Constants:  pi   e   tau   g (9.81)",
+                    "Operators:  +  -  *  /  ^ (power)  %",
+                    "Comparisons like (m > 1) equal 1 or 0,",
+                    "so they work as on/off switches.",
+                    "Anything else (words, letters not listed",
+                    "above) is rejected - the error shows in red."]:
+                self.widgets.append(Label(self._row(15), line, 11,
+                                          theme.TEXT_DIM))
 
         if world.drivers:
             self.widgets.append(SectionLabel(self._row(20), "Drivers"))
@@ -767,6 +858,9 @@ class Inspector(PanelBase):
                                                 "0", "0"))
         self.app.push_undo()
 
+    def _toggle_formula_help(self) -> None:
+        self.show_formula_help = not self.show_formula_help
+
     # -------------------------------------------------------------- view tab
     def _build_view(self) -> None:
         app = self.app
@@ -785,9 +879,12 @@ class Inspector(PanelBase):
         chk("Body labels", "labels")
         chk("Follow selection", "follow",
             "Keep the camera centred on the selected body (C)")
+        chk("Auto-fit camera", "auto_fit",
+            "Continuously zoom and pan so the whole scene stays in frame - "
+            "great for escaping orbits and flying debris")
         self.widgets.append(Button(self._row(24), app.zoom_to_fit,
                                    "Zoom to fit scene", size=12,
-                                   tooltip="Frame every object in view (F)"))
+                                   tooltip="Frame every object in view once (F)"))
 
         self.widgets.append(SectionLabel(self._row(20), "Vectors"))
         chk("Velocity vectors", "vel_vectors", "Green arrows (also editable by dragging)")
