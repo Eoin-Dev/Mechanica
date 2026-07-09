@@ -63,6 +63,13 @@ class App:
         self.dt_frame = 0.0
         self.running = True
         self.overloaded = False
+        # adaptive time resolution: extra, smaller physics steps during
+        # fast close encounters, budgeted against real frame headroom
+        self.adaptive_dt = True
+        self._phys_res = 1        # current subdivision (with hysteresis)
+        self._q_now = 1           # what actually ran this frame (for the UI)
+        self._step_ms = 0.2       # EMA of wall-clock ms per world step
+        self._last_phys_ms = 0.0  # physics wall time spent last frame
 
         self.undo_stack = UndoStack(self.world)
         self.initial_snapshot: str | None = None
@@ -77,6 +84,7 @@ class App:
         self.graph_mode = "Off"
 
         # user-resizable panel geometry, persisted across sessions
+        self.adaptive_dt = bool(self.settings.get("adaptive_dt", True))
         self.inspector_visible = bool(self.settings.get("inspector_visible", True))
         try:
             self.inspector_w = int(self.settings.get("inspector_w", INSPECTOR_W))
@@ -253,8 +261,9 @@ class App:
         self.ensure_initial()
         self.playing = False
         # one 60 Hz frame, stepped at the normal rate so accuracy matches play
-        self._safe_step(self.world, PHYSICS_DT)
-        self._safe_step(self.world, PHYSICS_DT)
+        for _ in range(2):
+            self._safe_step(self.world, PHYSICS_DT)
+            self._record_trails()
         self._after_physics()
 
     def ensure_initial(self) -> None:
@@ -517,6 +526,11 @@ class App:
         self.settings["antialias"] = on
         self._save_settings()
 
+    def set_adaptive_dt(self, on: bool) -> None:
+        self.adaptive_dt = on
+        self.settings["adaptive_dt"] = on
+        self._save_settings()
+
     def toggle_library(self) -> None:
         if self.library.visible:
             self.library.close()
@@ -665,11 +679,30 @@ class App:
             # instead of one full-size step every few frames (choppy).
             eff_dt = PHYSICS_DT * min(self.speed, 1.0)
             self.accumulator += dt_frame * self.speed
-            steps = 0
-            while self.accumulator >= eff_dt and steps < MAX_STEPS_PER_FRAME:
-                self._safe_step(self.world, eff_dt)
+            quanta = 0
+            small_steps = 0
+            q_used = 1
+            t0 = time.perf_counter()
+            while self.accumulator >= eff_dt and quanta < MAX_STEPS_PER_FRAME:
+                # resolution is re-chosen per quantum from the freshest
+                # accelerations, so a close encounter that flares up
+                # mid-frame is caught within 1/120 s
+                q = self._pick_resolution(eff_dt, dt_frame)
+                if q > q_used:
+                    q_used = q
+                h = eff_dt / q
+                for _ in range(q):
+                    self._safe_step(self.world, h)
+                    self._record_trails()
+                    small_steps += 1
                 self.accumulator -= eff_dt
-                steps += 1
+                quanta += 1
+            elapsed = time.perf_counter() - t0
+            self._last_phys_ms = elapsed * 1000.0
+            if small_steps:
+                self._step_ms = (0.9 * self._step_ms
+                                 + 0.1 * self._last_phys_ms / small_steps)
+            self._q_now = q_used
             self.overloaded = self.accumulator >= eff_dt
             if self.overloaded:
                 self.accumulator = 0.0
@@ -702,19 +735,52 @@ class App:
                 cam.centre.x += (body.pos.x - cam.centre.x) * blend
                 cam.centre.y += (body.pos.y - cam.centre.y) * blend
 
+    def _pick_resolution(self, eff_dt: float, dt_frame: float) -> int:
+        """Time-resolution multiplier for this frame: how many extra, smaller
+        physics steps to run in place of each normal one.
+
+        Need comes from the physics (world.subdivision_need: fast close
+        encounters want finer time slicing); affordability comes from the
+        measured step cost and frame headroom, so the extra work never pulls
+        the frame rate below ~48 fps - plenty of resolution at 200 fps,
+        none to spare at 30.
+        """
+        if not self.adaptive_dt:
+            self._phys_res = 1
+            return 1
+        need = self.world.subdivision_need(eff_dt)
+        if need > self._phys_res:
+            self._phys_res = need       # react to spikes immediately...
+        elif self._phys_res > need:
+            self._phys_res -= 1         # ...but relax gradually (no flicker)
+        q = self._phys_res
+        if q > 1:
+            base_steps = max(1.0, dt_frame * self.speed / eff_dt)
+            floor_fps = min(self.fps_cap, 48)
+            render_ms = max(0.0, dt_frame * 1000.0 - self._last_phys_ms)
+            budget_ms = max(1.0, 1000.0 / floor_fps - render_ms)
+            afford = int(budget_ms / max(self._step_ms * base_steps, 1e-3))
+            q = max(1, min(q, afford))
+        return q
+
+    def _record_trails(self) -> None:
+        """Append trail points; called after every physics step so extra
+        adaptive steps show up as extra trail resolution."""
+        if not self.view.trails:
+            return
+        maxlen = self.view.trail_len
+        threshold = 0.5 / self.camera.zoom
+        for b in self.world.bodies:
+            if b.locked:
+                continue
+            pts = self.trails.setdefault(b.id, [])
+            if not pts or (abs(pts[-1][0] - b.pos.x) + abs(pts[-1][1] - b.pos.y)
+                           > threshold):
+                pts.append((b.pos.x, b.pos.y))
+                if len(pts) > maxlen:
+                    del pts[:len(pts) - maxlen]
+
     def _after_physics(self) -> None:
-        # trails
-        if self.view.trails:
-            maxlen = self.view.trail_len
-            for b in self.world.bodies:
-                if b.locked:
-                    continue
-                pts = self.trails.setdefault(b.id, [])
-                if not pts or (abs(pts[-1][0] - b.pos.x) + abs(pts[-1][1] - b.pos.y)
-                               > 0.5 / self.camera.zoom):
-                    pts.append((b.pos.x, b.pos.y))
-                    if len(pts) > maxlen:
-                        del pts[:len(pts) - maxlen]
         # graphs: every series records continuously whatever the dock shows,
         # so switching graph views (or closing and reopening the dock) never
         # leaves gaps in the data

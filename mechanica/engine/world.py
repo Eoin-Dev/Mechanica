@@ -736,6 +736,36 @@ class World:
             self.diverged.append(b.name)
 
     # ------------------------------------------------------------- diagnostics
+    def subdivision_need(self, dt: float, max_q: int = 16) -> int:
+        """How many equal slices `dt` should be cut into for smooth motion.
+
+        Sagitta criterion (the N-body adaptive-timestep idea a la Aarseth):
+        a body under acceleration a deviates from its straight chord by
+        about a*dt^2/8 over one step. When that deviation grows past a
+        small fraction of the body's own size - exactly what happens in
+        fast close encounters - the step wants subdividing; the deviation
+        shrinks quadratically with dt, so calm scenes report 1.
+
+        Uses the accelerations left by the previous force evaluation, so
+        it costs one O(n) pass and no extra physics.
+        """
+        q = 1
+        k = dt * dt * 0.125
+        for b in self.bodies:
+            if b.inv_mass == 0.0:
+                continue
+            ax, ay = b.acc.x, b.acc.y
+            dev = (ax * ax + ay * ay) ** 0.5 * k
+            tol = b.radius * 0.04
+            if tol < 0.002:
+                tol = 0.002
+            if dev > tol * q * q:      # only beat the current best
+                need = int((dev / tol) ** 0.5) + 1
+                if need >= max_q:
+                    return max_q
+                q = need
+        return q
+
     def energy(self) -> dict[str, float]:
         ke = 0.0
         pe_g = 0.0
