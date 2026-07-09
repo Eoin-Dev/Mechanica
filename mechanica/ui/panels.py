@@ -19,8 +19,9 @@ from mechanica.ui.widgets import (Button, Checkbox, Label, SectionLabel,
 
 TOOLBAR_H = 46
 PALETTE_W = 52
-INSPECTOR_W = 306
-DOCK_H = 178
+INSPECTOR_W = 306   # default width of the right panel (drag its edge to resize)
+DOCK_H = 178        # default height of the graph dock (drag its edge to resize)
+COLLAPSED_W = 18    # slim reopen strip shown when the right panel is hidden
 HINT_H = 24
 
 
@@ -154,6 +155,7 @@ class Inspector(PanelBase):
         self.scroll = 0
         self.content_h = 0
         self.tabs: Segmented | None = None
+        self._hide_btn: Button | None = None
         self._key: tuple = ()
 
     def _content_rect(self) -> pygame.Rect:
@@ -171,7 +173,8 @@ class Inspector(PanelBase):
         field_errors = tuple(f.error for f in app.world.fields)
         return (self.tab, sel_ids, len(app.world.fields), field_errors,
                 len(app.world.drivers), self.scroll, app.width, app.height,
-                app.graph_mode)
+                app.graph_mode, app.inspector_w, app.inspector_visible,
+                app.dock_h)
 
     def maybe_rebuild(self) -> None:
         key = self._structure_key()
@@ -180,6 +183,15 @@ class Inspector(PanelBase):
             self.relayout()
 
     def handle_event(self, event, mouse) -> bool:
+        if not self.app.inspector_visible:
+            # collapsed to a slim strip: any click on it reopens the panel
+            if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
+                    and self.rect.collidepoint(mouse)):
+                self.app.toggle_inspector()
+                return True
+            return False
+        if self._hide_btn and self._hide_btn.handle(event, mouse):
+            return True
         if self.tabs and self.tabs.handle(event, mouse):
             return True
         content_rect = self._content_rect()
@@ -215,14 +227,27 @@ class Inspector(PanelBase):
 
     def relayout(self) -> None:
         app = self.app
-        self.rect = pygame.Rect(app.width - INSPECTOR_W, TOOLBAR_H, INSPECTOR_W,
-                                app.height - TOOLBAR_H - HINT_H
-                                - (DOCK_H if app.graph_mode != "Off" else 0))
+        panel_h = (app.height - TOOLBAR_H - HINT_H
+                   - (app.dock_h if app.graph_mode != "Off" else 0))
+        if not app.inspector_visible:
+            self.rect = pygame.Rect(app.width - COLLAPSED_W, TOOLBAR_H,
+                                    COLLAPSED_W, panel_h)
+            self.widgets = []
+            self.tabs = None
+            self._hide_btn = None
+            self.content_h = 0
+            return
+        self.rect = pygame.Rect(app.width - app.inspector_w, TOOLBAR_H,
+                                app.inspector_w, panel_h)
         self.widgets = []
         tabs_rect = pygame.Rect(self.rect.x + 12, self.rect.y + 10,
-                                self.rect.w - 24, 28)
+                                self.rect.w - 24 - 30, 28)
         self.tabs = Segmented(tabs_rect, self.TABS, lambda: self.tab,
                               self._set_tab)
+        self._hide_btn = Button((self.rect.right - 34, self.rect.y + 10, 24, 28),
+                                app.toggle_inspector, "", icon="chev_right",
+                                style="ghost",
+                                tooltip="Hide the panel to widen the canvas (Tab)")
         self._y = self.rect.y + 48 - self.scroll
         if self.tab == "Selection":
             self._build_selection()
@@ -800,6 +825,20 @@ class Inspector(PanelBase):
                                      "Smooth circle edges. Turn off on slow machines."))
 
     def draw(self, surface, mouse) -> None:
+        app = self.app
+        if not app.inspector_visible:
+            # slim reopen strip along the right edge
+            pygame.draw.rect(surface, theme.PANEL, self.rect)
+            pygame.draw.line(surface, theme.OUTLINE, (self.rect.x, self.rect.y),
+                             (self.rect.x, self.rect.bottom))
+            hover = self.rect.collidepoint(mouse)
+            draw_icon(surface, "chev_left",
+                      pygame.Rect(self.rect.x, self.rect.centery - 14,
+                                  self.rect.w, 28),
+                      theme.TEXT if hover else theme.TEXT_DIM)
+            if hover:
+                app.ui.note_hover(self, "Show the panel (Tab)", app.dt_frame)
+            return
         pygame.draw.rect(surface, theme.PANEL, self.rect)
         pygame.draw.line(surface, theme.OUTLINE, (self.rect.x, self.rect.y),
                          (self.rect.x, self.rect.bottom))
@@ -818,31 +857,128 @@ class Inspector(PanelBase):
             if self.tabs.tooltip and self.tabs.hit(mouse):
                 self.app.ui.note_hover(self.tabs, self.tabs.tooltip,
                                        self.app.dt_frame)
+        if self._hide_btn:
+            self._hide_btn.draw(surface, mouse)
+            if self._hide_btn.tooltip and self._hide_btn.hit(mouse):
+                app.ui.note_hover(self._hide_btn, self._hide_btn.tooltip,
+                                  app.dt_frame)
         pygame.draw.line(surface, theme.OUTLINE, (self.rect.x, self.rect.y),
                          (self.rect.x, self.rect.bottom))
+        # resize grip on the draggable left edge
+        pygame.draw.rect(surface, theme.TEXT_FAINT,
+                         (self.rect.x + 1, self.rect.centery - 16, 3, 32), 0, 2)
         surface.set_clip(clip)
 
 
 # --------------------------------------------------------------- graph dock
 class GraphDock(PanelBase):
+    """Bottom dock hosting the live graphs.
+
+    Resizable by dragging its top edge. The header switches between graphs,
+    clears the collected data, and shows a conservation hint explaining when
+    the plotted quantity is (or is not) expected to stay constant."""
+
     def relayout(self) -> None:
         app = self.app
         # full width (the inspector stops at the dock's top edge)
-        self.rect = pygame.Rect(PALETTE_W, app.height - HINT_H - DOCK_H,
-                                app.width - PALETTE_W, DOCK_H)
-        self.widgets = [Button((self.rect.right - 30, self.rect.y + 6, 24, 24),
-                               lambda: app.set_graph_mode("Off"), "",
-                               icon="close", style="ghost", tooltip="Close graphs")]
+        self.rect = pygame.Rect(PALETTE_W, app.height - HINT_H - app.dock_h,
+                                app.width - PALETTE_W, app.dock_h)
+        y = self.rect.y + 8
+        self._seg = Segmented((self.rect.x + 10, y,
+                               min(270, max(180, self.rect.w // 4)), 24),
+                              ["Energy", "Mom.", "Phase"],
+                              lambda: app.graph_mode, app.set_graph_mode,
+                              tooltip="Which live graph to display")
+        self.widgets = [
+            self._seg,
+            Button((self.rect.right - 32, y, 24, 24),
+                   lambda: app.set_graph_mode("Off"), "", icon="close",
+                   style="ghost", tooltip="Close the graph dock"),
+            Button((self.rect.right - 60, y, 24, 24), self._clear_data, "",
+                   icon="trash", style="ghost",
+                   tooltip="Clear all collected graph data"),
+        ]
+
+    def _clear_data(self) -> None:
+        app = self.app
+        app.energy_series.clear()
+        app.momentum_series.clear()
+        app.phase_plot.clear()
+
+    def _active_series(self):
+        app = self.app
+        return {"Energy": app.energy_series,
+                "Mom.": app.momentum_series}.get(app.graph_mode)
+
+    def handle_event(self, event, mouse) -> bool:
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 \
+                and self.rect.collidepoint(mouse):
+            series = self._active_series()
+            if series is not None and series.legend_click(mouse):
+                return True
+        return super().handle_event(event, mouse)
+
+    def _hint(self) -> str:
+        """Why the plotted conserved quantity may legitimately change."""
+        app = self.app
+        w = app.world
+        if app.graph_mode == "Mom.":
+            ext = []
+            if w.gravity != 0.0:
+                ext.append("gravity")
+            if any(b.inv_mass == 0.0 for b in w.bodies):
+                ext.append("fixed anchors")
+            if w.walls:
+                ext.append("walls")
+            if w.drag_linear or w.drag_quadratic or w.global_damping:
+                ext.append("drag/damping")
+            if any(d.enabled for d in w.drivers) or \
+                    any(f.enabled for f in w.fields):
+                ext.append("drivers/fields")
+            if ext:
+                return ("momentum is only conserved in isolation - " +
+                        ", ".join(ext) + " exert external forces here")
+            return "isolated system: total momentum should stay constant"
+        if app.graph_mode == "Energy":
+            lossy = []
+            if w.drag_linear or w.drag_quadratic:
+                lossy.append("air drag")
+            if w.global_damping:
+                lossy.append("global damping")
+            if any(isinstance(ln, SpringLink) and ln.damping > 0
+                   for ln in w.links):
+                lossy.append("spring damping")
+            if lossy:
+                return "energy is removed by " + ", ".join(lossy)
+        return ""
 
     def draw(self, surface, mouse) -> None:
         app = self.app
         pygame.draw.rect(surface, theme.PANEL, self.rect)
-        plot_rect = self.rect.inflate(-12, -12)
+        pygame.draw.line(surface, theme.OUTLINE, self.rect.topleft,
+                         self.rect.topright)
+        # resize grip on the draggable top edge
+        pygame.draw.rect(surface, theme.TEXT_FAINT,
+                         (self.rect.centerx - 16, self.rect.y + 2, 32, 3), 0, 2)
+        hint = self._hint()
+        if hint:
+            x0 = self._seg.rect.right + 12
+            max_w = self.rect.right - 66 - x0
+            if max_w > 80:
+                f = theme.font(11)
+                if f.size(hint)[0] > max_w:
+                    while hint and f.size(hint + "...")[0] > max_w:
+                        hint = hint[:-1]
+                    hint += "..."
+                blit_text(surface, hint, (x0, self._seg.rect.centery), 11,
+                          theme.TEXT_FAINT, False, "midleft")
+        plot_rect = pygame.Rect(self.rect.x + 10, self.rect.y + 38,
+                                self.rect.w - 20, self.rect.h - 46)
         if app.graph_mode == "Energy":
             app.energy_series.draw(surface, plot_rect, "Energy (J)")
         elif app.graph_mode == "Mom.":
             app.momentum_series.draw(surface, plot_rect,
-                                     "Momentum (kg m/s) and angular momentum")
+                                     "Momentum p (kg m/s) and angular momentum L")
         elif app.graph_mode == "Phase":
             body = next((o for o in app.selection if isinstance(o, Body)), None)
             title = f"Phase space: {body.name}" if body else "Phase space"
@@ -1051,6 +1187,7 @@ HELP_SHORTCUTS = [
     ("F", "Zoom to fit the scene"), ("C", "Follow the selected body"),
     ("N", "Toggle grid snapping"), ("T", "Toggle motion trails"),
     ("G", "Toggle broadphase grid"), ("L", "Open the library"),
+    ("Tab", "Show / hide the right panel"),
     ("Scroll", "Zoom at cursor"), ("Mid/right drag", "Pan the view"),
     ("Shift+click", "Add to selection"), ("Shift+drag wall", "Snap wall angle"),
     ("Drag body (playing)", "Throw it"), ("F1", "This help"),

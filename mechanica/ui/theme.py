@@ -180,3 +180,11 @@ def draw_icon(surface: pygame.Surface, name: str, rect: pygame.Rect,
     elif name == "close":
         line(surface, color, (cx - s * 0.8, cy - s * 0.8), (cx + s * 0.8, cy + s * 0.8), 2)
         line(surface, color, (cx - s * 0.8, cy + s * 0.8), (cx + s * 0.8, cy - s * 0.8), 2)
+    elif name == "chev_left":
+        pygame.draw.lines(surface, color, False,
+                          [(cx + s * 0.5, cy - s), (cx - s * 0.5, cy),
+                           (cx + s * 0.5, cy + s)], 2)
+    elif name == "chev_right":
+        pygame.draw.lines(surface, color, False,
+                          [(cx - s * 0.5, cy - s), (cx + s * 0.5, cy),
+                           (cx - s * 0.5, cy + s)], 2)
