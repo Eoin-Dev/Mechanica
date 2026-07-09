@@ -909,6 +909,13 @@ class Inspector(PanelBase):
                                    on_commit=self._commit,
                                    tooltip="Solver iterations per substep for links "
                                            "and contacts (they exit early once converged)"))
+        self.widgets.append(Checkbox(
+            self._row(24), "Adaptive resolution",
+            lambda: app.adaptive_dt, app.set_adaptive_dt,
+            "Automatically run extra, smaller physics steps during fast "
+            "close encounters (gravity slingshots, whipping pendulums), "
+            "as long as the frame rate can afford it. Keeps trajectories "
+            "and motion trails smooth."))
 
         self.widgets.append(SectionLabel(self._row(20), "Custom force fields"))
         for field in list(world.fields):
@@ -1243,8 +1250,9 @@ class HintBar(PanelBase):
         wp = app.camera.to_world(*mouse)
         n_dyn = sum(1 for b in app.world.bodies if not b.locked)
         drift = app.energy_drift_text()
+        res = f"dt/{app._q_now}   " if app.playing and app._q_now > 1 else ""
         info = f"{wp.x:.2f}, {wp.y:.2f} m   |   {n_dyn} bodies   " \
-               f"{len(app.world.contacts)} contacts   {drift}"
+               f"{len(app.world.contacts)} contacts   {res}{drift}"
         blit_text(surface, info, (self.rect.right - 10, self.rect.centery), 12,
                   theme.TEXT_FAINT, False, "midright")
 
