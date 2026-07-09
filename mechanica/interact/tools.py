@@ -35,8 +35,9 @@ TOOL_KEYS = {pygame.K_v: "select", pygame.K_h: "pan", pygame.K_b: "body",
 TOOL_INFO = {
     "select": ("Select (V)", "Click to select, drag to move (drag while playing "
                "to throw). Shift-click adds. Drag empty space for a box select. "
-               "Drag the green arrow to set velocity."),
-    "pan": ("Pan (H)", "Drag to move the view. Middle/right mouse drag pans in any tool."),
+               "Right-drag a body (or drag the green arrow) to set its velocity."),
+    "pan": ("Pan (H)", "Drag to move the view. Middle drag (or right drag on "
+            "empty space) pans in any tool."),
     "body": ("Add body (B)", "Click to place a dynamic body. Edit it in the Inspector."),
     "anchor": ("Add anchor (A)", "Click to place a fixed anchor - a pivot for rods and springs."),
     "wall": ("Draw wall (W)", "Click and drag to draw a static wall. Shift snaps the angle."),
@@ -64,6 +65,9 @@ class CanvasController:
         self._vel_drag: Body | None = None
         self._wall_drag: tuple[Wall, int] | None = None  # wall, endpoint (0/1/2=whole)
         self._wall_grab: Vec2 | None = None
+        # velocities at grab time, so a plain click can restore them
+        self._press_vel: dict[int, tuple[float, float, float]] = {}
+        self._press_ms = 0
 
     # ------------------------------------------------------------------ helpers
     def set_tool(self, tool: str) -> None:
@@ -110,12 +114,12 @@ class CanvasController:
                 t = self._snap(Vec2(world_p.x + offset.x, world_p.y + offset.y))
                 pins[body] = (t.x, t.y, v_max)
         else:
+            # paused = pure editing: reposition only, keep the velocity so a
+            # click or drag never wipes the body's motion state
             app.world.drag_pins.clear()
             for body, offset, _ in self._drag_items:
                 t = self._snap(Vec2(world_p.x + offset.x, world_p.y + offset.y))
                 body.pos.set_vec(t)
-                body.vel.set(0.0, 0.0)
-                body.omega = 0.0
 
     def _snap(self, p: Vec2) -> Vec2:
         if not self.app.view.snap:
@@ -161,7 +165,16 @@ class CanvasController:
     def handle_event(self, event: pygame.event.Event, mouse) -> bool:
         app = self.app
         if event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button in (2, 3):  # middle/right: always pan
+            if event.button in (2, 3):
+                # right-drag on a dynamic body aims its velocity vector;
+                # middle-drag (or right-drag on empty space) pans
+                if event.button == 3:
+                    picked = self.pick(mouse)
+                    if isinstance(picked, Body) and not picked.locked:
+                        self._vel_drag = picked
+                        app.selection = [picked]
+                        self._drag_moved = False
+                        return True
                 self._panning = True
                 self._pan_last = mouse
                 return True
@@ -174,6 +187,10 @@ class CanvasController:
         elif event.type == pygame.MOUSEBUTTONUP:
             if event.button in (2, 3):
                 self._panning = False
+                if event.button == 3 and self._vel_drag is not None:
+                    if self._drag_moved:
+                        app.push_undo()
+                    self._vel_drag = None
                 return True
             if event.button == 1:
                 return self._release(mouse)
@@ -260,9 +277,10 @@ class CanvasController:
         app = self.app
         shift = pygame.key.get_mods() & pygame.KMOD_SHIFT
 
-        # velocity handle of a single selected body? Only when the arrow tip
-        # sticks out of the body - otherwise a click on a resting body would
-        # grab the (zero-length) arrow and fling it instead of moving it.
+        # velocity handle of a single selected body? The tip wins over the
+        # body even when it lies inside the body's disc, as long as the
+        # arrow has a visible length - otherwise a click on a resting body
+        # would grab the (zero-length) arrow and fling it instead of moving it.
         if len(app.selection) == 1 and isinstance(app.selection[0], Body):
             body = app.selection[0]
             if not body.locked:
@@ -272,8 +290,7 @@ class CanvasController:
                 centre = app.camera.to_screen(body.pos)
                 arrow_px = ((tip[0] - centre[0]) ** 2
                             + (tip[1] - centre[1]) ** 2) ** 0.5
-                clear_px = body.radius * app.camera.zoom + 6.0
-                if (arrow_px > clear_px
+                if (arrow_px > 12.0
                         and abs(mouse[0] - tip[0]) <= 8
                         and abs(mouse[1] - tip[1]) <= 8):
                     self._vel_drag = body
@@ -331,10 +348,12 @@ class CanvasController:
         self._drag_items = [
             (b, b.pos - world_p, safe_drag_speed(app.world, b, base_speed))
             for b in app.selection if isinstance(b, Body)]
+        # remember the grab-time motion so a plain click can put it back
+        self._press_ms = pygame.time.get_ticks()
+        self._press_vel = {b.id: (b.vel.x, b.vel.y, b.omega)
+                           for b, _, _ in self._drag_items}
         for b, _, _ in self._drag_items:
             b.held = True
-            b.vel.set(0.0, 0.0)
-            b.omega = 0.0
         self._drag_moved = False
         return True
 
@@ -387,11 +406,22 @@ class CanvasController:
             # While playing, a held body's velocity is already the speed its
             # pin was moving at (zero if the cursor was parked), so releasing
             # mid-swing throws it and releasing at rest just lets it go.
+            # A plain click (no movement, brief press) restores the velocity
+            # the body had at grab time instead of stopping it dead.
             throw = app.playing and self._drag_moved
+            quick = pygame.time.get_ticks() - self._press_ms <= 350
             for body, _, _ in self._drag_items:
                 body.held = False
-                if not throw:
-                    body.vel.set(0.0, 0.0)
+                if throw:
+                    continue
+                if not self._drag_moved and quick:
+                    v = self._press_vel.get(body.id)
+                    if v is not None:
+                        body.vel.set(v[0], v[1])
+                        body.omega = v[2]
+                elif app.playing:
+                    body.vel.set(0.0, 0.0)  # held parked, released at rest
+                # paused: leave the velocity untouched (pure editing)
             app.world.drag_pins.clear()
             if self._drag_moved:
                 app.push_undo()
@@ -542,8 +572,12 @@ class CanvasController:
         if self._link_first is not None:
             pygame.draw.line(surface, (150, 200, 150),
                              app.camera.to_screen(self._link_first.pos), mouse, 1)
-        # velocity handle for a single selected dynamic body (select tool)
-        if (self.tool == "select" and len(app.selection) == 1
-                and isinstance(app.selection[0], Body)
-                and not app.selection[0].locked):
-            draw_velocity_handle(surface, app.camera, app.selection[0], app.view)
+        # velocity handle: for the body being right-dragged (any tool), or
+        # for a single selected dynamic body with the select tool
+        body = self._vel_drag
+        if body is None and (self.tool == "select" and len(app.selection) == 1
+                             and isinstance(app.selection[0], Body)
+                             and not app.selection[0].locked):
+            body = app.selection[0]
+        if body is not None and not body.locked:
+            draw_velocity_handle(surface, app.camera, body, app.view)

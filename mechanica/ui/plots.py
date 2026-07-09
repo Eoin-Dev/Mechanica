@@ -27,11 +27,13 @@ class TimeSeries:
         self.data: dict[str, deque[float]] = {c: deque(maxlen=maxlen) for c in channels}
         self.hidden: set[str] = set()   # channels toggled off via the legend
         self._legend_hits: list[tuple[pygame.Rect, str]] = []
+        self._view: tuple[float, float] | None = None   # smoothed y-range
 
     def clear(self) -> None:
         self.t.clear()
         for d in self.data.values():
             d.clear()
+        self._view = None
 
     def add(self, t: float, values: dict[str, float]) -> None:
         # a single inf/NaN sample (a body mid-blow-up) would wreck the
@@ -105,6 +107,17 @@ class TimeSeries:
         pad = (hi - lo) * 0.08
         hi += pad
         lo -= pad
+
+        # autoscale with hysteresis: grow instantly to fit new data, shrink
+        # slowly - otherwise spiky data (e.g. wall-impact momentum jumps)
+        # entering and leaving the rolling window rescales the whole plot
+        # every frame, which reads as the graph vibrating
+        if self._view is not None:
+            vlo, vhi = self._view
+            vlo = lo if lo < vlo else vlo + (lo - vlo) * 0.04
+            vhi = hi if hi > vhi else vhi + (hi - vhi) * 0.04
+            lo, hi = vlo, vhi
+        self._view = (lo, hi)
 
         # horizontal gridlines with value labels (count adapts to height)
         n_seg = 2 if plot.h < 70 else 3 if plot.h < 130 else 4
