@@ -129,8 +129,14 @@ class _Manifold:
 
 
 def _solve_velocity(manifolds: list[_Manifold], iterations: int) -> None:
-    """Iterated sequential impulses with accumulated clamping."""
-    for _ in range(iterations):
+    """Iterated sequential impulses with accumulated clamping.
+
+    Exits early once the largest correction of a sweep falls below a small
+    fraction of the first sweep's largest correction: grinding contact
+    piles (e.g. a collapsed soft body) then converge in a few sweeps
+    instead of always burning the full iteration budget."""
+    worst0 = 0.0
+    for sweep in range(iterations):
         worst = 0.0
         for m in manifolds:
             a, b = m.a, m.b
@@ -197,7 +203,9 @@ def _solve_velocity(manifolds: list[_Manifold], iterations: int) -> None:
                     d = dpt if dpt > 0.0 else -dpt
                     if d > worst:
                         worst = d
-        if worst < IMPULSE_EPSILON:
+        if sweep == 0:
+            worst0 = worst
+        if worst < IMPULSE_EPSILON or worst < 1e-3 * worst0:
             break
 
 
@@ -525,6 +533,11 @@ def solve_contacts(bodies: list[Body], walls: list[Wall],
         cache.clear()
     if not manifolds:
         return
+    # under very heavy contact load (collapsed lattices, dense piles) trade
+    # iterations for speed: warm starting carries the converged impulses
+    # between substeps, so a few polish sweeps are enough to stay stable
+    if len(manifolds) * iterations > 400:
+        iterations = max(4, 400 // len(manifolds))
     _solve_velocity(manifolds, iterations)
     _solve_position(manifolds)
     for m in manifolds:
