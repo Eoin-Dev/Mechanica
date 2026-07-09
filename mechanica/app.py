@@ -507,6 +507,37 @@ class App:
         else:
             self.toast(f"Camera follow {'on' if self.view.follow else 'off'}")
 
+    def toggle_auto_fit(self) -> None:
+        self.view.auto_fit = not self.view.auto_fit
+        self.toast("Auto-fit camera "
+                   + ("on - framing the whole scene" if self.view.auto_fit
+                      else "off"))
+
+    def bump_speed(self, factor: float) -> None:
+        self.speed = min(20.0, max(0.01, self.speed * factor))
+        self.toast(f"Speed {self.speed:g}x")
+
+    def reset_speed(self) -> None:
+        self.speed = 1.0
+        self.toast("Speed 1x")
+
+    def toggle_graph(self, mode: str) -> None:
+        """Keyboard graph toggle: same key again closes the dock."""
+        self.set_graph_mode("Off" if self.graph_mode == mode else mode)
+
+    def toggle_lock_selection(self) -> None:
+        bodies = [o for o in self.selection if isinstance(o, Body)]
+        if not bodies:
+            self.toast("Select one or more bodies to lock (K)")
+            return
+        target = not all(b.locked for b in bodies)
+        for b in bodies:
+            b.locked = target
+        self.push_undo()
+        n = len(bodies)
+        self.toast(("Locked" if target else "Unlocked")
+                   + f" {n} bod{'ies' if n != 1 else 'y'}")
+
     # ---------------------------------------------------------------- misc UI
     def set_graph_mode(self, mode: str) -> None:
         self.graph_mode = mode
@@ -640,7 +671,28 @@ class App:
         elif key == pygame.K_g:
             self.view.spatial_grid = not self.view.spatial_grid
         elif key == pygame.K_f:
-            self.zoom_to_fit()
+            if mods & pygame.KMOD_SHIFT:
+                self.toggle_auto_fit()
+            else:
+                self.zoom_to_fit()
+        elif key == pygame.K_d:
+            self.view.vel_vectors = not self.view.vel_vectors
+            self.toast("Velocity vectors "
+                       + ("on" if self.view.vel_vectors else "off"))
+        elif key == pygame.K_k:
+            self.toggle_lock_selection()
+        elif key in (pygame.K_1, pygame.K_KP1):
+            self.toggle_graph("Energy")
+        elif key in (pygame.K_2, pygame.K_KP2):
+            self.toggle_graph("Mom.")
+        elif key in (pygame.K_3, pygame.K_KP3):
+            self.toggle_graph("Phase")
+        elif key in (pygame.K_MINUS, pygame.K_KP_MINUS):
+            self.bump_speed(0.5)
+        elif key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS):
+            self.bump_speed(2.0)
+        elif key in (pygame.K_0, pygame.K_KP0):
+            self.reset_speed()
         elif key == pygame.K_c:
             self.toggle_follow()
         elif key == pygame.K_l:

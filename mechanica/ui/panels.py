@@ -76,7 +76,9 @@ class Toolbar(PanelBase):
                                    lambda v: setattr(app, "speed", v),
                                    0.01, 20.0, app.ui, "x", "{:.2f}", log=True,
                                    tooltip="Simulation speed multiplier "
-                                           "(0.01x slow motion to 20x fast-forward)"))
+                                           "(0.01x slow motion to 20x "
+                                           "fast-forward). Keys: + and - "
+                                           "double/halve, 0 resets to 1x."))
         x += 200
         self.widgets.append(Label((x, 0, 30, TOOLBAR_H), "t =", 13, theme.TEXT_DIM))
         self._time_edit = TextEdit((x + 26, y + 3, 78, 24),
@@ -390,7 +392,7 @@ class Inspector(PanelBase):
         r1, r2 = self._half_rows()
         chk1 = Checkbox(r1, "Locked", lambda: b.locked,
                         lambda v: (setattr(b, "locked", v), self._commit()),
-                        "A locked body never moves: use as pivot or anchor")
+                        "A locked body never moves: use as pivot or anchor (K)")
         chk2 = Checkbox(r2, "Collides", lambda: b.collides,
                         lambda v: (setattr(b, "collides", v), self._commit()),
                         "Disable to let this body pass through others")
@@ -1031,13 +1033,14 @@ class Inspector(PanelBase):
             "Keep the camera centred on the selected body (C)")
         chk("Auto-fit camera", "auto_fit",
             "Continuously zoom and pan so the whole scene stays in frame - "
-            "great for escaping orbits and flying debris")
+            "great for escaping orbits and flying debris (Shift+F)")
         self.widgets.append(Button(self._row(24), app.zoom_to_fit,
                                    "Zoom to fit scene", size=12,
                                    tooltip="Frame every object in view once (F)"))
 
         self.widgets.append(SectionLabel(self._row(20), "Vectors"))
-        chk("Velocity vectors", "vel_vectors", "Green arrows (also editable by dragging)")
+        chk("Velocity vectors", "vel_vectors",
+            "Green arrows (also editable by dragging) (D)")
         chk("Acceleration vectors", "acc_vectors", "Orange arrows")
         chk("Net force vectors", "force_vectors", "Red arrows: F = ma")
         self.widgets.append(Slider(self._row(), "Vector size",
@@ -1060,7 +1063,8 @@ class Inspector(PanelBase):
         self.widgets.append(Segmented(self._row(26), ["Off", "Energy", "Mom.", "Phase"],
                                       lambda: app.graph_mode,
                                       app.set_graph_mode,
-                                      tooltip="Live plots along the bottom of the screen"))
+                                      tooltip="Live plots along the bottom of "
+                                              "the screen (keys 1, 2, 3)"))
 
         self.widgets.append(SectionLabel(self._row(20), "Performance"))
         self.widgets.append(Segmented(self._row(26), ["30", "60", "120", "Max"],
@@ -1135,7 +1139,8 @@ class GraphDock(PanelBase):
                                min(270, max(180, self.rect.w // 4)), 24),
                               ["Energy", "Mom.", "Phase"],
                               lambda: app.graph_mode, app.set_graph_mode,
-                              tooltip="Which live graph to display")
+                              tooltip="Which live graph to display "
+                                      "(keys 1, 2, 3)")
         self.widgets = [
             self._seg,
             Button((self.rect.right - 32, y, 24, 24),
@@ -1426,34 +1431,96 @@ class LibraryOverlay(PanelBase):
 
 
 # -------------------------------------------------------------------- help
-HELP_SHORTCUTS = [
-    ("Space", "Play / pause"), (".", "Step one frame"),
-    ("Ctrl+R", "Reset simulation"), ("Ctrl+Z / Y", "Undo / redo"),
-    ("Ctrl+D", "Duplicate selection"), ("Del", "Delete selection"),
-    ("Ctrl+C / V", "Copy / paste properties"), ("Ctrl+S", "Save scene"),
-    ("V H B A W R E S X", "Choose tool"), ("Arrows", "Nudge selected bodies"),
-    ("F", "Zoom to fit the scene"), ("C", "Follow the selected body"),
-    ("N", "Toggle grid snapping"), ("T", "Toggle motion trails"),
-    ("G", "Toggle broadphase grid"), ("L", "Open the library"),
-    ("Tab", "Show / hide the right panel"),
-    ("Scroll", "Zoom at cursor"), ("Mid/right drag", "Pan (right: empty space)"),
-    ("Right-drag body", "Aim its velocity"),
-    ("Shift+click", "Add to selection"), ("Shift+drag wall", "Snap wall angle"),
-    ("Drag body (playing)", "Throw it"), ("F1", "This help"),
+HELP_SECTIONS = [
+    ("Playback", [
+        ("Space", "Play / pause"),
+        (".", "Step one frame"),
+        ("+ / -", "Double / halve the speed"),
+        ("0", "Reset speed to 1x"),
+        ("Ctrl+R", "Reset the simulation"),
+        ("t = box", "Type a time to jump to it"),
+    ]),
+    ("Tools", [
+        ("V", "Select / move"),
+        ("H", "Pan"),
+        ("B / A", "Add body / anchor"),
+        ("W", "Draw wall"),
+        ("R / E / S", "Rod / string / spring"),
+        ("X", "Eraser"),
+    ]),
+    ("Camera & view", [
+        ("Scroll", "Zoom at the cursor"),
+        ("Mid drag", "Pan the view"),
+        ("F", "Zoom to fit, once"),
+        ("Shift+F", "Auto-fit camera on / off"),
+        ("C", "Follow the selected body"),
+        ("N", "Snap to grid"),
+        ("T", "Motion trails"),
+        ("D", "Velocity vectors"),
+        ("G", "Broadphase grid"),
+    ]),
+    ("Selection & editing", [
+        ("Drag body", "Move it (throw while playing)"),
+        ("Right-drag body", "Aim its velocity"),
+        ("Shift+click", "Add to the selection"),
+        ("Drag empty space", "Box select"),
+        ("Arrows", "Nudge the selection"),
+        ("K", "Lock / unlock selection"),
+        ("Ctrl+D", "Duplicate"),
+        ("Del", "Delete"),
+        ("Ctrl+C / V", "Copy / paste properties"),
+        ("Ctrl+Z / Y", "Undo / redo"),
+        ("Esc", "Cancel draw / clear selection"),
+    ]),
+    ("Graphs & analysis", [
+        ("1 / 2 / 3", "Energy / momentum / phase graph"),
+        ("Click legend", "Show / hide a channel"),
+        ("Drag dock edge", "Resize the graphs"),
+    ]),
+    ("Panels & app", [
+        ("Tab", "Show / hide the right panel"),
+        ("Drag panel edge", "Resize it"),
+        ("L", "Simulation library"),
+        ("Ctrl+S", "Quick-save the scene"),
+        ("F1", "This help"),
+    ]),
 ]
 
 
 class HelpOverlay(PanelBase):
+    """Sectioned, scrollable shortcut reference with key chips."""
+
+    ROW_H = 21
+    HEAD_H = 26
+    GAP = 10
+    KEY_COL = 136
+
     def __init__(self, app) -> None:
         super().__init__(app)
         self.visible = False
+        self.scroll = 0
+        self._cols: list[list] = [[], []]
+        self._col_h = 0
+
+    @classmethod
+    def _section_h(cls, sec) -> int:
+        return cls.HEAD_H + len(sec[1]) * cls.ROW_H + cls.GAP
 
     def relayout(self) -> None:
         app = self.app
-        rows = (len(HELP_SHORTCUTS) + 1) // 2
-        w = min(860, app.width - 80)
-        h = min(rows * 26 + 110, app.height - 60)
+        # balance the sections across two columns greedily
+        cols: list[list] = [[], []]
+        heights = [0, 0]
+        for sec in HELP_SECTIONS:
+            i = 0 if heights[0] <= heights[1] else 1
+            cols[i].append(sec)
+            heights[i] += self._section_h(sec)
+        self._cols = cols
+        self._col_h = max(heights)
+        w = min(900, app.width - 80)
+        h = min(self._col_h + 104, app.height - 60)
         self.rect = pygame.Rect((app.width - w) // 2, (app.height - h) // 2, w, h)
+        self.scroll = 0
         self.widgets = [
             Button((self.rect.right - 36, self.rect.y + 10, 26, 26),
                    lambda: setattr(self, "visible", False), "", icon="close",
@@ -1466,11 +1533,19 @@ class HelpOverlay(PanelBase):
         self.visible = False
         self.app.tour.start()
 
+    def _content_rect(self) -> pygame.Rect:
+        return pygame.Rect(self.rect.x + 20, self.rect.y + 46,
+                           self.rect.w - 40, self.rect.h - 96)
+
     def handle_event(self, event, mouse) -> bool:
         if not self.visible:
             return False
         if event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_F1):
             self.visible = False
+            return True
+        if event.type == pygame.MOUSEWHEEL and self.rect.collidepoint(mouse):
+            max_scroll = max(0, self._col_h - self._content_rect().h)
+            self.scroll = min(max_scroll, max(0, self.scroll - event.y * 40))
             return True
         for w in self.widgets:
             if w.handle(event, mouse):
@@ -1484,21 +1559,47 @@ class HelpOverlay(PanelBase):
     def draw(self, surface, mouse) -> None:
         if not self.visible:
             return
-        dim = pygame.Surface((self.app.width, self.app.height), pygame.SRCALPHA)
+        app = self.app
+        dim = pygame.Surface((app.width, app.height), pygame.SRCALPHA)
         dim.fill((8, 9, 12, 180))
         surface.blit(dim, (0, 0))
         pygame.draw.rect(surface, theme.PANEL, self.rect, 0, 10)
         pygame.draw.rect(surface, theme.OUTLINE, self.rect, 1, 10)
         blit_text(surface, "Help & keyboard shortcuts",
                   (self.rect.x + 16, self.rect.y + 12), 16, theme.TEXT, True)
-        rows = (len(HELP_SHORTCUTS) + 1) // 2
-        col_w = (self.rect.w - 48) // 2
-        for i, (keys, desc) in enumerate(HELP_SHORTCUTS):
-            col, row = divmod(i, rows)
-            x = self.rect.x + 24 + col * (col_w + 12)
-            y = self.rect.y + 52 + row * 26
-            blit_text(surface, keys, (x, y), 12, theme.ACCENT, True)
-            blit_text(surface, desc, (x + 150, y), 12, theme.TEXT_DIM)
+        content = self._content_rect()
+        clip = surface.get_clip()
+        surface.set_clip(content)
+        col_w = (content.w - 24) // 2
+        f_key = theme.font(11, True)
+        for ci, secs in enumerate(self._cols):
+            x = content.x + ci * (col_w + 24)
+            y = content.y - self.scroll
+            for title, items in secs:
+                blit_text(surface, title.upper(), (x, y + 6), 11,
+                          theme.TEXT_FAINT, True)
+                tw = f_key.size(title.upper())[0]
+                pygame.draw.line(surface, theme.OUTLINE,
+                                 (x + tw + 10, y + 13), (x + col_w, y + 13))
+                y += self.HEAD_H
+                for keys, desc in items:
+                    chip = pygame.Rect(x, y + 1, f_key.size(keys)[0] + 12, 17)
+                    pygame.draw.rect(surface, theme.PANEL_LIGHT, chip, 0, 4)
+                    blit_text(surface, keys, (chip.x + 6, chip.centery), 11,
+                              theme.ACCENT, True, "midleft")
+                    blit_text(surface, desc, (x + self.KEY_COL, y + 3), 12,
+                              theme.TEXT_DIM)
+                    y += self.ROW_H
+                y += self.GAP
+        surface.set_clip(clip)
+        if self._col_h > content.h:
+            blit_text(surface, "scroll for more", (self.rect.centerx,
+                      self.rect.bottom - 26), 11, theme.TEXT_FAINT, False,
+                      "midtop")
+        blit_text(surface, "Tip: the World tab has a formula reference for "
+                  "custom force fields.",
+                  (self.rect.right - 20, self.rect.bottom - 26), 11,
+                  theme.TEXT_FAINT, False, "topright")
         self.draw_widgets(surface, mouse)
 
 
