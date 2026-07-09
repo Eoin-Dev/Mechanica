@@ -18,10 +18,10 @@ from mechanica.scene import snapshot as snap
 from mechanica.scene.presets import PRESETS, Preset
 from mechanica.scene.snapshot import UndoStack
 from mechanica.ui import theme
-from mechanica.ui.panels import (DOCK_H, HINT_H, INSPECTOR_W, PALETTE_W,
-                                 TOOLBAR_H, GraphDock, HelpOverlay, HintBar,
-                                 Inspector, LibraryOverlay, Palette, Toolbar,
-                                 TourOverlay)
+from mechanica.ui.panels import (COLLAPSED_W, DOCK_H, HINT_H, INSPECTOR_W,
+                                 PALETTE_W, TOOLBAR_H, GraphDock, HelpOverlay,
+                                 HintBar, Inspector, LibraryOverlay, Palette,
+                                 Toolbar, TourOverlay)
 from mechanica.ui.plots import PhasePlot, TimeSeries
 from mechanica.ui.theme import blit_text
 from mechanica.ui.widgets import UIState
@@ -43,6 +43,7 @@ class App:
                                               pygame.RESIZABLE)
         pygame.display.set_caption("Mechanica - Physics Lab")
 
+        self.settings = self._load_settings()
         self.ui = UIState()
         self.world = World()
         self.camera = Camera(self.width, self.height)
@@ -75,6 +76,17 @@ class App:
         self._phase_body_id: int | None = None
         self.graph_mode = "Off"
 
+        # user-resizable panel geometry, persisted across sessions
+        self.inspector_visible = bool(self.settings.get("inspector_visible", True))
+        try:
+            self.inspector_w = int(self.settings.get("inspector_w", INSPECTOR_W))
+            self.dock_h = int(self.settings.get("dock_h", DOCK_H))
+        except (TypeError, ValueError):
+            self.inspector_w, self.dock_h = INSPECTOR_W, DOCK_H
+        self._split_drag: str | None = None
+        self._cursor = pygame.SYSTEM_CURSOR_ARROW
+        self._clamp_panel_sizes()
+
         self.toasts: list[list] = []
 
         self._nudge_dirty = False
@@ -91,7 +103,6 @@ class App:
         self.tour = TourOverlay(self)
         self.relayout_all()
 
-        self.settings = self._load_settings()
         if self.settings.get("fps_cap") in ("30", "60", "120", "Max"):
             self.set_fps_cap(self.settings["fps_cap"])
         self.view.antialias = bool(self.settings.get("antialias", True))
@@ -133,10 +144,89 @@ class App:
             self.help.relayout()
 
     def canvas_rect(self) -> pygame.Rect:
-        bottom = self.height - HINT_H - (DOCK_H if self.graph_mode != "Off" else 0)
+        bottom = self.height - HINT_H - (self.dock_h if self.graph_mode != "Off" else 0)
+        right = self.inspector_w if self.inspector_visible else COLLAPSED_W
         return pygame.Rect(PALETTE_W, TOOLBAR_H,
-                           self.width - PALETTE_W - INSPECTOR_W,
+                           self.width - PALETTE_W - right,
                            bottom - TOOLBAR_H)
+
+    # ------------------------------------------------- resizable panel edges
+    def _clamp_panel_sizes(self) -> None:
+        """Keep the user-resizable panels within sane bounds for the window."""
+        max_w = min(620, max(240, self.width - PALETTE_W - 320))
+        self.inspector_w = int(min(max_w, max(240, self.inspector_w)))
+        max_h = max(110, self.height - TOOLBAR_H - HINT_H - 220)
+        self.dock_h = int(min(max_h, max(110, self.dock_h)))
+
+    def toggle_inspector(self) -> None:
+        self.inspector_visible = not self.inspector_visible
+        self.settings["inspector_visible"] = self.inspector_visible
+        self._save_settings()
+        self.relayout_all()
+        if not self.inspector_visible:
+            self.toast("Panel hidden - press Tab or click the right edge to reopen")
+
+    def _split_rect_inspector(self) -> pygame.Rect | None:
+        if not self.inspector_visible:
+            return None
+        r = self.inspector.rect
+        return pygame.Rect(r.x - 3, r.y, 7, r.h)
+
+    def _split_rect_dock(self) -> pygame.Rect | None:
+        if self.graph_mode == "Off":
+            return None
+        r = self.dock.rect
+        return pygame.Rect(r.x, r.y - 3, r.w, 7)
+
+    def _handle_split(self, event: pygame.event.Event, mouse) -> bool:
+        """Drag the inspector's left edge or the dock's top edge to resize."""
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            self._split_drag = None
+            for name, rect in (("inspector", self._split_rect_inspector()),
+                               ("dock", self._split_rect_dock())):
+                if rect is not None and rect.collidepoint(mouse):
+                    self._split_drag = name
+                    return True
+            return False
+        if self._split_drag is None:
+            return False
+        if event.type == pygame.MOUSEMOTION:
+            if self._split_drag == "inspector":
+                self.inspector_w = self.width - mouse[0]
+            else:
+                self.dock_h = self.height - HINT_H - mouse[1]
+            self._clamp_panel_sizes()
+            self.relayout_all()
+            return True
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self._split_drag = None
+            self.settings["inspector_w"] = self.inspector_w
+            self.settings["dock_h"] = self.dock_h
+            self._save_settings()
+            return True
+        return False
+
+    def _update_cursor(self, mouse) -> None:
+        cur = pygame.SYSTEM_CURSOR_ARROW
+        if self._split_drag == "inspector":
+            cur = pygame.SYSTEM_CURSOR_SIZEWE
+        elif self._split_drag == "dock":
+            cur = pygame.SYSTEM_CURSOR_SIZENS
+        elif not (self.library.visible or self.help.visible or self.tour.visible
+                  or pygame.mouse.get_pressed()[0]):
+            r = self._split_rect_inspector()
+            if r and r.collidepoint(mouse):
+                cur = pygame.SYSTEM_CURSOR_SIZEWE
+            else:
+                r = self._split_rect_dock()
+                if r and r.collidepoint(mouse):
+                    cur = pygame.SYSTEM_CURSOR_SIZENS
+        if cur != self._cursor:
+            self._cursor = cur
+            try:
+                pygame.mouse.set_cursor(cur)
+            except pygame.error:
+                pass  # headless / dummy video driver has no cursor
 
     # ------------------------------------------------------------- playback
     def toggle_play(self) -> None:
@@ -395,6 +485,7 @@ class App:
             mouse = pygame.mouse.get_pos()
             for event in pygame.event.get():
                 self._route_event(event, mouse)
+            self._update_cursor(mouse)
             # keep held bodies pinned even when the mouse isn't moving
             self.canvas.update_drag(mouse)
             self._update(self.dt_frame)
@@ -411,6 +502,7 @@ class App:
             self.height = max(600, event.h)
             self.screen = pygame.display.set_mode((self.width, self.height),
                                                   pygame.RESIZABLE)
+            self._clamp_panel_sizes()
             self.relayout_all()
             return
         if self.tour.handle_event(event, mouse):
@@ -418,6 +510,8 @@ class App:
         if self.help.handle_event(event, mouse):
             return
         if self.library.handle_event(event, mouse):
+            return
+        if self._handle_split(event, mouse):
             return
         for panel in (self.toolbar, self.palette, self.inspector,
                       self.dock if self.graph_mode != "Off" else None):
@@ -473,6 +567,8 @@ class App:
             self.toggle_follow()
         elif key == pygame.K_l:
             self.toggle_library()
+        elif key == pygame.K_TAB:
+            self.toggle_inspector()
         elif key == pygame.K_F1:
             self.toggle_help()
         elif key in (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT):
@@ -538,25 +634,24 @@ class App:
                     pts.append((b.pos.x, b.pos.y))
                     if len(pts) > maxlen:
                         del pts[:len(pts) - maxlen]
-        # graphs
-        if self.graph_mode == "Energy":
-            e = self.world.energy()
-            self.energy_series.add(self.world.time,
-                                   {"KE": e["ke"], "PE": e["pe"],
-                                    "Total": e["total"]})
-        elif self.graph_mode == "Mom.":
-            p = self.world.momentum()
-            self.momentum_series.add(self.world.time,
-                                     {"|p|": p.length(), "px": p.x, "py": p.y,
-                                      "L": self.world.angular_momentum()})
-        elif self.graph_mode == "Phase":
-            body = next((o for o in self.selection if isinstance(o, Body)), None)
-            if body is not None:
-                if body.id != self._phase_body_id:
-                    self._phase_body_id = body.id
-                    self.phase_plot.clear()
-                self.phase_plot.add(body.pos.x, body.vel.x,
-                                    body.pos.y, body.vel.y)
+        # graphs: every series records continuously whatever the dock shows,
+        # so switching graph views (or closing and reopening the dock) never
+        # leaves gaps in the data
+        e = self.world.energy()
+        self.energy_series.add(self.world.time,
+                               {"KE": e["ke"], "PE": e["pe"],
+                                "Total": e["total"]})
+        p = self.world.momentum()
+        self.momentum_series.add(self.world.time,
+                                 {"|p|": p.length(), "px": p.x, "py": p.y,
+                                  "L": self.world.angular_momentum()})
+        body = next((o for o in self.selection if isinstance(o, Body)), None)
+        if body is not None:
+            if body.id != self._phase_body_id:
+                self._phase_body_id = body.id
+                self.phase_plot.clear()
+            self.phase_plot.add(body.pos.x, body.vel.x,
+                                body.pos.y, body.vel.y)
 
     # ---------------------------------------------------------------- render
     def _render(self, mouse) -> None:
@@ -600,7 +695,8 @@ class App:
         for msg, ttl in reversed(self.toasts[-3:]):
             img = theme.text(msg, 13, theme.TEXT)
             w = img.get_width() + 28
-            rect = pygame.Rect((self.width - INSPECTOR_W + PALETTE_W - w) // 2,
+            right = self.inspector_w if self.inspector_visible else COLLAPSED_W
+            rect = pygame.Rect((self.width - right + PALETTE_W - w) // 2,
                                y - 30, w, 30)
             s = pygame.Surface(rect.size, pygame.SRCALPHA)
             alpha = min(1.0, ttl / 0.4)

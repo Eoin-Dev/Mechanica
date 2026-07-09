@@ -14,12 +14,19 @@ SERIES_COLORS = [theme.ACCENT, theme.GOOD, theme.WARN, theme.BAD,
 
 
 class TimeSeries:
-    """Rolling window of named channels sampled against simulation time."""
+    """Rolling window of named channels sampled against simulation time.
 
-    def __init__(self, channels: list[str], maxlen: int = 900) -> None:
+    Channels can be toggled on/off by clicking their legend entries; hidden
+    channels are excluded from the autoscale so the visible ones fill the
+    plot.
+    """
+
+    def __init__(self, channels: list[str], maxlen: int = 3000) -> None:
         self.channels = channels
         self.t: deque[float] = deque(maxlen=maxlen)
         self.data: dict[str, deque[float]] = {c: deque(maxlen=maxlen) for c in channels}
+        self.hidden: set[str] = set()   # channels toggled off via the legend
+        self._legend_hits: list[tuple[pygame.Rect, str]] = []
 
     def clear(self) -> None:
         self.t.clear()
@@ -37,60 +44,109 @@ class TimeSeries:
         for c in self.channels:
             self.data[c].append(values.get(c, 0.0))
 
-    def draw(self, surface: pygame.Surface, rect: pygame.Rect, title: str,
-             unit: str = "") -> None:
+    def legend_click(self, pos) -> bool:
+        """Toggle a channel's visibility when its legend entry is clicked."""
+        for rect, c in self._legend_hits:
+            if rect.collidepoint(pos):
+                if c in self.hidden:
+                    self.hidden.discard(c)
+                else:
+                    self.hidden.add(c)
+                return True
+        return False
+
+    def _draw_legend(self, surface: pygame.Surface, rect: pygame.Rect) -> None:
+        self._legend_hits = []
+        lx = rect.right - 10
+        for ci in range(len(self.channels) - 1, -1, -1):
+            c = self.channels[ci]
+            d = self.data[c]
+            val = d[-1] if d else 0.0
+            off = c in self.hidden
+            lbl = f"{c}: {val:.3g}"
+            w = theme.font(11).size(lbl)[0]
+            lx -= w + 18
+            col = SERIES_COLORS[ci % len(SERIES_COLORS)]
+            pygame.draw.rect(surface, theme.TEXT_FAINT if off else col,
+                             (lx, rect.y + 9, 10, 3))
+            blit_text(surface, lbl, (lx + 14, rect.y + 4), 11,
+                      theme.TEXT_FAINT if off else theme.TEXT_DIM)
+            self._legend_hits.append(
+                (pygame.Rect(lx - 4, rect.y + 2, w + 20, 16), c))
+
+    def draw(self, surface: pygame.Surface, rect: pygame.Rect,
+             title: str) -> None:
         pygame.draw.rect(surface, (28, 30, 36), rect, 0, 6)
         pygame.draw.rect(surface, theme.OUTLINE, rect, 1, 6)
         blit_text(surface, title, (rect.x + 10, rect.y + 4), 12, theme.TEXT_DIM, True)
+        self._draw_legend(surface, rect)
         if len(self.t) < 2:
             blit_text(surface, "run the simulation to collect data",
                       rect.center, 12, theme.TEXT_FAINT, False, "center")
             return
-        plot = rect.inflate(-16, -30)
-        plot.y += 12
+        visible = [c for c in self.channels if c not in self.hidden]
+        if not visible:
+            blit_text(surface, "all channels hidden - click the legend to show one",
+                      rect.center, 12, theme.TEXT_FAINT, False, "center")
+            return
+        plot = pygame.Rect(rect.x + 8, rect.y + 26, rect.w - 16, rect.h - 42)
+        if plot.w < 20 or plot.h < 16:
+            return
         ts = list(self.t)
         t0, t1 = ts[0], ts[-1]
         if t1 - t0 < 1e-9:
             return
-        lo = min(min(d) for d in self.data.values() if d)
-        hi = max(max(d) for d in self.data.values() if d)
+        # deque indexing is O(distance from an end): snapshot to lists once
+        data = {c: list(self.data[c]) for c in visible}
+        lo = min(min(d) for d in data.values())
+        hi = max(max(d) for d in data.values())
         if hi - lo < 1e-12:
             hi, lo = hi + 1, lo - 1
         pad = (hi - lo) * 0.08
         hi += pad
         lo -= pad
 
-        # horizontal gridlines with value labels
-        for i in range(3):
-            frac = i / 2
+        # horizontal gridlines with value labels (count adapts to height)
+        n_seg = 2 if plot.h < 70 else 3 if plot.h < 130 else 4
+        for i in range(n_seg + 1):
+            frac = i / n_seg
             y = plot.bottom - frac * plot.h
             pygame.draw.line(surface, theme.GRID_MAJOR, (plot.x, y), (plot.right, y))
+            # the topmost label sits below its line so it stays inside the plot
             blit_text(surface, f"{lo + frac * (hi - lo):.3g}",
-                      (plot.x + 2, y - 7), 10, theme.TEXT_FAINT)
+                      (plot.x + 2, y + 1 if i == n_seg else y - 12), 10,
+                      theme.TEXT_FAINT)
+
+        # time axis labels along the bottom edge
+        for frac, align in ((0.0, "topleft"), (0.5, "midtop"), (1.0, "topright")):
+            tv = t0 + frac * (t1 - t0)
+            blit_text(surface, f"{tv:.4g} s", (plot.x + frac * plot.w, plot.bottom + 2),
+                      10, theme.TEXT_FAINT, False, align)
 
         # ~one sample per 2 px is visually lossless and halves the line work
         step = max(1, (2 * len(ts)) // max(plot.w, 1))
-        for ci, c in enumerate(self.channels):
-            d = self.data[c]
-            pts = []
-            for i in range(0, len(ts), step):
-                x = plot.x + (ts[i] - t0) / (t1 - t0) * plot.w
-                y = plot.bottom - (d[i] - lo) / (hi - lo) * plot.h
-                pts.append((x, y))
-            if len(pts) >= 2:
-                pygame.draw.aalines(surface, SERIES_COLORS[ci % len(SERIES_COLORS)],
-                                    False, pts)
-        # legend (inset so it never runs under the dock's close button)
-        lx = rect.right - 34
-        for ci in range(len(self.channels) - 1, -1, -1):
-            c = self.channels[ci]
-            val = self.data[c][-1] if self.data[c] else 0.0
-            lbl = f"{c}: {val:.3g}{unit}"
-            w = theme.font(11).size(lbl)[0]
-            lx -= w + 18
+        # break the polyline across recording gaps (e.g. data kept from before
+        # a rewind-safe clear) instead of drawing a bogus connecting segment
+        gap = 8.0 * step * (t1 - t0) / max(len(ts) - 1, 1)
+        x_scale = plot.w / (t1 - t0)
+        y_scale = plot.h / (hi - lo)
+        for c in visible:
+            ci = self.channels.index(c)
             col = SERIES_COLORS[ci % len(SERIES_COLORS)]
-            pygame.draw.rect(surface, col, (lx, rect.y + 9, 10, 3))
-            blit_text(surface, lbl, (lx + 14, rect.y + 4), 11, theme.TEXT_DIM)
+            d = data[c]
+            pts: list[tuple[float, float]] = []
+            prev_t = None
+            for i in range(0, len(ts), step):
+                ti = ts[i]
+                if prev_t is not None and ti - prev_t > gap:
+                    if len(pts) >= 2:
+                        pygame.draw.aalines(surface, col, False, pts)
+                    pts = []
+                prev_t = ti
+                pts.append((plot.x + (ti - t0) * x_scale,
+                            plot.bottom - (d[i] - lo) * y_scale))
+            if len(pts) >= 2:
+                pygame.draw.aalines(surface, col, False, pts)
 
 
 class PhasePlot:
