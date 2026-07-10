@@ -1092,7 +1092,9 @@ class Inspector(PanelBase):
                                    0.02, 20.0, u, "x", "{:.2f}", log=True))
 
         self.widgets.append(SectionLabel(self._row(20), "Analysis"))
-        chk("Motion trails", "trails", "Fading path behind each moving body (T)")
+        self.widgets.append(Checkbox(self._row(24), "Motion trails",
+                                     lambda: view.trails, app.set_trails,
+                                     "Fading path behind each moving body (T)"))
         self.widgets.append(Slider(self._row(), "Trail length",
                                    lambda: view.trail_len,
                                    lambda v: setattr(view, "trail_len", int(v)),

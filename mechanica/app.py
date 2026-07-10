@@ -29,6 +29,10 @@ from mechanica.ui.widgets import UIState
 
 PHYSICS_DT = 1.0 / 120.0
 MAX_STEPS_PER_FRAME = 24   # bounds catch-up work per frame at high speeds
+# wall-clock ceiling for physics per frame: however heavy the scene, the
+# UI keeps redrawing at ~20 fps and stays clickable (the sim just runs
+# slower than real time, with the existing "can't keep up" warning)
+PHYSICS_BUDGET_S = 0.045
 SETTINGS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "settings.json")
 
@@ -97,6 +101,8 @@ class App:
         self._autofit_ratio = 1.0    # user zoom-out factor while auto-fitting
         self._autofit_zt: float | None = None
         self._history: deque = deque(maxlen=600)   # per-frame rewind states
+        self._overload_since: float | None = None  # sustained-lag detection
+        self._overload_hint_at = 0.0
         self._clamp_panel_sizes()
 
         self.toasts: list[list] = []
@@ -736,7 +742,7 @@ class App:
             self.view.snap = not self.view.snap
             self.toast(f"Snap to grid {'on' if self.view.snap else 'off'}")
         elif key == pygame.K_t:
-            self.view.trails = not self.view.trails
+            self.set_trails(not self.view.trails)
         elif key == pygame.K_g:
             self.view.spatial_grid = not self.view.spatial_grid
         elif key == pygame.K_f:
@@ -820,6 +826,8 @@ class App:
                     small_steps += 1
                 self.accumulator -= eff_dt
                 quanta += 1
+                if time.perf_counter() - t0 > PHYSICS_BUDGET_S:
+                    break   # frame-time ceiling: stay responsive, dilate time
             elapsed = time.perf_counter() - t0
             self._last_phys_ms = elapsed * 1000.0
             if small_steps:
@@ -829,6 +837,7 @@ class App:
             self.overloaded = self.accumulator >= eff_dt
             if self.overloaded:
                 self.accumulator = 0.0
+            self._check_sustained_overload()
             self._after_physics()
             if self.world.diverged and time.monotonic() > self._diverge_cooldown:
                 self._diverge_cooldown = time.monotonic() + 5.0
@@ -892,6 +901,37 @@ class App:
             q = max(1, min(q, afford))
         return q
 
+    def _check_sustained_overload(self) -> None:
+        """After several seconds of continuous overload the lag clearly
+        won't recover on its own, so intervene: a fast-forward multiplier
+        is the usual culprit (reset it - that often fixes it outright);
+        otherwise tell the user what will actually help."""
+        if not self.overloaded:
+            self._overload_since = None
+            return
+        now = time.monotonic()
+        if self._overload_since is None:
+            self._overload_since = now
+            return
+        if now - self._overload_since > 4.0 and now > self._overload_hint_at:
+            self._overload_hint_at = now + 30.0
+            if self.speed > 1.0:
+                self.speed = 1.0
+                self.toast("Physics can't keep up - speed reset to 1x")
+            else:
+                self.toast("Scene too heavy for real time (running in slow "
+                           "motion). Fewer substeps, iterations or bodies "
+                           "will speed it up.")
+
+    def set_trails(self, on: bool) -> None:
+        """Trail toggle. Re-enabling starts fresh, so no bogus straight
+        line joins where recording stopped to where it resumed."""
+        if on and not self.view.trails:
+            self.trails.clear()
+        self.view.trails = on
+        if not on:
+            self.world.trace.clear()
+
     def _record_trails(self) -> None:
         """Append trail points; called after every physics step so extra
         adaptive steps show up as extra trail resolution."""
@@ -947,6 +987,12 @@ class App:
         screen.fill(theme.BG)
         self.ui.begin_frame()
         area = self.canvas_rect()
+        # transient render shedding: while the frame rate is critically low,
+        # drop antialiasing (the priciest drawing) without touching the
+        # user's setting - it comes back the moment the fps recovers
+        aa_saved = self.view.antialias
+        if self.playing and 0.0 < self.fps_now < 22.0:
+            self.view.antialias = False
         clip = screen.get_clip()
         screen.set_clip(area)
         if self.view.grid:
@@ -962,6 +1008,7 @@ class App:
         if self.playing:
             pygame.draw.circle(screen, theme.GOOD, (area.x + 14, area.y + 14), 5)
         screen.set_clip(clip)
+        self.view.antialias = aa_saved
 
         self.toolbar.draw(screen, mouse)
         self.palette.draw(screen, mouse)
