@@ -20,7 +20,10 @@ export const ICONS: Record<string, string> = {
   pan: svg('<path d="M12 3 V21 M3 12 H21 M12 3 L9.5 5.5 M12 3 L14.5 5.5 M12 21 L9.5 18.5 M12 21 L14.5 18.5 ' +
            'M3 12 L5.5 9.5 M3 12 L5.5 14.5 M21 12 L18.5 9.5 M21 12 L18.5 14.5" fill="none"/>'),
   body: svg('<circle cx="12" cy="12" r="7.5" fill="none"/><circle class="fill" cx="12" cy="12" r="2"/>'),
-  anchor: svg('<circle cx="12" cy="8" r="3.5" fill="none"/><path d="M12 11.5 V18 M7 18 H17" fill="none"/>'),
+  anchor: svg('<circle cx="12" cy="5" r="1.9" fill="none"/>' +
+              '<path d="M12 6.9 V19.2 M8.6 9.6 H15.4" fill="none"/>' +
+              '<path d="M12 19.2 C9 19 6.4 16.8 5.7 13.7 L4 15 M5.7 13.7 L7.5 14.8" fill="none"/>' +
+              '<path d="M12 19.2 C15 19 17.6 16.8 18.3 13.7 L20 15 M18.3 13.7 L16.5 14.8" fill="none"/>'),
   wall: svg('<path d="M4 17 L20 7" stroke-width="3.4"/>'),
   rod: svg('<path d="M7 17 L17 7"/><circle class="fill" cx="6" cy="18" r="2.4"/>' +
            '<circle class="fill" cx="18" cy="6" r="2.4"/>'),
@@ -50,4 +53,6 @@ export const ICONS: Record<string, string> = {
   download: svg('<path d="M12 4 V15 M7.5 11 L12 15.5 L16.5 11 M5 19.5 H19" fill="none"/>'),
   upload: svg('<path d="M12 15.5 V4.5 M7.5 8.5 L12 4 L16.5 8.5 M5 19.5 H19" fill="none"/>'),
   panel: svg('<rect x="4" y="5" width="16" height="14" rx="1.5" fill="none"/><path d="M14.5 5 V19"/>'),
+  rename: svg('<path d="M14.5 5.5 L18.5 9.5 L9 19 H5 V15 Z M12.5 7.5 L16.5 11.5" fill="none"/>'),
+  describe: svg('<path d="M5 6 H19 M5 10 H19 M5 14 H13 M5 18 H10" fill="none"/>'),
 };

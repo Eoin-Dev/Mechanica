@@ -13,6 +13,8 @@ export class Toolbar implements Panel {
   private timeInput: HTMLInputElement;
   private fps: HTMLElement;
   private app: App;
+  private lastPlaying: boolean | null = null;
+  private lastFps = "";
 
   constructor(app: App, root: HTMLElement) {
     this.app = app;
@@ -95,9 +97,19 @@ export class Toolbar implements Panel {
   }
 
   refresh(): void {
-    this.playBtn.innerHTML = this.app.playing ? ICONS.pause : ICONS.play;
-    this.playBtn.classList.toggle("active", this.app.playing);
-    this.fps.textContent = `${this.app.fpsNow.toFixed(0)} fps`;
+    // only touch the DOM when state changes: replacing the icon while the
+    // user's pointer is mid-click would destroy the element under the
+    // cursor and make the browser swallow the click
+    if (this.lastPlaying !== this.app.playing) {
+      this.lastPlaying = this.app.playing;
+      this.playBtn.innerHTML = this.app.playing ? ICONS.pause : ICONS.play;
+      this.playBtn.classList.toggle("active", this.app.playing);
+    }
+    const fps = `${this.app.fpsNow.toFixed(0)} fps`;
+    if (fps !== this.lastFps) {
+      this.lastFps = fps;
+      this.fps.textContent = fps;
+    }
     this.group.refreshAll();
   }
 }
