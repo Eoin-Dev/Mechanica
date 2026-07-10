@@ -193,24 +193,54 @@ export class CanvasController {
   }
 
   // ------------------------------------------------------------------ events
+  /** Drop every in-progress gesture (drag, pan, rubber band, pinch).
+   * Called when the browser interrupts us mid-gesture: fullscreen
+   * toggles, window blur, pointer cancellation. */
+  resetInteraction(): void {
+    this.abortDrag();
+    this.pointers.clear();
+    this.pinchDist = 0;
+    this.rubber = null;
+    this.wallStart = null;
+    this.panning = false;
+  }
+
   attach(canvas: HTMLCanvasElement): void {
+    // The page context menu must never open over the app: Chrome's menu
+    // starts with Back/Forward, so a stray right-click could navigate the
+    // user away mid-simulation. Text fields keep their native menu.
+    document.addEventListener("contextmenu", (e) => {
+      const t = e.target as HTMLElement;
+      if (t.tagName !== "INPUT" && t.tagName !== "TEXTAREA") e.preventDefault();
+    });
+    // a fullscreen toggle or focus loss can swallow the matching pointerup,
+    // which would otherwise leave bodies stuck "held"
+    window.addEventListener("blur", () => this.resetInteraction());
+    document.addEventListener("fullscreenchange", () => this.resetInteraction());
+
     canvas.addEventListener("pointerdown", (e) => {
       canvas.setPointerCapture(e.pointerId);
       this.mouse = this.local(canvas, e);
-      this.pointers.set(e.pointerId, this.mouse);
-      if (this.pointers.size === 2) {
-        // second finger: cancel the one-finger gesture, start pinching
-        this.abortDrag();
-        this.rubber = null;
-        this.wallStart = null;
-        this.panning = false;
-        const [p1, p2] = [...this.pointers.values()];
-        this.pinchDist = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
-        this.pinchMid = [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2];
-        return;
+      // only touch contacts take part in pinch detection: a mouse whose
+      // pointerup got eaten (context menu, F11) must never leave a stale
+      // entry that turns every later click into a phantom two-finger pinch
+      if (e.pointerType === "touch") {
+        this.pointers.set(e.pointerId, this.mouse);
+        if (this.pointers.size === 2) {
+          // second finger: cancel the one-finger gesture, start pinching
+          this.abortDrag();
+          this.rubber = null;
+          this.wallStart = null;
+          this.panning = false;
+          const [p1, p2] = [...this.pointers.values()];
+          this.pinchDist = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+          this.pinchMid = [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2];
+          return;
+        }
       }
       this.shiftDown = e.shiftKey;
       if (e.button === 1 || e.button === 2) {
+        e.preventDefault(); // no middle-click autoscroll / browser defaults
         // right-drag on a dynamic body aims its velocity vector;
         // middle-drag (or right-drag on empty space) pans
         if (e.button === 2) {
@@ -260,6 +290,7 @@ export class CanvasController {
       }
       this.mouse = this.local(canvas, e);
       if (e.button === 1 || e.button === 2) {
+        e.preventDefault();
         this.panning = false;
         if (e.button === 2 && this.velDrag !== null) {
           if (this.dragMoved) this.app.pushUndo();
@@ -275,6 +306,7 @@ export class CanvasController {
       this.abortDrag();
       this.rubber = null;
       this.panning = false;
+      this.pinchDist = 0;
     });
 
     canvas.addEventListener("wheel", (e) => {
@@ -284,8 +316,6 @@ export class CanvasController {
       this.app.camera.zoomAt(pos[0], pos[1], factor);
       this.app.noteUserZoom(); // auto-fit: allow out, cap in
     }, { passive: false });
-
-    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   }
 
   private local(canvas: HTMLCanvasElement, e: MouseEvent): [number, number] {
