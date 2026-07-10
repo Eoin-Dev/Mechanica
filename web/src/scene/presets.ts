@@ -14,6 +14,7 @@ export interface PresetHints {
   centre?: [number, number];
   trails?: boolean;
   vectors?: boolean;
+  autoFit?: boolean; // keep the whole scene framed as it spreads out
   graph?: "energy" | "momentum" | "phase";
 }
 
@@ -199,12 +200,17 @@ function buildFigure8(): World {
   return w;
 }
 
+/** A true hyperbolic flyby: the probe falls past the planet's trailing side
+ * just after it crosses, hooks around it, and leaves ~50% faster, chasing
+ * the planet - the Voyager manoeuvre. (Parameters are tuned so the relative
+ * speed exceeds escape speed at closest approach: a genuine flyby, not a
+ * capture.) */
 function buildSlingshot(): World {
   const w = spaceWorld(8);
-  const planet = addBody(w, 0, 0, { r: 0.5, m: 800.0, vx: -1.5,
-                                    color: [200, 150, 100], name: "Planet" });
-  const probe = addBody(w, 9.0, -2.4, { r: 0.07, m: 0.001, vx: -4.0,
-                                        color: [200, 220, 240], name: "Probe" });
+  const planet = addBody(w, 2.0, 0, { r: 0.5, m: 25.0, vx: -2.0,
+                                      color: [200, 150, 100], name: "Planet" });
+  const probe = addBody(w, 0, 8.0, { r: 0.07, m: 0.001, vy: -3.2,
+                                     color: [200, 220, 240], name: "Probe" });
   probe.collides = planet.collides = false;
   return w;
 }
@@ -1078,9 +1084,10 @@ export const PRESETS: Preset[] = [
     "circles the pair - a circumbinary orbit like Kepler-16b.",
     buildBinary, { zoom: 42, trails: true }),
   new Preset("Gravity slingshot", "Gravity & Orbits",
-    "A tiny probe steals momentum from a moving planet in a flyby, " +
-    "leaving faster than it arrived - how Voyager toured the planets.",
-    buildSlingshot, { zoom: 40, trails: true, vectors: true }),
+    "A tiny probe crosses just behind a moving planet, hooks around it and " +
+    "leaves about 50% faster - stolen momentum, exactly how Voyager toured " +
+    "the planets. The camera auto-follows the chase.",
+    buildSlingshot, { zoom: 55, trails: true, vectors: true, autoFit: true }),
   new Preset("Newton's cannon", "Gravity & Orbits",
     "Newton's thought experiment: fire a cannonball sideways from a " +
     "mountain. Too slow and it falls; at circular speed it orbits; " +

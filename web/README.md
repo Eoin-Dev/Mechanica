@@ -1,11 +1,14 @@
 # Mechanica — Web
 
-The browser version of Mechanica, a full TypeScript port of the Python/pygame
-desktop app in the repository root. The physics engine is a line-faithful
-translation (Velocity Verlet / Symplectic Euler / RK4 integrators, two-phase
-rod constraint solve, warm-started sequential impulses, spatial-hash
-broadphase), verified by the same analytic test suite. Scene JSON files are
-byte-compatible with the desktop app in both directions.
+The Mechanica physics lab as a static web app: TypeScript, no framework, no
+runtime dependencies, no server. The physics engine (Velocity Verlet /
+Symplectic Euler / RK4 integrators, two-phase rod constraint solve,
+warm-started sequential impulses, spatial-hash broadphase) is verified by an
+analytic test suite.
+
+> Historical note: this began as a line-faithful port of a Python/pygame
+> desktop app (see git history before mid-2026). The scene `.json` format is
+> unchanged, so scenes saved by the old desktop version still import here.
 
 ## Develop
 
@@ -13,8 +16,9 @@ byte-compatible with the desktop app in both directions.
 cd web
 npm install
 npm run dev        # dev server at http://localhost:5173
-npm test           # physics verification suite (41 analytic checks)
+npm test           # physics verification suite (42 analytic checks)
 npm run build      # production build into dist/
+npm run preview    # serve the production build locally
 ```
 
 ## Deploy — one-time setup
@@ -35,22 +39,20 @@ Netlify — connect the repo, set the build command to
 
 A custom domain can be pointed at any of these from the host's dashboard.
 
-## What differs from the desktop app
+## Architecture
 
-- **UI chrome is real HTML/CSS** (toolbar, inspector, library, help),
-  which brings text selection, native scrolling, tooltips and mobile
-  layout for free. The simulation canvas and live plots stay canvas-drawn.
-- **Touch support**: one finger drives the active tool, two fingers
-  pinch-zoom and pan.
-- **Scenes** save to browser localStorage (Ctrl+S), and can be exported /
-  imported as the same `.json` files the desktop app reads and writes.
-- **The expression sandbox was redesigned**: user force-field formulas are
-  parsed by a real tokenizer/recursive-descent parser into a closure tree —
-  no `eval`, works under any Content-Security-Policy. Same language,
-  including `^` for power and Python-style `a if cond else b`.
-- **One physics code path**: the desktop app's numpy fast path is
-  unnecessary — JIT-compiled loops fill that role, and the whole suite of
-  soft-body scenes runs several times faster than real time.
-- The randomized scenes (gas boxes, billiards, Brownian motion) use a
-  different seeded RNG, so their layouts differ from the desktop app in
-  detail while remaining reproducible run-to-run.
+- `src/core/` — vector maths and the force-field expression compiler
+  (a real tokenizer/recursive-descent parser producing a closure tree —
+  no `eval`, works under any Content-Security-Policy).
+- `src/engine/` — bodies, walls, links, contacts, and the world stepper.
+  Pure TypeScript, fully headless (the test suite runs it under Node).
+- `src/scene/` — the 47 built-in presets, scene serialization, undo/redo,
+  localStorage saves and `.json` import/export.
+- `src/render/` — camera and Canvas-2D scene rendering.
+- `src/interact/` — canvas tools: select/drag/throw, wall drawing, link
+  creation, box select, pinch-zoom.
+- `src/ui/` — DOM chrome: toolbar, tool palette, inspector, graph dock,
+  library and help overlays, live plots.
+- `tests/` — the physics verification suite: projectile SUVAT, orbit energy
+  conservation, pendulum periods, the (2/3)v₀ rolling result, soft-body
+  coherence, slingshot flyby, sandbox security, serialization round-trips.

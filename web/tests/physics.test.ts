@@ -428,6 +428,25 @@ describe("soft bodies", () => {
   });
 });
 
+describe("gravity slingshot", () => {
+  it("probe gains speed in a clean flyby behind the planet", () => {
+    const w = preset("Gravity slingshot");
+    const probe = w.bodies.find((b) => b.name === "Probe")!;
+    const planet = w.bodies.find((b) => b.name === "Planet")!;
+    const v0 = probe.vel.length();
+    let minD = Infinity;
+    for (let i = 0; i < 1080; i++) { // 9 s
+      w.step(DT);
+      minD = Math.min(minD, probe.pos.distTo(planet.pos));
+    }
+    const v1 = probe.vel.length();
+    expect(minD).toBeGreaterThan(1.0);  // a flyby, not a graze or capture
+    expect(v1 / v0).toBeGreaterThan(1.3); // leaves at least 30% faster
+    expect(probe.vel.x).toBeLessThan(0);  // flung along the planet's motion
+    expect(w.diverged).toHaveLength(0);
+  });
+});
+
 describe("force-field showcase", () => {
   it("Cyclone: formulas compile and the swarm stays bound", () => {
     const w = preset("Cyclone");

@@ -279,6 +279,7 @@ export class App {
     this.undoStack.reset(this.world);
     const hints = preset.hints;
     this.view.trails = hints.trails ?? false;
+    this.view.autoFit = hints.autoFit ?? false;
     if (hints.vectors) this.view.velVectors = true;
     if (hints.graph) {
       const mode = { energy: "Energy", momentum: "Mom.", phase: "Phase" }[hints.graph];
