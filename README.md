@@ -6,7 +6,15 @@ soft bodies.
 
 ![requires](https://img.shields.io/badge/python-3.10%2B-blue) ![deps](https://img.shields.io/badge/deps-pygame%20%7C%20numpy-green)
 
-## Run
+## Run in the browser
+
+The [`web/`](web/) directory contains a full TypeScript port that runs
+entirely in the browser — same physics (verified by the same analytic test
+suite), same scene files, plus touch support. See [web/README.md](web/README.md)
+for one-click deployment to GitHub Pages / Cloudflare Pages, or run it
+locally with `cd web && npm install && npm run dev`.
+
+## Run the desktop app
 
 ```
 pip install pygame numpy
