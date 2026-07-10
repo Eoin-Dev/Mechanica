@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Mechanica — 2D Physics Lab</title>
+  <meta name="description" content="An interactive physics sandbox for building and analysing mechanical systems: orbits, pendulums, oscillators, collisions, gases, friction, chaos and soft bodies." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='38' fill='%23569cd6'/><circle cx='50' cy='50' r='38' fill='none' stroke='%232f5677' stroke-width='8'/><line x1='50' y1='50' x2='78' y2='34' stroke='%232f5677' stroke-width='7'/></svg>" />
+</head>
+<body>
+  <div id="app">
+    <header id="toolbar"></header>
+    <div id="main">
+      <nav id="palette"></nav>
+      <div id="centre">
+        <div id="canvas-wrap">
+          <canvas id="canvas"></canvas>
+          <div id="toasts"></div>
+          <div id="running-dot" hidden></div>
+          <div id="overload-warning" hidden>slow: physics can't keep up — reduce substeps or bodies</div>
+        </div>
+        <div id="dock-splitter" hidden></div>
+        <div id="dock" hidden></div>
+      </div>
+      <div id="inspector-splitter"></div>
+      <aside id="inspector"></aside>
+    </div>
+    <footer id="hintbar">
+      <span id="hint-text"></span>
+      <span id="status-text"></span>
+    </footer>
+  </div>
+  <div id="library" class="overlay" hidden></div>
+  <div id="help" class="overlay" hidden></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

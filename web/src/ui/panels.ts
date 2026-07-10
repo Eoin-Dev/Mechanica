@@ -1,0 +1,317 @@
+/** Toolbar, tool palette, hint bar and graph dock (DOM). */
+import { App, GraphMode, Panel } from "../app";
+import { Body } from "../engine/body";
+import { SpringLink } from "../engine/links";
+import { TOOLS, TOOL_INFO, TOOL_KEYS, Tool } from "../interact/tools";
+import { RefreshGroup, button, el, segmented, slider } from "./dom";
+import { ICONS } from "./icons";
+
+// ------------------------------------------------------------------ toolbar
+export class Toolbar implements Panel {
+  private group = new RefreshGroup();
+  private playBtn: HTMLButtonElement;
+  private timeInput: HTMLInputElement;
+  private fps: HTMLElement;
+  private app: App;
+
+  constructor(app: App, root: HTMLElement) {
+    this.app = app;
+    const g = this.group;
+
+    root.append(el("span", { class: "brand", text: "Mechanica" }));
+
+    const play = g.add(button("", () => app.togglePlay(),
+      { icon: ICONS.play, style: "primary", tooltip: "Play / pause (Space)" }));
+    this.playBtn = play.root as HTMLButtonElement;
+    root.append(play.root);
+    root.append(g.add(button("", () => app.stepBack(),
+      { icon: ICONS.step_back, tooltip: "Step one frame back (,)" })).root);
+    root.append(g.add(button("", () => app.stepOnce(),
+      { icon: ICONS.step, tooltip: "Advance one frame (.)" })).root);
+    root.append(g.add(button("", () => app.resetSim(),
+      { icon: ICONS.reset, tooltip: "Reset to the initial state (Ctrl+R)" })).root);
+
+    const speedWrap = el("div", { style: "width:200px;flex:none;" });
+    speedWrap.append(g.add(slider("Speed", () => app.speed,
+      (v) => { app.speed = v; }, 0.01, 20.0,
+      { unit: "x", log: true, fmt: (v) => v.toFixed(2),
+        tooltip: "Simulation speed multiplier (0.01x slow motion to 20x " +
+                 "fast-forward). Keys: + and - double/halve, 0 resets." })).root);
+    root.append(speedWrap);
+    root.append(g.add(button("1x", () => app.resetSpeed(),
+      { tooltip: "Reset the speed to 1x (0)" })).root);
+
+    // simulation clock: type a time to re-simulate to it
+    this.timeInput = el("input", {
+      type: "text", inputmode: "decimal",
+      style: "width:76px;flex:none;text-align:right;",
+      title: "Simulation clock (s). Type a time to re-simulate to it.",
+    });
+    let timeFocused = false;
+    this.timeInput.addEventListener("focus", () => {
+      timeFocused = true;
+      this.timeInput.select();
+    });
+    this.timeInput.addEventListener("blur", () => {
+      timeFocused = false;
+      app.commitTimeJump(this.timeInput.value);
+    });
+    this.timeInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") this.timeInput.blur();
+      else if (e.key === "Escape") {
+        this.timeInput.value = app.world.time.toFixed(2);
+        this.timeInput.blur();
+      }
+      e.stopPropagation();
+    });
+    this.group.add({ root: this.timeInput, refresh: () => {
+      if (!timeFocused) this.timeInput.value = app.world.time.toFixed(2);
+    } });
+    root.append(el("span", { class: "dim", text: "t =" }), this.timeInput,
+                el("span", { class: "dim", text: "s" }));
+
+    root.append(el("div", { class: "toolbar-spacer" }));
+
+    root.append(g.add(button("", () => app.undo(),
+      { icon: ICONS.undo, tooltip: "Undo (Ctrl+Z)",
+        isEnabled: () => app.undoStack.canUndo })).root);
+    root.append(g.add(button("", () => app.redo(),
+      { icon: ICONS.redo, tooltip: "Redo (Ctrl+Y)",
+        isEnabled: () => app.undoStack.canRedo })).root);
+    root.append(g.add(button("", () => app.newScene(),
+      { icon: ICONS.trash, tooltip: "Clear the scene (undo-able)" })).root);
+    root.append(g.add(button("", () => app.zoomToFit(),
+      { icon: ICONS.fit, tooltip: "Zoom to fit the scene once (F)" })).root);
+    root.append(g.add(button("", () => app.toggleAutoFit(),
+      { icon: ICONS.autofit, isActive: () => app.view.autoFit,
+        tooltip: "Auto-fit camera: continuously keep the whole scene framed (Shift+F)" })).root);
+    root.append(g.add(button("Library", () => toggleOverlay("library"),
+      { icon: ICONS.library, tooltip: "Example simulations and saved scenes (L)" })).root);
+    root.append(g.add(button("", () => toggleOverlay("help"),
+      { icon: ICONS.help, tooltip: "Help & shortcuts (F1)" })).root);
+
+    this.fps = el("span", { id: "fps" });
+    root.append(this.fps);
+  }
+
+  refresh(): void {
+    this.playBtn.innerHTML = this.app.playing ? ICONS.pause : ICONS.play;
+    this.playBtn.classList.toggle("active", this.app.playing);
+    this.fps.textContent = `${this.app.fpsNow.toFixed(0)} fps`;
+    this.group.refreshAll();
+  }
+}
+
+/** Overlays register their open/close functions here (set by main.ts). */
+export const overlayToggles: Record<string, () => void> = {};
+
+function toggleOverlay(name: string): void {
+  overlayToggles[name]?.();
+}
+
+// ------------------------------------------------------------------ palette
+const TOOL_GROUPS: Tool[][] = [["select", "pan"], ["body", "anchor", "wall"],
+                               ["rod", "rope", "spring"], ["eraser"]];
+
+export class Palette implements Panel {
+  private group = new RefreshGroup();
+
+  constructor(app: App, root: HTMLElement) {
+    const keyOf: Record<string, string> = {};
+    for (const [k, t] of Object.entries(TOOL_KEYS)) keyOf[t] = k.toUpperCase();
+    TOOL_GROUPS.forEach((tools, gi) => {
+      if (gi > 0) root.append(el("hr"));
+      for (const tool of tools) {
+        const [name, desc] = TOOL_INFO[tool];
+        const b = this.group.add(button("", () => app.controller.setTool(tool), {
+          icon: ICONS[tool], style: "ghost", class: "tool-btn",
+          tooltip: `${name} - ${desc}`,
+          isActive: () => app.controller.tool === tool,
+        }));
+        b.root.append(el("span", { class: "key-badge", text: keyOf[tool] ?? "" }));
+        root.append(b.root);
+      }
+    });
+    void TOOLS;
+  }
+
+  refresh(): void {
+    this.group.refreshAll();
+  }
+}
+
+// ------------------------------------------------------------------ hint bar
+export class HintBar implements Panel {
+  private hint: HTMLElement;
+  private status: HTMLElement;
+  private app: App;
+
+  constructor(app: App, hint: HTMLElement, status: HTMLElement) {
+    this.app = app;
+    this.hint = hint;
+    this.status = status;
+  }
+
+  refresh(): void {
+    const app = this.app;
+    this.hint.textContent = app.controller.hint();
+    const [mx, my] = app.controller.mouse;
+    const wp = app.camera.toWorld(mx, my);
+    let nDyn = 0;
+    for (const b of app.world.bodies) if (!b.locked) nDyn++;
+    const drift = app.energyDriftText();
+    const res = app.playing && app.qNow > 1 ? `dt/${app.qNow}   ` : "";
+    this.status.textContent =
+      `${wp.x.toFixed(2)}, ${wp.y.toFixed(2)} m   |   ${nDyn} bodies   ` +
+      `${app.world.contacts.length} contacts   ${res}${drift}`;
+  }
+}
+
+// ---------------------------------------------------------------- graph dock
+export class GraphDock implements Panel {
+  private app: App;
+  private root: HTMLElement;
+  private splitter: HTMLElement;
+  private canvas: HTMLCanvasElement;
+  private ctx: CanvasRenderingContext2D;
+  private hintEl: HTMLElement;
+  private group = new RefreshGroup();
+  private lastMode: GraphMode = "Off";
+
+  constructor(app: App, root: HTMLElement, splitter: HTMLElement) {
+    this.app = app;
+    this.root = root;
+    this.splitter = splitter;
+
+    const header = el("div", { class: "dock-header" });
+    header.append(this.group.add(segmented(["Energy", "Mom.", "Phase"],
+      () => app.graphMode,
+      (v) => app.setGraphMode(v as GraphMode),
+      "Which live graph to display (keys 1, 2, 3)")).root);
+    this.hintEl = el("span", { class: "dock-hint" });
+    header.append(this.hintEl);
+    header.append(this.group.add(button("", () => this.clearData(),
+      { icon: ICONS.trash, style: "ghost", tooltip: "Clear all collected graph data" })).root);
+    header.append(this.group.add(button("", () => app.setGraphMode("Off"),
+      { icon: ICONS.close, style: "ghost", tooltip: "Close the graph dock" })).root);
+
+    this.canvas = el("canvas");
+    const wrap = el("div", { class: "dock-canvas-wrap" }, this.canvas);
+    this.ctx = this.canvas.getContext("2d")!;
+    root.append(header, wrap);
+
+    // legend clicks toggle channel visibility
+    this.canvas.addEventListener("click", (e) => {
+      const r = this.canvas.getBoundingClientRect();
+      const series = this.activeSeries();
+      series?.legendClick(e.clientX - r.left, e.clientY - r.top);
+    });
+
+    // resizable via the splitter above the dock
+    const saved = app.settings.dock_h;
+    if (typeof saved === "number") root.style.height = `${Math.max(110, saved)}px`;
+    let dragging = false;
+    splitter.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      splitter.setPointerCapture(e.pointerId);
+    });
+    splitter.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      const main = root.parentElement!;
+      const h = Math.max(110, Math.min(main.clientHeight - 160,
+        main.getBoundingClientRect().bottom - e.clientY));
+      root.style.height = `${h}px`;
+      app.resizeCanvas();
+    });
+    splitter.addEventListener("pointerup", () => {
+      dragging = false;
+      app.settings.dock_h = root.clientHeight;
+      app.saveSettings();
+    });
+  }
+
+  private clearData(): void {
+    this.app.energySeries.clear();
+    this.app.momentumSeries.clear();
+    this.app.phasePlot.clear();
+  }
+
+  private activeSeries() {
+    return { Energy: this.app.energySeries, "Mom.": this.app.momentumSeries }[
+      this.app.graphMode as string];
+  }
+
+  /** Why the plotted conserved quantity may legitimately change. */
+  private hint(): string {
+    const app = this.app;
+    const w = app.world;
+    if (app.graphMode === "Mom.") {
+      const ext: string[] = [];
+      if (w.gravity !== 0.0) ext.push("gravity");
+      if (w.bodies.some((b) => b.invMass === 0.0)) ext.push("fixed anchors");
+      if (w.walls.length > 0) ext.push("walls");
+      if (w.dragLinear || w.dragQuadratic || w.globalDamping) ext.push("drag/damping");
+      if (w.drivers.some((d) => d.enabled) || w.fields.some((f) => f.enabled)) {
+        ext.push("drivers/fields");
+      }
+      if (ext.length > 0) {
+        return "momentum is only conserved in isolation - " + ext.join(", ") +
+               " exert external forces here";
+      }
+      return "isolated system: total momentum should stay constant";
+    }
+    if (app.graphMode === "Energy") {
+      const lossy: string[] = [];
+      if (w.dragLinear || w.dragQuadratic) lossy.push("air drag");
+      if (w.globalDamping) lossy.push("global damping");
+      if (w.links.some((ln) => ln instanceof SpringLink && ln.damping > 0)) {
+        lossy.push("spring damping");
+      }
+      if (lossy.length > 0) return "energy is removed by " + lossy.join(", ");
+    }
+    return "";
+  }
+
+  refresh(): void {
+    const app = this.app;
+    const visible = app.graphMode !== "Off";
+    if (visible !== !this.root.hidden) {
+      this.root.hidden = !visible;
+      this.splitter.hidden = !visible;
+      app.resizeCanvas();
+    }
+    if (!visible) {
+      this.lastMode = "Off";
+      return;
+    }
+    if (app.graphMode !== this.lastMode) this.lastMode = app.graphMode;
+    this.group.refreshAll();
+    this.hintEl.textContent = this.hint();
+
+    const dpr = window.devicePixelRatio || 1;
+    const w = this.canvas.clientWidth;
+    const h = this.canvas.clientHeight;
+    if (w === 0 || h === 0) return;
+    if (this.canvas.width !== Math.round(w * dpr)) {
+      this.canvas.width = Math.round(w * dpr);
+      this.canvas.height = Math.round(h * dpr);
+    }
+    const ctx = this.ctx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    if (app.graphMode === "Energy") {
+      app.energySeries.draw(ctx, w, h, "Energy (J)");
+    } else if (app.graphMode === "Mom.") {
+      app.momentumSeries.draw(ctx, w, h,
+        "Momentum p (kg m/s) and angular momentum L");
+    } else if (app.graphMode === "Phase") {
+      const body = app.selection.find((o): o is Body => o instanceof Body);
+      const name = body ? body.name : "select a body";
+      // two SQUARE plots (x-vx and y-vy) so orbits aren't stretched
+      const side = Math.min(h - 4, (w - 12) / 2);
+      const x0 = (w - (2 * side + 12)) / 2;
+      app.phasePlot.draw(ctx, x0, 2, side, side, `${name}:  x - vx`, "x");
+      app.phasePlot.draw(ctx, x0 + side + 12, 2, side, side, `${name}:  y - vy`, "y");
+    }
+  }
+}
