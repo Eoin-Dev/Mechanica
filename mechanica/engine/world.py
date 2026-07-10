@@ -177,6 +177,13 @@ class World:
         self.contacts: list[Contact] = []
         self.step_count = 0
         self.diverged: list[str] = []   # names of bodies frozen this step
+        # sub-step path samples for motion trails: when the adaptive
+        # integrator slices through a close encounter, the U-turn happens
+        # *inside* one step, so the UI sets trace_spacing (world units) and
+        # drains `trace` after each step to keep trails smooth through it
+        self.trace: list[tuple[int, float, float]] = []
+        self.trace_spacing = 0.0        # 0 = tracing off
+        self._trace_last: dict[int, tuple[float, float]] = {}
         # transient mouse-drag pins: held body -> (target_x, target_y, v_max).
         # Each substep the body travels toward its target at up to v_max, so
         # a fast drag stays a smooth, bounded motion instead of a teleport.
@@ -556,6 +563,7 @@ class World:
         remaining = h
         floor = h / ENCOUNTER_MAX_SLICES
         guard = 2 * ENCOUNTER_MAX_SLICES   # hard bound on work
+        spacing = self.trace_spacing
         while remaining > 1e-12 and guard > 0:
             guard -= 1
             w = self._max_swing_rate()
@@ -563,7 +571,17 @@ class World:
                                                 ENCOUNTER_ANGLE / w)
             if hh < floor:
                 hh = floor
-            if hh < remaining:
+            sliced = hh < remaining
+            if sliced and spacing > 0.0:
+                # capture the path inside the slicing so trails show the
+                # encounter's curve instead of a step-to-step corner
+                for b in self._movers:
+                    last = self._trace_last.get(b.id)
+                    if last is None or (abs(last[0] - b.pos.x)
+                                        + abs(last[1] - b.pos.y)) >= spacing:
+                        self._trace_last[b.id] = (b.pos.x, b.pos.y)
+                        self.trace.append((b.id, b.pos.x, b.pos.y))
+            if sliced:
                 # actually slicing: use RK4 for the slices. A symplectic
                 # integrator loses its energy-conserving magic the moment
                 # the step size varies, so mid-encounter it has no edge -

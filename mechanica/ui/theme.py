@@ -100,6 +100,10 @@ def draw_icon(surface: pygame.Surface, name: str, rect: pygame.Rect,
         pygame.draw.polygon(surface, color,
                             [(cx - s, cy - s), (cx - s, cy + s), (cx + s * 0.4, cy)])
         pygame.draw.rect(surface, color, (cx + s * 0.6, cy - s, s * 0.4, 2 * s))
+    elif name == "step_back":
+        pygame.draw.polygon(surface, color,
+                            [(cx + s, cy - s), (cx + s, cy + s), (cx - s * 0.4, cy)])
+        pygame.draw.rect(surface, color, (cx - s, cy - s, s * 0.4, 2 * s))
     elif name == "reset":
         r = int(s)
         pygame.draw.arc(surface, color,

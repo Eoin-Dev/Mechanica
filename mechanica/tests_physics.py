@@ -270,6 +270,30 @@ def test_spring_period() -> None:
           f"measured={measured:.4f}s exact={exact:.4f}s err={100 * err:.2f}%")
 
 
+def test_friction_slide_to_roll() -> None:
+    """Coulomb friction + contact torque vs the classic analytic result:
+    a disc sliding at v0 without spin decelerates at mu*g while friction
+    torque spins it up; they meet at exactly v = (2/3) v0, after which it
+    rolls without slipping at constant speed."""
+    w = World()
+    w.substeps = 8
+    floor = Wall(Vec2(-50, 0), Vec2(50, 0), 0.12)
+    floor.friction = 0.5
+    floor.restitution = 0.0
+    w.walls.append(floor)
+    b = body(w, 0, 0.26, r=0.2, m=1.0, vx=3.0)
+    b.friction = 0.5
+    b.restitution = 0.0
+    run(w, 3.0)   # well past t* = v0/(3 mu g) = 0.204 s
+    v_exact = 2.0 / 3.0 * 3.0
+    err_v = abs(b.vel.x - v_exact) / v_exact
+    roll = abs(-b.omega * b.radius - b.vel.x) / max(b.vel.x, 1e-9)
+    check("friction: sliding disc settles at exactly (2/3) v0",
+          err_v < 0.005, f"v={b.vel.x:.4f} (exact {v_exact:.4f})")
+    check("friction: then rolls without slipping (omega r = v)",
+          roll < 0.005, f"omega*r/v={-b.omega * b.radius / b.vel.x:.4f}")
+
+
 def test_newtons_cradle() -> None:
     from mechanica.scene.presets import PRESETS
     w = [p for p in PRESETS if p.name == "Newton's cradle"][0].build()
@@ -514,6 +538,7 @@ def main() -> int:
     test_nonfinite_survival()
     test_spring_period()
     test_rolling()
+    test_friction_slide_to_roll()
     test_soft_body_presets()
     test_soft_body_momentum()
     test_drag_speed_limit()

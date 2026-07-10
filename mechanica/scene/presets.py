@@ -260,7 +260,7 @@ def _build_lagrange_triangle() -> World:
     return w
 
 
-def _choreography(p1: float, p2: float, substeps: int = 32) -> World:
+def _choreography(p1: float, p2: float, substeps: int = 64) -> World:
     """Zero-angular-momentum three-body choreography (Suvakov &
     Dmitrasinovic 2013): equal masses at (-1,0), (1,0), (0,0) with
     v1 = v2 = (p1, p2) and v3 = (-2 p1, -2 p2), G = m = 1."""
@@ -991,15 +991,18 @@ PRESETS: list[Preset] = [
            "(Stable versions of these points host the Trojan asteroids.)",
            _build_lagrange_triangle, {"zoom": 150, "trails": True}),
     Preset("Choreography: moth", "Gravity & Orbits",
-           "A zero-angular-momentum periodic three-body orbit (Suvakov & "
+           "A true periodic solution of the three-body problem (Suvakov & "
            "Dmitrasinovic, 2013): three equal masses chase each other along "
-           "one moth-shaped track. Delicate - numerical noise eventually "
-           "tips it into chaos.",
+           "one moth-shaped track. It is dynamically UNSTABLE - tiny errors "
+           "grow exponentially, so after many laps it must break into a "
+           "binary plus an escaper. That is chaos, not a glitch.",
            _build_moth, {"zoom": 220, "trails": True}),
     Preset("Choreography: butterfly", "Gravity & Orbits",
-           "Another of the 2013 zero-angular-momentum solutions: the three "
-           "bodies trace a butterfly-wing figure. Like all of these "
-           "choreographies it sits on a knife edge between order and chaos.",
+           "Another genuine periodic three-body solution, tracing butterfly "
+           "wings. Like all such choreographies it is unstable: error "
+           "doubles every couple of seconds, so even a perfect computer "
+           "eventually watches it split into a binary + escaper - the "
+           "generic fate of three bodies.",
            _build_butterfly_orbit, {"zoom": 220, "trails": True}),
 
     Preset("Simple pendulum", "Pendulums",
