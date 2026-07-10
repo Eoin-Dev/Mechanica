@@ -219,7 +219,11 @@ export class CanvasController {
     document.addEventListener("fullscreenchange", () => this.resetInteraction());
 
     canvas.addEventListener("pointerdown", (e) => {
-      canvas.setPointerCapture(e.pointerId);
+      try {
+        canvas.setPointerCapture(e.pointerId);
+      } catch {
+        // pointer already gone (released mid-dispatch): continue uncaptured
+      }
       this.mouse = this.local(canvas, e);
       // only touch contacts take part in pinch detection: a mouse whose
       // pointerup got eaten (context menu, F11) must never leave a stale
