@@ -39,6 +39,16 @@ INTEGRATORS = ("Velocity Verlet", "Symplectic Euler", "RK4")
 # starting makes a handful of passes enough even for long chains.
 ROD_FORCE_PASSES = 4
 
+# Adaptive close-encounter integration (mutual-gravity scenes only): a
+# substep is marched through in slices sized so that no body's velocity
+# direction swings more than ENCOUNTER_ANGLE radians per slice, with at
+# most ENCOUNTER_MAX_SLICES-fold refinement. Deep two-body encounters
+# (which would otherwise blow up the energy) then get automatically and
+# smoothly resolved down to microsecond slices, while calm stretches take
+# a single slice at zero extra cost.
+ENCOUNTER_ANGLE = 0.02          # rad of velocity swing per slice
+ENCOUNTER_MAX_SLICES = 1024     # floor: slice >= h / this
+
 # Mouse-drag speed limit tuning: a held body may not chase the cursor faster
 # than DRAG_GAMMA * rest_length * omega of its stiffest attached spring, so a
 # fast drag can never stretch a spring faster than it can respond - which is
@@ -517,6 +527,54 @@ class World:
             row[0]._mu = row[9]
 
     # -------------------------------------------------------------- integrators
+    def _max_swing_rate(self) -> float:
+        """Largest a/|v| over the moving bodies: how fast (rad/s) the
+        fastest-turning body's velocity direction is being swung by the
+        current accelerations. Spikes during gravitational close passes."""
+        worst = 0.0
+        for b in self.bodies:
+            if b.inv_mass == 0.0:
+                continue
+            a2 = b.acc.x * b.acc.x + b.acc.y * b.acc.y
+            if a2 == 0.0:
+                continue
+            v = (b.vel.x * b.vel.x + b.vel.y * b.vel.y) ** 0.5
+            w = a2 ** 0.5 / (v + 0.05)
+            if w > worst:
+                worst = w
+        return worst
+
+    def _integrate_adaptive(self, h: float) -> None:
+        """March through one substep in adaptively sized slices.
+
+        Each slice is capped at ENCOUNTER_ANGLE / (max a/|v|), re-evaluated
+        from the freshest accelerations after every slice, so a close
+        encounter deepening mid-substep keeps getting finer resolution
+        (down to h/ENCOUNTER_MAX_SLICES). This is what keeps the energy of
+        near-collision N-body orbits (three-body choreographies and the
+        like) from exploding, at no cost to calm scenes."""
+        remaining = h
+        floor = h / ENCOUNTER_MAX_SLICES
+        guard = 2 * ENCOUNTER_MAX_SLICES   # hard bound on work
+        while remaining > 1e-12 and guard > 0:
+            guard -= 1
+            w = self._max_swing_rate()
+            hh = remaining if w <= 0.0 else min(remaining,
+                                                ENCOUNTER_ANGLE / w)
+            if hh < floor:
+                hh = floor
+            if hh < remaining:
+                # actually slicing: use RK4 for the slices. A symplectic
+                # integrator loses its energy-conserving magic the moment
+                # the step size varies, so mid-encounter it has no edge -
+                # while RK4's O(h^5) local error makes the brief violent
+                # stretch essentially exact, and it is too short for RK4's
+                # long-term drift to matter.
+                self._integrate_rk4(hh)
+            else:
+                self._integrate(hh)
+            remaining -= hh
+
     def _integrate(self, h: float) -> None:
         name = self.integrator
         movers = self._movers
@@ -598,13 +656,19 @@ class World:
             b._prev.y = b.pos.y
         rigid = self._rods
         iters = self.iterations
+        # N-body scenes get adaptive slice-marching inside each substep so
+        # close encounters can't blow up; everything else is untouched
+        adaptive = self.mutual_gravity and self.G != 0.0
         for _ in range(n):
             if self.drag_pins:
                 self._move_drag_pins(h, inv_h)
 
             # (spin integration happens inside the integrator body loops;
             # torque only arises from contacts, applied there)
-            self._integrate(h)
+            if adaptive:
+                self._integrate_adaptive(h)
+            else:
+                self._integrate(h)
 
             if rigid:
                 self._solve_rod_positions(rigid, h, inv_h, iters)

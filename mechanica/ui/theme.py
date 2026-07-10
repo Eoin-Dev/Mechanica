@@ -180,6 +180,25 @@ def draw_icon(surface: pygame.Surface, name: str, rect: pygame.Rect,
     elif name == "close":
         line(surface, color, (cx - s * 0.8, cy - s * 0.8), (cx + s * 0.8, cy + s * 0.8), 2)
         line(surface, color, (cx - s * 0.8, cy + s * 0.8), (cx + s * 0.8, cy - s * 0.8), 2)
+    elif name == "fit":
+        # corner brackets: frame the scene once
+        for sx_, sy_ in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+            corner_x = cx + sx_ * s
+            corner_y = cy + sy_ * s
+            line(surface, color, (corner_x, corner_y),
+                 (corner_x - sx_ * s * 0.7, corner_y), 2)
+            line(surface, color, (corner_x, corner_y),
+                 (corner_x, corner_y - sy_ * s * 0.7), 2)
+    elif name == "autofit":
+        # corner brackets around a dot: keep the scene framed continuously
+        for sx_, sy_ in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+            corner_x = cx + sx_ * s
+            corner_y = cy + sy_ * s
+            line(surface, color, (corner_x, corner_y),
+                 (corner_x - sx_ * s * 0.7, corner_y), 2)
+            line(surface, color, (corner_x, corner_y),
+                 (corner_x, corner_y - sy_ * s * 0.7), 2)
+        pygame.draw.circle(surface, color, (cx, cy), max(2, s * 0.3))
     elif name == "chev_left":
         pygame.draw.lines(surface, color, False,
                           [(cx + s * 0.5, cy - s), (cx - s * 0.5, cy),

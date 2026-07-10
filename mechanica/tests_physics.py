@@ -216,8 +216,7 @@ def test_pendulum_energy_conservation() -> None:
     from mechanica.scene.presets import PRESETS
 
     for name, seconds, tol in [("Simple pendulum", 60.0, 1e-3),
-                               ("Triple pendulum", 30.0, 5e-3),
-                               ("Swinging rope", 15.0, 3e-2)]:
+                               ("Triple pendulum", 30.0, 5e-3)]:
         w = [p for p in PRESETS if p.name == name][0].build()
         e0 = w.energy()["total"]
         run(w, seconds)
@@ -225,6 +224,23 @@ def test_pendulum_energy_conservation() -> None:
         drift = abs(e1 - e0) / max(abs(e0), 1e-9)
         check(f"{name}: |dE| < {tol * 100:g}% over {seconds:.0f} s",
               drift < tol, f"dE={100 * (e1 - e0) / e0:+.4f}%")
+
+    # the rope is a chain of *damped* elastic strings now, so its physical
+    # invariant is dissipation: energy may only ever go down, never up
+    w = [p for p in PRESETS if p.name == "Swinging rope"][0].build()
+    e0 = w.energy()["total"]
+    peak = e0
+    for _ in range(int(round(15.0 / DT))):
+        w.step(DT)
+        e = w.energy()["total"]
+        if e > peak:
+            peak = e
+    e1 = w.energy()["total"]
+    scale = max(abs(e0), 1e-9)
+    check("Swinging rope (damped strings): energy only dissipates",
+          peak <= e0 + scale * 5e-3 and e1 <= e0,
+          f"peak dE={100 * (peak - e0) / scale:+.3f}%, "
+          f"final dE={100 * (e1 - e0) / scale:+.2f}%")
 
 
 # -------------------------------------------------------------------- spring

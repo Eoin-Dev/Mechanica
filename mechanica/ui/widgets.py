@@ -213,7 +213,12 @@ class Segmented(Widget):
 
 
 class TextEdit(Widget):
-    """Single-line text editor. commit(text) -> bool decides acceptance."""
+    """Single-line text editor. commit(text) -> bool decides acceptance.
+
+    Full caret editing: arrows / Home / End move (Shift extends the
+    selection), Ctrl+A selects all, Backspace/Delete remove the selection
+    or one character, and typing replaces the selection. Focusing selects
+    everything, so click-and-type replaces the whole value."""
 
     def __init__(self, rect, get: Callable[[], str],
                  commit: Callable[[str], bool], ui: UIState,
@@ -228,11 +233,15 @@ class TextEdit(Widget):
         self.align_right = align_right
         self.editing = False
         self.buffer = ""
+        self.caret = 0
+        self.sel: int | None = None   # selection anchor (None = no selection)
         self.error = False
 
     def begin_edit(self) -> None:
         self.editing = True
         self.buffer = self.get()
+        self.caret = len(self.buffer)
+        self.sel = 0 if self.buffer else None   # select all: type to replace
         self.error = False
         self.ui.set_focus(self)
 
@@ -247,11 +256,48 @@ class TextEdit(Widget):
         ok = self.commit_fn(self.buffer)
         self.error = not ok
 
+    # -- selection helpers
+    def _sel_range(self) -> tuple[int, int] | None:
+        if self.sel is None or self.sel == self.caret:
+            return None
+        return (min(self.sel, self.caret), max(self.sel, self.caret))
+
+    def _delete_selection(self) -> bool:
+        r = self._sel_range()
+        if r is None:
+            self.sel = None
+            return False
+        self.buffer = self.buffer[:r[0]] + self.buffer[r[1]:]
+        self.caret = r[0]
+        self.sel = None
+        return True
+
+    def _move_caret(self, target: int, shift: bool) -> None:
+        target = max(0, min(len(self.buffer), target))
+        if shift:
+            if self.sel is None:
+                self.sel = self.caret
+        else:
+            self.sel = None
+        self.caret = target
+
+    def _caret_from_x(self, mx: int) -> int:
+        f = theme.font(12)
+        best, best_d = 0, 1e9
+        base = self.rect.x + 6
+        for i in range(len(self.buffer) + 1):
+            d = abs(base + f.size(self.buffer[:i])[0] - mx)
+            if d < best_d:
+                best, best_d = i, d
+        return best
+
     def handle(self, event, mouse) -> bool:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if self.hit(mouse):
                 if not self.editing:
                     self.begin_edit()
+                else:
+                    self._move_caret(self._caret_from_x(mouse[0]), False)
                 return True
             if self.editing:
                 self.blur(commit=True)
@@ -259,25 +305,60 @@ class TextEdit(Widget):
         if not self.editing:
             return False
         if event.type == pygame.KEYDOWN:
-            if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            mods = pygame.key.get_mods()
+            shift = bool(mods & pygame.KMOD_SHIFT)
+            key = event.key
+            if key in (pygame.K_RETURN, pygame.K_KP_ENTER):
                 self._try_commit()
                 if not self.error:
                     self.editing = False
                     self.ui.focus = None
                 return True
-            if event.key == pygame.K_ESCAPE:
+            if key == pygame.K_ESCAPE:
                 self.editing = False
                 self.ui.focus = None
                 return True
-            if event.key == pygame.K_BACKSPACE:
-                self.buffer = self.buffer[:-1]
+            if key == pygame.K_a and mods & pygame.KMOD_CTRL:
+                self.sel = 0
+                self.caret = len(self.buffer)
+                return True
+            if key == pygame.K_LEFT:
+                r = self._sel_range()
+                self._move_caret(r[0] if r and not shift else self.caret - 1,
+                                 shift)
+                return True
+            if key == pygame.K_RIGHT:
+                r = self._sel_range()
+                self._move_caret(r[1] if r and not shift else self.caret + 1,
+                                 shift)
+                return True
+            if key == pygame.K_HOME:
+                self._move_caret(0, shift)
+                return True
+            if key == pygame.K_END:
+                self._move_caret(len(self.buffer), shift)
+                return True
+            if key == pygame.K_BACKSPACE:
+                if not self._delete_selection() and self.caret > 0:
+                    self.buffer = (self.buffer[:self.caret - 1]
+                                   + self.buffer[self.caret:])
+                    self.caret -= 1
+                self.error = False
+                return True
+            if key == pygame.K_DELETE:
+                if not self._delete_selection() and self.caret < len(self.buffer):
+                    self.buffer = (self.buffer[:self.caret]
+                                   + self.buffer[self.caret + 1:])
                 self.error = False
                 return True
             ch = event.unicode
             if ch and ch.isprintable():
                 if self.numeric and ch not in "0123456789.-+eE":
                     return True
-                self.buffer += ch
+                self._delete_selection()
+                self.buffer = (self.buffer[:self.caret] + ch
+                               + self.buffer[self.caret:])
+                self.caret += 1
                 self.error = False
                 return True
         return False
@@ -288,20 +369,41 @@ class TextEdit(Widget):
         border = theme.BAD if self.error else \
             theme.ACCENT if self.editing else theme.OUTLINE
         pygame.draw.rect(surface, border, self.rect, 1, 5)
-        shown = self.buffer if self.editing else self.get()
-        color = theme.TEXT
-        if not shown and self.placeholder and not self.editing:
-            shown, color = self.placeholder, theme.TEXT_FAINT
-        if self.editing and (pygame.time.get_ticks() // 500) % 2 == 0:
-            shown += "|"
-        # clip long text from the left so the caret stays visible
         f = theme.font(12)
-        while shown and f.size(shown)[0] > self.rect.w - 10:
-            shown = shown[1:]
-        anchor = "midright" if self.align_right and not self.editing else "midleft"
-        pos = (self.rect.right - 6, self.rect.centery) if anchor == "midright" \
-            else (self.rect.x + 6, self.rect.centery)
-        blit_text(surface, shown, pos, 12, color, False, anchor)
+        if not self.editing:
+            shown = self.get()
+            color = theme.TEXT
+            if not shown and self.placeholder:
+                shown, color = self.placeholder, theme.TEXT_FAINT
+            while shown and f.size(shown)[0] > self.rect.w - 10:
+                shown = shown[1:]
+            anchor = "midright" if self.align_right else "midleft"
+            pos = (self.rect.right - 6, self.rect.centery) \
+                if self.align_right else (self.rect.x + 6, self.rect.centery)
+            blit_text(surface, shown, pos, 12, color, False, anchor)
+            return
+        # editing: scroll the visible window so the caret stays in view
+        buf = self.buffer
+        start = 0
+        while f.size(buf[start:self.caret])[0] > self.rect.w - 14:
+            start += 1
+        base_x = self.rect.x + 6
+        clip = surface.get_clip()
+        surface.set_clip(self.rect.inflate(-2, -2))
+        r = self._sel_range()
+        if r is not None:
+            s0, s1 = max(r[0], start), max(r[1], start)
+            x0 = base_x + f.size(buf[start:s0])[0]
+            x1 = base_x + f.size(buf[start:s1])[0]
+            pygame.draw.rect(surface, theme.ACCENT_DARK,
+                             (x0, self.rect.y + 3, x1 - x0, self.rect.h - 6))
+        blit_text(surface, buf[start:], (base_x, self.rect.centery), 12,
+                  theme.TEXT, False, "midleft")
+        if (pygame.time.get_ticks() // 500) % 2 == 0:
+            cx = base_x + f.size(buf[start:self.caret])[0]
+            pygame.draw.line(surface, theme.TEXT, (cx, self.rect.y + 4),
+                             (cx, self.rect.bottom - 4))
+        surface.set_clip(clip)
 
 
 class Slider(Widget):
