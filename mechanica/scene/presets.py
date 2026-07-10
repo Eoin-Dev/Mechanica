@@ -958,12 +958,6 @@ PRESETS: list[Preset] = [
            "Two equal stars orbit their barycentre while a distant planet "
            "circles the pair - a circumbinary orbit like Kepler-16b.",
            _build_binary, {"zoom": 42, "trails": True}),
-    Preset("Three-body figure-8", "Gravity & Orbits",
-           "The celebrated Chenciner-Montgomery choreography: three equal "
-           "masses chase each other around a figure-eight forever. A "
-           "razor-thin periodic solution - almost any other three-body "
-           "start turns chaotic.",
-           _build_figure8, {"zoom": 220, "trails": True, "graph": "energy"}),
     Preset("Gravity slingshot", "Gravity & Orbits",
            "A tiny probe steals momentum from a moving planet in a flyby, "
            "leaving faster than it arrived - how Voyager toured the planets.",
@@ -978,32 +972,47 @@ PRESETS: list[Preset] = [
            "behind (L5). These Lagrange points are gravitationally stable, "
            "so the swarms slowly librate around them instead of drifting off.",
            _build_trojans, {"zoom": 55, "trails": True}),
-    Preset("Sun, Earth & Moon", "Gravity & Orbits",
-           "A hierarchical three-body system: the Moon circles the Earth "
-           "while both circle the Sun. Stable because the Moon sits deep "
-           "inside Earth's Hill sphere, where Earth's pull dominates.",
+    # ---- the three-body problem, from stability to chaos -------------
+    Preset("Sun, Earth & Moon", "Three-Body Problem",
+           "The one arrangement of three bodies that IS stable: a "
+           "hierarchy. The Moon circles the Earth while both circle the "
+           "Sun, safe because the Moon sits deep inside Earth's Hill "
+           "sphere, where Earth's pull dominates.",
            _build_sun_earth_moon, {"zoom": 95, "centre": (0, 0),
                                    "trails": True}),
-    Preset("Lagrange's triangle", "Gravity & Orbits",
+    Preset("Three-body figure-8", "Three-Body Problem",
+           "The celebrated Chenciner-Montgomery choreography: three equal "
+           "masses chase each other around a figure-eight forever. A "
+           "razor-thin periodic solution - almost any other three-body "
+           "start turns chaotic.",
+           _build_figure8, {"zoom": 220, "trails": True, "graph": "energy"}),
+    Preset("Lagrange's triangle", "Three-Body Problem",
            "Lagrange proved three bodies at an equilateral triangle can "
            "rotate rigidly forever. For equal masses it is unstable: watch "
            "the perfect waltz hold for a while, then shatter into chaos. "
            "(Stable versions of these points host the Trojan asteroids.)",
            _build_lagrange_triangle, {"zoom": 150, "trails": True}),
-    Preset("Choreography: moth", "Gravity & Orbits",
+    Preset("Choreography: moth", "Three-Body Problem",
            "A true periodic solution of the three-body problem (Suvakov & "
            "Dmitrasinovic, 2013): three equal masses chase each other along "
            "one moth-shaped track. It is dynamically UNSTABLE - tiny errors "
            "grow exponentially, so after many laps it must break into a "
            "binary plus an escaper. That is chaos, not a glitch.",
            _build_moth, {"zoom": 220, "trails": True}),
-    Preset("Choreography: butterfly", "Gravity & Orbits",
+    Preset("Choreography: butterfly", "Three-Body Problem",
            "Another genuine periodic three-body solution, tracing butterfly "
            "wings. Like all such choreographies it is unstable: error "
            "doubles every couple of seconds, so even a perfect computer "
            "eventually watches it split into a binary + escaper - the "
            "generic fate of three bodies.",
            _build_butterfly_orbit, {"zoom": 220, "trails": True}),
+    Preset("Pythagorean three-body", "Three-Body Problem",
+           "Burrau's 1913 problem: masses 3, 4 and 5 dropped at rest from a "
+           "3-4-5 triangle. They swing through wild close encounters until "
+           "two bind into a binary and eject the third - the fate of almost "
+           "every three-body system.",
+           _build_pythagorean, {"zoom": 70, "centre": (-0.5, 1.0),
+                                "trails": True, "graph": "energy"}),
 
     Preset("Simple pendulum", "Pendulums",
            "A small-angle pendulum. Its period is 2*pi*sqrt(L/g), roughly 2.46 s "
@@ -1156,13 +1165,6 @@ PRESETS: list[Preset] = [
            "Fourteen tiny moons on eccentric orbits around one star. Long-"
            "term structure emerges from simple inverse-square gravity.",
            _build_orbit_dance, {"zoom": 55, "trails": True}),
-    Preset("Pythagorean three-body", "Chaos",
-           "Burrau's 1913 problem: masses 3, 4 and 5 dropped at rest from a "
-           "3-4-5 triangle. They swing through wild close encounters until "
-           "two bind into a binary and eject the third - the fate of almost "
-           "every three-body system.",
-           _build_pythagorean, {"zoom": 70, "centre": (-0.5, 1.0),
-                                "trails": True, "graph": "energy"}),
     Preset("Sinai billiard", "Chaos",
            "Two balls launched a hair apart in a box with a circular "
            "scatterer. Every bounce off the curved wall stretches their "
