@@ -843,35 +843,34 @@ function buildSquishyBall(): World {
   return w;
 }
 
-function buildClothCurtain(): World {
+/** Force-field showcase: a cyclone written entirely as two formulas.
+ *
+ * The field combines four ideas the formula language supports: a tangential
+ * swirl with exponential falloff (exp), an inward pull (1/r-style terms), a
+ * comparison used as a switch to hollow out a calm "eye" (r < 0.7), and
+ * velocity damping. Open the World tab to read and edit the formulas live.
+ */
+function buildCyclone(): World {
   const w = new World();
-  w.substeps = 8;
-  const floor = new Wall(new Vec2(-5.0, -1.8), new Vec2(5.0, -1.8), 0.14);
-  floor.friction = 0.6;
-  floor.restitution = 0.2;
-  w.walls.push(floor);
-  for (const x of [-5.0, 5.0]) {
-    const side = new Wall(new Vec2(x, -1.8), new Vec2(x, 2.2), 0.14);
-    side.restitution = 0.4;
-    w.walls.push(side);
+  w.gravity = 0.0;
+  w.substeps = 4;
+  const rng = new Random(9);
+  for (let i = 0; i < 60; i++) {
+    const d = rng.uniform(0.8, 4.2);
+    const th = rng.uniform(0, 2 * Math.PI);
+    // spread of masses: since the field applies forces (not accelerations),
+    // light debris and heavy debris settle onto different orbits, so the
+    // storm organizes into layered bands instead of one ring
+    addBody(w, d * Math.cos(th), d * Math.sin(th),
+            { r: 0.06, m: rng.uniform(0.02, 0.15),
+              vx: rng.uniform(-0.5, 0.5), vy: rng.uniform(-0.5, 0.5),
+              e: 0.6, mu: 0.0,
+              color: [120 + rng.randint(0, 80), 160 + rng.randint(0, 60),
+                      200 + rng.randint(0, 55)] });
   }
-  const cols = 13;
-  const rows = 8;
-  const spacing = 0.2;
-  const grid = softGrid(w, -1.2, -0.4, cols, rows, spacing, 1.5,
-                        200.0, 1.0, [150, 170, 230], 0.05, 0.3, 0.04);
-  for (const b of grid[rows - 1]) { // pin the whole top edge
-    b.locked = true;
-    b.color = PIVOT_GREY;
-  }
-  // a gusting breeze that only stirs the light fabric (selected by mass),
-  // then a ball lobbed into the middle of the curtain
-  w.fields.push(new ForceField("Breeze (light bodies)",
-                               "0.6*sin(1.1*t + 0.8*y)*(m < 0.1)", "0"));
-  const ball = addBody(w, -3.8, 0.2, { r: 0.28, m: 1.2, vx: 3.6, vy: 3.2,
-                                       e: 0.3, mu: 0.3, color: [235, 200, 90],
-                                       name: "Cannonball" });
-  ball.collides = true;
+  w.fields.push(new ForceField("Cyclone",
+    "-9*y*exp(-r/5)/(r+0.15) - 3*x/(r+0.3) + 6*x*(r < 0.7) - 0.4*vx",
+    "9*x*exp(-r/5)/(r+0.15) - 3*y/(r+0.3) + 6*y*(r < 0.7) - 0.4*vy"));
   return w;
 }
 
@@ -1254,11 +1253,6 @@ export const PRESETS: Preset[] = [
     "neighbours, rolls and splats down a V-ramp. Fully triangulated, " +
     "so it keeps its round shape - mostly.",
     buildSquishyBall, { zoom: 85, centre: [0, 2.0] }),
-  new Preset("Cloth curtain", "Soft Bodies",
-    "A 15 x 10 spring lattice pinned along its top edge sways in a " +
-    "gusting breeze - until a cannonball flies into it. Drag any " +
-    "particle to tug the fabric around.",
-    buildClothCurtain, { zoom: 110, centre: [0, 0.4] }),
   new Preset("Trampoline", "Soft Bodies",
     "A springy bed of particles strung between two anchors. The " +
     "ball's energy trades between gravity and spring tension every " +
@@ -1289,6 +1283,13 @@ export const PRESETS: Preset[] = [
     "separation - exponential divergence, while energy stays exactly " +
     "flat. The founding example of provable chaos.",
     buildSinaiBilliard, { zoom: 125, trails: true, graph: "energy" }),
+  new Preset("Cyclone", "Chaos",
+    "Sixty particles caught in a storm written entirely as two force-field " +
+    "formulas: a swirling wind that fades with distance (exp), an inward " +
+    "pull, a comparison (r < 0.7) acting as a switch that hollows out a " +
+    "calm eye, and drag. Open the World tab to read - and edit - the " +
+    "formulas while it runs.",
+    buildCyclone, { zoom: 85, trails: true }),
   new Preset("Magnetic pendulum", "Chaos",
     "A pendulum swings over three attracting 'magnets' with light " +
     "air drag. It wanders unpredictably before settling over one - " +

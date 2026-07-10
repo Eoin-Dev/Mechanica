@@ -368,7 +368,7 @@ describe("friction and rolling", () => {
 // ---------------------------------------------------------------- soft bodies
 describe("soft bodies", () => {
   it.each([
-    "Jelly block", "Squishy ball", "Cloth curtain",
+    "Jelly block", "Squishy ball",
     "Trampoline", "Soft wheel", "Jelly smash",
   ])("preset '%s' stays coherent over 3 s", (name) => {
     const w = preset(name);
@@ -425,6 +425,19 @@ describe("soft bodies", () => {
     const worst = Math.max(...springs.map(
       (ln) => Math.abs(ln.a.pos.distTo(ln.b.pos) - ln.restLength) / ln.restLength));
     expect(worst).toBeLessThan(0.2);
+  });
+});
+
+describe("force-field showcase", () => {
+  it("Cyclone: formulas compile and the swarm stays bound", () => {
+    const w = preset("Cyclone");
+    expect(w.fields).toHaveLength(1);
+    expect(w.fields[0].error).toBe("");
+    run(w, 5.0);
+    const spans = w.bodies.map((b) => Math.abs(b.pos.x) + Math.abs(b.pos.y));
+    expect(spans.every((s) => Number.isFinite(s))).toBe(true);
+    expect(Math.max(...spans)).toBeLessThan(30.0);
+    expect(w.diverged).toHaveLength(0);
   });
 });
 

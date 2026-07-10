@@ -8,6 +8,9 @@
 import { World, WorldDict } from "../engine/world";
 
 const SCENE_PREFIX = "mechanica.scene.";
+// per-scene user metadata (description, ...) lives under a separate key so
+// the scene payload itself stays byte-compatible with the desktop app
+const META_PREFIX = "mechanica.scenemeta.";
 
 export function snapshot(world: World): string {
   return JSON.stringify(world.toDict());
@@ -95,6 +98,40 @@ export function loadScene(name: string): World | null {
 
 export function deleteScene(name: string): void {
   localStorage.removeItem(SCENE_PREFIX + name);
+  localStorage.removeItem(META_PREFIX + name);
+}
+
+/** Rename a saved scene (metadata moves with it). Returns the safe name,
+ * or null if the target name is already taken. */
+export function renameScene(oldName: string, newName: string): string | null {
+  const safe = safeName(newName);
+  if (safe === oldName) return safe;
+  if (localStorage.getItem(SCENE_PREFIX + safe) !== null) return null;
+  const payload = localStorage.getItem(SCENE_PREFIX + oldName);
+  if (payload === null) return null;
+  localStorage.setItem(SCENE_PREFIX + safe, payload);
+  const meta = localStorage.getItem(META_PREFIX + oldName);
+  if (meta !== null) localStorage.setItem(META_PREFIX + safe, meta);
+  deleteScene(oldName);
+  return safe;
+}
+
+export function sceneDescription(name: string): string {
+  try {
+    const meta = JSON.parse(localStorage.getItem(META_PREFIX + name) ?? "{}");
+    return typeof meta.description === "string" ? meta.description : "";
+  } catch {
+    return "";
+  }
+}
+
+export function setSceneDescription(name: string, description: string): void {
+  if (description.trim() === "") {
+    localStorage.removeItem(META_PREFIX + name);
+  } else {
+    localStorage.setItem(META_PREFIX + name,
+                         JSON.stringify({ description: description.trim() }));
+  }
 }
 
 // -------------------------------------------------------- file import/export

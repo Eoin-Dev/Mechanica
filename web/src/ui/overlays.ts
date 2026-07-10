@@ -1,4 +1,4 @@
-/** Modal overlays: the preset library / saved scenes, and help & shortcuts. */
+/** Modal overlays: the library (example presets + saved scenes), and help. */
 import { App } from "../app";
 import { CATEGORIES, PRESETS } from "../scene/presets";
 import * as snap from "../scene/snapshot";
@@ -6,14 +6,16 @@ import { button, el } from "./dom";
 import { ICONS } from "./icons";
 
 // ------------------------------------------------------------------ library
+type LibraryTab = "Examples" | "My scenes";
+
 export class Library {
   visible = false;
   private app: App;
   private root: HTMLElement;
+  private tab: LibraryTab = "Examples";
   private category = "All";
-  private grid!: HTMLElement;
-  private scenesEl!: HTMLElement;
-  private chips!: HTMLElement;
+  private tabBtns = new Map<LibraryTab, HTMLButtonElement>();
+  private content!: HTMLElement;
 
   constructor(app: App, root: HTMLElement) {
     this.app = app;
@@ -27,8 +29,7 @@ export class Library {
   open(): void {
     this.visible = true;
     this.root.hidden = false;
-    this.renderCards();
-    this.renderScenes();
+    this.render();
   }
 
   close(): void {
@@ -42,19 +43,76 @@ export class Library {
   }
 
   private build(): void {
-    const app = this.app;
     const header = el("div", { class: "overlay-header" },
       el("h2", { text: "Library" }));
-    header.append(button("Save current scene", () => {
+    const tabs = el("div", { class: "tabs", style: "border:none;flex:none;width:280px" });
+    for (const t of ["Examples", "My scenes"] as const) {
+      const b = el("button", { text: t });
+      b.addEventListener("click", () => {
+        this.tab = t;
+        this.render();
+      });
+      this.tabBtns.set(t, b);
+      tabs.append(b);
+    }
+    header.append(tabs);
+    header.append(el("div", { style: "flex:1" }));
+    header.append(button("", () => this.close(),
+      { icon: ICONS.close, style: "ghost", tooltip: "Close (Esc)" }).root);
+
+    this.content = el("div", { class: "overlay-body" });
+    this.root.append(el("div", { class: "overlay-panel" }, header, this.content));
+  }
+
+  private render(): void {
+    for (const [t, b] of this.tabBtns) b.classList.toggle("active", t === this.tab);
+    this.content.replaceChildren();
+    if (this.tab === "Examples") this.renderExamples();
+    else this.renderScenes();
+  }
+
+  // ------------------------------------------------------------- examples
+  private renderExamples(): void {
+    const chips = el("div", { class: "cat-chips" });
+    for (const cat of CATEGORIES) {
+      const b = el("button", { text: cat });
+      if (cat === this.category) b.classList.add("active");
+      b.addEventListener("click", () => {
+        this.category = cat;
+        this.render();
+      });
+      chips.append(b);
+    }
+    const grid = el("div", { class: "card-grid" });
+    for (const preset of PRESETS) {
+      if (this.category !== "All" && preset.category !== this.category) continue;
+      const card = el("div", { class: "preset-card" },
+        el("div", { class: "cat", text: preset.category }),
+        el("h3", { text: preset.name }),
+        el("p", { text: preset.description }));
+      card.addEventListener("click", () => {
+        this.app.loadPreset(preset);
+        this.close();
+      });
+      grid.append(card);
+    }
+    this.content.append(chips, grid);
+  }
+
+  // ----------------------------------------------------------- saved scenes
+  private renderScenes(): void {
+    const app = this.app;
+    const actions = el("div", { class: "cat-chips" });
+    actions.append(button("Save current scene", () => {
       const name = prompt("Scene name:",
         `scene ${new Date().toISOString().slice(0, 10)}`);
       if (name) {
-        snap.saveScene(app.world, name);
-        app.toast(`Saved scene '${name}'`);
-        this.renderScenes();
+        const saved = snap.saveScene(app.world, name);
+        app.toast(`Saved scene '${saved}'`);
+        this.render();
       }
     }, { icon: ICONS.save }).root);
-    header.append(button("Import .json", async () => {
+    actions.append(button("Import .json", async () => {
       const result = await snap.uploadScene();
       if (result === null) {
         app.toast("Could not read that scene file");
@@ -68,66 +126,65 @@ export class Library {
       this.close();
     }, { icon: ICONS.upload,
          tooltip: "Load a scene file saved from this app or the desktop version" }).root);
-    header.append(button("", () => this.close(),
-      { icon: ICONS.close, style: "ghost", tooltip: "Close (Esc)" }).root);
+    this.content.append(actions);
 
-    const body = el("div", { class: "overlay-body" });
-    this.chips = el("div", { class: "cat-chips" });
-    this.grid = el("div", { class: "card-grid" });
-    this.scenesEl = el("div");
-    body.append(this.chips, this.grid,
-                el("h3", { text: "Saved scenes",
-                           style: "margin:18px 0 6px;font-size:14px" }),
-                this.scenesEl);
-
-    this.root.append(el("div", { class: "overlay-panel" }, header, body));
-    this.renderChips();
-  }
-
-  private renderChips(): void {
-    this.chips.replaceChildren();
-    for (const cat of CATEGORIES) {
-      const b = el("button", { text: cat });
-      if (cat === this.category) b.classList.add("active");
-      b.addEventListener("click", () => {
-        this.category = cat;
-        this.renderChips();
-        this.renderCards();
-      });
-      this.chips.append(b);
-    }
-  }
-
-  private renderCards(): void {
-    this.grid.replaceChildren();
-    for (const preset of PRESETS) {
-      if (this.category !== "All" && preset.category !== this.category) continue;
-      const card = el("div", { class: "preset-card" },
-        el("div", { class: "cat", text: preset.category }),
-        el("h3", { text: preset.name }),
-        el("p", { text: preset.description }));
-      card.addEventListener("click", () => {
-        this.app.loadPreset(preset);
-        this.close();
-      });
-      this.grid.append(card);
-    }
-  }
-
-  private renderScenes(): void {
-    const app = this.app;
-    this.scenesEl.replaceChildren();
     const names = snap.listScenes();
     if (names.length === 0) {
-      this.scenesEl.append(el("div", { class: "faint",
-        text: "No saved scenes yet. Ctrl+S saves the current scene here " +
-              "(stored in this browser); Export downloads it as a file." }));
+      this.content.append(el("div", { class: "faint",
+        style: "margin-top:14px",
+        text: "No saved scenes yet. Ctrl+S (or the button above) saves the " +
+              "current scene here, stored in this browser. Export downloads " +
+              "a scene as a file the desktop app can read too." }));
       return;
     }
+
+    const grid = el("div", { class: "card-grid" });
     for (const name of names) {
-      const row = el("div", { class: "scene-row" },
-        el("span", { class: "name", text: name }));
-      row.append(button("Load", () => {
+      const desc = snap.sceneDescription(name);
+      const card = el("div", { class: "preset-card scene-card" },
+        el("div", { class: "cat", text: "Saved scene" }),
+        el("h3", { text: name }));
+      if (desc) card.append(el("p", { text: desc }));
+
+      const bar = el("div", { class: "card-actions" });
+      const stop = (fn: () => void) => (e: Event) => {
+        e.stopPropagation(); // buttons must not trigger the card's load
+        fn();
+      };
+      const mkBtn = (icon: string, tooltip: string, fn: () => void,
+                     danger = false): HTMLElement => {
+        const b = el("button", { class: `ghost icon${danger ? " danger" : ""}`,
+                                 title: tooltip });
+        b.insertAdjacentHTML("beforeend", icon);
+        b.addEventListener("click", stop(fn));
+        return b;
+      };
+      bar.append(mkBtn(ICONS.rename, "Rename", () => {
+        const newName = prompt("Rename scene:", name);
+        if (!newName || newName === name) return;
+        const saved = snap.renameScene(name, newName);
+        if (saved === null) app.toast("A scene with that name already exists");
+        else app.toast(`Renamed to '${saved}'`);
+        this.render();
+      }));
+      bar.append(mkBtn(ICONS.describe, desc ? "Edit description" : "Add description", () => {
+        const text = prompt("Description (empty to remove):", desc);
+        if (text === null) return;
+        snap.setSceneDescription(name, text);
+        this.render();
+      }));
+      bar.append(mkBtn(ICONS.download, "Download as a .json file", () => {
+        const world = snap.loadScene(name);
+        if (world !== null) snap.downloadScene(world, name);
+      }));
+      bar.append(mkBtn(ICONS.trash, "Delete this saved scene", () => {
+        if (!confirm(`Delete saved scene '${name}'?`)) return;
+        snap.deleteScene(name);
+        this.render();
+      }, true));
+      card.append(bar);
+
+      card.addEventListener("click", () => {
         const world = snap.loadScene(name);
         if (world === null) {
           app.toast(`Could not load '${name}'`);
@@ -139,17 +196,10 @@ export class Library {
         app.zoomToFit();
         app.toast(`Loaded scene '${name}'`);
         this.close();
-      }).root);
-      row.append(button("Export", () => {
-        const world = snap.loadScene(name);
-        if (world !== null) snap.downloadScene(world, name);
-      }, { icon: ICONS.download, tooltip: "Download as a .json file" }).root);
-      row.append(button("", () => {
-        snap.deleteScene(name);
-        this.renderScenes();
-      }, { icon: ICONS.trash, style: "ghost", tooltip: "Delete this saved scene" }).root);
-      this.scenesEl.append(row);
+      });
+      grid.append(card);
     }
+    this.content.append(grid);
   }
 }
 

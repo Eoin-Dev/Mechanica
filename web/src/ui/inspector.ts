@@ -26,10 +26,21 @@ export class Inspector implements Panel {
   private structureKey = "";
   private showFormulaHelp = false;
   private collapsed = false;
+  private splitter: HTMLElement;
+  private reopenStrip: HTMLElement;
 
   constructor(app: App, root: HTMLElement, splitter: HTMLElement) {
     this.app = app;
     this.root = root;
+    this.splitter = splitter;
+
+    // slim clickable strip shown while the panel is collapsed
+    this.reopenStrip = el("div", { class: "reopen-strip",
+                                   title: "Show the panel (Tab)" });
+    this.reopenStrip.insertAdjacentHTML("beforeend", ICONS.chev_left);
+    this.reopenStrip.hidden = true;
+    this.reopenStrip.addEventListener("click", () => this.toggleCollapsed());
+    root.append(this.reopenStrip);
 
     const tabs = el("div", { class: "tabs" });
     for (const t of TABS) {
@@ -41,6 +52,11 @@ export class Inspector implements Panel {
       this.tabBtns.set(t, b);
       tabs.append(b);
     }
+    const collapseBtn = el("button", { class: "collapse-btn",
+                                       title: "Hide the panel (Tab)" });
+    collapseBtn.insertAdjacentHTML("beforeend", ICONS.chev_right);
+    collapseBtn.addEventListener("click", () => this.toggleCollapsed());
+    tabs.append(collapseBtn);
     this.body = el("div", { class: "inspector-body" });
     root.append(tabs, this.body);
 
@@ -79,7 +95,17 @@ export class Inspector implements Panel {
       window.matchMedia("(max-width: 760px)").matches);
     this.body.hidden = this.collapsed;
     (this.root.querySelector(".tabs") as HTMLElement).hidden = this.collapsed;
+    this.reopenStrip.hidden = !this.collapsed;
+    this.splitter.hidden = this.collapsed; // no resizing while collapsed
+    if (this.collapsed) {
+      this.root.style.removeProperty("width"); // let .collapsed set the width
+    } else if (typeof this.app.settings.inspector_w === "number") {
+      this.root.style.width = `${Math.max(240, this.app.settings.inspector_w)}px`;
+    }
     this.app.resizeCanvas();
+    if (this.collapsed) {
+      this.app.toast("Panel hidden - press Tab or click the right edge to reopen");
+    }
   }
 
   private dirty = false;
@@ -604,8 +630,20 @@ export class Inspector implements Panel {
 
     this.body.append(section("Custom force fields"));
     for (const field of [...world.fields]) {
-      this.add(checkbox(field.name, () => field.enabled,
-        (v) => { field.enabled = v; this.commit(); }));
+      // enabled toggle + editable name on one row (the name is saved with
+      // the scene, so it survives save/export like everything else)
+      const nameRow = el("div", { class: "row" });
+      const chk = this.group.add(checkbox("", () => field.enabled,
+        (v) => { field.enabled = v; this.commit(); },
+        "Enable / disable this force field"));
+      const nameEd = this.group.add(textEdit(() => field.name, (s) => {
+        field.name = s.trim() || field.name;
+        this.commit();
+        return true;
+      }, "field name"));
+      nameEd.root.style.flex = "1";
+      nameRow.append(chk.root, nameEd.root);
+      this.body.append(nameRow);
       for (const attr of ["fxSrc", "fySrc"] as const) {
         const row = el("div", { class: "num-row" });
         row.append(el("span", { class: "lbl", text: attr === "fxSrc" ? "Fx" : "Fy" }));

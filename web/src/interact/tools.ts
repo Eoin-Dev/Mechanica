@@ -41,7 +41,7 @@ export const TOOL_INFO: Record<Tool, [string, string]> = {
   pan: ["Pan (H)", "Drag to move the view. Middle drag (or right drag on " +
         "empty space) pans in any tool."],
   body: ["Add body (B)", "Click to place a dynamic body. Edit it in the Inspector."],
-  anchor: ["Add anchor (A)", "Click to place a fixed anchor - a pivot for rods and springs."],
+  anchor: ["Add anchor (A)", "Click to place a fixed anchor - connect rods, strings and springs to it."],
   wall: ["Draw wall (W)", "Click and drag to draw a static wall. Shift snaps the angle."],
   rod: ["Connect rod (R)", "Click two bodies to join them rigidly. " +
         "Click empty space to create an anchor/body automatically."],
