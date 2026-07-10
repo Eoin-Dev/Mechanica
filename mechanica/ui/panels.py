@@ -9,7 +9,7 @@ import pygame
 from mechanica.engine.body import Body, MATERIALS, Wall
 from mechanica.engine.links import DistanceLink, SpringLink
 from mechanica.engine.world import Driver, ForceField, INTEGRATORS
-from mechanica.interact.tools import TOOLS, TOOL_INFO
+from mechanica.interact.tools import TOOL_KEYS, TOOLS, TOOL_INFO
 from mechanica.scene import snapshot as snap
 from mechanica.scene.presets import CATEGORIES, PRESETS
 from mechanica.ui import theme
@@ -79,7 +79,11 @@ class Toolbar(PanelBase):
                                            "(0.01x slow motion to 20x "
                                            "fast-forward). Keys: + and - "
                                            "double/halve, 0 resets to 1x."))
-        x += 200
+        x += 196
+        self.widgets.append(Button((x, y + 3, 30, 24), app.reset_speed, "1x",
+                                   size=11,
+                                   tooltip="Reset the speed to 1x  (0)"))
+        x += 40
         self.widgets.append(Label((x, 0, 30, TOOLBAR_H), "t =", 13, theme.TEXT_DIM))
         self._time_edit = TextEdit((x + 26, y + 3, 78, 24),
                                    lambda: f"{app.sim_time:.2f}",
@@ -105,6 +109,16 @@ class Toolbar(PanelBase):
                                    icon="library",
                                    tooltip="Example simulations and saved scenes  (L)"))
         rx -= 40
+        self.widgets.append(Button((rx, y, 34, h), app.toggle_auto_fit, "",
+                                   icon="autofit",
+                                   is_active=lambda: app.view.auto_fit,
+                                   tooltip="Auto-fit camera: continuously keep "
+                                           "the whole scene framed  (Shift+F)"))
+        rx -= 38
+        self.widgets.append(Button((rx, y, 34, h), app.zoom_to_fit, "",
+                                   icon="fit",
+                                   tooltip="Zoom to fit the scene once  (F)"))
+        rx -= 40
         self.widgets.append(Button((rx, y, 34, h), app.new_scene, "", icon="trash",
                                    tooltip="Clear the scene (undo-able)"))
         rx -= 78
@@ -124,27 +138,48 @@ class Toolbar(PanelBase):
 
 
 # ---------------------------------------------------------------- palette
+# tools grouped by purpose; a thin separator is drawn between groups
+TOOL_GROUPS = [("select", "pan"), ("body", "anchor", "wall"),
+               ("rod", "rope", "spring"), ("eraser",)]
+
+
 class Palette(PanelBase):
     def relayout(self) -> None:
         app = self.app
         self.rect = pygame.Rect(0, TOOLBAR_H, PALETTE_W,
                                 app.height - TOOLBAR_H - HINT_H)
         self.widgets = []
+        self._badges: list[tuple[pygame.Rect, str]] = []
+        self._seps: list[int] = []
+        key_of = {t: pygame.key.name(k).upper() for k, t in TOOL_KEYS.items()}
         y = self.rect.y + 10
-        for tool in TOOLS:
-            name, desc = TOOL_INFO[tool]
-            btn = Button((8, y, 36, 36),
-                         (lambda t=tool: app.canvas.set_tool(t)), "",
-                         icon=tool, tooltip=f"{name} - {desc}", style="ghost",
-                         is_active=(lambda t=tool: app.canvas.tool == t))
-            self.widgets.append(btn)
-            y += 42
+        for gi, group in enumerate(TOOL_GROUPS):
+            if gi:
+                self._seps.append(y)
+                y += 8
+            for tool in group:
+                name, desc = TOOL_INFO[tool]
+                btn = Button((8, y, 36, 36),
+                             (lambda t=tool: app.canvas.set_tool(t)), "",
+                             icon=tool, tooltip=f"{name} - {desc}",
+                             style="ghost",
+                             is_active=(lambda t=tool: app.canvas.tool == t))
+                self.widgets.append(btn)
+                self._badges.append((btn.rect, key_of.get(tool, "")))
+                y += 42
 
     def draw(self, surface, mouse) -> None:
         pygame.draw.rect(surface, theme.PANEL, self.rect)
         pygame.draw.line(surface, theme.OUTLINE, (self.rect.right - 1, self.rect.y),
                          (self.rect.right - 1, self.rect.bottom))
+        for sy in self._seps:
+            pygame.draw.line(surface, theme.OUTLINE, (10, sy), (PALETTE_W - 10, sy))
         self.draw_widgets(surface, mouse)
+        # tiny shortcut-letter badge in each button's corner
+        for rect, letter in self._badges:
+            if letter:
+                blit_text(surface, letter, (rect.right - 2, rect.bottom + 1),
+                          9, theme.TEXT_FAINT, False, "bottomright")
 
 
 # --------------------------------------------------------------- inspector
@@ -607,15 +642,6 @@ class Inspector(PanelBase):
                                        tooltip="Damping coefficient c, applied "
                                                "to every selected spring/string"))
 
-        if rods:
-            rfirst = rods[0]
-            self.widgets.append(SectionLabel(self._row(20),
-                                             f"Rods & inelastic strings ({len(rods)})"))
-            self.widgets.append(Checkbox(self._row(24), "No push (taut string)",
-                                         lambda: rfirst.is_rope,
-                                         lambda v: (set_all(rods, "is_rope")(v),
-                                                    self._commit())))
-
         self._action_buttons()
         # selective deletion: remove just one kind of thing from the selection
         groups = [(g, lbl) for g, lbl in
@@ -796,14 +822,10 @@ class Inspector(PanelBase):
                                        lambda v: setattr(link, "length", v),
                                        0.01, 100.0, u, "m", "{:.3g}", log=True,
                                        on_commit=self._commit,
-                                       tooltip="Natural length L0 the constraint "
-                                               "maintains"))
-            self.widgets.append(Checkbox(
-                self._row(24), "No push (taut string)",
-                lambda: link.is_rope,
-                lambda v: (setattr(link, "is_rope", v), self._commit()),
-                "On: resists stretching only (an inelastic string). "
-                "Off: rigid both ways (a rod)."))
+                                       tooltip="Rigid length the rod maintains"
+                                               if not link.is_rope else
+                                               "Natural length L0: rigid when "
+                                               "taut, free when slack"))
             if link.is_rope:
                 self.widgets.append(Checkbox(
                     self._row(24), "Inelastic (fixed length)",

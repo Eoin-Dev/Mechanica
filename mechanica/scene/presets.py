@@ -63,9 +63,11 @@ def _add_box(w: World, half_w: float, half_h: float, e: float = 1.0,
 
 def _pendulum_chain(w: World, px: float, py: float, n: int, seg: float,
                     mass: float = 1.0, r: float = 0.12, angle_deg: float = 90.0,
-                    color=None) -> list[Body]:
-    """Pivot + n bobs hanging as a rigid chain, released at angle_deg from
-    vertical (90 = horizontal)."""
+                    color=None, string_k: float | None = None,
+                    string_c: float = 1.5) -> list[Body]:
+    """Pivot + n bobs hanging as a chain, released at angle_deg from
+    vertical (90 = horizontal). Rigid rod links by default; pass string_k
+    for elastic strings (tension-only springs) instead."""
     pivot = _add_body(w, px, py, 0.06, 1.0, locked=True, color=(120, 125, 135),
                       name="Pivot")
     a = radians(angle_deg)
@@ -74,7 +76,11 @@ def _pendulum_chain(w: World, px: float, py: float, n: int, seg: float,
     for i in range(1, n + 1):
         b = _add_body(w, px + dx * seg * i, py + dy * seg * i, r, mass, color=color)
         b.collides = False
-        w.links.append(DistanceLink(bodies[-1], b))
+        if string_k is None:
+            w.links.append(DistanceLink(bodies[-1], b))
+        else:
+            w.links.append(SpringLink(bodies[-1], b, stiffness=string_k,
+                                      damping=string_c, tension_only=True))
         bodies.append(b)
     return bodies
 
@@ -302,8 +308,11 @@ def _build_rope() -> World:
     w = World()
     w.substeps = 12
     w.iterations = 8
+    # elastic string segments: stiff enough that the rope stretches under
+    # its own weight by only ~1.5% at the top, slack when compressed - so
+    # the rope can fold and whip like real cord
     _pendulum_chain(w, 0, 1.8, 12, 0.22, mass=0.2, r=0.05, angle_deg=85,
-                    color=(170, 140, 230))
+                    color=(170, 140, 230), string_k=1500.0, string_c=1.5)
     return w
 
 
@@ -1006,8 +1015,9 @@ PRESETS: list[Preset] = [
            "the energy graph stay flat while the tip whips around.",
            _build_triple_pendulum, {"zoom": 110, "trails": True, "graph": "energy"}),
     Preset("Swinging rope", "Pendulums",
-           "Twelve short links approximate a flexible rope. Constraint "
-           "solving keeps every link exactly the same length.",
+           "Twelve elastic string segments approximate a flexible rope: "
+           "taut ones stretch a hair and pull, slack ones carry nothing, "
+           "so the rope folds and whips like real cord.",
            _build_rope, {"zoom": 110}),
     Preset("Newton's cradle", "Pendulums",
            "Five balls on strings. Elastic collisions hand momentum down the "
