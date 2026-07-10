@@ -1,35 +1,39 @@
 # Mechanica — 2D Physics Lab
 
-An interactive physics sandbox for building and analysing mechanical systems:
-orbits, pendulums, oscillators, collisions, gases, friction, chaos and
-soft bodies.
+An interactive physics sandbox that runs entirely in the browser: build and
+analyse mechanical systems — orbits, pendulums, oscillators, collisions,
+gases, friction, chaos and soft bodies.
 
-![requires](https://img.shields.io/badge/python-3.10%2B-blue) ![deps](https://img.shields.io/badge/deps-pygame%20%7C%20numpy-green)
+![typescript](https://img.shields.io/badge/TypeScript-strict-blue) ![deps](https://img.shields.io/badge/runtime%20deps-none-green) ![tests](https://img.shields.io/badge/physics%20tests-42-brightgreen)
 
-## Run in the browser
+The app lives in [`web/`](web/). No server, no accounts — everything
+simulates locally in the visitor's browser.
 
-The [`web/`](web/) directory contains a full TypeScript port that runs
-entirely in the browser — same physics (verified by the same analytic test
-suite), same scene files, plus touch support. See [web/README.md](web/README.md)
-for one-click deployment to GitHub Pages / Cloudflare Pages, or run it
-locally with `cd web && npm install && npm run dev`.
-
-## Run the desktop app
+## Run locally
 
 ```
-pip install pygame numpy
-python -m mechanica
+cd web
+npm install
+npm run dev        # dev server, live reload
 ```
 
-Verify the physics engine against analytic results (headless, no window):
+## Test & build
 
 ```
-python -m mechanica.tests_physics
+npm test           # physics verification suite (42 analytic checks)
+npm run build      # production build into web/dist/
 ```
+
+## Deploy
+
+Pushing to `main` automatically tests, builds and publishes the site via
+GitHub Pages ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)).
+One-time setup: repo **Settings → Pages → Source → "GitHub Actions"**.
+Details and alternative hosts in [web/README.md](web/README.md).
 
 ## What's inside
 
-- **Engine** (`mechanica/engine/`) — circular rigid bodies with rotation,
+- **Engine** (`web/src/engine/`) — circular rigid bodies with rotation,
   static capsule walls, rigid rods / one-sided ropes / damped springs,
   N-body gravity with softening, linear + quadratic drag, sinusoidal
   drivers and sandboxed user force fields.
@@ -39,36 +43,22 @@ python -m mechanica.tests_physics
     Gauss-Seidel *before* integrating, then an XPBD position pass removes the
     tiny residual drift. This keeps pendulums and chains energy-conserving
     (a double pendulum drifts well under 0.1% per minute).
-  - Contacts: spatial-hash broadphase (or a vectorized all-pairs test for
-    dense soft-body scenes), then iterated sequential impulses with
+  - Contacts: spatial-hash broadphase, then iterated sequential impulses with
     accumulated-impulse clamping and warm starting (the Box2D scheme),
     restitution as a pre-solve velocity bias, Coulomb friction applied at the
     contact point (so rolling emerges from torque), and split-impulse
     positional correction that cannot inject energy. Stacks come to rest.
-  - Performance: large scenes automatically switch the smooth-force pass
-    (gravity, drag, N-body, springs, custom fields) and contact candidate
-    search to vectorized numpy array math — 2-3x faster on spring lattices —
-    while small scenes keep pure-Python loops, which beat numpy's call
-    overhead there. Both paths produce identical physics (verified to
-    ~1e-15 m by the test suite).
-  - Soft bodies: lattices of evenly spaced particles joined by damped
-    springs. Directly linked bodies never collide with each other (their
-    link governs the separation), but everything else does - so a lattice
-    can squash yet never tangle through itself. Dragging is capped to a
-    spring-aware speed so a fast flick cannot inject unbounded energy.
   - Any body whose state blows up numerically is frozen and reported instead
     of crashing the app.
-- **Library** — 35 ready-made, annotated simulations across seven categories
-  (press `L`), including six soft-body scenes: jelly block, squishy ball,
-  cloth curtain, trampoline, soft wheel and a wrecking-ball jelly smash.
+- **Library** — 47 ready-made, annotated simulations across eight categories
+  (press `L`), plus saved scenes with rename/describe/export/import.
 - **Analysis** — live energy / momentum / phase-space plots, velocity /
   acceleration / force vector overlays, motion trails, centre of mass,
   contact normals, an energy-drift readout in the status bar.
 - **Editing** — direct manipulation with undo/redo, renameable objects, a
-  type-filtered box select (choose whether it picks up bodies, walls,
-  springs and/or rods) with bulk editing of everything selected at once,
-  grid snapping, property copy/paste, alignment tools, scene save/load
-  (JSON).
+  type-filtered box select with bulk editing, grid snapping, property
+  copy/paste, alignment tools, scene save/load (JSON).
+- **Touch** — one finger drives the active tool; two fingers pinch-zoom and pan.
 
 ## Controls (press F1 in-app for the full list)
 
@@ -85,9 +75,6 @@ python -m mechanica.tests_physics
 Drag a body while the simulation is running to throw it; hold it still and
 it stays pinned under the cursor while everything else collides with it.
 Drag the green arrow tip of a selected body to set its velocity exactly.
-
-The solver runs up to 128 substeps per 1/120 s physics tick (World tab of
-the Inspector) for stiff systems that need extra accuracy.
 
 ## Units
 

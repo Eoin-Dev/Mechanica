@@ -1,4 +1,2 @@
-__pycache__/
-*.pyc
-mechanica/scenes/
-mechanica/settings.json
+node_modules/
+web/dist/
