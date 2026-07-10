@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections import deque
 from math import isfinite
 
 import pygame
@@ -93,6 +94,9 @@ class App:
             self.inspector_w, self.dock_h = INSPECTOR_W, DOCK_H
         self._split_drag: str | None = None
         self._cursor = pygame.SYSTEM_CURSOR_ARROW
+        self._autofit_ratio = 1.0    # user zoom-out factor while auto-fitting
+        self._autofit_zt: float | None = None
+        self._history: deque = deque(maxlen=600)   # per-frame rewind states
         self._clamp_panel_sizes()
 
         self.toasts: list[list] = []
@@ -266,6 +270,28 @@ class App:
             self._record_trails()
         self._after_physics()
 
+    def step_back(self) -> None:
+        """Rewind the simulation by one displayed frame (,)."""
+        self.playing = False
+        state = None
+        if len(self._history) >= 2:
+            self._history.pop()           # the frame we are on
+            state = self._history[-1]     # the one before it
+        elif self.initial_snapshot is not None:
+            self._history.clear()
+            state = self.initial_snapshot
+        if state is None:
+            return
+        sel_ids = {o.id for o in self.selection if isinstance(o, Body)}
+        world = snap.restore(state)
+        self.world = world
+        self.canvas.hover = None
+        self.canvas.abort_drag()
+        self.selection = [b for b in world.bodies if b.id in sel_ids]
+        # trim graphs back to the rewound time instead of wiping them
+        self.energy_series.truncate(world.time)
+        self.momentum_series.truncate(world.time)
+
     def ensure_initial(self) -> None:
         if self.initial_snapshot is None:
             self.initial_snapshot = snap.snapshot(self.world)
@@ -310,6 +336,7 @@ class App:
         self.energy_series.clear()
         self.momentum_series.clear()
         self.phase_plot.clear()
+        self._history.clear()
         if not keep_initial:
             self.initial_snapshot = None
             self.baseline_energy = None
@@ -369,6 +396,7 @@ class App:
         A hint centre is honoured but clamped so the whole scene stays in
         the canvas."""
         cam = self.camera
+        self._autofit_ratio = 1.0
         bounds = self._scene_bounds()
         if bounds is None:
             cam.centre.set(*hints.get("centre", (0, 0)))
@@ -509,9 +537,48 @@ class App:
 
     def toggle_auto_fit(self) -> None:
         self.view.auto_fit = not self.view.auto_fit
+        self._autofit_ratio = 1.0
         self.toast("Auto-fit camera "
-                   + ("on - framing the whole scene" if self.view.auto_fit
-                      else "off"))
+                   + ("on - framing the whole scene (scroll out any time)"
+                      if self.view.auto_fit else "off"))
+
+    def note_user_zoom(self) -> None:
+        """Called after a manual scroll-zoom. With auto-fit active the user
+        may zoom out freely (auto-fit keeps tracking at that wider framing)
+        but can never zoom in tighter than the current fit level."""
+        if not self.view.auto_fit:
+            return
+        target = self._fit_target()
+        if target is None:
+            return
+        zt = target[2]
+        if self.camera.zoom > zt:
+            self.camera.zoom = zt
+        self._autofit_ratio = max(0.02, min(1.0, self.camera.zoom / zt))
+
+    def _clamp_camera_to_bounds(self) -> None:
+        """Zoom out and shift the camera just enough that every body and
+        wall is inside the canvas right now."""
+        bounds = self._scene_bounds()
+        if bounds is None:
+            return
+        min_x, max_x, min_y, max_y = bounds
+        rect = self.canvas_rect()
+        cam = self.camera
+        span_x = max(max_x - min_x, 1e-9)
+        span_y = max(max_y - min_y, 1e-9)
+        fit = min(rect.w / span_x, rect.h / span_y) * 0.98
+        if cam.zoom > fit:
+            cam.zoom = max(fit, MIN_ZOOM)
+        z = cam.zoom
+        lo = max_x - (rect.right - self.width * 0.5) / z
+        hi = min_x + (self.width * 0.5 - rect.left) / z
+        if lo <= hi:
+            cam.centre.x = min(max(cam.centre.x, lo), hi)
+        lo = max_y + (rect.top - self.height * 0.5) / z
+        hi = min_y + (rect.bottom - self.height * 0.5) / z
+        if lo <= hi:
+            cam.centre.y = min(max(cam.centre.y, lo), hi)
 
     def bump_speed(self, factor: float) -> None:
         self.speed = min(20.0, max(0.01, self.speed * factor))
@@ -659,6 +726,8 @@ class App:
             self.toggle_play()
         elif key == pygame.K_PERIOD:
             self.step_once()
+        elif key == pygame.K_COMMA:
+            self.step_back()
         elif key in (pygame.K_DELETE, pygame.K_BACKSPACE):
             self.canvas.delete_selection()
         elif key in TOOL_KEYS:
@@ -730,6 +799,8 @@ class App:
             # fresh state every frame (glassy smooth, and *more* accurate)
             # instead of one full-size step every few frames (choppy).
             eff_dt = PHYSICS_DT * min(self.speed, 1.0)
+            self.world.trace_spacing = (0.5 / self.camera.zoom
+                                        if self.view.trails else 0.0)
             self.accumulator += dt_frame * self.speed
             quanta = 0
             small_steps = 0
@@ -769,14 +840,20 @@ class App:
             target = self._fit_target()
             if target is not None:
                 cam = self.camera
-                # zoom out quickly so escapers stay in frame; zoom back in
-                # gently so bounces don't make the view pump
-                rate = 6.0 if target[2] < cam.zoom else 1.2
+                self._autofit_zt = target[2]
+                # the user may zoom OUT below the fit level (ratio < 1);
+                # auto-fit then keeps tracking at that wider framing and
+                # never zooms back in on its own
+                desired = target[2] * self._autofit_ratio
+                rate = 10.0 if desired < cam.zoom else 3.0
                 k = min(1.0, dt_frame * rate)
-                cam.zoom *= (target[2] / cam.zoom) ** k
-                blend = min(1.0, dt_frame * 4.0)
+                cam.zoom *= (desired / cam.zoom) ** k
+                blend = min(1.0, dt_frame * 10.0)
                 cam.centre.x += (target[0] - cam.centre.x) * blend
                 cam.centre.y += (target[1] - cam.centre.y) * blend
+                # hard guarantee on top of the smoothing: nothing that
+                # exists right now may be off-screen, however fast it moves
+                self._clamp_camera_to_bounds()
         elif self.view.follow:
             body = next((o for o in self.selection
                          if isinstance(o, Body) and isfinite(o.pos.x)
@@ -819,9 +896,19 @@ class App:
         """Append trail points; called after every physics step so extra
         adaptive steps show up as extra trail resolution."""
         if not self.view.trails:
+            self.world.trace.clear()
             return
         maxlen = self.view.trail_len
         threshold = 0.5 / self.camera.zoom
+        # sub-step path samples captured inside the adaptive integrator
+        # (close encounters turn around within a single step)
+        if self.world.trace:
+            for bid, x, y in self.world.trace:
+                pts = self.trails.setdefault(bid, [])
+                pts.append((x, y))
+                if len(pts) > maxlen:
+                    del pts[:len(pts) - maxlen]
+            self.world.trace.clear()
         for b in self.world.bodies:
             if b.locked:
                 continue
@@ -833,6 +920,8 @@ class App:
                     del pts[:len(pts) - maxlen]
 
     def _after_physics(self) -> None:
+        # rolling per-frame history so the user can step backwards (,)
+        self._history.append(snap.snapshot(self.world))
         # graphs: every series records continuously whatever the dock shows,
         # so switching graph views (or closing and reopening the dock) never
         # leaves gaps in the data
@@ -890,13 +979,13 @@ class App:
         self._draw_tooltip(mouse)
 
     def _draw_toasts(self) -> None:
-        y = self.height - HINT_H - 40
+        # centred over the canvas and kept above the graph dock
+        area = self.canvas_rect()
+        y = area.bottom - 16
         for msg, ttl in reversed(self.toasts[-3:]):
             img = theme.text(msg, 13, theme.TEXT)
             w = img.get_width() + 28
-            right = self.inspector_w if self.inspector_visible else COLLAPSED_W
-            rect = pygame.Rect((self.width - right + PALETTE_W - w) // 2,
-                               y - 30, w, 30)
+            rect = pygame.Rect(area.centerx - w // 2, y - 30, w, 30)
             s = pygame.Surface(rect.size, pygame.SRCALPHA)
             alpha = min(1.0, ttl / 0.4)
             s.fill((20, 22, 27, int(230 * alpha)))

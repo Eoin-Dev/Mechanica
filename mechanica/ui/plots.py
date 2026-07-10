@@ -28,12 +28,23 @@ class TimeSeries:
         self.hidden: set[str] = set()   # channels toggled off via the legend
         self._legend_hits: list[tuple[pygame.Rect, str]] = []
         self._view: tuple[float, float] | None = None   # smoothed y-range
+        self._n_total = 0   # samples ever added: anchors the draw decimation
 
     def clear(self) -> None:
         self.t.clear()
         for d in self.data.values():
             d.clear()
         self._view = None
+        self._n_total = 0
+
+    def truncate(self, t: float) -> None:
+        """Drop samples newer than time t (stepping the simulation back)."""
+        while self.t and self.t[-1] > t + 1e-9:
+            self.t.pop()
+            self._n_total -= 1
+            for d in self.data.values():
+                if d:
+                    d.pop()
 
     def add(self, t: float, values: dict[str, float]) -> None:
         # a single inf/NaN sample (a body mid-blow-up) would wreck the
@@ -43,6 +54,7 @@ class TimeSeries:
         if self.t and t < self.t[-1]:
             self.clear()  # simulation was reset/rewound
         self.t.append(t)
+        self._n_total += 1
         for c in self.channels:
             self.data[c].append(values.get(c, 0.0))
 
@@ -136,8 +148,12 @@ class TimeSeries:
             blit_text(surface, f"{tv:.4g} s", (plot.x + frac * plot.w, plot.bottom + 2),
                       10, theme.TEXT_FAINT, False, align)
 
-        # ~one sample per 2 px is visually lossless and halves the line work
+        # ~one sample per 2 px is visually lossless and halves the line work.
+        # The decimation phase is anchored to the global sample counter, so
+        # the same samples stay chosen as the window rolls - otherwise a
+        # fast-oscillating channel shimmers/flickers at high sim speeds.
         step = max(1, (2 * len(ts)) // max(plot.w, 1))
+        i0 = (-(self._n_total - len(ts))) % step
         # break the polyline across recording gaps (e.g. data kept from before
         # a rewind-safe clear) instead of drawing a bogus connecting segment
         gap = 8.0 * step * (t1 - t0) / max(len(ts) - 1, 1)
@@ -149,7 +165,7 @@ class TimeSeries:
             d = data[c]
             pts: list[tuple[float, float]] = []
             prev_t = None
-            for i in range(0, len(ts), step):
+            for i in range(i0, len(ts), step):
                 ti = ts[i]
                 if prev_t is not None and ti - prev_t > gap:
                     if len(pts) >= 2:
@@ -165,9 +181,9 @@ class TimeSeries:
 class PhasePlot:
     """Position-velocity trajectory of a selected body.
 
-    Both axes are recorded and the plot shows whichever one the body
-    actually moves along, so a vertical oscillator traces its y-vy orbit
-    instead of collapsing to a single stationary x-vx dot.
+    Both axes are recorded; draw() plots one chosen pair (x-vx or y-vy) in
+    a square area so the orbit's shape isn't stretched by the panel's
+    aspect ratio.
     """
 
     def __init__(self, maxlen: int = 1500) -> None:
@@ -181,27 +197,23 @@ class PhasePlot:
             self.points.append((x, vx, y, vy))
 
     def draw(self, surface: pygame.Surface, rect: pygame.Rect,
-             title: str) -> None:
+             title: str, axis: str = "x") -> None:
         pygame.draw.rect(surface, (28, 30, 36), rect, 0, 6)
         pygame.draw.rect(surface, theme.OUTLINE, rect, 1, 6)
         blit_text(surface, title, (rect.x + 10, rect.y + 4), 12, theme.TEXT_DIM, True)
         if len(self.points) < 2:
-            blit_text(surface, "select a body and run to trace its phase orbit",
+            blit_text(surface, "select a body and run",
                       rect.center, 12, theme.TEXT_FAINT, False, "center")
             return
         plot = rect.inflate(-20, -34)
         plot.y += 14
         samples = list(self.points)
-        pos_x = [p[0] for p in samples]
-        pos_y = [p[2] for p in samples]
-        # plot the axis with the larger positional spread (slight bias to x,
-        # the classic phase-portrait choice, so ties don't flicker)
-        if max(pos_y) - min(pos_y) > 1.2 * (max(pos_x) - min(pos_x)):
-            xs = pos_y
+        if axis == "y":
+            xs = [p[2] for p in samples]
             ys = [p[3] for p in samples]
             xlabel, ylabel = "y (m)", "vy (m/s)"
         else:
-            xs = pos_x
+            xs = [p[0] for p in samples]
             ys = [p[1] for p in samples]
             xlabel, ylabel = "x (m)", "vx (m/s)"
         lo_x, hi_x = min(xs), max(xs)

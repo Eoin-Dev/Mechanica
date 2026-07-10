@@ -201,6 +201,7 @@ class CanvasController:
         elif event.type == pygame.MOUSEWHEEL:
             factor = 1.1 ** event.y
             app.camera.zoom_at(*mouse, factor)
+            app.note_user_zoom()   # auto-fit: allow out, cap in
             return True
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             if self._link_first or self._wall_start:

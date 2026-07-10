@@ -65,6 +65,10 @@ class Toolbar(PanelBase):
         play_btn.is_active = lambda: app.playing
         self._play_btn = play_btn
         x += 70
+        self.widgets.append(Button((x, y, 34, h), app.step_back, "",
+                                   icon="step_back",
+                                   tooltip="Step one frame back  (,)"))
+        x += 38
         self.widgets.append(Button((x, y, 34, h), app.step_once, "", icon="step",
                                    tooltip="Advance one frame  (.)"))
         x += 40
@@ -986,29 +990,7 @@ class Inspector(PanelBase):
             tooltip="Every variable, function and operator you can use in "
                     "force-field formulas"))
         if self.show_formula_help:
-            for line in [
-                    "Write plain math, e.g.:",
-                    "  -0.5*vx           drag along x",
-                    "  -10*x             spring toward x = 0",
-                    "  3*sin(2*t)        oscillating push",
-                    "  -5*x/r^3          inverse-square pull",
-                    "  -0.4*m*(y > 2)    only above y = 2",
-                    "Variables:",
-                    "  x, y    position (m)",
-                    "  vx, vy  velocity (m/s)",
-                    "  t  time    m  mass    r  distance from (0,0)",
-                    "Functions:",
-                    "  sin cos tan asin acos atan atan2",
-                    "  sqrt exp log abs min max",
-                    "  sign floor ceil hypot",
-                    "Constants:  pi   e   tau   g (9.81)",
-                    "Operators:  +  -  *  /  ^ (power)  %",
-                    "Comparisons like (m > 1) equal 1 or 0,",
-                    "so they work as on/off switches.",
-                    "Anything else (words, letters not listed",
-                    "above) is rejected - the error shows in red."]:
-                self.widgets.append(Label(self._row(15), line, 11,
-                                          theme.TEXT_DIM))
+            self._build_formula_reference()
 
         if world.drivers:
             self.widgets.append(SectionLabel(self._row(20), "Drivers"))
@@ -1035,6 +1017,50 @@ class Inspector(PanelBase):
     def _toggle_formula_help(self) -> None:
         self.show_formula_help = not self.show_formula_help
 
+    def _build_formula_reference(self) -> None:
+        """The in-panel cheat sheet for force-field formulas: sectioned,
+        with the code part in accent and the meaning in dim text."""
+
+        def code_row(code: str, desc: str, code_w: int = 108) -> None:
+            row = self._row(16)
+            self.widgets.append(Label((row.x + 6, row.y, code_w, 16), code,
+                                      11, theme.ACCENT))
+            self.widgets.append(Label((row.x + 6 + code_w, row.y,
+                                       row.w - code_w - 6, 16), desc, 11,
+                                      theme.TEXT_FAINT))
+
+        def dim_row(text: str) -> None:
+            self.widgets.append(Label(self._row(15), "   " + text, 11,
+                                      theme.TEXT_DIM))
+
+        self.widgets.append(SectionLabel(self._row(20), "Examples"))
+        code_row("-0.5*vx", "drag along x")
+        code_row("-10*x", "spring toward x = 0")
+        code_row("3*sin(2*t)", "oscillating push")
+        code_row("-5*x/r^3", "inverse-square pull")
+        code_row("-0.4*m*(y > 2)", "only above y = 2")
+        self.widgets.append(SectionLabel(self._row(20), "Variables"))
+        code_row("x,  y", "position (m)")
+        code_row("vx,  vy", "velocity (m/s)")
+        code_row("t", "time (s)")
+        code_row("m", "mass (kg)")
+        code_row("r", "distance from (0, 0)  (m)")
+        self.widgets.append(SectionLabel(self._row(20), "Functions"))
+        dim_row("sin  cos  tan  asin  acos  atan  atan2")
+        dim_row("sqrt  exp  log  abs  sign  hypot")
+        dim_row("min(a, b, ...)  max  floor  ceil")
+        self.widgets.append(SectionLabel(self._row(20), "Constants & operators"))
+        code_row("pi  e  tau  g", "3.1416...,  2.7183...,  2*pi,  9.81")
+        code_row("+ - * / %", "arithmetic")
+        code_row("^  or  **", "power:  x^2  is  x squared")
+        code_row("(m > 1)", "comparisons give 1 or 0 -")
+        dim_row("use them as on/off switches, or write")
+        code_row("a if y > 0 else b", "for a true either/or")
+        self.widgets.append(SectionLabel(self._row(20), "Notes"))
+        dim_row("The force is in newtons, applied to every")
+        dim_row("body. Anything not listed above is rejected")
+        dim_row("and the error shows in red under the field.")
+
     # -------------------------------------------------------------- view tab
     def _build_view(self) -> None:
         app = self.app
@@ -1052,13 +1078,8 @@ class Inspector(PanelBase):
         chk("Snap to grid", "snap", "New and dragged objects snap to grid points (N)")
         chk("Body labels", "labels")
         chk("Follow selection", "follow",
-            "Keep the camera centred on the selected body (C)")
-        chk("Auto-fit camera", "auto_fit",
-            "Continuously zoom and pan so the whole scene stays in frame - "
-            "great for escaping orbits and flying debris (Shift+F)")
-        self.widgets.append(Button(self._row(24), app.zoom_to_fit,
-                                   "Zoom to fit scene", size=12,
-                                   tooltip="Frame every object in view once (F)"))
+            "Keep the camera centred on the selected body (C). Zoom-to-fit "
+            "and the auto-fit camera live in the toolbar.")
 
         self.widgets.append(SectionLabel(self._row(20), "Vectors"))
         chk("Velocity vectors", "vel_vectors",
@@ -1255,8 +1276,15 @@ class GraphDock(PanelBase):
                                      "Momentum p (kg m/s) and angular momentum L")
         elif app.graph_mode == "Phase":
             body = next((o for o in app.selection if isinstance(o, Body)), None)
-            title = f"Phase space: {body.name}" if body else "Phase space"
-            app.phase_plot.draw(surface, plot_rect, title)
+            name = body.name if body else "select a body"
+            # two SQUARE plots (x-vx and y-vy) so orbits aren't stretched
+            # by the dock's wide aspect ratio
+            side = min(plot_rect.h, (plot_rect.w - 12) // 2)
+            x0 = plot_rect.x + (plot_rect.w - (2 * side + 12)) // 2
+            left = pygame.Rect(x0, plot_rect.y, side, side)
+            right = pygame.Rect(x0 + side + 12, plot_rect.y, side, side)
+            app.phase_plot.draw(surface, left, f"{name}:  x - vx", "x")
+            app.phase_plot.draw(surface, right, f"{name}:  y - vy", "y")
         self.draw_widgets(surface, mouse)
 
 
@@ -1456,7 +1484,7 @@ class LibraryOverlay(PanelBase):
 HELP_SECTIONS = [
     ("Playback", [
         ("Space", "Play / pause"),
-        (".", "Step one frame"),
+        (". / ,", "Step a frame forward / back"),
         ("+ / -", "Double / halve the speed"),
         ("0", "Reset speed to 1x"),
         ("Ctrl+R", "Reset the simulation"),
