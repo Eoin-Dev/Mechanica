@@ -668,20 +668,22 @@ export class Inspector implements Panel {
         this.markDirty();
       }, { icon: ICONS.trash, style: "danger" }));
     }
-    this.add(button("Add force field", () => {
+    const addBtn = this.group.add(button("Add force field", () => {
       world.fields.push(new ForceField(`Field ${world.fields.length + 1}`, "0", "0"));
       app.pushUndo();
       this.markDirty();
     }, { icon: ICONS.plus,
          tooltip: "A force (in N) applied to every body, written as plain " +
                   "math. Try Fy = -y*5 for a spring field." }));
-    this.add(button(this.showFormulaHelp ? "Hide formula reference" : "Formula reference",
+    const refBtn = this.group.add(button(
+      this.showFormulaHelp ? "Hide formula reference" : "Formula reference",
       () => {
         this.showFormulaHelp = !this.showFormulaHelp;
         this.markDirty();
-      }, { style: "ghost",
+      }, { style: "ghost", isActive: () => this.showFormulaHelp,
            tooltip: "Every variable, function and operator you can use in " +
                     "force-field formulas" }));
+    this.body.append(el("div", { class: "field-actions" }, addBtn.root, refBtn.root));
     if (this.showFormulaHelp) this.buildFormulaReference();
 
     if (world.drivers.length > 0) {
