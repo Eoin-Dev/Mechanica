@@ -312,6 +312,7 @@ export class World {
       const eps2 = this.softening * this.softening;
       for (let i = 0; i < n; i++) {
         const bi = bodies[i];
+        if (bi.isAnchor) continue; // anchors neither pull nor are pulled
         const bix = bi.pos.x;
         const biy = bi.pos.y;
         const biAcc = bi.acc;
@@ -319,6 +320,7 @@ export class World {
         const biMass = bi.mass;
         for (let j = i + 1; j < n; j++) {
           const bj = bodies[j];
+          if (bj.isAnchor) continue;
           const dx = bj.pos.x - bix;
           const dy = bj.pos.y - biy;
           const d2 = dx * dx + dy * dy + eps2;
@@ -829,8 +831,10 @@ export class World {
       const eps2 = this.softening * this.softening;
       for (let i = 0; i < bodies.length; i++) {
         const bi = bodies[i];
+        if (bi.isAnchor) continue; // consistent with the force: no anchor PE
         for (let j = i + 1; j < bodies.length; j++) {
           const bj = bodies[j];
+          if (bj.isAnchor) continue;
           const dx = bj.pos.x - bi.pos.x;
           const dy = bj.pos.y - bi.pos.y;
           peN -= this.G * bi.mass * bj.mass /

@@ -54,6 +54,16 @@ export const TOOL_INFO: Record<Tool, [string, string]> = {
 
 const ANCHOR_GREY: [number, number, number] = [120, 125, 135];
 
+/** Turn a freshly-created body into a fixed anchor: locked, grey, named
+ * "Anchor", and flagged so it is excluded from gravity and the body count. */
+function makeAnchor(b: Body): Body {
+  b.locked = true;
+  b.isAnchor = true;
+  b.color = ANCHOR_GREY;
+  b.name = "Anchor";
+  return b;
+}
+
 interface DragItem {
   body: Body;
   offset: Vec2;
@@ -353,10 +363,7 @@ export class CanvasController {
     }
 
     if (tool === "anchor") {
-      const b = new Body(this.snap(worldP), 0.08);
-      b.locked = true;
-      b.color = ANCHOR_GREY;
-      b.name = `Anchor ${b.id}`;
+      const b = makeAnchor(new Body(this.snap(worldP), 0.08));
       app.world.bodies.push(b);
       app.setSelection([b]);
       app.pushUndo();
@@ -373,11 +380,7 @@ export class CanvasController {
       let target = picked instanceof Body ? picked : null;
       if (target === null) {
         target = new Body(this.snap(worldP), this.linkFirst === null ? 0.08 : 0.12);
-        if (this.linkFirst === null) {
-          target.locked = true;
-          target.color = ANCHOR_GREY;
-          target.name = `Anchor ${target.id}`;
-        }
+        if (this.linkFirst === null) makeAnchor(target);
         app.world.bodies.push(target);
       }
       if (this.linkFirst === null) {
@@ -600,8 +603,9 @@ export class CanvasController {
       p[1] >= rect.y && p[1] <= rect.y + rect.h;
     const flt = app.boxFilter;
     const found: Selectable[] = [];
-    if (flt.bodies) {
+    if (flt.bodies || flt.anchors) {
       for (const body of app.world.bodies) {
+        if (!(body.isAnchor ? flt.anchors : flt.bodies)) continue;
         if (inside(cam.toScreen(body.pos))) found.push(body);
       }
     }
