@@ -311,6 +311,8 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 .row input.val:hover { border-color: var(--outline); }
 .row input.val:focus { border-color: var(--accent); background: var(--bg); }
 .row input.val.error { border-color: var(--bad); }
+.field-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+.field-actions button { flex: none; }
 .row-half { display: flex; gap: 6px; margin: 4px 0; }
 .row-half > * { flex: 1; min-width: 0; }
 .num-row { display: flex; align-items: center; gap: 4px; }
