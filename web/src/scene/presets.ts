@@ -380,9 +380,11 @@ function buildRope(): World {
   w.iterations = 8;
   // elastic string segments: stiff enough that the rope stretches under
   // its own weight by only ~1.5% at the top, slack when compressed - so
-  // the rope can fold and whip like real cord
-  pendulumChain(w, 0, 1.8, 12, 0.22, 0.2, 0.05, 85, [170, 140, 230],
-                1500.0, 1.5);
+  // the rope can fold and whip like real cord. Many short segments give a
+  // smooth, finely-jointed cord; count/spacing/mass/stiffness scale together
+  // so total length (2.64 m), total mass and overall compliance are unchanged.
+  pendulumChain(w, 0, 1.8, 24, 0.11, 0.1, 0.045, 85, [170, 140, 230],
+                3000.0, 1.5);
   return w;
 }
 

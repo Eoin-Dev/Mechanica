@@ -37,11 +37,11 @@ export class Toolbar implements Panel {
     speedWrap.append(g.add(slider("Speed", () => app.speed,
       (v) => { app.speed = v; }, 0.01, 20.0,
       { unit: "x", log: true, fmt: (v) => v.toFixed(2),
-        tooltip: "Simulation speed multiplier (0.01x slow motion to 20x " +
-                 "fast-forward). Keys: + and - double/halve, 0 resets." })).root);
+        tooltip: "Simulation speed multiplier. Keys: + and - double/halve, " +
+                 "0 resets." })).root);
     root.append(speedWrap);
     root.append(g.add(button("1x", () => app.resetSpeed(),
-      { tooltip: "Reset the speed to 1x (0)" })).root);
+      { tooltip: "Reset the speed to 1x - press 0" })).root);
 
     // simulation clock: type a time to re-simulate to it
     this.timeInput = el("input", {
