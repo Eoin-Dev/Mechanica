@@ -442,6 +442,17 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+.preset-card.expanded p { -webkit-line-clamp: unset; overflow: visible; }
+.card-more {
+  margin-top: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius);
+}
+.card-more:hover:not(:disabled) { background: var(--panel-hover); color: var(--accent); }
 .scene-card { display: flex; flex-direction: column; }
 .scene-card h3 { word-break: break-word; }
 .card-actions {

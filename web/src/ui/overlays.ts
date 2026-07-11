@@ -84,19 +84,37 @@ export class Library {
       chips.append(b);
     }
     const grid = el("div", { class: "card-grid" });
+    // Descriptions are clamped to a few lines; where one is truncated we add a
+    // "Show more" toggle (mouse- or keyboard-activated) to reveal the full text
+    // without loading the preset. Whether it's needed can only be measured once
+    // the cards are laid out, so collect them and check after appending.
+    const clampable: Array<{ desc: HTMLElement; card: HTMLElement }> = [];
     for (const preset of PRESETS) {
       if (this.category !== "All" && preset.category !== this.category) continue;
+      const desc = el("p", { text: preset.description });
       const card = el("div", { class: "preset-card" },
         el("div", { class: "cat", text: preset.category }),
         el("h3", { text: preset.name }),
-        el("p", { text: preset.description }));
+        desc);
       card.addEventListener("click", () => {
         this.app.loadPreset(preset);
         this.close();
       });
       grid.append(card);
+      clampable.push({ desc, card });
     }
     this.content.append(chips, grid);
+
+    for (const { desc, card } of clampable) {
+      if (desc.scrollHeight <= desc.clientHeight + 1) continue; // fully visible
+      const more = el("button", { class: "card-more", text: "Show more" });
+      more.addEventListener("click", (e) => {
+        e.stopPropagation(); // don't load the preset when toggling the text
+        const open = card.classList.toggle("expanded");
+        more.textContent = open ? "Show less" : "Show more";
+      });
+      card.append(more);
+    }
   }
 
   // ----------------------------------------------------------- saved scenes
