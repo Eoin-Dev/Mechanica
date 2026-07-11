@@ -45,6 +45,17 @@ app.panels = [toolbar, palette, inspector, dock, hintbar, {
   },
 }];
 
+// A mouse-clicked button keeps focus, so the next global shortcut key flips
+// the browser's :focus-visible heuristic into "keyboard mode" and paints a
+// stray outline on whatever was last clicked. Drop focus after a mouse click
+// (detail >= 1) to prevent that; keyboard activation (Enter/Space, detail 0)
+// keeps its focus ring so Tab navigation stays visible.
+document.addEventListener("click", (e) => {
+  if (e.detail === 0) return; // keyboard-triggered click: leave focus alone
+  const btn = (e.target as Element | null)?.closest?.("button");
+  if (btn instanceof HTMLElement) btn.blur();
+});
+
 // --------------------------------------------------------------- keyboard
 document.addEventListener("keydown", (e) => {
   // let form fields keep their keys (widgets stopPropagation, but be safe)
