@@ -45,7 +45,7 @@ export class App {
   camera = new Camera(800, 600);
   view = new ViewSettings();
   selection: Selectable[] = [];
-  boxFilter = { bodies: true, walls: true, springs: true, rods: true };
+  boxFilter = { bodies: true, anchors: true, walls: true, springs: true, rods: true };
   controller: CanvasController;
 
   playing = false;
@@ -324,7 +324,7 @@ export class App {
                      "locked", "collides"] as const;
 
   copyProps(): void {
-    const body = this.selection.find((o): o is Body => o instanceof Body);
+    const body = this.selection.find((o): o is Body => o instanceof Body && !o.isAnchor);
     if (body === undefined) {
       this.toast("Select a body to copy properties from");
       return;
@@ -338,7 +338,7 @@ export class App {
 
   pasteProps(): void {
     if (this.clipboardProps === null) return;
-    const bodies = this.selection.filter((o): o is Body => o instanceof Body);
+    const bodies = this.selection.filter((o): o is Body => o instanceof Body && !o.isAnchor);
     for (const b of bodies) {
       Object.assign(b, this.clipboardProps);
     }
@@ -501,7 +501,8 @@ export class App {
   }
 
   toggleLockSelection(): void {
-    const bodies = this.selection.filter((o): o is Body => o instanceof Body);
+    // Anchors are permanently locked; never toggle them.
+    const bodies = this.selection.filter((o): o is Body => o instanceof Body && !o.isAnchor);
     if (bodies.length === 0) {
       this.toast("Select one or more bodies to lock (K)");
       return;

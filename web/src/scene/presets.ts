@@ -65,6 +65,8 @@ function spaceWorld(substeps = 4): World {
   return w;
 }
 
+const PIVOT_GREY: Color = [120, 125, 135];
+
 interface BodyOpts {
   r?: number;
   m?: number;
@@ -73,17 +75,22 @@ interface BodyOpts {
   e?: number;
   mu?: number;
   locked?: boolean;
+  anchor?: boolean; // fixed attachment point: locked, grey, no gravity, "Anchor"
   color?: Color;
   name?: string;
 }
 
 function addBody(w: World, x: number, y: number, opts: BodyOpts = {}): Body {
   const b = new Body(new Vec2(x, y), opts.r ?? 0.15, opts.m ?? 1.0,
-                     opts.color ?? null);
+                     opts.color ?? (opts.anchor ? PIVOT_GREY : null));
   b.vel.set(opts.vx ?? 0.0, opts.vy ?? 0.0);
   b.restitution = opts.e ?? 0.8;
   b.friction = opts.mu ?? 0.4;
-  b.locked = opts.locked ?? false;
+  b.locked = (opts.locked ?? false) || (opts.anchor ?? false);
+  if (opts.anchor) {
+    b.isAnchor = true;
+    b.name = "Anchor";
+  }
   if (opts.name) b.name = opts.name;
   w.bodies.push(b);
   return b;
@@ -101,8 +108,6 @@ function addBox(w: World, halfW: number, halfH: number, e = 1.0,
   }
 }
 
-const PIVOT_GREY: Color = [120, 125, 135];
-
 /** Pivot + n bobs hanging as a chain, released at angleDeg from vertical
  * (90 = horizontal). Rigid rod links by default; pass stringK for elastic
  * strings (tension-only springs) instead. */
@@ -111,8 +116,7 @@ function pendulumChain(w: World, px: number, py: number, n: number, seg: number,
                        color: Color | null = null,
                        stringK: number | null = null,
                        stringC = 1.5): Body[] {
-  const pivot = addBody(w, px, py, { r: 0.06, m: 1.0, locked: true,
-                                     color: PIVOT_GREY, name: "Pivot" });
+  const pivot = addBody(w, px, py, { r: 0.06, m: 1.0, anchor: true });
   const a = (angleDeg * Math.PI) / 180;
   const dx = Math.sin(a);
   const dy = -Math.cos(a);
@@ -389,8 +393,7 @@ function buildNewtonsCradle(): World {
   const gap = 0.302; // just over the diameter so balls rest touching
   for (let i = 0; i < 5; i++) {
     const x = (i - 2) * gap;
-    const pivot = addBody(w, x, 1.4, { r: 0.05, m: 1.0, locked: true,
-                                       color: PIVOT_GREY });
+    const pivot = addBody(w, x, 1.4, { r: 0.05, m: 1.0, anchor: true });
     const ball = addBody(w, x, 0.0, { r, m: 1.0, e: 1.0, mu: 0.0,
                                       color: [150, 160, 175], name: `Ball ${i + 1}` });
     w.links.push(new DistanceLink(pivot, ball));
@@ -415,7 +418,7 @@ function buildCoupledPendulums(): World {
 function buildShm(): World {
   const w = new World();
   w.substeps = 6;
-  const anchor = addBody(w, 0, 2.0, { r: 0.06, m: 1.0, locked: true, color: PIVOT_GREY });
+  const anchor = addBody(w, 0, 2.0, { r: 0.06, m: 1.0, anchor: true });
   const bob = addBody(w, 0, 0.2, { r: 0.16, m: 1.0, color: [86, 156, 214], name: "Mass" });
   w.links.push(new SpringLink(anchor, bob, 1.2, 25.0));
   return w;
@@ -435,7 +438,7 @@ function buildDampingRegimes(): World {
   for (let i = 0; i < rows.length; i++) {
     const [label, c, col] = rows[i];
     const x = (i - 1) * 1.4;
-    const anchor = addBody(w, x, 2.0, { r: 0.06, m: 1.0, locked: true, color: PIVOT_GREY });
+    const anchor = addBody(w, x, 2.0, { r: 0.06, m: 1.0, anchor: true });
     const bob = addBody(w, x, 0.0, { r: 0.15, m, color: col, name: label });
     bob.collides = false;
     w.links.push(new SpringLink(anchor, bob, 1.2, k, c));
@@ -447,7 +450,7 @@ function buildResonance(): World {
   const w = new World();
   w.gravity = 0.0;
   w.substeps = 6;
-  const anchor = addBody(w, 0, 0, { r: 0.06, m: 1.0, locked: true, color: PIVOT_GREY });
+  const anchor = addBody(w, 0, 0, { r: 0.06, m: 1.0, anchor: true });
   const bob = addBody(w, 1.2, 0, { r: 0.16, m: 1.0, color: [230, 120, 120],
                                    name: "Driven mass" });
   const k = 25.0;
@@ -461,8 +464,8 @@ function buildCoupledOscillators(): World {
   const w = new World();
   w.gravity = 0.0;
   w.substeps = 6;
-  const left = addBody(w, -2.4, 0, { r: 0.06, m: 1.0, locked: true, color: PIVOT_GREY });
-  const right = addBody(w, 2.4, 0, { r: 0.06, m: 1.0, locked: true, color: PIVOT_GREY });
+  const left = addBody(w, -2.4, 0, { r: 0.06, m: 1.0, anchor: true });
+  const right = addBody(w, 2.4, 0, { r: 0.06, m: 1.0, anchor: true });
   const masses: Body[] = [];
   for (let i = 0; i < 3; i++) {
     const b = addBody(w, -1.2 + i * 1.2, 0, { r: 0.14, m: 1.0,
@@ -481,7 +484,7 @@ function buildCoupledOscillators(): World {
 function buildSpringPendulum(): World {
   const w = new World();
   w.substeps = 8;
-  const anchor = addBody(w, 0, 1.5, { r: 0.06, m: 1.0, locked: true, color: PIVOT_GREY });
+  const anchor = addBody(w, 0, 1.5, { r: 0.06, m: 1.0, anchor: true });
   const bob = addBody(w, 0.9, 0.6, { r: 0.15, m: 1.0, color: [200, 110, 180], name: "Bob" });
   w.links.push(new SpringLink(anchor, bob, 1.0, 30.0));
   return w;
@@ -645,7 +648,7 @@ function buildWreckingBall(): World {
   floor.friction = 0.7;
   floor.restitution = 0.05;
   w.walls.push(floor);
-  const pivot = addBody(w, -0.5, 3.4, { r: 0.06, m: 1.0, locked: true, color: PIVOT_GREY });
+  const pivot = addBody(w, -0.5, 3.4, { r: 0.06, m: 1.0, anchor: true });
   const ball = addBody(w, -2.95, 2.15, { r: 0.35, m: 22.0, e: 0.2, mu: 0.4,
                                          color: [90, 95, 105], name: "Wrecking ball" });
   w.links.push(new DistanceLink(pivot, ball));
@@ -666,8 +669,8 @@ function buildChainBridge(): World {
   const w = new World();
   w.substeps = 12;
   w.iterations = 16;
-  const left = addBody(w, -2.4, 1.0, { r: 0.07, m: 1.0, locked: true, color: PIVOT_GREY });
-  const right = addBody(w, 2.4, 1.0, { r: 0.07, m: 1.0, locked: true, color: PIVOT_GREY });
+  const left = addBody(w, -2.4, 1.0, { r: 0.07, m: 1.0, anchor: true });
+  const right = addBody(w, 2.4, 1.0, { r: 0.07, m: 1.0, anchor: true });
   const n = 11;
   let prev = left;
   // elastic strings: taut segments stretch slightly under the load,
@@ -886,10 +889,8 @@ function buildTrampoline(): World {
   const n = 21;
   const spacing = 0.18;
   const x0 = (-(n - 1) * spacing) / 2;
-  const left = addBody(w, x0 - spacing, 0.0, { r: 0.07, m: 1.0, locked: true,
-                                               color: PIVOT_GREY });
-  const right = addBody(w, -x0 + spacing, 0.0, { r: 0.07, m: 1.0, locked: true,
-                                                 color: PIVOT_GREY });
+  const left = addBody(w, x0 - spacing, 0.0, { r: 0.07, m: 1.0, anchor: true });
+  const right = addBody(w, -x0 + spacing, 0.0, { r: 0.07, m: 1.0, anchor: true });
   let prev = left;
   const sheet: Body[] = [];
   for (let i = 0; i < n; i++) {
@@ -974,7 +975,7 @@ function buildJellySmash(): World {
   floor.restitution = 0.1;
   w.walls.push(floor);
   softGrid(w, -1.6, -0.34, 8, 6, 0.24, 3.5, 1100.0, 3.2, [170, 140, 230]);
-  const pivot = addBody(w, -3.2, 3.6, { r: 0.06, m: 1.0, locked: true, color: PIVOT_GREY });
+  const pivot = addBody(w, -3.2, 3.6, { r: 0.06, m: 1.0, anchor: true });
   const ball = addBody(w, -5.6, 1.4, { r: 0.4, m: 18.0, e: 0.2, mu: 0.4,
                                        color: [90, 95, 105], name: "Wrecking ball" });
   w.links.push(new DistanceLink(pivot, ball));
@@ -1023,8 +1024,7 @@ function buildMagneticPendulum(): World {
   w.G = 0.02;
   w.softening = 0.08;
   w.dragLinear = 0.3;
-  const pivot = addBody(w, 0, 2.2, { r: 0.06, m: 1.0, locked: true,
-                                     color: PIVOT_GREY, name: "Pivot" });
+  const pivot = addBody(w, 0, 2.2, { r: 0.06, m: 1.0, anchor: true });
   const ang = (75 * Math.PI) / 180;
   const bob = addBody(w, 1.9 * Math.sin(ang), 2.2 - 1.9 * Math.cos(ang),
                       { r: 0.11, m: 1.0, color: [235, 235, 225], name: "Bob" });

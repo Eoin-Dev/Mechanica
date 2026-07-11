@@ -169,12 +169,15 @@ export class HintBar implements Panel {
     this.hint.textContent = app.controller.hint();
     const [mx, my] = app.controller.mouse;
     const wp = app.camera.toWorld(mx, my);
-    let nDyn = 0;
-    for (const b of app.world.bodies) if (!b.locked) nDyn++;
+    let nBodies = 0;
+    let nAnchors = 0;
+    for (const b of app.world.bodies) b.isAnchor ? nAnchors++ : nBodies++;
+    const nLinks = app.world.links.length;
     const drift = app.energyDriftText();
     const res = app.playing && app.qNow > 1 ? `dt/${app.qNow}   ` : "";
     this.status.textContent =
-      `${wp.x.toFixed(2)}, ${wp.y.toFixed(2)} m   |   ${nDyn} bodies   ` +
+      `${wp.x.toFixed(2)}, ${wp.y.toFixed(2)} m   |   ${nBodies} bodies   ` +
+      `${nAnchors} anchors   ${nLinks} links   ` +
       `${app.world.contacts.length} contacts   ${res}${drift}`;
   }
 }

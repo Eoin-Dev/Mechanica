@@ -188,7 +188,7 @@ export class Inspector implements Panel {
       this.body.append(section("Box select picks up"));
       const flt = app.boxFilter;
       const rows: Array<[keyof typeof flt, string]> = [
-        ["bodies", "Bodies / particles"], ["walls", "Walls"],
+        ["bodies", "Bodies / particles"], ["anchors", "Anchors"], ["walls", "Walls"],
         ["springs", "Springs & strings"], ["rods", "Rods"],
       ];
       for (const [key, label] of rows) {
@@ -197,7 +197,9 @@ export class Inspector implements Panel {
       }
       const world = app.world;
       const groups: Array<[Selectable[], string]> = [
-        [world.bodies, "bodies"], [world.walls, "walls"],
+        [world.bodies.filter((b) => !b.isAnchor), "bodies"],
+        [world.bodies.filter((b) => b.isAnchor), "anchors"],
+        [world.walls, "walls"],
         [world.links.filter((l) => l instanceof SpringLink), "springs & strings"],
         [world.links.filter((l) => l instanceof DistanceLink), "rods"],
       ];
@@ -213,8 +215,10 @@ export class Inspector implements Panel {
       }
       return;
     }
-    if (sel.length === 1 && sel[0] instanceof Body) this.buildSingleBody(sel[0]);
-    else if (sel.length === 1 && sel[0] instanceof Wall) this.buildWall(sel[0]);
+    if (sel.length === 1 && sel[0] instanceof Body) {
+      if (sel[0].isAnchor) this.buildSingleAnchor(sel[0]);
+      else this.buildSingleBody(sel[0]);
+    } else if (sel.length === 1 && sel[0] instanceof Wall) this.buildWall(sel[0]);
     else if (sel.length === 1) this.buildLink(sel[0] as DistanceLink | SpringLink);
     else this.buildMulti(sel);
   }
@@ -286,6 +290,32 @@ export class Inspector implements Panel {
     this.actionButtons();
   }
 
+  /** An anchor is a fixed attachment point: only its size, position, whether
+   * it collides, and its material matter. No mass, motion, name or forces. */
+  private buildSingleAnchor(b: Body): void {
+    this.body.append(el("div", { text: "Anchor",
+      style: "font-weight:600;margin-bottom:6px" }));
+    this.add(slider("Radius", () => b.radius, (v) => { b.radius = v; },
+      0.01, 10.0, { unit: "m", log: true, onCommit: this.commit,
+        tooltip: "Collision radius of the anchor" }));
+    this.addHalf(
+      numEdit("x", () => b.pos.x, (v) => { b.pos.x = v; }, "m", this.commit),
+      numEdit("y", () => b.pos.y, (v) => { b.pos.y = v; }, "m", this.commit));
+    this.add(checkbox("Collides", () => b.collides, (v) => { b.collides = v; this.commit(); },
+      "Disable to let bodies pass through this anchor"));
+
+    this.body.append(section("Material"));
+    this.add(slider("Bounce", () => b.restitution, (v) => { b.restitution = v; },
+      0.0, 1.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
+        tooltip: "Coefficient of restitution e for bodies bouncing off this anchor" }));
+    this.add(slider("Friction", () => b.friction, (v) => { b.friction = v; },
+      0.0, 3.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
+        tooltip: "Coefficient of friction mu at contact with this anchor" }));
+    this.materialButtons([b]);
+
+    this.actionButtons();
+  }
+
   private materialButtons(bodies: Body[]): void {
     const grid = el("div", { class: "btn-grid" });
     for (const [name, [e, mu]] of Object.entries(MATERIALS)) {
@@ -318,12 +348,14 @@ export class Inspector implements Panel {
   /** Bulk editor for a mixed selection: every type present gets its own
    * section, and each control writes to all selected objects of that type. */
   private buildMulti(sel: Selectable[]): void {
-    const bodies = sel.filter((o): o is Body => o instanceof Body);
+    const bodies = sel.filter((o): o is Body => o instanceof Body && !o.isAnchor);
+    const anchors = sel.filter((o): o is Body => o instanceof Body && o.isAnchor);
     const walls = sel.filter((o): o is Wall => o instanceof Wall);
     const springs = sel.filter((o): o is SpringLink => o instanceof SpringLink);
     const rods = sel.filter((o): o is DistanceLink => o instanceof DistanceLink);
     const parts: string[] = [];
     if (bodies.length) parts.push(`${bodies.length} ${bodies.length !== 1 ? "bodies" : "body"}`);
+    if (anchors.length) parts.push(`${anchors.length} anchor${anchors.length !== 1 ? "s" : ""}`);
     if (walls.length) parts.push(`${walls.length} wall${walls.length !== 1 ? "s" : ""}`);
     if (springs.length) parts.push(`${springs.length} spring/string${springs.length !== 1 ? "s" : ""}`);
     if (rods.length) parts.push(`${rods.length} rod${rods.length !== 1 ? "s" : ""}`);
@@ -378,6 +410,27 @@ export class Inspector implements Panel {
       }
     }
 
+    if (anchors.length > 0) {
+      const af = anchors[0];
+      this.body.append(section(`Anchors (${anchors.length})`));
+      this.add(slider("Radius", () => af.radius,
+        (v) => anchors.forEach((a) => { a.radius = v; }), 0.01, 10.0,
+        { unit: "m", log: true, onCommit: this.commit,
+          tooltip: "Collision radius, applied to every selected anchor" }));
+      this.add(slider("Bounce", () => af.restitution,
+        (v) => anchors.forEach((a) => { a.restitution = v; }), 0.0, 1.0,
+        { fmt: (v) => v.toFixed(2), onCommit: this.commit,
+          tooltip: "Coefficient of restitution e, applied to every selected anchor" }));
+      this.add(slider("Friction", () => af.friction,
+        (v) => anchors.forEach((a) => { a.friction = v; }), 0.0, 3.0,
+        { fmt: (v) => v.toFixed(2), onCommit: this.commit,
+          tooltip: "Coefficient of friction mu, applied to every selected anchor" }));
+      this.materialButtons(anchors);
+      this.add(checkbox("Collides", () => af.collides,
+        (v) => { anchors.forEach((a) => { a.collides = v; }); this.commit(); },
+        "Enable / disable collisions for every selected anchor"));
+    }
+
     if (walls.length > 0) {
       const wf = walls[0];
       this.body.append(section(`Walls (${walls.length})`));
@@ -408,7 +461,8 @@ export class Inspector implements Panel {
     this.actionButtons();
     // selective deletion: remove just one kind of thing from the selection
     const groups: Array<[Selectable[], string]> = [
-      [bodies, "bodies"], [walls, "walls"], [springs, "springs"], [rods, "rods"],
+      [bodies, "bodies"], [anchors, "anchors"], [walls, "walls"],
+      [springs, "springs"], [rods, "rods"],
     ];
     const nonEmpty = groups.filter(([g]) => g.length > 0);
     if (nonEmpty.length >= 2) {
