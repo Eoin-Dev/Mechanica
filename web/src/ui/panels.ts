@@ -33,7 +33,7 @@ export class Toolbar implements Panel {
     root.append(g.add(button("", () => app.resetSim(),
       { icon: ICONS.reset, tooltip: "Reset to the initial state (Ctrl+R)" })).root);
 
-    const speedWrap = el("div", { style: "width:200px;flex:none;" });
+    const speedWrap = el("div", { class: "speed-ctrl", style: "width:200px;flex:none;" });
     speedWrap.append(g.add(slider("Speed", () => app.speed,
       (v) => { app.speed = v; }, 0.01, 20.0,
       { unit: "x", log: true, fmt: (v) => v.toFixed(2),
