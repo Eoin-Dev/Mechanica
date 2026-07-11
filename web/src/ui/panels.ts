@@ -5,6 +5,8 @@ import { SpringLink } from "../engine/links";
 import { TOOLS, TOOL_INFO, TOOL_KEYS, Tool } from "../interact/tools";
 import { RefreshGroup, button, el, segmented, slider } from "./dom";
 import { ICONS } from "./icons";
+import * as theme from "./theme";
+import { css } from "./theme";
 
 // ------------------------------------------------------------------ toolbar
 export class Toolbar implements Panel {
@@ -324,11 +326,18 @@ export class GraphDock implements Panel {
     } else if (app.graphMode === "Phase") {
       const body = app.selection.find((o): o is Body => o instanceof Body);
       const name = body ? body.name : "select a body";
+      // the body name once, centred above both plots (not repeated in each)
+      ctx.font = "600 12px system-ui, sans-serif";
+      ctx.fillStyle = css(theme.TEXT_DIM);
+      ctx.textAlign = "center";
+      ctx.fillText(name, w / 2, 14);
+      ctx.textAlign = "left";
       // two SQUARE plots (x-vx and y-vy) so orbits aren't stretched
-      const side = Math.min(h - 4, (w - 12) / 2);
+      const top = 20;
+      const side = Math.min(h - top - 4, (w - 12) / 2);
       const x0 = (w - (2 * side + 12)) / 2;
-      app.phasePlot.draw(ctx, x0, 2, side, side, `${name}:  x - vx`, "x");
-      app.phasePlot.draw(ctx, x0 + side + 12, 2, side, side, `${name}:  y - vy`, "y");
+      app.phasePlot.draw(ctx, x0, top, side, side, "x");
+      app.phasePlot.draw(ctx, x0 + side + 12, top, side, side, "y");
     }
   }
 }
