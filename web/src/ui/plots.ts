@@ -264,16 +264,13 @@ export class PhasePlot {
   }
 
   draw(ctx: CanvasRenderingContext2D, ox: number, oy: number,
-       w: number, h: number, title: string, axis: "x" | "y"): void {
+       w: number, h: number, axis: "x" | "y"): void {
     ctx.strokeStyle = css(theme.OUTLINE);
     ctx.fillStyle = "rgb(28,30,36)";
     ctx.beginPath();
     ctx.roundRect(ox, oy, w, h, 6);
     ctx.fill();
     ctx.stroke();
-    ctx.font = "600 12px system-ui, sans-serif";
-    ctx.fillStyle = css(theme.TEXT_DIM);
-    ctx.fillText(title, ox + 10, oy + 15);
     if (this.points.length < 2) {
       ctx.font = "11px system-ui, sans-serif";
       ctx.fillStyle = css(theme.TEXT_FAINT);
@@ -282,7 +279,7 @@ export class PhasePlot {
       ctx.textAlign = "left";
       return;
     }
-    const plot = { x: ox + 10, y: oy + 24, w: w - 20, h: h - 44 };
+    const plot = { x: ox + 20, y: oy + 8, w: w - 30, h: h - 30 };
     const xi = axis === "y" ? 2 : 0;
     const yi = axis === "y" ? 3 : 1;
     const xlabel = axis === "y" ? "y (m)" : "x (m)";
@@ -345,11 +342,18 @@ export class PhasePlot {
     ctx.beginPath();
     ctx.arc(toPx(last[xi]), toPy(last[yi]), 3, 0, 2 * Math.PI);
     ctx.fill();
+    // Each label sits alongside its own axis so there is no ambiguity: the
+    // position component runs along the bottom (horizontal axis) and the
+    // velocity component up the left (vertical axis, rotated to match).
     ctx.font = "10px system-ui, sans-serif";
     ctx.fillStyle = css(theme.TEXT_FAINT);
     ctx.textAlign = "center";
-    ctx.fillText(xlabel, plot.x + plot.w / 2, oy + h - 5);
+    ctx.fillText(xlabel, plot.x + plot.w / 2, oy + h - 6);
+    ctx.save();
+    ctx.translate(ox + 11, plot.y + plot.h / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText(ylabel, 0, 0);
+    ctx.restore();
     ctx.textAlign = "left";
-    ctx.fillText(ylabel, ox + 8, plot.y - 2);
   }
 }

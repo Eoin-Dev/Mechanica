@@ -38,11 +38,9 @@ const help = new Help($("help"));
 overlayToggles["library"] = () => library.toggle();
 overlayToggles["help"] = () => help.toggle();
 
-const runningDot = $("running-dot");
 const overloadEl = $("overload-warning");
 app.panels = [toolbar, palette, inspector, dock, hintbar, {
   refresh() {
-    runningDot.hidden = !app.playing;
     overloadEl.hidden = !(app.overloaded && app.playing);
   },
 }];

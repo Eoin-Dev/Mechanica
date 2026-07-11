@@ -359,16 +359,6 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
   text-overflow: ellipsis;
   transition: opacity 0.3s;
 }
-#running-dot {
-  position: absolute;
-  left: 12px;
-  top: 12px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--good);
-  z-index: 4;
-}
 #overload-warning {
   position: absolute;
   top: 10px;
@@ -411,8 +401,20 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 }
 .overlay-header h2 { font-size: 16px; flex: 1; }
 .overlay-body { overflow-y: auto; padding: 14px 16px; }
+/* Library: no top padding so the sticky category bar sits flush under the
+   header with no see-through gap above it. */
+#library .overlay-body { padding-top: 0; }
 
-.cat-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.cat-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  position: sticky;      /* keep the category groupings visible while scrolling */
+  top: 0;
+  z-index: 2;
+  background: var(--panel);
+  padding: 12px 0 10px;  /* opaque bar, flush under the header - no see-through gap */
+}
 .cat-chips button { padding: 4px 10px; border-radius: 12px; font-size: 12px; }
 
 .card-grid {
