@@ -104,7 +104,9 @@ export function slider(label: string, get: () => number,
                        opts: SliderOpts = {}): Control {
   const fmt = opts.fmt ?? fmt3g;
   const input = el("input", { type: "range", min: "0", max: String(RESOLUTION) });
-  const val = el("span", { class: "val" });
+  // The value readout doubles as a text field: click it to type an exact value.
+  const val = el("input", { class: "val", type: "text", inputmode: "decimal",
+                            title: "Click to type an exact value" });
   const row = el("div", { class: "row" },
                  el("span", { class: "lbl", text: label }), input, val);
   if (opts.tooltip) row.title = opts.tooltip;
@@ -124,8 +126,10 @@ export function slider(label: string, get: () => number,
   };
 
   let dragging = false;
+  let editing = false;
   const show = (v: number) => {
-    val.textContent = opts.unit ? `${fmt(v)} ${opts.unit}` : fmt(v);
+    if (editing) return; // don't clobber what the user is typing
+    val.value = opts.unit ? `${fmt(v)} ${opts.unit}` : fmt(v);
   };
   input.addEventListener("input", () => {
     dragging = true;
@@ -137,8 +141,34 @@ export function slider(label: string, get: () => number,
     dragging = false;
     opts.onCommit?.();
   });
+
+  // The readout is a text field: clicking it lets you type an exact value.
+  // Typed values are clamped to the slider's range (and its step, if any).
+  val.addEventListener("focus", () => {
+    editing = true;
+    val.value = fmt(get()); // drop the unit so only the number is edited
+    val.select();
+  });
+  val.addEventListener("blur", () => {
+    editing = false;
+    const raw = parseFloat(val.value);
+    if (Number.isFinite(raw)) {
+      let v = Math.max(min, Math.min(max, raw));
+      if (opts.step) v = Math.round(v / opts.step) * opts.step;
+      set(v);
+      opts.onCommit?.();
+    }
+    val.classList.remove("error");
+    refresh(); // reformat readout and re-sync the slider knob
+  });
+  val.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") val.blur();
+    else if (e.key === "Escape") { val.value = fmt(get()); val.blur(); }
+    e.stopPropagation(); // keep global shortcuts from firing while typing
+  });
+
   const refresh = () => {
-    if (dragging) return;
+    if (dragging || editing) return;
     const v = get();
     input.value = String(toPos(v));
     show(v);
