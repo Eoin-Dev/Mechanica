@@ -4,8 +4,9 @@ import { Body, Color, Wall } from "../engine/body";
 import { DistanceLink, Link, SpringLink } from "../engine/links";
 import { World } from "../engine/world";
 import * as theme from "../ui/theme";
-import { css, lighten, scale, towardBg } from "../ui/theme";
+import { css, lighten, scale } from "../ui/theme";
 import { Camera } from "./camera";
+import { Trail } from "./trail";
 
 // world metres of arrow length per unit of the quantity, at vector scale 1
 export const VEL_ARROW_SCALE = 0.15;
@@ -198,38 +199,71 @@ const STRING_TAUT: Color = [170, 150, 115];
 const STRING_SLACK: Color = [140, 125, 100];
 const STRING_HOVER: Color = [215, 190, 150];
 
+// Total gradient strokes to spend across all trails per frame. A single
+// trail fades over up to MAX_BANDS colour bands; when many trails are on
+// screen the band count is shared out so the frame cost stays bounded.
+const TRAIL_STROKE_BUDGET = 900;
+const MAX_BANDS = 24;
+// Cap the vertices drawn per trail: beyond this the extra points are
+// sub-pixel and invisible, so decimate. Keeps very long trails cheap.
+const MAX_TRAIL_VERTS = 600;
+
+/** rgb() string faded from the background toward `base` by fraction f,
+ * without allocating an intermediate Color (this runs per band per trail). */
+function fadedRgb(base: Color, f: number): string {
+  const bg = theme.BG;
+  const r = (bg[0] + (base[0] - bg[0]) * f) | 0;
+  const g = (bg[1] + (base[1] - bg[1]) * f) | 0;
+  const b = (bg[2] + (base[2] - bg[2]) * f) | 0;
+  return `rgb(${r},${g},${b})`;
+}
+
+function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
+                    trails: Map<number, Trail>,
+                    minX: number, minY: number, maxX: number, maxY: number): void {
+  ctx.lineWidth = 1;
+  const bands = Math.max(1, Math.min(MAX_BANDS,
+    Math.floor(TRAIL_STROKE_BUDGET / Math.max(1, trails.size))));
+  for (const [bid, trail] of trails) {
+    const n = trail.count;
+    if (n < 2) continue;
+    // cull trails whose bounding box lies entirely outside the viewport
+    if (trail.maxX < minX || trail.minX > maxX ||
+        trail.maxY < minY || trail.minY > maxY) continue;
+    const body = world.bodyById(bid);
+    const base: Color = body ? body.color : [120, 130, 140];
+    const stride = Math.max(1, Math.ceil(n / MAX_TRAIL_VERTS));
+    const last = n - 1;
+    // draw `bands` contiguous colour bands oldest -> newest; each band ends
+    // exactly where the next begins so the line stays unbroken
+    for (let bnd = 0; bnd < bands; bnd++) {
+      const i0 = Math.floor((bnd * last) / bands);
+      const i1 = Math.floor(((bnd + 1) * last) / bands);
+      if (i1 <= i0) continue;
+      ctx.strokeStyle = fadedRgb(base, i0 / n);
+      ctx.beginPath();
+      const [sx0, sy0] = cam.toScreenXY(trail.x(i0), trail.y(i0));
+      ctx.moveTo(sx0, sy0);
+      for (let k = i0 + stride; k < i1; k += stride) {
+        const [sx, sy] = cam.toScreenXY(trail.x(k), trail.y(k));
+        ctx.lineTo(sx, sy);
+      }
+      const [sxE, syE] = cam.toScreenXY(trail.x(i1), trail.y(i1));
+      ctx.lineTo(sxE, syE);
+      ctx.stroke();
+    }
+  }
+}
+
 export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
                           world: World, view: ViewSettings,
                           selection: Selectable[], hover: Selectable | null,
-                          trails: Map<number, Array<[number, number]>>,
+                          trails: Map<number, Trail>,
                           areaW: number, areaH: number): void {
   const [minX, minY, maxX, maxY] = cam.visibleBounds();
 
   // --- trails ---------------------------------------------------------------
-  if (view.trails) {
-    ctx.lineWidth = 1;
-    for (const [bid, pts] of trails) {
-      if (pts.length < 2) continue;
-      const body = world.bodyById(bid);
-      const base: Color = body ? body.color : [120, 130, 140];
-      const n = pts.length;
-      const seg = Math.max(1, Math.floor(n / 24));
-      // the final chunk is usually shorter than seg: draw it anyway,
-      // so the trail always connects right up to the body
-      for (let i = 0; i < n - 1; i += seg) {
-        const j = Math.min(i + seg, n - 1);
-        ctx.strokeStyle = css(towardBg(base, i / n));
-        ctx.beginPath();
-        const [sx0, sy0] = cam.toScreenXY(pts[i][0], pts[i][1]);
-        ctx.moveTo(sx0, sy0);
-        for (let k = i + 1; k <= j; k++) {
-          const [sx, sy] = cam.toScreenXY(pts[k][0], pts[k][1]);
-          ctx.lineTo(sx, sy);
-        }
-        ctx.stroke();
-      }
-    }
-  }
+  if (view.trails) drawTrails(ctx, cam, world, trails, minX, minY, maxX, maxY);
 
   // --- links -----------------------------------------------------------------
   for (const link of world.links) {

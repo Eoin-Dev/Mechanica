@@ -843,6 +843,15 @@ export class Inspector implements Panel {
     this.add(slider("Trail length", () => view.trailLen,
       (v) => { view.trailLen = Math.round(v); }, 10, 10000,
       { unit: "pts", fmt: (v) => v.toFixed(0), step: 10, log: true }));
+    const trailWarn = el("div", { class: "error-text",
+      text: "Long trails or many bodies at once can lower the frame rate.",
+      style: "display:none" });
+    this.add({ root: trailWarn, refresh: () => {
+      const moving = app.world.bodies.reduce((n, b) => n + (b.locked ? 0 : 1), 0);
+      const heavy = view.trails &&
+        (view.trailLen >= 1500 || moving >= 40 || view.trailLen * moving >= 30000);
+      trailWarn.style.display = heavy ? "" : "none";
+    } });
     chk("Centre of mass", () => view.com, (v) => { view.com = v; });
     chk("Contact normals", () => view.contacts, (v) => { view.contacts = v; },
         "Arrow at every collision this frame");

@@ -8,6 +8,7 @@ import { Body, Wall } from "./engine/body";
 import { World } from "./engine/world";
 import { Camera, MAX_ZOOM, MIN_ZOOM } from "./render/camera";
 import { Selectable, ViewSettings, drawGrid, drawScaleBar, drawWorld, snapStep } from "./render/draw";
+import { Trail } from "./render/trail";
 import * as snap from "./scene/snapshot";
 import { PRESETS, Preset } from "./scene/presets";
 import { CanvasController } from "./interact/tools";
@@ -66,7 +67,7 @@ export class App {
   baselineEnergy: number | null = null;
   clipboardProps: Record<string, number | boolean> | null = null;
 
-  trails = new Map<number, Array<[number, number]>>();
+  trails = new Map<number, Trail>();
   energySeries = new TimeSeries(["KE", "PE", "Total"]);
   momentumSeries = new TimeSeries(["|p|", "px", "py", "L"]);
   phasePlot = new PhasePlot();
@@ -715,32 +716,29 @@ export class App {
     }
     const maxlen = this.view.trailLen;
     const threshold = 0.5 / this.camera.zoom;
+    const trailFor = (bid: number): Trail => {
+      let t = this.trails.get(bid);
+      if (t === undefined) {
+        t = new Trail(maxlen);
+        this.trails.set(bid, t);
+      } else if (t.capacity !== maxlen) {
+        t.setCapacity(maxlen); // the user changed Trail length
+      }
+      return t;
+    };
     // sub-step path samples captured inside the adaptive integrator
     // (close encounters turn around within a single step)
     if (this.world.trace.length > 0) {
-      for (const [bid, x, y] of this.world.trace) {
-        let pts = this.trails.get(bid);
-        if (pts === undefined) {
-          pts = [];
-          this.trails.set(bid, pts);
-        }
-        pts.push([x, y]);
-        if (pts.length > maxlen) pts.splice(0, pts.length - maxlen);
-      }
+      for (const [bid, x, y] of this.world.trace) trailFor(bid).push(x, y);
       this.world.trace.length = 0;
     }
     for (const b of this.world.bodies) {
       if (b.locked) continue;
-      let pts = this.trails.get(b.id);
-      if (pts === undefined) {
-        pts = [];
-        this.trails.set(b.id, pts);
-      }
-      const last = pts[pts.length - 1];
-      if (last === undefined ||
-          Math.abs(last[0] - b.pos.x) + Math.abs(last[1] - b.pos.y) > threshold) {
-        pts.push([b.pos.x, b.pos.y]);
-        if (pts.length > maxlen) pts.splice(0, pts.length - maxlen);
+      const t = trailFor(b.id);
+      const n = t.count;
+      if (n === 0 ||
+          Math.abs(t.x(n - 1) - b.pos.x) + Math.abs(t.y(n - 1) - b.pos.y) > threshold) {
+        t.push(b.pos.x, b.pos.y);
       }
     }
   }
