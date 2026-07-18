@@ -68,6 +68,12 @@ export class Body {
   // body acts as infinite mass (it stays pinned under the cursor) but
   // everything else still collides with it. Never serialized.
   held = false;
+  // transient: had a contact last substep (set by the contact solver).
+  // Used by the adaptive-timestep heuristics: a body held in place by
+  // contacts keeps a large gravitational acceleration that the contact
+  // impulses cancel, so it must not be mistaken for a violent close
+  // encounter and trigger fine time-slicing forever. Never serialized.
+  touching = false;
   color: Color;
   // scratch state used by the solver
   acc = new Vec2();

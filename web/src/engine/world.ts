@@ -470,11 +470,16 @@ export class World {
   // -------------------------------------------------------------- integrators
   /** Largest a/|v| over the moving bodies: how fast (rad/s) the
    * fastest-turning body's velocity direction is being swung by the
-   * current accelerations. Spikes during gravitational close passes. */
+   * current accelerations. Spikes during gravitational close passes.
+   *
+   * Bodies in persistent contact are skipped: the contact impulses cancel
+   * their acceleration each substep (a resting stack has huge a and ~zero
+   * v forever), so slicing them buys no accuracy and used to cost tens of
+   * times the frame budget in resting mutual-gravity clusters. */
   private maxSwingRate(): number {
     let worst = 0.0;
     for (const b of this.bodies) {
-      if (b.invMass === 0.0) continue;
+      if (b.invMass === 0.0 || b.touching) continue;
       const a2 = b.acc.x * b.acc.x + b.acc.y * b.acc.y;
       if (a2 === 0.0) continue;
       const v = Math.sqrt(b.vel.x * b.vel.x + b.vel.y * b.vel.y);
@@ -813,7 +818,9 @@ export class World {
     let q = 1;
     const k = dt * dt * 0.125;
     for (const b of this.bodies) {
-      if (b.invMass === 0.0) continue;
+      // touching bodies are pinned by contact impulses, not free-flying
+      // through an encounter - their acceleration is not real deviation
+      if (b.invMass === 0.0 || b.touching) continue;
       const ax = b.acc.x;
       const ay = b.acc.y;
       const dev = Math.sqrt(ax * ax + ay * ay) * k;

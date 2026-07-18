@@ -524,6 +524,13 @@ export function solveContacts(bodies: Body[], walls: Wall[],
   const manifolds: Manifold[] = [];
   detectBodies(bodies, manifolds, staticState);
   detectWalls(bodies, walls, manifolds, staticState);
+  // refresh the persistent-contact flags the adaptive-timestep heuristics
+  // read: a body held by contacts is not in a gravitational close encounter
+  for (const b of bodies) b.touching = false;
+  for (const m of manifolds) {
+    m.a.touching = true;
+    if (m.b !== null) m.b.touching = true;
+  }
   if (cache !== null) {
     if (manifolds.length > 0) warmStart(manifolds, cache);
     cache.clear();
