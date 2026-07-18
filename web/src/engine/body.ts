@@ -35,6 +35,7 @@ export interface BodyDict {
   const_force: [number, number];
   locked: boolean;
   collides: boolean;
+  no_rotation?: boolean;
   is_anchor?: boolean;
   color: number[];
 }
@@ -60,6 +61,11 @@ export class Body {
   constForce = new Vec2(); // user-applied constant force, N
   locked = false;
   collides = true;
+  // true: the body cannot spin (infinite rotational inertia), so contact
+  // friction produces no torque and it behaves like a point particle - which
+  // means it can rest in limiting equilibrium on a slope (mu >= tan theta)
+  // instead of rolling. Distinct from `locked`, which freezes translation too.
+  noRotation = false;
   // An anchor is a fixed attachment point (for rods/strings/springs). It is
   // always locked and, unlike a locked massive body, exerts no gravitational
   // pull and is not counted among the bodies. Always named "Anchor".
@@ -101,7 +107,8 @@ export class Body {
   }
 
   get invInertia(): number {
-    if (this.locked || this.held || this.mass <= 0.0 || this.radius <= 0.0) return 0.0;
+    if (this.locked || this.held || this.noRotation ||
+        this.mass <= 0.0 || this.radius <= 0.0) return 0.0;
     return 2.0 / (this.mass * this.radius * this.radius);
   }
 
@@ -121,6 +128,7 @@ export class Body {
       restitution: this.restitution, friction: this.friction,
       const_force: [this.constForce.x, this.constForce.y],
       locked: this.locked, collides: this.collides,
+      no_rotation: this.noRotation,
       is_anchor: this.isAnchor,
       color: [...this.color],
     };
@@ -141,6 +149,8 @@ export class Body {
     b.constForce = new Vec2(cf[0], cf[1]);
     b.locked = d.locked;
     b.collides = d.collides ?? true;
+    b.noRotation = d.no_rotation ?? false;
+    if (b.noRotation) b.omega = 0.0; // a non-rotating body never spins
     b.isAnchor = d.is_anchor ?? false;
     if (b.isAnchor) b.name = "Anchor";
     return b;

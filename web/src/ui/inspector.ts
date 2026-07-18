@@ -254,6 +254,11 @@ export class Inspector implements Panel {
         "A locked body never moves: use as pivot or anchor (K)"),
       checkbox("Collides", () => b.collides, (v) => { b.collides = v; this.commit(); },
         "Disable to let this body pass through others"));
+    this.add(checkbox("No rotation", () => b.noRotation,
+      (v) => { b.noRotation = v; if (v) b.omega = 0.0; this.commit(); },
+      "Body can't spin (infinite rotational inertia): it behaves like a " +
+      "point particle, so friction can hold it in limiting equilibrium on a " +
+      "slope (mu >= tan theta) instead of rolling"));
 
     this.body.append(section("Material"));
     this.add(slider("Bounce", () => b.restitution, (v) => { b.restitution = v; },
@@ -261,7 +266,7 @@ export class Inspector implements Panel {
         tooltip: "Coefficient of restitution e: fraction of approach speed " +
                  "kept after a bounce (1 = perfectly elastic, 0 = perfectly inelastic)" }));
     this.add(slider("Friction", () => b.friction, (v) => { b.friction = v; },
-      0.0, 3.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
+      0.0, 10.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
         tooltip: "Coefficient of friction mu (Coulomb model: |F_t| <= mu N)" }));
     this.materialButtons([b]);
 
@@ -309,7 +314,7 @@ export class Inspector implements Panel {
       0.0, 1.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
         tooltip: "Coefficient of restitution e for bodies bouncing off this anchor" }));
     this.add(slider("Friction", () => b.friction, (v) => { b.friction = v; },
-      0.0, 3.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
+      0.0, 10.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
         tooltip: "Coefficient of friction mu at contact with this anchor" }));
     this.materialButtons([b]);
 
@@ -376,7 +381,7 @@ export class Inspector implements Panel {
         { fmt: (v) => v.toFixed(2), onCommit: this.commit,
           tooltip: "Coefficient of restitution e, applied to every selected body" }));
       this.add(slider("Friction", () => first.friction,
-        (v) => bodies.forEach((b) => { b.friction = v; }), 0.0, 3.0,
+        (v) => bodies.forEach((b) => { b.friction = v; }), 0.0, 10.0,
         { fmt: (v) => v.toFixed(2), onCommit: this.commit,
           tooltip: "Coefficient of friction mu, applied to every selected body" }));
       this.materialButtons(bodies);
@@ -387,6 +392,11 @@ export class Inspector implements Panel {
         checkbox("Collides", () => first.collides,
           (v) => { bodies.forEach((b) => { b.collides = v; }); this.commit(); },
           "Enable / disable collisions for every selected body"));
+      this.add(checkbox("No rotation", () => first.noRotation,
+        (v) => { bodies.forEach((b) => { b.noRotation = v; if (v) b.omega = 0.0; });
+                 this.commit(); },
+        "Stop every selected body from spinning: each behaves like a point " +
+        "particle (can rest in limiting equilibrium on a slope)"));
       this.body.append(section("Constant force"));
       this.addHalf(
         numEdit("Fx", () => first.constForce.x,
@@ -422,7 +432,7 @@ export class Inspector implements Panel {
         { fmt: (v) => v.toFixed(2), onCommit: this.commit,
           tooltip: "Coefficient of restitution e, applied to every selected anchor" }));
       this.add(slider("Friction", () => af.friction,
-        (v) => anchors.forEach((a) => { a.friction = v; }), 0.0, 3.0,
+        (v) => anchors.forEach((a) => { a.friction = v; }), 0.0, 10.0,
         { fmt: (v) => v.toFixed(2), onCommit: this.commit,
           tooltip: "Coefficient of friction mu, applied to every selected anchor" }));
       this.materialButtons(anchors);
@@ -441,7 +451,7 @@ export class Inspector implements Panel {
         (v) => walls.forEach((w) => { w.restitution = v; }), 0.0, 1.0,
         { fmt: (v) => v.toFixed(2), onCommit: this.commit }));
       this.add(slider("Friction", () => wf.friction,
-        (v) => walls.forEach((w) => { w.friction = v; }), 0.0, 3.0,
+        (v) => walls.forEach((w) => { w.friction = v; }), 0.0, 10.0,
         { fmt: (v) => v.toFixed(2), onCommit: this.commit }));
     }
 
@@ -548,7 +558,7 @@ export class Inspector implements Panel {
     this.add(slider("Bounce", () => w.restitution, (v) => { w.restitution = v; },
       0.0, 1.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit }));
     this.add(slider("Friction", () => w.friction, (v) => { w.friction = v; },
-      0.0, 3.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit }));
+      0.0, 10.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit }));
     this.actionButtons();
   }
 
