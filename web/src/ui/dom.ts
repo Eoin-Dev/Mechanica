@@ -86,6 +86,12 @@ export interface SliderOpts {
   step?: number;         // value-space rounding (e.g. 1 for integers)
   onCommit?: () => void;
   tooltip?: string;
+  disabled?: () => boolean; // greyed and non-interactive while true
+}
+
+/** Fixed 3-decimal-place formatting, for positions and velocities. */
+export function fmt3dp(v: number): string {
+  return v.toFixed(3);
 }
 
 const RESOLUTION = 2000;
@@ -169,6 +175,10 @@ export function slider(label: string, get: () => number,
 
   const refresh = () => {
     if (dragging || editing) return;
+    const dis = opts.disabled?.() ?? false;
+    input.disabled = dis;
+    val.disabled = dis;
+    row.classList.toggle("disabled", dis);
     const v = get();
     input.value = String(toPos(v));
     show(v);
@@ -181,7 +191,8 @@ export function slider(label: string, get: () => number,
 /** Small numeric field committing on Enter/blur; shows live value otherwise. */
 export function numEdit(label: string, get: () => number,
                         set: (v: number) => void, unit = "",
-                        onCommit?: () => void): Control {
+                        onCommit?: () => void,
+                        fmt: (v: number) => string = fmt3g): Control {
   const input = el("input", { type: "text", inputmode: "decimal" });
   const wrap = el("div", { class: "num-row" },
                   el("span", { class: "lbl", text: label }), input,
@@ -208,13 +219,13 @@ export function numEdit(label: string, get: () => number,
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") input.blur();
     else if (e.key === "Escape") {
-      input.value = fmt3g(get());
+      input.value = fmt(get());
       input.blur();
     }
     e.stopPropagation();
   });
   const refresh = () => {
-    if (!focused) input.value = fmt3g(get());
+    if (!focused) input.value = fmt(get());
   };
   refresh();
   return { root: wrap, refresh };

@@ -51,8 +51,10 @@ export interface ContactStatic {
   movers?: Body[];
 }
 
-/** Persistent warm-start impulse cache; pass the same map every substep. */
-export type ContactCache = Map<string, [number, number]>;
+/** Persistent per-contact cache carried between substeps: [pn, pt] for warm
+ * starting, optionally followed by [ax, ay] - a tangential position anchor for
+ * static resting friction (see solveStaticFriction). */
+export type ContactCache = Map<string, number[]>;
 
 /** One contact point with precomputed effective masses and accumulators.
  *
@@ -86,6 +88,11 @@ class Manifold {
   targetVn: number;
   pn = 0.0;
   pt = 0.0;
+  // static-friction position anchor (world contact point) carried from the
+  // previous substep; `anchored` is false for a brand-new contact
+  ax = 0.0;
+  ay = 0.0;
+  anchored = false;
   sepBase: number;
   key: string;
 
@@ -291,6 +298,51 @@ function solvePosition(manifolds: Manifold[]): void {
   }
 }
 
+/** Split-impulse static friction: hold a resting contact in place tangentially.
+ *
+ * The velocity solve drives tangential *velocity* to zero each substep, but the
+ * body has already been integrated forward by the gravity-along-slope velocity
+ * that friction then cancels, so its *position* creeps down-slope a little every
+ * substep. This pins the contact point back to an anchor while friction is
+ * static (unsaturated), removing the drift without touching velocities (so no
+ * energy is injected).
+ *
+ * Only bodies that cannot rotate (invInertia == 0: point particles, blocks)
+ * are pinned. A rotating disc is *supposed* to move along the slope - it rolls -
+ * and its contact friction is also unsaturated, so pinning it would wrongly
+ * freeze the roll. Non-rotating bodies have no such motion, so anchoring is
+ * exactly the point-particle behaviour the user expects. */
+function solveStaticFriction(manifolds: Manifold[]): void {
+  for (const m of manifolds) {
+    if (!m.anchored) continue;           // no reference point yet (new contact)
+    if (m.pn <= 0.0) continue;           // not pressed together
+    if (Math.abs(m.pt) >= m.mu * m.pn * (1 - 1e-6)) continue; // sliding: let it
+    const a = m.a;
+    const b = m.b;
+    const aFix = a.invInertia === 0.0 && a.invMass > 0.0;
+    const bFix = b !== null && b.invInertia === 0.0 && b.invMass > 0.0;
+    const invSum = (aFix ? a.invMass : 0.0) + (bFix ? b!.invMass : 0.0);
+    if (invSum <= 0.0) continue;
+    // current contact point tracks each fixable body's centre (its arm is
+    // fixed for a non-rotating body); drift is its tangential slip from anchor
+    const tx = -m.ny;
+    const ty = m.nx;
+    const cx = a.pos.x + m.rax; // material contact point on a, this step
+    const cy = a.pos.y + m.ray;
+    const driftT = (cx - m.ax) * tx + (cy - m.ay) * ty;
+    if (driftT === 0.0) continue;
+    const corr = driftT / invSum;
+    if (aFix) {
+      a.pos.x -= corr * a.invMass * tx;
+      a.pos.y -= corr * a.invMass * ty;
+    }
+    if (bFix) {
+      b!.pos.x += corr * b!.invMass * tx;
+      b!.pos.y += corr * b!.invMass * ty;
+    }
+  }
+}
+
 function pairKey(idA: number, idB: number): string {
   return idA < idB ? `${idA},${idB}` : `${idB},${idA}`;
 }
@@ -493,6 +545,11 @@ function warmStart(manifolds: Manifold[], cache: ContactCache): void {
     const [pn, pt] = cached;
     m.pn = pn;
     m.pt = pt;
+    if (cached.length >= 4) { // a static-friction anchor from last substep
+      m.ax = cached[2];
+      m.ay = cached[3];
+      m.anchored = true;
+    }
     const nx = m.nx;
     const ny = m.ny;
     const ix = pn * nx - pt * ny;
@@ -544,8 +601,23 @@ export function solveContacts(bodies: Body[], walls: Wall[],
   }
   solveVelocity(manifolds, iterations);
   solvePosition(manifolds);
+  solveStaticFriction(manifolds);
   for (const m of manifolds) {
     contacts.push(new Contact(m.px, m.py, m.nx, m.ny, m.pn));
-    if (cache !== null) cache.set(m.key, [m.pn, m.pt]);
+    if (cache === null) continue;
+    const aFix = m.a.invInertia === 0.0 && m.a.invMass > 0.0;
+    const bFix = m.b !== null && m.b.invInertia === 0.0 && m.b.invMass > 0.0;
+    if (!aFix && !bFix) {
+      cache.set(m.key, [m.pn, m.pt]); // no anchor needed (rotating/immovable)
+      continue;
+    }
+    // keep the anchor while a static contact persists; (re)set it to the
+    // current contact point on a new contact or once friction is sliding
+    const saturated = Math.abs(m.pt) >= m.mu * m.pn * (1 - 1e-6);
+    if (m.anchored && !saturated && m.pn > 0.0) {
+      cache.set(m.key, [m.pn, m.pt, m.ax, m.ay]);
+    } else {
+      cache.set(m.key, [m.pn, m.pt, m.px, m.py]);
+    }
   }
 }
