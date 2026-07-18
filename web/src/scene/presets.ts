@@ -889,30 +889,75 @@ function buildTrampoline(): World {
   const w = new World();
   w.substeps = 10;
   const n = 21;
-  const spacing = 0.18;
-  const x0 = (-(n - 1) * spacing) / 2;
-  const left = addBody(w, x0 - spacing, 0.0, { r: 0.07, m: 1.0, anchor: true });
-  const right = addBody(w, -x0 + spacing, 0.0, { r: 0.07, m: 1.0, anchor: true });
+  const rest = 0.18;   // natural length of each bed segment (unchanged)
+  const K = 100000.0;  // maximum spring stiffness (inspector slider max)
+  const C = 250.0;     // half the maximum damping (slider max 500)
+  const wallX = 3.2;
+  const wallBot = -0.6;
+  // anchors sit at the bottom of each side bumper wall
+  const left = addBody(w, -wallX, wallBot, { r: 0.07, m: 1.0, anchor: true });
+  const right = addBody(w, wallX, wallBot, { r: 0.07, m: 1.0, anchor: true });
+  // Perfectly elastic, frictionless bed particles, placed evenly between the
+  // anchors as a starting guess; the true rest shape is settled below.
   let prev = left;
   const sheet: Body[] = [];
   for (let i = 0; i < n; i++) {
-    const b = addBody(w, x0 + i * spacing, 0.0, { r: 0.055, m: 0.1, e: 0.2,
-                                                  mu: 0.5, color: [110, 200, 210] });
+    const x = -wallX + ((i + 1) * 2 * wallX) / (n + 1);
+    const b = addBody(w, x, wallBot, { r: 0.055, m: 0.1, e: 1.0,
+                                       mu: 0.0, color: [110, 200, 210] });
     sheet.push(b);
-    softSpring(w, prev, b, 2500.0, 4.0);
+    w.links.push(new SpringLink(prev, b, rest, K, C));
     prev = b;
   }
-  softSpring(w, prev, right, 2500.0, 4.0);
+  w.links.push(new SpringLink(prev, right, rest, K, C));
   for (let i = 0; i + 2 < sheet.length; i++) { // bend springs keep the bed smooth
-    softSpring(w, sheet[i], sheet[i + 2], 500.0, 1.5);
+    w.links.push(new SpringLink(sheet[i], sheet[i + 2], 2 * rest, K, C));
   }
   // side bumpers keep the bouncer over the bed
-  for (const x of [-3.2, 3.2]) {
-    const side = new Wall(new Vec2(x, -0.6), new Vec2(x, 3.2), 0.12);
+  for (const x of [-wallX, wallX]) {
+    const side = new Wall(new Vec2(x, wallBot), new Vec2(x, 3.2), 0.12);
     side.restitution = 0.5;
     w.walls.push(side);
   }
-  addBody(w, 0.0, 2.6, { r: 0.3, m: 2.0, e: 0.2, mu: 0.4, color: [220, 130, 90],
+  // Settle the bed into its rest shape under the new stiffness and anchor
+  // positions (rest lengths untouched). A small dedicated relaxation loop is
+  // used instead of World.step so preset construction stays instant; it
+  // applies exactly the engine's per-substep-clamped spring force model
+  // (see World.prepareStep), so a force balance here is a true fixed point
+  // of the runtime simulation - the bed loads perfectly still.
+  const hSub = 1 / 120 / w.substeps;
+  const springs = w.links.filter((l): l is SpringLink => l instanceof SpringLink);
+  const kEff = springs.map((s) =>
+    Math.min(s.stiffness, 1 / (hSub * hSub * (s.a.invMass + s.b.invMass))));
+  const hRelax = 2e-4;
+  for (let it = 0; it < 15000; it++) {
+    for (const b of sheet) b.acc.set(0, -w.gravity);
+    for (let i = 0; i < springs.length; i++) {
+      const s = springs[i];
+      const dx = s.b.pos.x - s.a.pos.x;
+      const dy = s.b.pos.y - s.a.pos.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < 1e-9) continue;
+      const f = kEff[i] * (d - s.restLength); // positive pulls ends together
+      const nx = dx / d;
+      const ny = dy / d;
+      s.a.acc.x += f * nx * s.a.invMass;
+      s.a.acc.y += f * ny * s.a.invMass;
+      s.b.acc.x -= f * nx * s.b.invMass;
+      s.b.acc.y -= f * ny * s.b.invMass;
+    }
+    for (const b of sheet) {
+      b.vel.x = (b.vel.x + b.acc.x * hRelax) * 0.995;
+      b.vel.y = (b.vel.y + b.acc.y * hRelax) * 0.995;
+      b.pos.x += b.vel.x * hRelax;
+      b.pos.y += b.vel.y * hRelax;
+    }
+  }
+  for (const b of sheet) {
+    b.vel.set(0, 0);
+    b.acc.set(0, 0);
+  }
+  addBody(w, 0.0, 2.6, { r: 0.3, m: 64.0, e: 1.0, mu: 0.0, color: [220, 130, 90],
                          name: "Gymnast" });
   return w;
 }
