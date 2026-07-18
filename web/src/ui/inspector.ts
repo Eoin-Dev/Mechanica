@@ -9,7 +9,7 @@ import { Body, MATERIALS, Wall } from "../engine/body";
 import { DistanceLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
 import { Selectable } from "../render/draw";
-import { RefreshGroup, button, checkbox, el, halfRow, numEdit, section,
+import { RefreshGroup, button, checkbox, el, fmt3dp, halfRow, numEdit, section,
          segmented, slider, textEdit } from "./dom";
 import { ICONS } from "./icons";
 
@@ -241,14 +241,16 @@ export class Inspector implements Panel {
       0.01, 10.0, { unit: "m", log: true, onCommit: this.commit,
         tooltip: "Collision radius (mass is independent of size here)" }));
     this.addHalf(
-      numEdit("x", () => b.pos.x, (v) => { b.pos.x = v; }, "m", this.commit),
-      numEdit("y", () => b.pos.y, (v) => { b.pos.y = v; }, "m", this.commit));
+      numEdit("x", () => b.pos.x, (v) => { b.pos.x = v; }, "m", this.commit, fmt3dp),
+      numEdit("y", () => b.pos.y, (v) => { b.pos.y = v; }, "m", this.commit, fmt3dp));
     this.addHalf(
-      numEdit("vx", () => b.vel.x, (v) => { b.vel.x = v; }, "", this.commit),
-      numEdit("vy", () => b.vel.y, (v) => { b.vel.y = v; }, "", this.commit));
+      numEdit("vx", () => b.vel.x, (v) => { b.vel.x = v; }, "", this.commit, fmt3dp),
+      numEdit("vy", () => b.vel.y, (v) => { b.vel.y = v; }, "", this.commit, fmt3dp));
     this.add(slider("Spin", () => b.omega, (v) => { b.omega = v; },
       -100.0, 100.0, { unit: "rad/s", fmt: (v) => v.toFixed(2), onCommit: this.commit,
-        tooltip: "Angular velocity omega about the body's centre" }));
+        disabled: () => b.noRotation,
+        tooltip: "Angular velocity omega about the body's centre " +
+                 "(disabled while No rotation is on)" }));
     this.addHalf(
       checkbox("Locked", () => b.locked, (v) => { b.locked = v; this.commit(); },
         "A locked body never moves: use as pivot or anchor (K)"),
@@ -304,8 +306,8 @@ export class Inspector implements Panel {
       0.01, 10.0, { unit: "m", log: true, onCommit: this.commit,
         tooltip: "Collision radius of the anchor" }));
     this.addHalf(
-      numEdit("x", () => b.pos.x, (v) => { b.pos.x = v; }, "m", this.commit),
-      numEdit("y", () => b.pos.y, (v) => { b.pos.y = v; }, "m", this.commit));
+      numEdit("x", () => b.pos.x, (v) => { b.pos.x = v; }, "m", this.commit, fmt3dp),
+      numEdit("y", () => b.pos.y, (v) => { b.pos.y = v; }, "m", this.commit, fmt3dp));
     this.add(checkbox("Collides", () => b.collides, (v) => { b.collides = v; this.commit(); },
       "Disable to let bodies pass through this anchor"));
 
@@ -548,11 +550,11 @@ export class Inspector implements Panel {
   private buildWall(w: Wall): void {
     this.nameEdit(w);
     this.addHalf(
-      numEdit("x1", () => w.a.x, (v) => { w.a.x = v; }, "m", this.commit),
-      numEdit("y1", () => w.a.y, (v) => { w.a.y = v; }, "m", this.commit));
+      numEdit("x1", () => w.a.x, (v) => { w.a.x = v; }, "m", this.commit, fmt3dp),
+      numEdit("y1", () => w.a.y, (v) => { w.a.y = v; }, "m", this.commit, fmt3dp));
     this.addHalf(
-      numEdit("x2", () => w.b.x, (v) => { w.b.x = v; }, "m", this.commit),
-      numEdit("y2", () => w.b.y, (v) => { w.b.y = v; }, "m", this.commit));
+      numEdit("x2", () => w.b.x, (v) => { w.b.x = v; }, "m", this.commit, fmt3dp),
+      numEdit("y2", () => w.b.y, (v) => { w.b.y = v; }, "m", this.commit, fmt3dp));
     this.add(slider("Thickness", () => w.thickness, (v) => { w.thickness = v; },
       0.01, 2.0, { unit: "m", log: true, fmt: (v) => v.toFixed(2), onCommit: this.commit }));
     this.add(slider("Bounce", () => w.restitution, (v) => { w.restitution = v; },
