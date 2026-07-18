@@ -5,7 +5,7 @@
  * happens on requestAnimationFrame and the UI chrome lives in the DOM.
  */
 import { Body, Wall } from "./engine/body";
-import { World } from "./engine/world";
+import { ENCOUNTER_ANGLE, World } from "./engine/world";
 import { Camera, MAX_ZOOM, MIN_ZOOM } from "./render/camera";
 import { Selectable, ViewSettings, drawGrid, drawScaleBar, drawWorld, snapStep } from "./render/draw";
 import { Trail } from "./render/trail";
@@ -61,6 +61,13 @@ export class App {
   qNow = 1;               // what actually ran this frame (for the UI)
   private stepMs = 0.2;   // EMA of wall-clock ms per world step
   private lastPhysMs = 0.0;
+  // Headroom-driven quality: when physics uses well under half a display
+  // refresh, both precision systems get their thresholds tightened by this
+  // factor (finer slicing at moderate speeds -> smooth trails everywhere);
+  // it backs off before the frame rate could dip below the monitor's.
+  private quality = 1.0;
+  private refreshMs = 1000 / 60; // estimated display refresh interval
+  private renderMs = 1.0;        // EMA of measured render cost per frame
 
   undoStack = new snap.UndoStack(this.world);
   initialSnapshot: string | null = null;
@@ -577,6 +584,14 @@ export class App {
       this.pushUndo();
     }
 
+    // display-refresh estimate: snap down to the fastest frame interval seen
+    // (the monitor cap), drift up slowly so one slow frame doesn't stick
+    const frameMs = dtFrame * 1000.0;
+    if (frameMs > 1.0) {
+      this.refreshMs = Math.min(34.0,
+        Math.min(this.refreshMs * 1.002, Math.max(4.0, frameMs)));
+    }
+
     if (this.playing) {
       // Below 1x, keep stepping at the normal 120 Hz real-time rate but
       // with a proportionally smaller dt: slow motion then produces a
@@ -584,6 +599,9 @@ export class App {
       // instead of one full-size step every few frames (choppy).
       const effDt = PHYSICS_DT * Math.min(this.speed, 1.0);
       this.world.traceSpacing = this.view.trails ? 0.5 / this.camera.zoom : 0.0;
+      // quality > 1 lowers the slicing threshold, so the in-substep
+      // adaptive integrator also engages at moderate speeds
+      this.world.encounterAngle = ENCOUNTER_ANGLE / this.quality;
       this.accumulator += dtFrame * this.speed;
       let quanta = 0;
       let smallSteps = 0;
@@ -615,6 +633,17 @@ export class App {
       this.qNow = qUsed;
       this.overloaded = this.accumulator >= effDt;
       if (this.overloaded) this.accumulator = 0.0;
+      // spend spare headroom on finer time resolution: ramp quality up
+      // while physics stays well under half a display refresh, back off
+      // quickly as the budget tightens, reset outright on overload
+      const targetMs = 0.5 * this.refreshMs;
+      if (this.overloaded) {
+        this.quality = 1.0;
+      } else if (this.lastPhysMs > 0.8 * targetMs) {
+        this.quality = Math.max(1.0, this.quality * 0.85);
+      } else if (this.lastPhysMs < 0.45 * targetMs) {
+        this.quality = Math.min(10.0, this.quality * 1.03);
+      }
       this.checkSustainedOverload();
       this.afterPhysics();
       const nowS = performance.now() / 1000;
@@ -660,22 +689,23 @@ export class App {
    * physics steps to run in place of each normal one.
    *
    * Need comes from the physics (world.subdivisionNeed: fast close
-   * encounters want finer time slicing); affordability comes from the
-   * measured step cost and frame headroom, so the extra work never pulls
-   * the frame rate below ~48 fps. */
+   * encounters want finer time slicing, and the headroom-driven quality
+   * factor lowers that bar when the machine is idling); affordability
+   * comes from the measured step and render costs against the display's
+   * own refresh interval, so the extra work never pulls the frame rate
+   * meaningfully below the monitor's. */
   private pickResolution(effDt: number, dtFrame: number): number {
     if (!this.adaptiveDt) {
       this.physRes = 1;
       return 1;
     }
-    const need = this.world.subdivisionNeed(effDt);
+    const need = this.world.subdivisionNeed(effDt, 16, this.quality);
     if (need > this.physRes) this.physRes = need; // react to spikes immediately...
     else if (this.physRes > need) this.physRes--; // ...but relax gradually
     let q = this.physRes;
     if (q > 1) {
       const baseSteps = Math.max(1.0, (dtFrame * this.speed) / effDt);
-      const renderMs = Math.max(0.0, dtFrame * 1000.0 - this.lastPhysMs);
-      const budgetMs = Math.max(1.0, 1000.0 / 48 - renderMs);
+      const budgetMs = Math.max(1.0, 0.75 * this.refreshMs - this.renderMs);
       const afford = Math.floor(budgetMs / Math.max(this.stepMs * baseSteps, 1e-3));
       q = Math.max(1, Math.min(q, afford));
     }
@@ -767,6 +797,7 @@ export class App {
 
   // ------------------------------------------------------------------ render
   private render(): void {
+    const t0 = performance.now();
     const ctx = this.ctx;
     const dpr = window.devicePixelRatio || 1;
     const w = this.camera.screenW;
@@ -779,6 +810,8 @@ export class App {
               this.controller.hover, this.trails, w, h);
     this.controller.drawOverlays(ctx);
     drawScaleBar(ctx, this.camera, w, h);
+    // measured render cost feeds the physics budget in pickResolution
+    this.renderMs = 0.9 * this.renderMs + 0.1 * (performance.now() - t0);
   }
 }
 

@@ -42,8 +42,11 @@ const ROD_FORCE_PASSES = 4;
 // (which would otherwise blow up the energy) then get automatically and
 // smoothly resolved down to microsecond slices, while calm stretches take
 // a single slice at zero extra cost.
-const ENCOUNTER_ANGLE = 0.02;       // rad of velocity swing per slice
-const ENCOUNTER_MAX_SLICES = 1024;  // floor: slice >= h / this
+// Base threshold; World.encounterAngle starts here and the app may lower it
+// at runtime when there is frame-time headroom, so moderate-speed curves get
+// the same fine slicing (and smooth trails) as extreme encounters.
+export const ENCOUNTER_ANGLE = 0.02; // rad of velocity swing per slice
+const ENCOUNTER_MAX_SLICES = 1024;   // floor: slice >= h / this
 
 // Mouse-drag speed limit tuning: a held body may not chase the cursor faster
 // than DRAG_GAMMA * rest_length * omega of its stiffest attached spring, so a
@@ -224,6 +227,10 @@ export class World {
   integrator: Integrator = "Velocity Verlet";
   substeps = 4;
   iterations = 8;          // solver iterations (links and contacts)
+  // runtime tuning (not serialized): how much velocity swing one adaptive
+  // slice may carry. The app lowers it below ENCOUNTER_ANGLE when there is
+  // frame headroom so fast-but-not-extreme curves also get fine slicing.
+  encounterAngle = ENCOUNTER_ANGLE;
 
   time = 0.0;
   contacts: Contact[] = [];
@@ -505,7 +512,7 @@ export class World {
     while (remaining > 1e-12 && guard > 0) {
       guard--;
       const w = this.maxSwingRate();
-      let hh = w <= 0.0 ? remaining : Math.min(remaining, ENCOUNTER_ANGLE / w);
+      let hh = w <= 0.0 ? remaining : Math.min(remaining, this.encounterAngle / w);
       if (hh < floor) hh = floor;
       const sliced = hh < remaining;
       if (sliced && spacing > 0.0) {
@@ -814,7 +821,7 @@ export class World {
    * Uses the accelerations left by the previous force evaluation, so
    * it costs one O(n) pass and no extra physics.
    */
-  subdivisionNeed(dt: number, maxQ = 16): number {
+  subdivisionNeed(dt: number, maxQ = 16, quality = 1.0): number {
     let q = 1;
     const k = dt * dt * 0.125;
     for (const b of this.bodies) {
@@ -824,8 +831,12 @@ export class World {
       const ax = b.acc.x;
       const ay = b.acc.y;
       const dev = Math.sqrt(ax * ax + ay * ay) * k;
+      // `quality` > 1 tightens the tolerance: with frame headroom to spare
+      // the app asks for subdivision at gentler curvature, which is what
+      // keeps fast (but not extreme) trail arcs smooth
       let tol = b.radius * 0.04;
       if (tol < 0.002) tol = 0.002;
+      tol /= quality;
       if (dev > tol * q * q) { // only beat the current best
         const need = Math.floor(Math.sqrt(dev / tol)) + 1;
         if (need >= maxQ) return maxQ;
