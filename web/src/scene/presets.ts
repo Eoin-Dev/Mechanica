@@ -189,6 +189,7 @@ function buildBinary(): World {
 function buildFigure8(): World {
   // Chenciner-Montgomery figure-eight choreography (G = m = 1)
   const w = spaceWorld(8);
+  w.pointGravity = true; // the exact solution assumes point masses
   w.softening = 0.001;
   const x1 = 0.97000436;
   const y1 = -0.24308753;
@@ -295,6 +296,7 @@ function buildSunEarthMoon(): World {
  * binary and fling the third away. */
 function buildPythagorean(): World {
   const w = spaceWorld(32);
+  w.pointGravity = true; // near-collisions are the whole point here
   w.softening = 0.01;
   const rows: Array<[number, number, number, Color]> = [
     [1.0, 3.0, 3.0, [230, 120, 120]],
@@ -315,6 +317,7 @@ function buildPythagorean(): World {
  * the dance breaks into chaos. */
 function buildLagrangeTriangle(): World {
   const w = spaceWorld(12);
+  w.pointGravity = true; // the rigid-rotation solution assumes point masses
   const side = 2.4;
   const m = 100.0;
   const rOrbit = side / Math.sqrt(3);
@@ -337,6 +340,7 @@ function buildLagrangeTriangle(): World {
  * v1 = v2 = (p1, p2) and v3 = (-2 p1, -2 p2), G = m = 1. */
 function choreography(p1: number, p2: number, substeps = 64): World {
   const w = spaceWorld(substeps);
+  w.pointGravity = true; // these delicate orbits assume point masses
   w.softening = 0.001;
   const cols: Color[] = [[230, 120, 120], [120, 190, 120], [120, 160, 230]];
   const starts: Array<[number, number, number]> =

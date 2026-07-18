@@ -170,6 +170,7 @@ export interface WorldDict {
   settings: {
     gravity: number;
     mutual_gravity: boolean;
+    point_gravity?: boolean;
     G: number;
     softening: number;
     drag_linear: number;
@@ -209,6 +210,11 @@ export class World {
 
   gravity = 9.81;          // m/s^2, downward (negative = upward)
   mutualGravity = false;   // pairwise Newtonian attraction
+  // true: each body's whole mass acts from its centre even when bodies
+  // overlap (a point-mass singularity - overlapping pairs can slingshot).
+  // false (default): bodies attract like solid uniform discs, so inside an
+  // overlap the pull ramps linearly to zero at the centre, as in reality.
+  pointGravity = false;
   G = 1.0;                 // gravitational constant (scaled units)
   softening = 0.01;        // m, avoids the r->0 singularity
   dragLinear = 0.0;        // N*s/m         (F = -c1 v)
@@ -310,6 +316,7 @@ export class World {
       const n = bodies.length;
       const G = this.G;
       const eps2 = this.softening * this.softening;
+      const solid = !this.pointGravity;
       for (let i = 0; i < n; i++) {
         const bi = bodies[i];
         if (bi.isAnchor) continue; // anchors neither pull nor are pulled
@@ -318,12 +325,21 @@ export class World {
         const biAcc = bi.acc;
         const biMovable = bi.invMass !== 0.0;
         const biMass = bi.mass;
+        const biR = bi.radius;
         for (let j = i + 1; j < n; j++) {
           const bj = bodies[j];
           if (bj.isAnchor) continue;
           const dx = bj.pos.x - bix;
           const dy = bj.pos.y - biy;
-          const d2 = dx * dx + dy * dy + eps2;
+          let r2 = dx * dx + dy * dy;
+          if (solid) {
+            // solid uniform bodies: once the discs overlap the pull ramps
+            // linearly to zero at the centre (interior field of a uniform
+            // body) instead of diverging like a point-mass singularity
+            const R = biR + bj.radius;
+            if (r2 < R * R) r2 = R * R;
+          }
+          const d2 = r2 + eps2;
           const s = G / (d2 * Math.sqrt(d2)); // G / d^3
           if (biMovable) {
             const m = s * bj.mass;
@@ -837,8 +853,19 @@ export class World {
           if (bj.isAnchor) continue;
           const dx = bj.pos.x - bi.pos.x;
           const dy = bj.pos.y - bi.pos.y;
-          peN -= this.G * bi.mass * bj.mass /
-            Math.sqrt(dx * dx + dy * dy + eps2);
+          const r2 = dx * dx + dy * dy;
+          const R = bi.radius + bj.radius;
+          if (!this.pointGravity && r2 < R * R) {
+            // potential of the linear interior force, continuous with the
+            // exterior branch at r = R (keeps the energy graph honest
+            // while overlapping bodies pass through each other)
+            const D2 = R * R + eps2;
+            const D = Math.sqrt(D2);
+            peN -= this.G * bi.mass * bj.mass *
+              (1.0 / D + (R * R - r2) / (2.0 * D2 * D));
+          } else {
+            peN -= this.G * bi.mass * bj.mass / Math.sqrt(r2 + eps2);
+          }
         }
       }
     }
@@ -916,6 +943,7 @@ export class World {
     return {
       settings: {
         gravity: this.gravity, mutual_gravity: this.mutualGravity,
+        point_gravity: this.pointGravity,
         G: this.G, softening: this.softening,
         drag_linear: this.dragLinear,
         drag_quadratic: this.dragQuadratic,
@@ -936,6 +964,7 @@ export class World {
     const s = data.settings ?? ({} as Partial<WorldDict["settings"]>);
     w.gravity = s.gravity ?? 9.81;
     w.mutualGravity = s.mutual_gravity ?? false;
+    w.pointGravity = s.point_gravity ?? false;
     w.G = s.G ?? 1.0;
     w.softening = s.softening ?? 0.01;
     w.dragLinear = s.drag_linear ?? 0.0;

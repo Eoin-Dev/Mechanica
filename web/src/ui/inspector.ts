@@ -641,6 +641,12 @@ export class Inspector implements Panel {
       this.add(slider("Softening", () => world.softening, (v) => { world.softening = v; },
         0.0001, 2.0, { unit: "m", log: true, onCommit: this.commit,
           tooltip: "Smooths the force at tiny separations" }));
+      this.add(checkbox("Point-mass gravity", () => world.pointGravity,
+        (v) => { world.pointGravity = v; this.commit(); },
+        "On: each body's whole mass acts from its centre, so overlapping " +
+        "bodies can slingshot to extreme speeds. Off: bodies attract like " +
+        "solid uniform discs - inside an overlap the pull fades to zero at " +
+        "the centre, as in reality."));
     }
 
     this.body.append(section("Air & damping"));
