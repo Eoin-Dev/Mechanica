@@ -47,13 +47,17 @@ app.panels = [toolbar, palette, inspector, dock, hintbar, {
 
 // A mouse-clicked button keeps focus, so the next global shortcut key flips
 // the browser's :focus-visible heuristic into "keyboard mode" and paints a
-// stray outline on whatever was last clicked. Drop focus after a mouse click
-// (detail >= 1) to prevent that; keyboard activation (Enter/Space, detail 0)
-// keeps its focus ring so Tab navigation stays visible.
+// stray outline on whatever was last clicked. It also means the next Space
+// re-toggles that control (a focused checkbox) or is swallowed by it (a
+// focused slider) instead of playing/pausing. Drop focus after a mouse click
+// (detail >= 1) on any non-text control to prevent both; keyboard activation
+// (Enter/Space, detail 0) keeps its focus ring so Tab navigation stays
+// visible, and text fields are left alone so typing (and Space) still works.
 document.addEventListener("click", (e) => {
   if (e.detail === 0) return; // keyboard-triggered click: leave focus alone
-  const btn = (e.target as Element | null)?.closest?.("button");
-  if (btn instanceof HTMLElement) btn.blur();
+  const el = (e.target as Element | null)?.closest?.(
+    "button, input[type=checkbox], input[type=range]");
+  if (el instanceof HTMLElement) el.blur();
 });
 
 // --------------------------------------------------------------- keyboard
