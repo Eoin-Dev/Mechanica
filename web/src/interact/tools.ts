@@ -590,7 +590,11 @@ export class CanvasController {
       const [x1, y1] = mouse;
       const rect = { x: Math.min(x0, x1), y: Math.min(y0, y1),
                      w: Math.abs(x1 - x0), h: Math.abs(y1 - y0) };
-      if (rect.w > 4 && rect.h > 4) {
+      // one long dimension is enough: a flat box over a row of bodies (or
+      // a tall one over a column) is a deliberate selection - requiring
+      // BOTH dimensions silently selected nothing. Click jitter stays
+      // excluded because both dimensions are tiny.
+      if (rect.w > 4 || rect.h > 4) {
         const found = this.boxContents(rect);
         if (this.shiftDown) {
           const sel = [...app.selection];
