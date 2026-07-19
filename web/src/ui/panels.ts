@@ -3,7 +3,7 @@ import { App, GraphMode, Panel } from "../app";
 import { Body } from "../engine/body";
 import { SpringLink } from "../engine/links";
 import { TOOLS, TOOL_INFO, TOOL_KEYS, Tool } from "../interact/tools";
-import { RefreshGroup, button, el, segmented, slider } from "./dom";
+import { RefreshGroup, button, el, isPhone, segmented, slider } from "./dom";
 import { ICONS } from "./icons";
 import * as theme from "./theme";
 import { css } from "./theme";
@@ -159,6 +159,8 @@ export class HintBar implements Panel {
   private hint: HTMLElement;
   private status: HTMLElement;
   private app: App;
+  private lastHint = "";
+  private lastBarW = 0;
 
   constructor(app: App, hint: HTMLElement, status: HTMLElement) {
     this.app = app;
@@ -166,21 +168,45 @@ export class HintBar implements Panel {
     this.status = status;
   }
 
+  /** Shrink only the tool-hint text until it fits beside the stats (down
+   * to a floor, after which it ellipsizes); the stats keep their size. */
+  private fitHint(): void {
+    let size = 12;
+    this.hint.style.fontSize = "";
+    while (size > 9 && this.hint.scrollWidth > this.hint.clientWidth) {
+      size--;
+      this.hint.style.fontSize = `${size}px`;
+    }
+  }
+
   refresh(): void {
     const app = this.app;
-    this.hint.textContent = app.controller.hint();
-    const [mx, my] = app.controller.mouse;
-    const wp = app.camera.toWorld(mx, my);
+    const hint = app.controller.hint();
     let nBodies = 0;
     let nAnchors = 0;
     for (const b of app.world.bodies) b.isAnchor ? nAnchors++ : nBodies++;
     const nLinks = app.world.links.length;
     const drift = app.energyDriftText();
     const res = app.playing && app.qNow > 1 ? `dt/${app.qNow}   ` : "";
-    this.status.textContent =
-      `${wp.x.toFixed(2)}, ${wp.y.toFixed(2)} m   |   ${nBodies} bodies   ` +
-      `${nAnchors} anchors   ${nLinks} links   ` +
-      `${app.world.contacts.length} contacts   ${res}${drift}`;
+    const stats = `${nBodies} bodies   ${nAnchors} anchors   ${nLinks} links   ` +
+                  `${app.world.contacts.length} contacts   ${res}${drift}`;
+    // the cursor position is a hover readout - meaningless on a phone, and
+    // the room is better spent on the counts
+    if (isPhone()) {
+      this.status.textContent = stats;
+    } else {
+      const [mx, my] = app.controller.mouse;
+      const wp = app.camera.toWorld(mx, my);
+      this.status.textContent =
+        `${wp.x.toFixed(2)}, ${wp.y.toFixed(2)} m   |   ${stats}`;
+    }
+    const barW = this.hint.parentElement?.clientWidth ?? 0;
+    if (hint !== this.lastHint || barW !== this.lastBarW) {
+      this.lastHint = hint;
+      this.lastBarW = barW;
+      this.hint.textContent = hint;
+      this.fitHint();
+    }
   }
 }
 
