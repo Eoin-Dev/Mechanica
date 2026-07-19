@@ -2,7 +2,7 @@
 import { App } from "../app";
 import { CATEGORIES, PRESETS } from "../scene/presets";
 import * as snap from "../scene/snapshot";
-import { button, el } from "./dom";
+import { button, el, isTouch } from "./dom";
 import { ICONS } from "./icons";
 
 // ------------------------------------------------------------------ library
@@ -123,7 +123,7 @@ export class Library {
     const actions = el("div", { class: "cat-chips" });
     actions.append(button("Save current scene", () => {
       const name = prompt("Scene name:",
-        `scene ${new Date().toISOString().slice(0, 10)}`);
+        `Scene ${new Date().toISOString().slice(0, 10)}`);
       if (name) {
         const saved = snap.saveScene(app.world, name);
         app.toast(`Saved scene '${saved}'`);
@@ -150,7 +150,9 @@ export class Library {
     if (names.length === 0) {
       this.content.append(el("div", { class: "faint",
         style: "margin-top:14px",
-        text: "No saved scenes yet. Ctrl+S (or the button above) saves the " +
+        text: (isTouch()
+                ? "No saved scenes yet. The button above saves the "
+                : "No saved scenes yet. Ctrl+S (or the button above) saves the ") +
               "current scene here, stored in this browser. Export downloads " +
               "a scene as a file the desktop app can read too." }));
       return;
@@ -222,52 +224,56 @@ export class Library {
 }
 
 // --------------------------------------------------------------------- help
-const SHORTCUT_SECTIONS: Array<[string, Array<[string, string]>]> = [
+/** Rows tagged "pc" need a keyboard or mouse and are dropped on touch
+ * devices; untagged rows work everywhere. Keyboard-shortcut sections are
+ * tagged as a whole. */
+type HelpRow = [string, string] | [string, string, "pc"];
+const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
   ["Playback", [
-    ["Space", "play / pause"],
-    [". / ,", "step forward / back one frame"],
-    ["Ctrl+R", "reset to the initial state"],
-    ["+ / -", "double / halve the speed"],
-    ["0", "reset the speed to 1x"],
-  ]],
+    ["Space", "Play / pause"],
+    [". / ,", "Step forward / back one frame"],
+    ["Ctrl+R", "Reset to the initial state"],
+    ["+ / -", "Double / halve the speed"],
+    ["0", "Reset the speed to 1x"],
+  ], "pc"],
   ["Tools", [
-    ["V", "select"],
-    ["H", "pan"],
-    ["B / A", "add body / anchor"],
-    ["W", "draw wall (Shift snaps the angle)"],
-    ["R / E / S", "connect rod / string / spring"],
-    ["X", "eraser"],
-    ["Esc", "cancel a pending link or wall; clear selection"],
-  ]],
+    ["V", "Select"],
+    ["H", "Pan"],
+    ["B / A", "Add body / anchor"],
+    ["W", "Draw wall (Shift snaps the angle)"],
+    ["R / E / S", "Connect rod / string / spring"],
+    ["X", "Eraser"],
+    ["Esc", "Cancel a pending link or wall; clear selection"],
+  ], "pc"],
   ["Editing", [
-    ["Ctrl+Z / Ctrl+Y", "undo / redo"],
-    ["Ctrl+D", "duplicate the selection"],
-    ["Del", "delete the selection"],
-    ["Ctrl+C / Ctrl+V", "copy / paste body properties"],
-    ["Arrows", "nudge selected bodies"],
-    ["K", "lock / unlock selected bodies"],
-    ["N", "snap to grid"],
-    ["Ctrl+S", "save the scene (browser storage)"],
-  ]],
+    ["Ctrl+Z / Ctrl+Y", "Undo / redo"],
+    ["Ctrl+D", "Duplicate the selection"],
+    ["Del", "Delete the selection"],
+    ["Ctrl+C / Ctrl+V", "Copy / paste body properties"],
+    ["Arrows", "Nudge selected bodies"],
+    ["K", "Lock / unlock selected bodies"],
+    ["N", "Snap to grid"],
+    ["Ctrl+S", "Save the scene (browser storage)"],
+  ], "pc"],
   ["View & analysis", [
-    ["F / Shift+F", "zoom to fit / auto-fit camera"],
-    ["C", "follow the selected body"],
-    ["T", "motion trails"],
-    ["D", "velocity vectors"],
-    ["G", "broadphase debug grid"],
-    ["1 / 2 / 3", "energy / momentum / phase graph"],
-    ["Scroll / right-drag", "zoom at cursor / pan"],
-    ["Tab", "hide / show the inspector"],
-    ["L", "library"],
-    ["F1", "this help"],
-  ]],
+    ["F / Shift+F", "Zoom to fit / auto-fit camera"],
+    ["C", "Follow the selected body"],
+    ["T", "Motion trails"],
+    ["D", "Velocity vectors"],
+    ["G", "Broadphase debug grid"],
+    ["1 / 2 / 3", "Energy / momentum / phase graph"],
+    ["Scroll / right-drag", "Zoom at cursor / pan"],
+    ["Tab", "Hide / show the inspector"],
+    ["L", "Library"],
+    ["F1", "This help"],
+  ], "pc"],
   ["Mouse & touch", [
-    ["drag a body", "move it (throw it while playing)"],
-    ["hold a body still", "pin it while everything collides with it"],
-    ["drag the green arrow", "set a body's velocity exactly"],
-    ["right-drag a body", "aim its velocity vector"],
-    ["drag empty space", "box select"],
-    ["pinch (touch)", "zoom and pan"],
+    ["Drag a body", "Move it (throw it while playing)"],
+    ["Hold a body still", "Pin it while everything collides with it"],
+    ["Drag the green arrow", "Set a body's velocity exactly"],
+    ["Right-drag a body", "Aim its velocity vector", "pc"],
+    ["Drag empty space", "Box select"],
+    ["Pinch (touch)", "Zoom and pan"],
   ]],
 ];
 
@@ -280,14 +286,20 @@ export class Help {
     root.addEventListener("pointerdown", (e) => {
       if (e.target === root) this.close();
     });
+    // touch devices (phones and tablets) have no keyboard or mouse: hide
+    // the shortcut sections and mouse-only rows, keep the touch gestures
+    const touch = isTouch();
     const header = el("div", { class: "overlay-header" },
-      el("h2", { text: "Help & shortcuts" }));
+      el("h2", { text: touch ? "Help" : "Help & shortcuts" }));
     header.append(button("", () => this.close(),
       { icon: ICONS.close, style: "ghost", tooltip: "Close (Esc)" }).root);
     const cols = el("div", { class: "help-cols" });
-    for (const [title, rows] of SHORTCUT_SECTIONS) {
-      const col = el("div", {}, el("h3", { text: title }));
-      for (const [keys, what] of rows) {
+    for (const [title, rows, sectionTag] of SHORTCUT_SECTIONS) {
+      if (touch && sectionTag === "pc") continue;
+      const col = el("div", {},
+        el("h3", { text: touch && title === "Mouse & touch" ? "Touch" : title }));
+      for (const [keys, what, rowTag] of rows) {
+        if (touch && rowTag === "pc") continue;
         col.append(el("div", { class: "shortcut-row" },
           el("span", { class: "keys", text: keys }),
           el("span", { class: "what", text: what })));

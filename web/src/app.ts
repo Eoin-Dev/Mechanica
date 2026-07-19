@@ -239,6 +239,8 @@ export class App {
       this.initialSnapshot = null;
       this.baselineEnergy = null;
     }
+    // an open graph should show the new world's state straight away
+    if (this.graphMode !== "Off") this.recordGraphSample();
     this.onWorldReplaced();
   }
 
@@ -439,7 +441,7 @@ export class App {
   quickSave(): void {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
-    const name = `scene ${now.getFullYear()}-${pad(now.getMonth() + 1)}-` +
+    const name = `Scene ${now.getFullYear()}-${pad(now.getMonth() + 1)}-` +
       `${pad(now.getDate())} ${pad(now.getHours())}${pad(now.getMinutes())}` +
       `${pad(now.getSeconds())}`;
     const saved = snap.saveScene(this.world, name);
@@ -525,6 +527,9 @@ export class App {
   // ----------------------------------------------------------------- misc UI
   setGraphMode(mode: GraphMode): void {
     this.graphMode = mode;
+    // seed the plot with the current state so it draws immediately, even
+    // before the simulation is started
+    if (mode !== "Off") this.recordGraphSample();
     this.onWorldReplaced(); // panels re-check dock visibility
   }
 
@@ -777,8 +782,16 @@ export class App {
     // rolling per-frame history so the user can step backwards (,)
     this.history.push(snap.snapshot(this.world));
     if (this.history.length > 600) this.history.shift();
-    // graphs: every series records continuously whatever the dock shows,
-    // so switching graph views never leaves gaps in the data
+    this.recordGraphSample();
+  }
+
+  /** Sample the current state into every graph series. Runs after each
+   * physics frame, and immediately when a graph is enabled or the world
+   * changes, so an opened graph shows data from the very first frame
+   * instead of waiting for the simulation to produce a backlog. */
+  recordGraphSample(): void {
+    // every series records continuously whatever the dock shows, so
+    // switching graph views never leaves gaps in the data
     const e = this.world.energy();
     this.energySeries.add(this.world.time, { KE: e.ke, PE: e.pe, Total: e.total });
     const p = this.world.momentum();

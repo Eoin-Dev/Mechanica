@@ -30,10 +30,19 @@ export interface Control {
 }
 
 /** Phone-sized viewport (matches the CSS mobile breakpoint). Checked live
- * so rotation and window resizing are picked up. */
+ * so rotation and window resizing are picked up. Gates LAYOUT choices
+ * (the inspector drawer, toolbar trims). */
 export function isPhone(): boolean {
   return typeof window !== "undefined" &&
          window.matchMedia("(max-width: 760px)").matches;
+}
+
+/** Touch-first device (phones AND tablets - no hover, no mouse buttons,
+ * usually no keyboard). Gates WORDING and content: touch hints, no
+ * keyboard/mouse references, no cursor readouts. */
+export function isTouch(): boolean {
+  return typeof window !== "undefined" &&
+         window.matchMedia("(pointer: coarse)").matches;
 }
 
 /** Collects controls so a panel can refresh them all each frame. */

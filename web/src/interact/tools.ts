@@ -22,7 +22,7 @@ import { Body, Wall } from "../engine/body";
 import { DistanceLink, SpringLink } from "../engine/links";
 import { safeDragSpeed } from "../engine/world";
 import { Selectable, VEL_ARROW_SCALE, drawVelocityHandle, snapStep } from "../render/draw";
-import { isPhone } from "../ui/dom";
+import { isTouch } from "../ui/dom";
 import { css } from "../ui/theme";
 import type { App } from "../app";
 
@@ -53,8 +53,9 @@ export const TOOL_INFO: Record<Tool, [string, string]> = {
   eraser: ["Eraser (X)", "Click bodies, walls or links to delete them."],
 };
 
-/** Phone wording for the hint bar: short, tap-based, and free of the
- * PC-only interactions (keyboard keys, hover, right/middle drag). */
+/** Touch wording for the hint bar (phones and tablets): short, tap-based,
+ * and free of the PC-only interactions (keyboard keys, hover, right/middle
+ * drag). */
 export const TOOL_INFO_TOUCH: Record<Tool, string> = {
   select: "Tap to select, drag to move (throw while playing). " +
           "Drag empty space for a box select.",
@@ -210,19 +211,19 @@ export class CanvasController {
   }
 
   hint(): string {
-    const phone = isPhone();
+    const touch = isTouch();
     if ((this.tool === "rod" || this.tool === "rope" || this.tool === "spring") &&
         this.linkFirst !== null) {
-      return phone
+      return touch
         ? "Now tap a second body (or empty space) to finish the link."
         : "Now click a second body (or empty space) to finish the link. Esc cancels.";
     }
     if (this.tool === "wall" && this.wallStart !== null) {
-      return phone
+      return touch
         ? "Release to finish the wall."
         : "Release to finish the wall. Hold Shift to snap the angle.";
     }
-    return phone ? TOOL_INFO_TOUCH[this.tool] : TOOL_INFO[this.tool][1];
+    return touch ? TOOL_INFO_TOUCH[this.tool] : TOOL_INFO[this.tool][1];
   }
 
   // ------------------------------------------------------------------ events
