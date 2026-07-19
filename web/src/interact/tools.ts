@@ -22,6 +22,7 @@ import { Body, Wall } from "../engine/body";
 import { DistanceLink, SpringLink } from "../engine/links";
 import { safeDragSpeed } from "../engine/world";
 import { Selectable, VEL_ARROW_SCALE, drawVelocityHandle, snapStep } from "../render/draw";
+import { isPhone } from "../ui/dom";
 import { css } from "../ui/theme";
 import type { App } from "../app";
 
@@ -50,6 +51,23 @@ export const TOOL_INFO: Record<Tool, [string, string]> = {
          "made inelastic (fixed length) in the Inspector."],
   spring: ["Connect spring (S)", "Click two bodies to join them with a spring."],
   eraser: ["Eraser (X)", "Click bodies, walls or links to delete them."],
+};
+
+/** Phone wording for the hint bar: short, tap-based, and free of the
+ * PC-only interactions (keyboard keys, hover, right/middle drag). */
+export const TOOL_INFO_TOUCH: Record<Tool, string> = {
+  select: "Tap to select, drag to move (throw while playing). " +
+          "Drag empty space for a box select.",
+  pan: "Drag to move the view. Pinch with two fingers to zoom.",
+  body: "Tap to place a dynamic body. Edit it in the Inspector.",
+  anchor: "Tap to place a fixed anchor for rods, strings and springs.",
+  wall: "Drag to draw a static wall.",
+  rod: "Tap two bodies to join them rigidly. Tap empty space to " +
+       "auto-create an anchor/body.",
+  rope: "Tap two bodies to join with an elastic string (pulls only " +
+        "when stretched).",
+  spring: "Tap two bodies to join them with a spring.",
+  eraser: "Tap bodies, walls or links to delete them.",
 };
 
 const ANCHOR_GREY: [number, number, number] = [120, 125, 135];
@@ -192,14 +210,19 @@ export class CanvasController {
   }
 
   hint(): string {
+    const phone = isPhone();
     if ((this.tool === "rod" || this.tool === "rope" || this.tool === "spring") &&
         this.linkFirst !== null) {
-      return "Now click a second body (or empty space) to finish the link. Esc cancels.";
+      return phone
+        ? "Now tap a second body (or empty space) to finish the link."
+        : "Now click a second body (or empty space) to finish the link. Esc cancels.";
     }
     if (this.tool === "wall" && this.wallStart !== null) {
-      return "Release to finish the wall. Hold Shift to snap the angle.";
+      return phone
+        ? "Release to finish the wall."
+        : "Release to finish the wall. Hold Shift to snap the angle.";
     }
-    return TOOL_INFO[this.tool][1];
+    return phone ? TOOL_INFO_TOUCH[this.tool] : TOOL_INFO[this.tool][1];
   }
 
   // ------------------------------------------------------------------ events

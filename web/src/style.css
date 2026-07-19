@@ -153,6 +153,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 0 10px;
   background: var(--panel);
   border-top: 1px solid var(--outline);
@@ -161,7 +162,10 @@ body {
   white-space: nowrap;
   overflow: hidden;
 }
-#status-text { color: var(--text-faint); }
+/* the tool hint yields (shrinks, then ellipsizes) so the stats never get
+   pushed offscreen; the stats keep their size */
+#hint-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#status-text { flex: none; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 
 /* ------------------------------------------------------------- controls */
 button {
@@ -486,6 +490,10 @@ kbd {
 }
 
 /* --------------------------------------------------------------- mobile */
+/* drawer handle: the only way into the inspector on phones (shown by the
+   inspector itself while the drawer is closed; hidden elsewhere) */
+#inspector-handle { display: none; }
+
 @media (max-width: 760px) {
   #inspector, #inspector-splitter { display: none; }
   #inspector.mobile-open {
@@ -499,4 +507,40 @@ kbd {
     box-shadow: -8px 0 24px rgba(0, 0, 0, 0.5);
   }
   .brand { display: none; }
+
+  #inspector-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 26px;
+    height: 76px;
+    background: var(--panel);
+    border: 1px solid var(--outline);
+    border-right: none;
+    border-radius: 10px 0 0 10px;
+    color: var(--text-dim);
+    z-index: 8;
+    cursor: pointer;
+  }
+  #inspector-handle svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* keyboard shortcuts don't exist on a phone */
+  .tool-btn .key-badge { display: none; }
+
+  /* tighter chrome so the important controls stay on screen */
+  #toolbar { gap: 4px; padding: 0 6px; }
+  .speed-ctrl { width: 132px !important; }
+  #hintbar { gap: 8px; padding: 0 8px; }
 }

@@ -9,8 +9,8 @@ import { Body, MATERIALS, Wall } from "../engine/body";
 import { DistanceLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
 import { Selectable } from "../render/draw";
-import { RefreshGroup, button, checkbox, el, fmt3dp, halfRow, numEdit, section,
-         segmented, slider, textEdit } from "./dom";
+import { RefreshGroup, button, checkbox, el, fmt3dp, halfRow, isPhone, numEdit,
+         section, segmented, slider, textEdit } from "./dom";
 import { ICONS } from "./icons";
 
 const TABS = ["Selection", "World", "View"] as const;
@@ -28,6 +28,7 @@ export class Inspector implements Panel {
   private collapsed = false;
   private splitter: HTMLElement;
   private reopenStrip: HTMLElement;
+  private handle: HTMLElement;
 
   constructor(app: App, root: HTMLElement, splitter: HTMLElement) {
     this.app = app;
@@ -85,25 +86,55 @@ export class Inspector implements Panel {
       else this.refreshStructure();
     };
     app.onWorldReplaced = () => this.markDirty();
+
+    // Phones: the panel becomes a slide-over drawer. It starts closed, and
+    // a fixed handle on the right screen edge opens it - without one there
+    // is no way in at all (no Tab key, and the desktop reopen strip lives
+    // inside the hidden panel).
+    this.handle = el("div", { id: "inspector-handle", title: "Open the panel" });
+    this.handle.insertAdjacentHTML("beforeend", ICONS.chev_left);
+    this.handle.addEventListener("click", () => this.toggleCollapsed());
+    document.body.append(this.handle);
+    if (isPhone()) this.collapsed = true;
+    this.applyCollapsed();
+    // re-apply when the viewport crosses the phone breakpoint (media-change
+    // AND resize: some webviews throttle one or the other)
+    let wasPhone = isPhone();
+    const onViewportChange = () => {
+      if (isPhone() === wasPhone) return;
+      wasPhone = !wasPhone;
+      this.applyCollapsed();
+    };
+    window.matchMedia("(max-width: 760px)")
+      .addEventListener("change", onViewportChange);
+    window.addEventListener("resize", onViewportChange);
+
     this.rebuild();
+  }
+
+  /** Reflect the collapsed state in the DOM for the current viewport. */
+  private applyCollapsed(): void {
+    const phone = isPhone();
+    this.root.classList.toggle("collapsed", this.collapsed);
+    this.root.classList.toggle("mobile-open", !this.collapsed && phone);
+    this.body.hidden = this.collapsed;
+    (this.root.querySelector(".tabs") as HTMLElement).hidden = this.collapsed;
+    this.reopenStrip.hidden = !this.collapsed;
+    this.splitter.hidden = this.collapsed || phone; // no resizing drawers
+    if (this.collapsed || phone) {
+      // let .collapsed / the drawer CSS set the width
+      this.root.style.removeProperty("width");
+    } else if (typeof this.app.settings.inspector_w === "number") {
+      this.root.style.width = `${Math.max(240, this.app.settings.inspector_w)}px`;
+    }
+    this.handle.hidden = !phone || !this.collapsed;
+    this.app.resizeCanvas();
   }
 
   toggleCollapsed(): void {
     this.collapsed = !this.collapsed;
-    this.root.classList.toggle("collapsed", this.collapsed);
-    this.root.classList.toggle("mobile-open", !this.collapsed &&
-      window.matchMedia("(max-width: 760px)").matches);
-    this.body.hidden = this.collapsed;
-    (this.root.querySelector(".tabs") as HTMLElement).hidden = this.collapsed;
-    this.reopenStrip.hidden = !this.collapsed;
-    this.splitter.hidden = this.collapsed; // no resizing while collapsed
-    if (this.collapsed) {
-      this.root.style.removeProperty("width"); // let .collapsed set the width
-    } else if (typeof this.app.settings.inspector_w === "number") {
-      this.root.style.width = `${Math.max(240, this.app.settings.inspector_w)}px`;
-    }
-    this.app.resizeCanvas();
-    if (this.collapsed) {
+    this.applyCollapsed();
+    if (this.collapsed && !isPhone()) {
       this.app.toast("Panel hidden - press Tab or click the right edge to reopen");
     }
   }

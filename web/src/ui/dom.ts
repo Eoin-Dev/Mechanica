@@ -29,6 +29,13 @@ export interface Control {
   refresh?: () => void;
 }
 
+/** Phone-sized viewport (matches the CSS mobile breakpoint). Checked live
+ * so rotation and window resizing are picked up. */
+export function isPhone(): boolean {
+  return typeof window !== "undefined" &&
+         window.matchMedia("(max-width: 760px)").matches;
+}
+
 /** Collects controls so a panel can refresh them all each frame. */
 export class RefreshGroup {
   private fns: Array<() => void> = [];
