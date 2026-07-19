@@ -5,6 +5,7 @@ import { SpringLink } from "../engine/links";
 import { TOOLS, TOOL_INFO, TOOL_KEYS, Tool } from "../interact/tools";
 import { RefreshGroup, button, el, isTouch, segmented, slider } from "./dom";
 import { ICONS } from "./icons";
+import { GRAPH_HISTORY_S, GRAPH_WINDOW_S, TimeSeries } from "./plots";
 import * as theme from "./theme";
 import { css } from "./theme";
 
@@ -29,15 +30,15 @@ export class Toolbar implements Panel {
     this.playBtn = play.root as HTMLButtonElement;
     root.append(play.root);
     root.append(g.add(button("", () => app.stepBack(),
-      { icon: ICONS.step_back, tooltip: "Step one frame back (,)" })).root);
+      { icon: ICONS.step_back, tooltip: "Step one frame back (Left arrow or ,)" })).root);
     root.append(g.add(button("", () => app.stepOnce(),
-      { icon: ICONS.step, tooltip: "Advance one frame (.)" })).root);
+      { icon: ICONS.step, tooltip: "Advance one frame (Right arrow or .)" })).root);
     root.append(g.add(button("", () => app.resetSim(),
       { icon: ICONS.reset, tooltip: "Reset to the initial state (Ctrl+R)" })).root);
 
     const speedWrap = el("div", { class: "speed-ctrl", style: "width:200px;flex:none;" });
     speedWrap.append(g.add(slider("Speed", () => app.speed,
-      (v) => { app.speed = v; }, 0.01, 20.0,
+      (v) => { app.speed = v; }, 0.01, 16.0,
       { unit: "x", log: true, fmt: (v) => v.toFixed(2),
         tooltip: "Simulation speed multiplier. Keys: + and - double/halve, " +
                  "0 resets." })).root);
@@ -91,8 +92,9 @@ export class Toolbar implements Panel {
         tooltip: "Auto-fit camera: continuously keep the whole scene framed (Shift+F)" })).root);
     root.append(g.add(button("Library", () => toggleOverlay("library"),
       { icon: ICONS.library, tooltip: "Example simulations and saved scenes (L)" })).root);
-    root.append(g.add(button("", () => toggleOverlay("help"),
-      { icon: ICONS.help, tooltip: "Help & shortcuts (F1)" })).root);
+    root.append(g.add(button("", () => toggleOverlay("settings"),
+      { icon: ICONS.gear,
+        tooltip: "Settings - theme, font, performance, help" })).root);
 
     this.fps = el("span", { id: "fps" });
     root.append(this.fps);
@@ -218,8 +220,12 @@ export class GraphDock implements Panel {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private hintEl: HTMLElement;
+  private liveBtn: HTMLButtonElement;
   private group = new RefreshGroup();
   private lastMode: GraphMode = "Off";
+  // time-axis view: zoom (span) and scroll-back position (end; null=live)
+  private viewSpan = GRAPH_WINDOW_S;
+  private viewEnd: number | null = null;
 
   constructor(app: App, root: HTMLElement, splitter: HTMLElement) {
     this.app = app;
@@ -233,6 +239,11 @@ export class GraphDock implements Panel {
       "Which live graph to display (keys 1, 2, 3)")).root);
     this.hintEl = el("span", { class: "dock-hint" });
     header.append(this.hintEl);
+    this.liveBtn = el("button", { class: "primary", text: "Live" });
+    this.liveBtn.title = "Jump back to the present and follow new data";
+    this.liveBtn.hidden = true;
+    this.liveBtn.addEventListener("click", () => { this.viewEnd = null; });
+    header.append(this.liveBtn);
     header.append(this.group.add(button("", () => this.clearData(),
       { icon: ICONS.trash, style: "ghost", tooltip: "Clear all collected graph data" })).root);
     header.append(this.group.add(button("", () => app.setGraphMode("Off"),
@@ -243,12 +254,7 @@ export class GraphDock implements Panel {
     this.ctx = this.canvas.getContext("2d")!;
     root.append(header, wrap);
 
-    // legend clicks toggle channel visibility
-    this.canvas.addEventListener("click", (e) => {
-      const r = this.canvas.getBoundingClientRect();
-      const series = this.activeSeries();
-      series?.legendClick(e.clientX - r.left, e.clientY - r.top);
-    });
+    this.attachViewControls();
 
     // resizable via the splitter above the dock
     const saved = app.settings.dock_h;
@@ -273,10 +279,79 @@ export class GraphDock implements Panel {
     });
   }
 
+  /** Wheel = zoom the time axis, drag = scroll back through the retained
+   * history (detaching from the live edge), plain click = legend toggle. */
+  private attachViewControls(): void {
+    const spanFor = (px: number): number => this.viewSpan * (px / Math.max(1, this.canvas.clientWidth));
+
+    this.canvas.addEventListener("wheel", (e) => {
+      const series = this.activeSeries();
+      if (series === undefined || series.t.length === 0) return;
+      e.preventDefault();
+      const factor = 1.1 ** (-e.deltaY / 100);
+      const newSpan = Math.min(GRAPH_HISTORY_S,
+        Math.max(0.5, this.viewSpan / factor));
+      if (this.viewEnd !== null) {
+        // detached: keep the time under the cursor fixed while zooming
+        const r = this.canvas.getBoundingClientRect();
+        const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width)));
+        const tCursor = this.viewEnd - this.viewSpan * (1 - frac);
+        this.setViewEnd(tCursor + (1 - frac) * newSpan, series);
+      }
+      // live: the right edge stays anchored and keeps following
+      this.viewSpan = newSpan;
+    }, { passive: false });
+
+    let dragId: number | null = null;
+    let lastX = 0;
+    let moved = false;
+    this.canvas.addEventListener("pointerdown", (e) => {
+      dragId = e.pointerId;
+      lastX = e.clientX;
+      moved = false;
+      try {
+        this.canvas.setPointerCapture(e.pointerId);
+      } catch {
+        // pointer already gone: the drag simply won't extend off-canvas
+      }
+    });
+    this.canvas.addEventListener("pointermove", (e) => {
+      if (dragId !== e.pointerId) return;
+      const dx = e.clientX - lastX;
+      if (!moved && Math.abs(dx) < 4) return; // not a drag yet
+      const series = this.activeSeries();
+      if (series === undefined || series.t.length === 0) return;
+      moved = true;
+      lastX = e.clientX;
+      this.setViewEnd((this.viewEnd ?? series.lastT) - spanFor(dx), series);
+    });
+    const endDrag = (e: PointerEvent) => {
+      if (dragId !== e.pointerId) return;
+      dragId = null;
+      if (!moved) {
+        // a plain click: toggle legend channels
+        const r = this.canvas.getBoundingClientRect();
+        this.activeSeries()?.legendClick(e.clientX - r.left, e.clientY - r.top);
+      }
+    };
+    this.canvas.addEventListener("pointerup", endDrag);
+    this.canvas.addEventListener("pointercancel", () => { dragId = null; });
+  }
+
+  /** Clamp a requested right-edge time to the retained history and snap
+   * back to live when it reaches the newest sample. */
+  private setViewEnd(end: number, series: TimeSeries): void {
+    const latest = series.lastT;
+    const minEnd = Math.min(latest, series.firstT + this.viewSpan);
+    end = Math.max(minEnd, Math.min(latest, end));
+    this.viewEnd = end >= latest - 1e-9 ? null : end;
+  }
+
   private clearData(): void {
     this.app.energySeries.clear();
     this.app.momentumSeries.clear();
     this.app.phasePlot.clear();
+    this.viewEnd = null;
   }
 
   private activeSeries() {
@@ -346,25 +421,36 @@ export class GraphDock implements Panel {
       this.canvas.height = bh;
     }
 
+    // Scrolled-back view whose whole range has been evicted from the
+    // bounded history: rejoin the live edge and tell the user why.
+    const series = this.activeSeries();
+    if (this.viewEnd !== null && series !== undefined &&
+        series.t.length > 0 && this.viewEnd <= series.firstT) {
+      this.viewEnd = null;
+      app.toast("That part of the graph history has expired - back to live");
+    }
+    this.liveBtn.hidden = this.viewEnd === null || series === undefined;
+
     // redraw only when something it depends on changed - between throttled
     // samples and while paused the canvas is already correct. An easing
     // autoscale keeps redrawing static data until the animation settles.
-    const series = this.activeSeries();
     const body = app.selection.find((o): o is Body => o instanceof Body);
     const rev = series !== undefined ? series.rev
       : `${app.phasePlot.rev}:${body?.name ?? ""}`;
-    const sig = `${app.graphMode}:${bw}x${bh}:${rev}`;
+    const sig = `${app.graphMode}:${bw}x${bh}:${rev}:` +
+                `${this.viewEnd ?? "live"}:${this.viewSpan}`;
     if (sig === this.lastDrawSig && !(series?.easing ?? false)) return;
     this.lastDrawSig = sig;
 
+    const graphView = { end: this.viewEnd, span: this.viewSpan };
     const ctx = this.ctx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     if (app.graphMode === "Energy") {
-      app.energySeries.draw(ctx, w, h, "Energy (J)");
+      app.energySeries.draw(ctx, w, h, "Energy (J)", graphView);
     } else if (app.graphMode === "Mom.") {
       app.momentumSeries.draw(ctx, w, h,
-        "Momentum p (kg m/s) and angular momentum L");
+        "Momentum p (kg m/s) and angular momentum L", graphView);
     } else if (app.graphMode === "Phase") {
       const body = app.selection.find((o): o is Body => o instanceof Body);
       const name = body ? body.name : "select a body";

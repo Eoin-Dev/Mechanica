@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import * as theme from "../src/ui/theme";
 import { css } from "../src/ui/theme";
-import { GRAPH_WINDOW_S, TimeSeries } from "../src/ui/plots";
+import { TimeSeries } from "../src/ui/plots";
 
 const gridCss = css(theme.GRID_MAJOR);
 
@@ -132,18 +132,45 @@ describe("time-series rendering", () => {
     expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(20);
   });
 
-  it("scrolls once the time window fills instead of squeezing forever", () => {
-    const s = new TimeSeries(["E"]);
+  it("retains only the bounded history however long the sim runs", () => {
+    const s = new TimeSeries(["E"], 10); // 10 s of retained history
     let t = 0;
-    for (let i = 0; i < 30 * 60; i++) {
-      s.add((t += 1 / 60), { E: Math.sin(i * 0.1) }); // 30 s at 60 Hz
+    for (let i = 0; i < 60 * 60; i++) {
+      s.add((t += 1 / 60), { E: Math.sin(i * 0.1) }); // a 60 s run
     }
     const span = s.t[s.t.length - 1] - s.t[0];
-    // the window covers the last GRAPH_WINDOW_S seconds, no more
-    expect(span).toBeLessThanOrEqual(GRAPH_WINDOW_S + 1e-9);
-    expect(span).toBeGreaterThan(GRAPH_WINDOW_S * 0.95);
-    // and the sample count is bounded accordingly (drawing cost cap)
-    expect(s.t.length).toBeLessThanOrEqual(GRAPH_WINDOW_S * 60 + 2);
+    expect(span).toBeLessThanOrEqual(10 + 1e-9);
+    expect(span).toBeGreaterThan(10 * 0.95);
+    // memory stays bounded: samples for the retained span only
+    expect(s.t.length).toBeLessThanOrEqual(10 * 60 + 2);
+  });
+
+  it("draws only the requested view range when zoomed/scrolled back", () => {
+    const s = new TimeSeries(["E"]);
+    let t = 0;
+    for (let i = 0; i < 40 * 60; i++) {
+      s.add((t += 1 / 60), { E: Math.sin(i * 0.05) }); // 40 s at 60 Hz
+    }
+    // detached view: 5 s ending at t=20 s (well inside the history)
+    const { ctx, pts } = recCtx();
+    s.draw(ctx, 600, 200, "Energy", { end: 20, span: 5 });
+    const data = pts.filter((p) => p.stroke !== gridCss && p.stroke !== "");
+    // ~5 s at 60 Hz plus the one-sample overhang each side
+    expect(data.length).toBeGreaterThan(5 * 60 - 2);
+    expect(data.length).toBeLessThan(5 * 60 + 4);
+  });
+
+  it("connects across irregular sample spacing (no tab-switch gaps)", () => {
+    const s = new TimeSeries(["E"]);
+    s.add(0.0, { E: 0 });
+    s.add(0.0125, { E: 1 });
+    s.add(0.5, { E: 2 }); // a stalled frame / backgrounded tab
+    s.add(0.5125, { E: 3 });
+    const { ctx, pts } = recCtx();
+    s.draw(ctx, 300, 120, "Energy");
+    const data = pts.filter((p) => p.stroke !== gridCss && p.stroke !== "");
+    // one unbroken polyline through all four samples
+    expect(data.length).toBe(4);
   });
 
   it("bumps rev on mutations so renderers can skip unchanged frames", () => {

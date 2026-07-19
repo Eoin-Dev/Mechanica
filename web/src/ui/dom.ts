@@ -47,19 +47,46 @@ export function isTouch(): boolean {
 
 /** Collects controls so a panel can refresh them all each frame. */
 export class RefreshGroup {
-  private fns: Array<() => void> = [];
+  private items: Array<{ el: HTMLElement; fn: () => void; visible: boolean }> = [];
+  private byEl = new Map<Element, { visible: boolean }>();
+  private io: IntersectionObserver | null = null;
+
+  /** Skip refreshing controls scrolled out of view inside `scrollRoot`.
+   * A long panel (hundreds of driver/field rows) otherwise refreshes
+   * every control every frame, which shows up as an fps drop just from
+   * having the panel open. */
+  cullWithin(scrollRoot: HTMLElement): void {
+    if (typeof IntersectionObserver === "undefined") return;
+    this.io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        const item = this.byEl.get(e.target);
+        if (item) item.visible = e.isIntersecting;
+      }
+    }, { root: scrollRoot, rootMargin: "80px" });
+  }
 
   add<T extends Control>(c: T): T {
-    if (c.refresh) this.fns.push(c.refresh);
+    if (c.refresh) {
+      // visible until the observer reports otherwise, so nothing is
+      // stale during the first frames after a rebuild
+      const item = { el: c.root, fn: c.refresh, visible: true };
+      this.items.push(item);
+      this.byEl.set(c.root, item);
+      this.io?.observe(c.root);
+    }
     return c;
   }
 
   refreshAll(): void {
-    for (const fn of this.fns) fn();
+    for (const item of this.items) {
+      if (item.visible) item.fn();
+    }
   }
 
   clear(): void {
-    this.fns = [];
+    this.io?.disconnect();
+    this.items = [];
+    this.byEl.clear();
   }
 }
 
@@ -151,7 +178,8 @@ export function slider(label: string, get: () => number,
   let editing = false;
   const show = (v: number) => {
     if (editing) return; // don't clobber what the user is typing
-    val.value = opts.unit ? `${fmt(v)} ${opts.unit}` : fmt(v);
+    const s = opts.unit ? `${fmt(v)} ${opts.unit}` : fmt(v);
+    if (val.value !== s) val.value = s; // avoid per-frame DOM writes
   };
   input.addEventListener("input", () => {
     dragging = true;
@@ -192,11 +220,14 @@ export function slider(label: string, get: () => number,
   const refresh = () => {
     if (dragging || editing) return;
     const dis = opts.disabled?.() ?? false;
-    input.disabled = dis;
-    val.disabled = dis;
-    row.classList.toggle("disabled", dis);
+    if (input.disabled !== dis) {
+      input.disabled = dis;
+      val.disabled = dis;
+      row.classList.toggle("disabled", dis);
+    }
     const v = get();
-    input.value = String(toPos(v));
+    const pos = String(toPos(v));
+    if (input.value !== pos) input.value = pos;
     show(v);
   };
   refresh();
@@ -241,7 +272,9 @@ export function numEdit(label: string, get: () => number,
     e.stopPropagation();
   });
   const refresh = () => {
-    if (!focused) input.value = fmt(get());
+    if (focused) return;
+    const s = fmt(get());
+    if (input.value !== s) input.value = s;
   };
   refresh();
   return { root: wrap, refresh };
@@ -255,7 +288,8 @@ export function checkbox(label: string, get: () => boolean,
   if (tooltip) lab.title = tooltip;
   input.addEventListener("change", () => set(input.checked));
   const refresh = () => {
-    input.checked = get();
+    const v = get();
+    if (input.checked !== v) input.checked = v;
   };
   refresh();
   return { root: lab, refresh };

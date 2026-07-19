@@ -5,7 +5,7 @@ import { App, PRESETS } from "./app";
 import { GraphMode } from "./app";
 import { TOOL_KEYS } from "./interact/tools";
 import { Inspector } from "./ui/inspector";
-import { Library, Help } from "./ui/overlays";
+import { Help, Library, SettingsPanel } from "./ui/overlays";
 import { GraphDock, HintBar, Palette, Toolbar, overlayToggles } from "./ui/panels";
 
 const $ = (id: string): HTMLElement => document.getElementById(id)!;
@@ -35,8 +35,10 @@ const dock = new GraphDock(app, $("dock"), $("dock-splitter"));
 const hintbar = new HintBar(app, $("hint-text"), $("status-text"));
 const library = new Library(app, $("library"));
 const help = new Help($("help"));
+const settingsPanel = new SettingsPanel(app, $("settings"), () => help.open());
 overlayToggles["library"] = () => library.toggle();
 overlayToggles["help"] = () => help.toggle();
+overlayToggles["settings"] = () => settingsPanel.toggle();
 
 const overloadEl = $("overload-warning");
 app.panels = [toolbar, palette, inspector, dock, hintbar, {
@@ -90,10 +92,11 @@ document.addEventListener("keydown", (e) => {
   }
 
   // overlays swallow everything except their own close keys
-  if (library.visible || help.visible) {
+  if (library.visible || help.visible || settingsPanel.visible) {
     if (e.key === "Escape" || key === "l" || e.key === "F1") {
       library.close();
       help.close();
+      settingsPanel.close();
       e.preventDefault();
     }
     return;
@@ -123,17 +126,11 @@ document.addEventListener("keydown", (e) => {
     case "F1":
       help.toggle();
       break;
-    case "ArrowUp":
-      app.nudgeSelection(0, 1);
-      break;
-    case "ArrowDown":
-      app.nudgeSelection(0, -1);
-      break;
     case "ArrowLeft":
-      app.nudgeSelection(-1, 0);
+      app.stepBack();
       break;
     case "ArrowRight":
-      app.nudgeSelection(1, 0);
+      app.stepOnce();
       break;
     default: {
       if (key in TOOL_KEYS && key !== "d" && key !== "c") {

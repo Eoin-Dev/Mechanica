@@ -1063,38 +1063,6 @@ function buildSinaiBilliard(): World {
   return w;
 }
 
-/** A pendulum swinging over three attractors with light air drag.
- *
- * It wanders chaotically before settling over one 'magnet'; which one it
- * picks depends so sensitively on the release point that the basins of
- * attraction form a fractal. */
-function buildMagneticPendulum(): World {
-  const w = new World();
-  w.substeps = 10;
-  w.mutualGravity = true; // the magnets attract via N-body gravity
-  w.G = 0.02;
-  w.softening = 0.08;
-  w.dragLinear = 0.3;
-  const pivot = addBody(w, 0, 2.2, { r: 0.06, m: 1.0, anchor: true });
-  const ang = (75 * Math.PI) / 180;
-  const bob = addBody(w, 1.9 * Math.sin(ang), 2.2 - 1.9 * Math.cos(ang),
-                      { r: 0.11, m: 1.0, color: [235, 235, 225], name: "Bob" });
-  bob.collides = false;
-  w.links.push(new DistanceLink(pivot, bob));
-  const magnets: Array<[[number, number], Color]> = [
-    [[0.0, 0.18], [230, 120, 120]],
-    [[-1.05, 0.50], [120, 190, 120]],
-    [[1.05, 0.50], [120, 160, 230]],
-  ];
-  for (let i = 0; i < magnets.length; i++) {
-    const [[mx, my], col] = magnets[i];
-    const mag = addBody(w, mx, my, { r: 0.09, m: 25.0, locked: true,
-                                     color: col, name: `Magnet ${i + 1}` });
-    mag.collides = false;
-  }
-  return w;
-}
-
 function buildOrbitDance(): World {
   const w = spaceWorld(8);
   w.softening = 0.02;
@@ -1348,12 +1316,6 @@ export const PRESETS: Preset[] = [
     "calm eye, and drag. Open the World tab to read - and edit - the " +
     "formulas while it runs.",
     buildCyclone, { zoom: 85, trails: true }),
-  new Preset("Magnetic pendulum", "Chaos",
-    "A pendulum swings over three attracting 'magnets' with light " +
-    "air drag. It wanders unpredictably before settling over one - " +
-    "and which one depends so sensitively on the release point that " +
-    "the basins of attraction form a fractal. Try nudging the bob.",
-    buildMagneticPendulum, { zoom: 110, trails: true }),
 ];
 
 export const CATEGORIES: string[] = (() => {
