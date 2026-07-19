@@ -315,6 +315,10 @@ export class GraphDock implements Panel {
     return "";
   }
 
+  /** What the last canvas draw depended on; redraws are skipped while
+   * this stays the same (paused sim, throttled sampling frames). */
+  private lastDrawSig = "";
+
   refresh(): void {
     const app = this.app;
     const visible = app.graphMode !== "Off";
@@ -341,6 +345,18 @@ export class GraphDock implements Panel {
       this.canvas.width = bw;
       this.canvas.height = bh;
     }
+
+    // redraw only when something it depends on changed - between throttled
+    // samples and while paused the canvas is already correct. An easing
+    // autoscale keeps redrawing static data until the animation settles.
+    const series = this.activeSeries();
+    const body = app.selection.find((o): o is Body => o instanceof Body);
+    const rev = series !== undefined ? series.rev
+      : `${app.phasePlot.rev}:${body?.name ?? ""}`;
+    const sig = `${app.graphMode}:${bw}x${bh}:${rev}`;
+    if (sig === this.lastDrawSig && !(series?.easing ?? false)) return;
+    this.lastDrawSig = sig;
+
     const ctx = this.ctx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
