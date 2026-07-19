@@ -38,6 +38,10 @@ html, body, #app { height: 100%; overflow: hidden; }
   font-weight: 400;
   font-style: normal;
   font-display: swap;
+  /* OpenDyslexic's glyphs fill far more of the em box than Segoe UI;
+     rendering it ~25% smaller matches the two fonts' visual size so
+     the layout doesn't blow up when the option is toggled */
+  size-adjust: 74%;
 }
 @font-face {
   font-family: "OpenDyslexic";
@@ -45,6 +49,7 @@ html, body, #app { height: 100%; overflow: hidden; }
   font-weight: 600 700;
   font-style: normal;
   font-display: swap;
+  size-adjust: 74%;
 }
 body.dyslexic {
   --font: "OpenDyslexic", "Segoe UI", system-ui, sans-serif;

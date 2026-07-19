@@ -86,8 +86,12 @@ class Manifold {
   rbx: number;
   rby: number;
   targetVn: number;
+  e: number;
   pn = 0.0;
   pt = 0.0;
+  /** Impulse applied by the one-shot impact pass (not warm-started, not
+   * retractable by the clamped sweeps; counted for the friction limit). */
+  pnBounce = 0.0;
   // static-friction position anchor (world contact point) carried from the
   // previous substep; `anchored` is false for a brand-new contact
   ax = 0.0;
@@ -146,7 +150,10 @@ class Manifold {
     this.rbXt = rbXt;
     this.kT = this.invMSum + raXt * raXt * invIa + rbXt * rbXt * invIb;
 
-    // restitution bias from the pre-solve approach speed
+    // restitution bias from the pre-solve approach speed (it can rise
+    // during the velocity solve as impulse chains propagate - see
+    // solveVelocity)
+    this.e = e;
     const vn0 = this.normalVelocity();
     this.targetVn = vn0 < -RESTING_SPEED ? -e * vn0 : 0.0;
     this.key = b !== null ? `${a.id},${b.id}` : `${a.id},0`;
@@ -181,6 +188,49 @@ class Manifold {
  * fraction of the first sweep's largest correction: grinding contact
  * piles (e.g. a collapsed soft body) then converge in a few sweeps
  * instead of always burning the full iteration budget. */
+/** Sequential pairwise impact resolution (restitution propagation).
+ *
+ * The clamped solver below treats its restitution bias as a persistent
+ * velocity constraint, which is right for a single impact but wrong for a
+ * touching CHAIN: interior contacts capture zero pre-solve approach speed
+ * (inelastic smear), while re-raising their bias mid-solve would force
+ * pairs that already handed their impulse on to keep separating - both
+ * distort a Newton's cradle and the latter injects energy.
+ *
+ * Stiff bodies physically resolve chained impacts as a sequence of
+ * pairwise collisions. This pass does exactly that: any contact closing
+ * faster than the resting threshold gets the exact two-body collision
+ * impulse -(1+e)vn/kN, repeated in sweeps so the impulse propagates down
+ * the chain (one ball in, one ball out). Every one-shot is a real
+ * two-body collision, so energy is conserved (e=1) or dissipated (e<1),
+ * never created. The contact's persistent bias is then zeroed: its bounce
+ * has happened, and the clamped sweeps treat it as a resting contact. */
+function solveImpacts(manifolds: Manifold[]): void {
+  const passes = Math.min(32, manifolds.length + 4);
+  for (let pass = 0; pass < passes; pass++) {
+    let any = false;
+    for (const m of manifolds) {
+      const vn = m.normalVelocity();
+      if (vn >= -RESTING_SPEED) continue;
+      const dpn = (-(1.0 + m.e) * vn) / m.kN;
+      m.pnBounce += dpn;
+      m.targetVn = 0.0; // its bounce is spent; no persistent separation bias
+      const a = m.a;
+      const b = m.b;
+      a.vel.x -= dpn * m.nx * m.invMa;
+      a.vel.y -= dpn * m.ny * m.invMa;
+      a.omega -= m.raXn * dpn * m.invIa;
+      if (b !== null) {
+        b.vel.x += dpn * m.nx * m.invMb;
+        b.vel.y += dpn * m.ny * m.invMb;
+        b.omega += m.rbXn * dpn * m.invIb;
+      }
+      any = true;
+    }
+    if (!any) break;
+  }
+}
+
 function solveVelocity(manifolds: Manifold[], iterations: number): void {
   let worst0 = 0.0;
   for (let sweep = 0; sweep < iterations; sweep++) {
@@ -242,7 +292,7 @@ function solveVelocity(manifolds: Manifold[], iterations: number): void {
         const ty = nx;
         const vt = (vbx - vax) * tx + (vby - vay) * ty;
         let dpt = -vt / m.kT;
-        const maxF = m.mu * m.pn;
+        const maxF = m.mu * (m.pn + m.pnBounce);
         let newPt = m.pt + dpt;
         if (newPt > maxF) newPt = maxF;
         else if (newPt < -maxF) newPt = -maxF;
@@ -599,11 +649,12 @@ export function solveContacts(bodies: Body[], walls: Wall[],
   if (manifolds.length * iterations > 400) {
     iterations = Math.max(4, Math.floor(400 / manifolds.length));
   }
+  solveImpacts(manifolds);
   solveVelocity(manifolds, iterations);
   solvePosition(manifolds);
   solveStaticFriction(manifolds);
   for (const m of manifolds) {
-    contacts.push(new Contact(m.px, m.py, m.nx, m.ny, m.pn));
+    contacts.push(new Contact(m.px, m.py, m.nx, m.ny, m.pn + m.pnBounce));
     if (cache === null) continue;
     const aFix = m.a.invInertia === 0.0 && m.a.invMass > 0.0;
     const bFix = m.b !== null && m.b.invInertia === 0.0 && m.b.invMass > 0.0;
