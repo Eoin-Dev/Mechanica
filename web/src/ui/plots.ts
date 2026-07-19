@@ -4,10 +4,13 @@ import { isTouch } from "./dom";
 import * as theme from "./theme";
 import { css } from "./theme";
 
-export const SERIES_COLORS: Color[] = [
-  theme.ACCENT, theme.GOOD, theme.WARN, theme.BAD,
-  [170, 140, 230], [110, 200, 210],
-];
+/** Per-channel line colour. A function (not a module-level array) so a
+ * runtime theme change is picked up by the next draw. */
+export function seriesColor(i: number): Color {
+  const extra: Color[] = [[170, 140, 230], [110, 200, 210]];
+  const base = [theme.ACCENT, theme.GOOD, theme.WARN, theme.BAD, ...extra];
+  return base[i % base.length];
+}
 
 function fmt(v: number): string {
   if (v === 0) return "0";
@@ -24,15 +27,27 @@ interface LegendHit {
   channel: string;
 }
 
-/** How much simulation time the rolling window shows. Scrolling starts
- * once this span is filled, so it doubles as "how long the plot squeezes
- * before it starts moving". */
+/** Default view span: how much simulation time the live plot shows.
+ * Scrolling starts once this span is filled, so it doubles as "how long
+ * the plot squeezes before it starts moving". Zooming changes it. */
 export const GRAPH_WINDOW_S = 15.0;
 
-/** Vertex budget for the window - roughly one sample per pixel on a wide
- * plot. The app derives its sampling cadence from this so drawing cost is
- * bounded no matter the display's refresh rate. */
+/** Vertex budget for one view span - roughly one sample per pixel on a
+ * wide plot. The app derives its sampling cadence from this so drawing
+ * cost is bounded no matter the display's refresh rate. */
 export const GRAPH_MAX_POINTS = 1200;
+
+/** How much history is retained for scrolling back. Bounded so a
+ * simulation left running for hours cannot grow memory without limit:
+ * at the sampling cadence this is ~10k samples per channel. */
+export const GRAPH_HISTORY_S = 120.0;
+
+/** The time range a plot draws: `end` is the time at the right edge
+ * (null = follow the live edge) and `span` is the visible duration. */
+export interface GraphView {
+  end: number | null;
+  span: number;
+}
 
 /** Rolling window of named channels sampled against simulation time.
  *
@@ -49,16 +64,22 @@ export class TimeSeries {
   rev = 0;
   /** True while the autoscale is still animating toward its target. */
   easing = false;
-  private windowS: number;
+  private historyS: number;
   private maxlen: number;
   private legendHits: LegendHit[] = [];
   private view: [number, number] | null = null; // smoothed y-range
 
-  constructor(channels: string[], windowS = GRAPH_WINDOW_S, maxlen = 3000) {
+  constructor(channels: string[], historyS = GRAPH_HISTORY_S, maxlen = 10000) {
     this.channels = channels;
-    this.windowS = windowS;
+    this.historyS = historyS;
     this.maxlen = maxlen;
     this.data = new Map(channels.map((c) => [c, []]));
+  }
+
+  /** Oldest / newest retained sample time (NaN when empty). */
+  get firstT(): number { return this.t.length > 0 ? this.t[0] : NaN; }
+  get lastT(): number {
+    return this.t.length > 0 ? this.t[this.t.length - 1] : NaN;
   }
 
   clear(): void {
@@ -102,11 +123,10 @@ export class TimeSeries {
     for (const c of this.channels) {
       this.data.get(c)!.push(values[c] ?? 0.0);
     }
-    // Evict by TIME first: the window shows the last windowS seconds, so
-    // scrolling starts after that span instead of after thousands of
-    // samples' worth of ever-tighter squeezing. maxlen stays as a hard
-    // safety cap on the per-frame drawing cost.
-    const cutoff = t - this.windowS;
+    // Evict by TIME first: retain the last historyS seconds (the
+    // scroll-back buffer), no more, so an all-day run cannot grow memory
+    // without bound. maxlen stays as a hard safety cap.
+    const cutoff = t - this.historyS;
     while (this.t.length > this.maxlen ||
            (this.t.length > 2 && this.t[0] < cutoff)) {
       this.t.shift();
@@ -140,7 +160,7 @@ export class TimeSeries {
       const lbl = `${c}: ${fmt(val)}`;
       const tw = ctx.measureText(lbl).width;
       lx -= tw + 18;
-      const col = SERIES_COLORS[ci % SERIES_COLORS.length];
+      const col = seriesColor(ci);
       ctx.fillStyle = css(off ? theme.TEXT_FAINT : col);
       ctx.fillRect(lx, 9, 10, 3);
       ctx.fillStyle = css(off ? theme.TEXT_FAINT : theme.TEXT_DIM);
@@ -149,7 +169,20 @@ export class TimeSeries {
     }
   }
 
-  draw(ctx: CanvasRenderingContext2D, w: number, h: number, title: string): void {
+  /** First index with t >= tv (binary search; ts is sorted ascending). */
+  private lowerBound(tv: number): number {
+    let a = 0;
+    let b = this.t.length;
+    while (a < b) {
+      const m = (a + b) >> 1;
+      if (this.t[m] < tv) a = m + 1;
+      else b = m;
+    }
+    return a;
+  }
+
+  draw(ctx: CanvasRenderingContext2D, w: number, h: number, title: string,
+       view?: GraphView): void {
     ctx.clearRect(0, 0, w, h);
     ctx.font = "600 12px system-ui, sans-serif";
     ctx.fillStyle = css(theme.TEXT_DIM);
@@ -175,12 +208,24 @@ export class TimeSeries {
     const plot = { x: 8, y: 26, w: w - 16, h: h - 42 };
     if (plot.w < 20 || plot.h < 16) return;
     const ts = this.t;
-    const t0 = ts[0];
-    const t1 = ts[ts.length - 1];
+    // Visible time range. Live (end null): right edge follows the newest
+    // sample, and while the data is younger than the span the plot
+    // stretches what exists (the familiar early squeeze). Detached
+    // (scrolled back / zoomed): the exact requested range, frozen.
+    const span = view?.span ?? GRAPH_WINDOW_S;
+    const detached = view !== undefined && view.end !== null;
+    const t1 = detached ? (view.end as number) : ts[ts.length - 1];
+    const t0 = detached ? t1 - span : Math.max(ts[0], t1 - span);
+    // indices covering [t0, t1] plus one sample either side so the line
+    // enters and exits the plot instead of stopping at the first sample
+    const i0 = Math.max(0, this.lowerBound(t0) - 1);
+    const i1 = Math.min(ts.length - 1, this.lowerBound(t1 + 1e-12));
     let lo = Infinity;
     let hi = -Infinity;
     for (const c of visible) {
-      for (const v of this.data.get(c)!) {
+      const d = this.data.get(c)!;
+      for (let i = i0; i <= i1; i++) {
+        const v = d[i];
         if (v < lo) lo = v;
         if (v > hi) hi = v;
       }
@@ -238,59 +283,49 @@ export class TimeSeries {
     }
     ctx.textAlign = "left";
 
-    // Draw the exact polyline through every sample. Decimation is tempting
-    // when samples outnumber pixels, but both flavours artefact: every-Nth
-    // stride skips peaks (they flicker and snap as the window scrolls), and
-    // per-pixel min/max renders each column as a vertical bar, which turns
-    // steep smooth curves into a scalloped sawtooth once the window gets
-    // long and squished. The rolling window is capped at maxlen samples, so
-    // stroking all of them stays cheap - and it is the only rendering that
-    // is faithful at every sample density.
+    // Draw the exact polyline through every visible sample. Decimation is
+    // tempting when samples outnumber pixels, but both flavours artefact:
+    // every-Nth stride skips peaks (they flicker and snap as the window
+    // scrolls), and per-pixel min/max renders each column as a vertical
+    // bar, which turns steep smooth curves into a scalloped sawtooth. The
+    // visible index range is bounded by the sampling cadence, so stroking
+    // all of it stays cheap. Samples are never split into separate
+    // strokes: an irregular spacing (a frame stall, a backgrounded tab)
+    // is a legitimate continuation of the run, not a recording gap -
+    // splitting there drew broken lines after tab switches.
     // A freshly-seeded plot has a single sample (zero time span): show it
     // as a dot per channel so the graph is alive before the sim starts.
-    const span = Math.max(t1 - t0, 1e-9);
-    const xScale = plot.w / span;
+    const xScale = plot.w / Math.max(t1 - t0, 1e-9);
     const yScale = plot.h / (hi - lo);
-    // Break the polyline across genuine recording gaps rather than drawing
-    // a bogus connecting segment. The threshold is relative to the data's
-    // own mean sample spacing - a pixel-based threshold breaks EVERY
-    // segment while the window is young and sparse (few samples spread
-    // wide), which blanked the graph for the first moments after play.
-    const gap = (8.0 * span) / Math.max(ts.length - 1, 1);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(plot.x - 1, 0, plot.w + 2, h); // boundary samples overhang
+    ctx.clip();
     ctx.lineWidth = 1.2;
     for (const c of visible) {
       const ci = this.channels.indexOf(c);
-      ctx.strokeStyle = css(SERIES_COLORS[ci % SERIES_COLORS.length]);
+      ctx.strokeStyle = css(seriesColor(ci));
       const d = this.data.get(c)!;
-      if (ts.length === 1) {
-        // single seeded sample: a stroke needs two points, so mark it
-        ctx.fillStyle = css(SERIES_COLORS[ci % SERIES_COLORS.length]);
+      if (i1 === i0) {
+        // single visible sample: a stroke needs two points, so mark it
+        const px = plot.x + (ts[i0] - t0) * xScale;
+        ctx.fillStyle = css(seriesColor(ci));
         ctx.beginPath();
-        ctx.arc(plot.x, plotBottom - (d[0] - lo) * yScale, 2.5, 0, 2 * Math.PI);
+        ctx.arc(Math.max(plot.x, Math.min(plot.x + plot.w, px)),
+                plotBottom - (d[i0] - lo) * yScale, 2.5, 0, 2 * Math.PI);
         ctx.fill();
         continue;
       }
       ctx.beginPath();
-      let started = false;
-      let prevT: number | null = null;
-      for (let i = 0; i < ts.length; i++) {
-        const ti = ts[i];
-        const px = plot.x + (ti - t0) * xScale;
+      for (let i = i0; i <= i1; i++) {
+        const px = plot.x + (ts[i] - t0) * xScale;
         const py = plotBottom - (d[i] - lo) * yScale;
-        if (prevT !== null && ti - prevT > gap) {
-          ctx.stroke();
-          ctx.beginPath();
-          started = false;
-        }
-        prevT = ti;
-        if (started) ctx.lineTo(px, py);
-        else {
-          ctx.moveTo(px, py);
-          started = true;
-        }
+        if (i === i0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
       }
       ctx.stroke();
     }
+    ctx.restore();
   }
 }
 
@@ -326,7 +361,7 @@ export class PhasePlot {
   draw(ctx: CanvasRenderingContext2D, ox: number, oy: number,
        w: number, h: number, axis: "x" | "y"): void {
     ctx.strokeStyle = css(theme.OUTLINE);
-    ctx.fillStyle = "rgb(28,30,36)";
+    ctx.fillStyle = css(theme.BG);
     ctx.beginPath();
     ctx.roundRect(ox, oy, w, h, 6);
     ctx.fill();

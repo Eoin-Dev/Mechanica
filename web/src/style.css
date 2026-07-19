@@ -27,6 +27,28 @@
 html, body, #app { height: 100%; overflow: hidden; }
 
 :root { color-scheme: dark; }
+:root[data-theme="light"] { color-scheme: light; }
+
+/* dyslexia-friendly font option (settings): OpenDyslexic, whose
+   letterforms have heavily weighted bottoms so letters are hard to
+   flip/mirror. Bundled locally (SIL OFL licence) - no network needed. */
+@font-face {
+  font-family: "OpenDyslexic";
+  src: url("./fonts/OpenDyslexic-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "OpenDyslexic";
+  src: url("./fonts/OpenDyslexic-Bold.woff2") format("woff2");
+  font-weight: 600 700;
+  font-style: normal;
+  font-display: swap;
+}
+body.dyslexic {
+  --font: "OpenDyslexic", "Segoe UI", system-ui, sans-serif;
+}
 
 body {
   background: var(--bg);
@@ -354,7 +376,8 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
   z-index: 5;
 }
 .toast {
-  background: rgba(20, 22, 27, 0.92);
+  background: var(--panel);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   border: 1px solid var(--outline);
   border-radius: 8px;
   padding: 6px 14px;
@@ -380,7 +403,8 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(12, 13, 16, 0.72);
+  /* neutral scrim: dims what's behind without tinting it a colour */
+  background: rgba(0, 0, 0, 0.62);
   z-index: 20;
   display: flex;
   align-items: center;
@@ -460,7 +484,13 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
   border: none;
   border-radius: var(--radius);
 }
-.card-more:hover:not(:disabled) { background: var(--panel-hover); color: var(--accent); }
+/* clear hover affordance: the card behind it also highlights on hover,
+   so the link itself brightens and underlines to read as clickable */
+.card-more:hover:not(:disabled) {
+  background: transparent;
+  color: var(--accent-hot);
+  text-decoration: underline;
+}
 .scene-card { display: flex; flex-direction: column; }
 .scene-card h3 { word-break: break-word; }
 .card-actions {
@@ -474,6 +504,11 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 .card-actions button:hover { color: var(--text); }
 .card-actions button.danger:hover { color: var(--bad); background: var(--panel-hover); }
 .card-actions button svg { width: 15px; height: 15px; }
+
+.settings-panel { width: min(440px, 100%); }
+.settings-panel .section:first-child { margin-top: 0; }
+.settings-note { font-size: 11px; line-height: 1.5; margin: 4px 0 10px; }
+.settings-panel .segmented { margin: 4px 0; }
 
 .help-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
 .help-cols h3 { font-size: 13px; color: var(--accent); margin-bottom: 8px; }

@@ -2,8 +2,9 @@
 import { App } from "../app";
 import { CATEGORIES, PRESETS } from "../scene/presets";
 import * as snap from "../scene/snapshot";
-import { button, el, isTouch } from "./dom";
+import { Control, button, checkbox, el, isTouch, segmented } from "./dom";
 import { ICONS } from "./icons";
+import { ThemeName } from "./theme";
 
 // ------------------------------------------------------------------ library
 type LibraryTab = "Examples" | "My scenes";
@@ -153,8 +154,7 @@ export class Library {
         text: (isTouch()
                 ? "No saved scenes yet. The button above saves the "
                 : "No saved scenes yet. Ctrl+S (or the button above) saves the ") +
-              "current scene here, stored in this browser. Export downloads " +
-              "a scene as a file the desktop app can read too." }));
+              "current scene here, stored in this browser." }));
       return;
     }
 
@@ -223,6 +223,92 @@ export class Library {
   }
 }
 
+// ----------------------------------------------------------------- settings
+const THEME_LABELS: Array<[string, ThemeName]> = [
+  ["Dark", "dark"], ["Light", "light"], ["Original", "original"],
+];
+
+export class SettingsPanel {
+  visible = false;
+  private root: HTMLElement;
+  private controls: Control[] = [];
+
+  constructor(app: App, root: HTMLElement, openHelp: () => void) {
+    this.root = root;
+    root.addEventListener("pointerdown", (e) => {
+      if (e.target === root) this.close();
+    });
+    const header = el("div", { class: "overlay-header" },
+      el("h2", { text: "Settings" }));
+    header.append(button("", () => this.close(),
+      { icon: ICONS.close, style: "ghost", tooltip: "Close (Esc)" }).root);
+    const body = el("div", { class: "overlay-body" });
+    const add = (c: Control): void => {
+      this.controls.push(c);
+      body.append(c.root);
+    };
+    const note = (text: string): void => {
+      body.append(el("div", { class: "faint settings-note", text }));
+    };
+
+    body.append(el("div", { class: "section", text: "Appearance" }));
+    add(segmented(THEME_LABELS.map(([lbl]) => lbl),
+      () => THEME_LABELS.find(([, t]) => t === (app.settings.theme ?? "dark"))![0],
+      (v) => {
+        app.settings.theme = THEME_LABELS.find(([lbl]) => lbl === v)![1];
+        app.saveSettings();
+        app.applyUiSettings();
+      }, "Colour theme"));
+    note("Original is the classic blue-tinted dark palette.");
+    add(checkbox("Dyslexia-friendly font",
+      () => app.settings.dyslexic_font ?? false,
+      (v) => {
+        app.settings.dyslexic_font = v;
+        app.saveSettings();
+        app.applyUiSettings();
+      }, "Use a rounder, more distinct typeface across the interface"));
+
+    body.append(el("div", { class: "section", text: "Performance" }));
+    add(checkbox("Cull offscreen objects",
+      () => app.settings.cull ?? true,
+      (v) => {
+        app.settings.cull = v;
+        app.saveSettings();
+      }, "Skip drawing objects far outside the view"));
+    note("Recommended: keeps large scenes fast, especially on modest " +
+         "hardware, by not drawing what you cannot see. Physics is " +
+         "unaffected.");
+
+    const helpRow = el("div", {
+      style: "display:flex;justify-content:flex-end;margin-top:18px",
+    });
+    helpRow.append(button("Help & shortcuts", () => {
+      this.close();
+      openHelp();
+    }).root);
+    body.append(helpRow);
+
+    root.append(el("div", { class: "overlay-panel settings-panel" },
+      header, body));
+  }
+
+  open(): void {
+    this.visible = true;
+    this.root.hidden = false;
+    for (const c of this.controls) c.refresh?.();
+  }
+
+  close(): void {
+    this.visible = false;
+    this.root.hidden = true;
+  }
+
+  toggle(): void {
+    if (this.visible) this.close();
+    else this.open();
+  }
+}
+
 // --------------------------------------------------------------------- help
 /** Rows tagged "pc" need a keyboard or mouse and are dropped on touch
  * devices; untagged rows work everywhere. Keyboard-shortcut sections are
@@ -231,7 +317,7 @@ type HelpRow = [string, string] | [string, string, "pc"];
 const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
   ["Playback", [
     ["Space", "Play / pause"],
-    [". / ,", "Step forward / back one frame"],
+    ["Right / Left (or . / ,)", "Step forward / back one frame"],
     ["Ctrl+R", "Reset to the initial state"],
     ["+ / -", "Double / halve the speed"],
     ["0", "Reset the speed to 1x"],
@@ -250,7 +336,6 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
     ["Ctrl+D", "Duplicate the selection"],
     ["Del", "Delete the selection"],
     ["Ctrl+C / Ctrl+V", "Copy / paste body properties"],
-    ["Arrows", "Nudge selected bodies"],
     ["K", "Lock / unlock selected bodies"],
     ["N", "Snap to grid"],
     ["Ctrl+S", "Save the scene (browser storage)"],

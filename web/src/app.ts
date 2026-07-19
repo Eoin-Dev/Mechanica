@@ -4,16 +4,17 @@
  * trails and graph recording are direct ports of the desktop app; rendering
  * happens on requestAnimationFrame and the UI chrome lives in the DOM.
  */
-import { Body, Wall } from "./engine/body";
+import { Body } from "./engine/body";
 import { ENCOUNTER_ANGLE, World } from "./engine/world";
 import { Camera, MAX_ZOOM, MIN_ZOOM } from "./render/camera";
-import { Selectable, ViewSettings, drawGrid, drawScaleBar, drawWorld, snapStep } from "./render/draw";
+import { Selectable, ViewSettings, drawGrid, drawScaleBar, drawWorld } from "./render/draw";
 import { Trail } from "./render/trail";
 import * as snap from "./scene/snapshot";
 import { PRESETS, Preset } from "./scene/presets";
 import { CanvasController } from "./interact/tools";
 import { GRAPH_MAX_POINTS, GRAPH_WINDOW_S, PhasePlot, TimeSeries } from "./ui/plots";
 import * as theme from "./ui/theme";
+import { ThemeName, setTheme } from "./ui/theme";
 import { css } from "./ui/theme";
 
 export const PHYSICS_DT = 1.0 / 120.0;
@@ -32,6 +33,9 @@ interface Settings {
   inspector_w?: number;
   dock_h?: number;
   tour_done?: boolean;
+  theme?: ThemeName;
+  dyslexic_font?: boolean;
+  cull?: boolean;
 }
 
 /** Panels register here; the app pokes them once per frame. */
@@ -86,8 +90,6 @@ export class App {
   private history: string[] = []; // per-frame rewind states (rolling)
   private overloadSince: number | null = null;
   private overloadHintAt = 0.0;
-  private nudgeDirty = false;
-  private nudgeDeadline = 0.0;
   private divergeCooldown = 0.0;
   private lastFrame = 0.0;
   private fpsSmoothed = 0.0;
@@ -105,6 +107,7 @@ export class App {
     this.controller.attach(canvas);
     this.settings = this.loadSettings();
     this.adaptiveDt = this.settings.adaptive_dt ?? true;
+    this.applyUiSettings();
   }
 
   // --------------------------------------------------------------- settings
@@ -122,6 +125,17 @@ export class App {
     } catch {
       // storage full or blocked: settings just don't persist
     }
+  }
+
+  /** Apply the persisted appearance settings (theme defaults to dark). */
+  applyUiSettings(): void {
+    setTheme(this.settings.theme ?? "dark");
+    document.body.classList.toggle("dyslexic", this.settings.dyslexic_font ?? false);
+  }
+
+  /** Skip drawing objects far outside the view (recommended; default on). */
+  get cullEnabled(): boolean {
+    return this.settings.cull ?? true;
   }
 
   // ----------------------------------------------------------------- layout
@@ -419,27 +433,6 @@ export class App {
     cam.zoom = target[2];
   }
 
-  /** Move selected bodies and walls one small step with the arrow keys. */
-  nudgeSelection(dx: number, dy: number): void {
-    const bodies = this.selection.filter((o): o is Body => o instanceof Body);
-    const walls = this.selection.filter((o): o is Wall => o instanceof Wall);
-    if (bodies.length === 0 && walls.length === 0) return;
-    const step = this.view.snap ? snapStep(this.camera.zoom) : 8.0 / this.camera.zoom;
-    for (const b of bodies) {
-      b.pos.x += dx * step;
-      b.pos.y += dy * step;
-    }
-    for (const w of walls) {
-      w.a.x += dx * step;
-      w.a.y += dy * step;
-      w.b.x += dx * step;
-      w.b.y += dy * step;
-    }
-    // commit to undo once the burst of key repeats ends
-    this.nudgeDirty = true;
-    this.nudgeDeadline = performance.now() / 1000 + 0.5;
-  }
-
   quickSave(): void {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
@@ -499,7 +492,7 @@ export class App {
   }
 
   bumpSpeed(factor: number): void {
-    this.speed = Math.min(20.0, Math.max(0.01, this.speed * factor));
+    this.speed = Math.min(16.0, Math.max(0.01, this.speed * factor));
     this.toast(`Speed ${parseFloat(this.speed.toPrecision(3))}x`);
   }
 
@@ -586,11 +579,6 @@ export class App {
   }
 
   private update(dtFrame: number): void {
-    if (this.nudgeDirty && performance.now() / 1000 > this.nudgeDeadline) {
-      this.nudgeDirty = false;
-      this.pushUndo();
-    }
-
     // display-refresh estimate: snap down to the fastest frame interval seen
     // (the monitor cap), drift up slowly so one slow frame doesn't stick
     const frameMs = dtFrame * 1000.0;
@@ -834,7 +822,7 @@ export class App {
     ctx.fillRect(0, 0, w, h);
     if (this.view.grid) drawGrid(ctx, this.camera, w, h);
     drawWorld(ctx, this.camera, this.world, this.view, this.selection,
-              this.controller.hover, this.trails, w, h);
+              this.controller.hover, this.trails, w, h, this.cullEnabled);
     this.controller.drawOverlays(ctx);
     drawScaleBar(ctx, this.camera, w, h);
     // measured render cost feeds the physics budget in pickResolution

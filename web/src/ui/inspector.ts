@@ -59,6 +59,9 @@ export class Inspector implements Panel {
     collapseBtn.addEventListener("click", () => this.toggleCollapsed());
     tabs.append(collapseBtn);
     this.body = el("div", { class: "inspector-body" });
+    // long panels (many drivers/fields) only refresh the controls that
+    // are actually scrolled into view
+    this.group.cullWithin(this.body);
     root.append(tabs, this.body);
 
     // width splitter (persisted)
