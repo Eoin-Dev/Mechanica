@@ -3,7 +3,7 @@ import { App, GraphMode, Panel } from "../app";
 import { Body } from "../engine/body";
 import { SpringLink } from "../engine/links";
 import { TOOLS, TOOL_INFO, TOOL_KEYS, Tool } from "../interact/tools";
-import { RefreshGroup, button, el, isPhone, segmented, slider } from "./dom";
+import { RefreshGroup, button, el, isTouch, segmented, slider } from "./dom";
 import { ICONS } from "./icons";
 import * as theme from "./theme";
 import { css } from "./theme";
@@ -190,9 +190,9 @@ export class HintBar implements Panel {
     const res = app.playing && app.qNow > 1 ? `dt/${app.qNow}   ` : "";
     const stats = `${nBodies} bodies   ${nAnchors} anchors   ${nLinks} links   ` +
                   `${app.world.contacts.length} contacts   ${res}${drift}`;
-    // the cursor position is a hover readout - meaningless on a phone, and
-    // the room is better spent on the counts
-    if (isPhone()) {
+    // the cursor position is a hover readout - meaningless on any touch
+    // device, and the room is better spent on the counts
+    if (isTouch()) {
       this.status.textContent = stats;
     } else {
       const [mx, my] = app.controller.mouse;
@@ -298,10 +298,10 @@ export class GraphDock implements Panel {
         ext.push("drivers/fields");
       }
       if (ext.length > 0) {
-        return "momentum is only conserved in isolation - " + ext.join(", ") +
+        return "Momentum is only conserved in isolation - " + ext.join(", ") +
                " exert external forces here";
       }
-      return "isolated system: total momentum should stay constant";
+      return "Isolated system: total momentum should stay constant";
     }
     if (app.graphMode === "Energy") {
       const lossy: string[] = [];
@@ -310,7 +310,7 @@ export class GraphDock implements Panel {
       if (w.links.some((ln) => ln instanceof SpringLink && ln.damping > 0)) {
         lossy.push("spring damping");
       }
-      if (lossy.length > 0) return "energy is removed by " + lossy.join(", ");
+      if (lossy.length > 0) return "Energy is removed by " + lossy.join(", ");
     }
     return "";
   }

@@ -14,10 +14,14 @@ const gridCss = css(theme.GRID_MAJOR);
  * lines can be told apart from the gridlines. */
 function recCtx() {
   const pts: Array<{ x: number; y: number; stroke: string }> = [];
+  const dots: Array<{ x: number; y: number }> = [];
+  const texts: string[] = [];
   let stroke = "";
   const base: Record<string, unknown> = {
     measureText: () => ({ width: 0 }),
-    beginPath() {}, stroke() {}, clearRect() {}, fillRect() {}, fillText() {},
+    beginPath() {}, stroke() {}, clearRect() {}, fillRect() {}, fill() {},
+    fillText(t: string) { texts.push(t); },
+    arc(x: number, y: number) { dots.push({ x, y }); },
     moveTo(x: number, y: number) { pts.push({ x, y, stroke }); },
     lineTo(x: number, y: number) { pts.push({ x, y, stroke }); },
   };
@@ -25,7 +29,7 @@ function recCtx() {
     get(t, p) { if (p === "strokeStyle") return stroke; return (p in t) ? t[p as string] : () => {}; },
     set(_t, p, v) { if (p === "strokeStyle") stroke = v as string; return true; },
   }) as unknown as CanvasRenderingContext2D;
-  return { ctx, pts };
+  return { ctx, pts, dots, texts };
 }
 
 function dataVertices(series: TimeSeries, w: number, h: number) {
@@ -93,6 +97,29 @@ describe("time-series rendering", () => {
     for (let i = 1; i < data.length; i++) {
       expect(data[i].x).toBeGreaterThan(data[i - 1].x);
     }
+  });
+
+  it("draws a seeded single sample as a dot, not the placeholder", () => {
+    // Opening a graph seeds one sample of the current state; the plot must
+    // show it immediately (legend, grid, a dot per channel) instead of
+    // "run the simulation" - otherwise there is a visible dead period
+    // between pressing play and the graph appearing.
+    const s = new TimeSeries(["KE", "PE"]);
+    s.add(0, { KE: 3, PE: 7 });
+    const { ctx, dots, texts } = recCtx();
+    s.draw(ctx, 300, 120, "Energy");
+    expect(dots.length).toBe(2); // one marker per channel
+    expect(texts.join(" ")).not.toMatch(/[Rr]un the simulation/);
+  });
+
+  it("re-adding a sample at the same time updates it in place", () => {
+    const s = new TimeSeries(["E"]);
+    s.add(1.0, { E: 5 });
+    s.add(1.0, { E: 9 }); // seeded again (e.g. graph toggled twice)
+    expect(s.t.length).toBe(1);
+    expect(s.data.get("E")).toEqual([9]);
+    s.add(1.5, { E: 4 });
+    expect(s.t).toEqual([1.0, 1.5]);
   });
 
   it("draws a smooth wave's full vertical extent (peaks kept)", () => {

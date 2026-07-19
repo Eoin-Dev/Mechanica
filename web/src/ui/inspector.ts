@@ -9,8 +9,8 @@ import { Body, MATERIALS, Wall } from "../engine/body";
 import { DistanceLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
 import { Selectable } from "../render/draw";
-import { RefreshGroup, button, checkbox, el, fmt3dp, halfRow, isPhone, numEdit,
-         section, segmented, slider, textEdit } from "./dom";
+import { RefreshGroup, button, checkbox, el, fmt3dp, halfRow, isPhone, isTouch,
+         numEdit, section, segmented, slider, textEdit } from "./dom";
 import { ICONS } from "./icons";
 
 const TABS = ["Selection", "World", "View"] as const;
@@ -209,10 +209,15 @@ export class Inspector implements Panel {
     const app = this.app;
     const sel = app.selection;
     if (sel.length === 0) {
-      for (const line of ["Nothing selected.", "",
-                          "Click an object with the Select tool,",
-                          "or drag a box around several objects.",
-                          "Shift-click adds to the selection."]) {
+      const lines = isTouch()
+        ? ["Nothing selected.", "",
+           "Tap an object with the Select tool,",
+           "or drag a box around several objects."]
+        : ["Nothing selected.", "",
+           "Click an object with the Select tool,",
+           "or drag a box around several objects.",
+           "Shift-click adds to the selection."];
+      for (const line of lines) {
         this.body.append(el("div", { class: "dim", text: line,
                                      style: "min-height:15px" }));
       }
@@ -743,7 +748,7 @@ export class Inspector implements Panel {
         field.name = s.trim() || field.name;
         this.commit();
         return true;
-      }, "field name"));
+      }, "Field name"));
       nameEd.root.style.flex = "1";
       nameRow.append(chk.root, nameEd.root);
       this.body.append(nameRow);
@@ -822,18 +827,18 @@ export class Inspector implements Panel {
       return t;
     };
     this.body.append(section("Examples"), table([
-      ["-0.5*vx", "drag along x"],
-      ["-10*x", "spring toward x = 0"],
-      ["3*sin(2*t)", "oscillating push"],
-      ["-5*x/r^3", "inverse-square pull"],
-      ["-0.4*m*(y > 2)", "only above y = 2"],
+      ["-0.5*vx", "Drag along x"],
+      ["-10*x", "Spring toward x = 0"],
+      ["3*sin(2*t)", "Oscillating push"],
+      ["-5*x/r^3", "Inverse-square pull"],
+      ["-0.4*m*(y > 2)", "Only above y = 2"],
     ]));
     this.body.append(section("Variables"), table([
-      ["x,  y", "position (m)"],
-      ["vx,  vy", "velocity (m/s)"],
-      ["t", "time (s)"],
-      ["m", "mass (kg)"],
-      ["r", "distance from (0, 0)  (m)"],
+      ["x,  y", "Position (m)"],
+      ["vx,  vy", "Velocity (m/s)"],
+      ["t", "Time (s)"],
+      ["m", "Mass (kg)"],
+      ["r", "Distance from (0, 0)  (m)"],
     ]));
     this.body.append(section("Functions"), table([
       ["sin cos tan", "asin acos atan atan2"],
@@ -842,10 +847,10 @@ export class Inspector implements Panel {
     ]));
     this.body.append(section("Constants & operators"), table([
       ["pi  e  tau  g", "3.1416..., 2.7183..., 2*pi, 9.81"],
-      ["+ - * / %", "arithmetic"],
-      ["^  or  **", "power: x^2 is x squared"],
-      ["(m > 1)", "comparisons give 1 or 0"],
-      ["a if y > 0 else b", "a true either/or"],
+      ["+ - * / %", "Arithmetic"],
+      ["^  or  **", "Power: x^2 is x squared"],
+      ["(m > 1)", "Comparisons give 1 or 0"],
+      ["a if y > 0 else b", "A true either/or"],
     ]));
     this.body.append(el("div", { class: "faint",
       text: "The force is in newtons, applied to every body. Anything not " +

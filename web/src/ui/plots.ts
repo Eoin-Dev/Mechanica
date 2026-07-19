@@ -1,5 +1,6 @@
 /** Live plots: rolling time-series (energy, momentum) and phase-space plot. */
 import { Color } from "../engine/body";
+import { isTouch } from "./dom";
 import * as theme from "./theme";
 import { css } from "./theme";
 
@@ -68,6 +69,16 @@ export class TimeSeries {
     if (this.t.length > 0 && t < this.t[this.t.length - 1]) {
       this.clear(); // simulation was reset/rewound
     }
+    // a re-sample at the same time (seeding an opened graph, or a frame
+    // where the clock didn't advance) updates in place instead of stacking
+    // duplicate points
+    const last = this.t.length - 1;
+    if (last >= 0 && t === this.t[last]) {
+      for (const c of this.channels) {
+        this.data.get(c)![last] = values[c] ?? 0.0;
+      }
+      return;
+    }
     this.t.push(t);
     for (const c of this.channels) {
       this.data.get(c)!.push(values[c] ?? 0.0);
@@ -118,10 +129,10 @@ export class TimeSeries {
     ctx.fillText(title, 10, 15);
     ctx.font = "11px system-ui, sans-serif";
     this.drawLegend(ctx, w);
-    if (this.t.length < 2) {
+    if (this.t.length === 0) {
       ctx.fillStyle = css(theme.TEXT_FAINT);
       ctx.textAlign = "center";
-      ctx.fillText("run the simulation to collect data", w / 2, h / 2);
+      ctx.fillText("Run the simulation to collect data", w / 2, h / 2);
       ctx.textAlign = "left";
       return;
     }
@@ -129,7 +140,8 @@ export class TimeSeries {
     if (visible.length === 0) {
       ctx.fillStyle = css(theme.TEXT_FAINT);
       ctx.textAlign = "center";
-      ctx.fillText("all channels hidden - click the legend to show one", w / 2, h / 2);
+      ctx.fillText(`All channels hidden - ${isTouch() ? "tap" : "click"} the ` +
+                   "legend to show one", w / 2, h / 2);
       ctx.textAlign = "left";
       return;
     }
@@ -138,7 +150,6 @@ export class TimeSeries {
     const ts = this.t;
     const t0 = ts[0];
     const t1 = ts[ts.length - 1];
-    if (t1 - t0 < 1e-9) return;
     let lo = Infinity;
     let hi = -Infinity;
     for (const c of visible) {
@@ -202,17 +213,30 @@ export class TimeSeries {
     // long and squished. The rolling window is capped at maxlen samples, so
     // stroking all of them stays cheap - and it is the only rendering that
     // is faithful at every sample density.
-    const xScale = plot.w / (t1 - t0);
+    // A freshly-seeded plot has a single sample (zero time span): show it
+    // as a dot per channel so the graph is alive before the sim starts.
+    const span = Math.max(t1 - t0, 1e-9);
+    const xScale = plot.w / span;
     const yScale = plot.h / (hi - lo);
-    // break the polyline across genuine recording gaps (reset/rewind) rather
-    // than drawing a bogus connecting segment; ~16 px of time is far larger
-    // than any real sample spacing, so it never fires on normal data
-    const gap = (16.0 * (t1 - t0)) / Math.max(plot.w, 1);
+    // Break the polyline across genuine recording gaps rather than drawing
+    // a bogus connecting segment. The threshold is relative to the data's
+    // own mean sample spacing - a pixel-based threshold breaks EVERY
+    // segment while the window is young and sparse (few samples spread
+    // wide), which blanked the graph for the first moments after play.
+    const gap = (8.0 * span) / Math.max(ts.length - 1, 1);
     ctx.lineWidth = 1.2;
     for (const c of visible) {
       const ci = this.channels.indexOf(c);
       ctx.strokeStyle = css(SERIES_COLORS[ci % SERIES_COLORS.length]);
       const d = this.data.get(c)!;
+      if (ts.length === 1) {
+        // single seeded sample: a stroke needs two points, so mark it
+        ctx.fillStyle = css(SERIES_COLORS[ci % SERIES_COLORS.length]);
+        ctx.beginPath();
+        ctx.arc(plot.x, plotBottom - (d[0] - lo) * yScale, 2.5, 0, 2 * Math.PI);
+        ctx.fill();
+        continue;
+      }
       ctx.beginPath();
       let started = false;
       let prevT: number | null = null;
@@ -274,7 +298,7 @@ export class PhasePlot {
       ctx.font = "11px system-ui, sans-serif";
       ctx.fillStyle = css(theme.TEXT_FAINT);
       ctx.textAlign = "center";
-      ctx.fillText("select a body and run", ox + w / 2, oy + h / 2);
+      ctx.fillText("Select a body and run", ox + w / 2, oy + h / 2);
       ctx.textAlign = "left";
       return;
     }

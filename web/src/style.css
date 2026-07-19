@@ -536,11 +536,14 @@ kbd {
     stroke-linejoin: round;
   }
 
-  /* keyboard shortcuts don't exist on a phone */
-  .tool-btn .key-badge { display: none; }
-
   /* tighter chrome so the important controls stay on screen */
   #toolbar { gap: 4px; padding: 0 6px; }
   .speed-ctrl { width: 132px !important; }
   #hintbar { gap: 8px; padding: 0 8px; }
+}
+
+/* keyboard shortcut badges mean nothing on touch-first devices (phones
+   AND tablets), whatever the screen width */
+@media (pointer: coarse) {
+  .tool-btn .key-badge { display: none; }
 }
