@@ -37,7 +37,6 @@ export class TimeSeries {
   private maxlen: number;
   private legendHits: LegendHit[] = [];
   private view: [number, number] | null = null; // smoothed y-range
-  private nTotal = 0; // samples ever added: anchors the draw decimation
 
   constructor(channels: string[], maxlen = 3000) {
     this.channels = channels;
@@ -49,14 +48,12 @@ export class TimeSeries {
     this.t.length = 0;
     for (const d of this.data.values()) d.length = 0;
     this.view = null;
-    this.nTotal = 0;
   }
 
   /** Drop samples newer than time t (stepping the simulation back). */
   truncate(t: number): void {
     while (this.t.length > 0 && this.t[this.t.length - 1] > t + 1e-9) {
       this.t.pop();
-      this.nTotal--;
       for (const d of this.data.values()) d.pop();
     }
   }
@@ -72,7 +69,6 @@ export class TimeSeries {
       this.clear(); // simulation was reset/rewound
     }
     this.t.push(t);
-    this.nTotal++;
     for (const c of this.channels) {
       this.data.get(c)!.push(values[c] ?? 0.0);
     }
@@ -198,17 +194,20 @@ export class TimeSeries {
     }
     ctx.textAlign = "left";
 
-    // ~one sample per 2 px is visually lossless and halves the line work.
-    // The decimation phase is anchored to the global sample counter, so the
-    // same samples stay chosen as the window rolls - otherwise a fast-
-    // oscillating channel shimmers/flickers at high sim speeds.
-    const step = Math.max(1, Math.floor((2 * ts.length) / Math.max(plot.w, 1)));
-    const i0 = (((-(this.nTotal - ts.length)) % step) + step) % step;
-    // break the polyline across recording gaps instead of drawing a bogus
-    // connecting segment
-    const gap = (8.0 * step * (t1 - t0)) / Math.max(ts.length - 1, 1);
+    // Draw the exact polyline through every sample. Decimation is tempting
+    // when samples outnumber pixels, but both flavours artefact: every-Nth
+    // stride skips peaks (they flicker and snap as the window scrolls), and
+    // per-pixel min/max renders each column as a vertical bar, which turns
+    // steep smooth curves into a scalloped sawtooth once the window gets
+    // long and squished. The rolling window is capped at maxlen samples, so
+    // stroking all of them stays cheap - and it is the only rendering that
+    // is faithful at every sample density.
     const xScale = plot.w / (t1 - t0);
     const yScale = plot.h / (hi - lo);
+    // break the polyline across genuine recording gaps (reset/rewind) rather
+    // than drawing a bogus connecting segment; ~16 px of time is far larger
+    // than any real sample spacing, so it never fires on normal data
+    const gap = (16.0 * (t1 - t0)) / Math.max(plot.w, 1);
     ctx.lineWidth = 1.2;
     for (const c of visible) {
       const ci = this.channels.indexOf(c);
@@ -217,7 +216,7 @@ export class TimeSeries {
       ctx.beginPath();
       let started = false;
       let prevT: number | null = null;
-      for (let i = i0; i < ts.length; i += step) {
+      for (let i = 0; i < ts.length; i++) {
         const ti = ts[i];
         const px = plot.x + (ti - t0) * xScale;
         const py = plotBottom - (d[i] - lo) * yScale;
