@@ -12,7 +12,7 @@ import { Trail } from "./render/trail";
 import * as snap from "./scene/snapshot";
 import { PRESETS, Preset } from "./scene/presets";
 import { CanvasController } from "./interact/tools";
-import { PhasePlot, TimeSeries } from "./ui/plots";
+import { GRAPH_MAX_POINTS, GRAPH_WINDOW_S, PhasePlot, TimeSeries } from "./ui/plots";
 import * as theme from "./ui/theme";
 import { css } from "./ui/theme";
 
@@ -239,7 +239,9 @@ export class App {
       this.initialSnapshot = null;
       this.baselineEnergy = null;
     }
-    // an open graph should show the new world's state straight away
+    // an open graph should show the new world's state straight away (the
+    // sampling throttle is reset - the old world's clock is meaningless)
+    this.lastGraphSampleT = -Infinity;
     if (this.graphMode !== "Off") this.recordGraphSample();
     this.onWorldReplaced();
   }
@@ -785,11 +787,23 @@ export class App {
     this.recordGraphSample();
   }
 
+  private lastGraphSampleT = -Infinity;
+
   /** Sample the current state into every graph series. Runs after each
    * physics frame, and immediately when a graph is enabled or the world
    * changes, so an opened graph shows data from the very first frame
    * instead of waiting for the simulation to produce a backlog. */
   recordGraphSample(): void {
+    // Cap the cadence in SIM time: the window shows GRAPH_WINDOW_S seconds
+    // in at most GRAPH_MAX_POINTS samples, so anything finer is sub-pixel.
+    // This bounds both the sampling cost (energy() is O(n^2) with mutual
+    // gravity) and the number of vertices stroked per frame, independent
+    // of the display's refresh rate. Backward jumps (rewind/reset) always
+    // sample so the throttle can never go quiet after a rewind.
+    const minDt = GRAPH_WINDOW_S / GRAPH_MAX_POINTS;
+    const dt = this.world.time - this.lastGraphSampleT;
+    if (dt >= 0 && dt < minDt) return;
+    this.lastGraphSampleT = this.world.time;
     // every series records continuously whatever the dock shows, so
     // switching graph views never leaves gaps in the data
     const e = this.world.energy();

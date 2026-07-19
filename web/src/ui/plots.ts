@@ -24,6 +24,16 @@ interface LegendHit {
   channel: string;
 }
 
+/** How much simulation time the rolling window shows. Scrolling starts
+ * once this span is filled, so it doubles as "how long the plot squeezes
+ * before it starts moving". */
+export const GRAPH_WINDOW_S = 15.0;
+
+/** Vertex budget for the window - roughly one sample per pixel on a wide
+ * plot. The app derives its sampling cadence from this so drawing cost is
+ * bounded no matter the display's refresh rate. */
+export const GRAPH_MAX_POINTS = 1200;
+
 /** Rolling window of named channels sampled against simulation time.
  *
  * Channels can be toggled on/off by clicking their legend entries; hidden
@@ -35,12 +45,18 @@ export class TimeSeries {
   t: number[] = [];
   data: Map<string, number[]>;
   hidden = new Set<string>();
+  /** Bumped on every mutation so renderers can skip unchanged frames. */
+  rev = 0;
+  /** True while the autoscale is still animating toward its target. */
+  easing = false;
+  private windowS: number;
   private maxlen: number;
   private legendHits: LegendHit[] = [];
   private view: [number, number] | null = null; // smoothed y-range
 
-  constructor(channels: string[], maxlen = 3000) {
+  constructor(channels: string[], windowS = GRAPH_WINDOW_S, maxlen = 3000) {
     this.channels = channels;
+    this.windowS = windowS;
     this.maxlen = maxlen;
     this.data = new Map(channels.map((c) => [c, []]));
   }
@@ -49,6 +65,7 @@ export class TimeSeries {
     this.t.length = 0;
     for (const d of this.data.values()) d.length = 0;
     this.view = null;
+    this.rev++;
   }
 
   /** Drop samples newer than time t (stepping the simulation back). */
@@ -56,6 +73,7 @@ export class TimeSeries {
     while (this.t.length > 0 && this.t[this.t.length - 1] > t + 1e-9) {
       this.t.pop();
       for (const d of this.data.values()) d.pop();
+      this.rev++;
     }
   }
 
@@ -77,16 +95,24 @@ export class TimeSeries {
       for (const c of this.channels) {
         this.data.get(c)![last] = values[c] ?? 0.0;
       }
+      this.rev++;
       return;
     }
     this.t.push(t);
     for (const c of this.channels) {
       this.data.get(c)!.push(values[c] ?? 0.0);
     }
-    if (this.t.length > this.maxlen) {
+    // Evict by TIME first: the window shows the last windowS seconds, so
+    // scrolling starts after that span instead of after thousands of
+    // samples' worth of ever-tighter squeezing. maxlen stays as a hard
+    // safety cap on the per-frame drawing cost.
+    const cutoff = t - this.windowS;
+    while (this.t.length > this.maxlen ||
+           (this.t.length > 2 && this.t[0] < cutoff)) {
       this.t.shift();
       for (const d of this.data.values()) d.shift();
     }
+    this.rev++;
   }
 
   /** Toggle a channel's visibility when its legend entry is clicked. */
@@ -95,6 +121,7 @@ export class TimeSeries {
       if (x >= hit.x && x <= hit.x + hit.w && y >= hit.y && y <= hit.y + hit.h) {
         if (this.hidden.has(hit.channel)) this.hidden.delete(hit.channel);
         else this.hidden.add(hit.channel);
+        this.rev++;
         return true;
       }
     }
@@ -169,6 +196,8 @@ export class TimeSeries {
     // autoscale with hysteresis: grow instantly to fit new data, shrink
     // slowly - otherwise spiky data entering and leaving the rolling window
     // rescales the whole plot every frame, which reads as vibration
+    const targetLo = lo;
+    const targetHi = hi;
     if (this.view !== null) {
       let [vlo, vhi] = this.view;
       vlo = lo < vlo ? lo : vlo + (lo - vlo) * 0.04;
@@ -177,6 +206,10 @@ export class TimeSeries {
       hi = vhi;
     }
     this.view = [lo, hi];
+    // still easing toward the target range? renderers keep redrawing
+    // static data until the animation settles, then stop
+    const eps = 1e-3 * Math.max(1e-12, targetHi - targetLo);
+    this.easing = Math.abs(lo - targetLo) > eps || Math.abs(hi - targetHi) > eps;
 
     // horizontal gridlines with value labels (count adapts to height)
     const nSeg = plot.h < 70 ? 2 : plot.h < 130 ? 3 : 4;
@@ -269,6 +302,8 @@ export class TimeSeries {
  */
 export class PhasePlot {
   points: Array<[number, number, number, number]> = [];
+  /** Bumped on every mutation so renderers can skip unchanged frames. */
+  rev = 0;
   private maxlen: number;
 
   constructor(maxlen = 1500) {
@@ -277,12 +312,14 @@ export class PhasePlot {
 
   clear(): void {
     this.points.length = 0;
+    this.rev++;
   }
 
   add(x: number, vx: number, y: number, vy: number): void {
     if (Number.isFinite(x + vx + y + vy)) {
       this.points.push([x, vx, y, vy]);
       if (this.points.length > this.maxlen) this.points.shift();
+      this.rev++;
     }
   }
 

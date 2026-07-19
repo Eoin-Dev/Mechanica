@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import * as theme from "../src/ui/theme";
 import { css } from "../src/ui/theme";
-import { TimeSeries } from "../src/ui/plots";
+import { GRAPH_WINDOW_S, TimeSeries } from "../src/ui/plots";
 
 const gridCss = css(theme.GRID_MAJOR);
 
@@ -130,5 +130,29 @@ describe("time-series rendering", () => {
     }
     const ys = dataVertices(s, 300, 120).map((p) => p.y);
     expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(20);
+  });
+
+  it("scrolls once the time window fills instead of squeezing forever", () => {
+    const s = new TimeSeries(["E"]);
+    let t = 0;
+    for (let i = 0; i < 30 * 60; i++) {
+      s.add((t += 1 / 60), { E: Math.sin(i * 0.1) }); // 30 s at 60 Hz
+    }
+    const span = s.t[s.t.length - 1] - s.t[0];
+    // the window covers the last GRAPH_WINDOW_S seconds, no more
+    expect(span).toBeLessThanOrEqual(GRAPH_WINDOW_S + 1e-9);
+    expect(span).toBeGreaterThan(GRAPH_WINDOW_S * 0.95);
+    // and the sample count is bounded accordingly (drawing cost cap)
+    expect(s.t.length).toBeLessThanOrEqual(GRAPH_WINDOW_S * 60 + 2);
+  });
+
+  it("bumps rev on mutations so renderers can skip unchanged frames", () => {
+    const s = new TimeSeries(["E"]);
+    const r0 = s.rev;
+    s.add(1, { E: 2 });
+    expect(s.rev).toBeGreaterThan(r0);
+    const r1 = s.rev;
+    s.clear();
+    expect(s.rev).toBeGreaterThan(r1);
   });
 });
