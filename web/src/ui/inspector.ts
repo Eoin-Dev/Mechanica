@@ -773,11 +773,14 @@ export class Inspector implements Panel {
       if (field.error) {
         this.body.append(el("div", { class: "error-text", text: field.error }));
       }
-      this.add(button("Remove field", () => {
+      const remove = this.group.add(button("Remove field", () => {
         world.fields = world.fields.filter((f) => f !== field);
         this.commit();
         this.markDirty();
       }, { icon: ICONS.trash, style: "danger" }));
+      // breathing room: the button sat flush against the Fy row above it
+      remove.root.style.marginTop = "8px";
+      this.body.append(remove.root);
     }
     const addBtn = this.group.add(button("Add force field", () => {
       world.fields.push(new ForceField(`Field ${world.fields.length + 1}`, "0", "0"));

@@ -204,9 +204,11 @@ const STRING_HOVER: Color = [215, 190, 150];
 // screen the band count is shared out so the frame cost stays bounded.
 const TRAIL_STROKE_BUDGET = 900;
 const MAX_BANDS = 24;
-// Cap the vertices drawn per trail: beyond this the extra points are
-// sub-pixel and invisible, so decimate. Keeps very long trails cheap.
-const MAX_TRAIL_VERTS = 600;
+// Vertex budget shared across all trails on screen, with a generous
+// per-trail ceiling: a lone trail can spend a lot (long orbit paths stay
+// detailed) while a swarm still can't blow the frame.
+const TRAIL_VERT_BUDGET = 12000;
+const MAX_TRAIL_VERTS = 4000;
 
 /** rgb() string faded from the background toward `base` by fraction f,
  * without allocating an intermediate Color (this runs per band per trail). */
@@ -222,8 +224,19 @@ function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
                     trails: Map<number, Trail>,
                     minX: number, minY: number, maxX: number, maxY: number): void {
   ctx.lineWidth = 1;
+  ctx.lineJoin = "round";
+  // count the trails that will actually draw, so the vertex budget is
+  // shared between visible trails rather than every recorded one
+  let visible = 0;
+  for (const trail of trails.values()) {
+    if (trail.count >= 2 && trail.maxX >= minX && trail.minX <= maxX &&
+        trail.maxY >= minY && trail.minY <= maxY) visible++;
+  }
+  if (visible === 0) return;
   const bands = Math.max(1, Math.min(MAX_BANDS,
-    Math.floor(TRAIL_STROKE_BUDGET / Math.max(1, trails.size))));
+    Math.floor(TRAIL_STROKE_BUDGET / visible)));
+  const vertsPerTrail = Math.max(64,
+    Math.min(MAX_TRAIL_VERTS, Math.floor(TRAIL_VERT_BUDGET / visible)));
   for (const [bid, trail] of trails) {
     const n = trail.count;
     if (n < 2) continue;
@@ -232,7 +245,14 @@ function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
         trail.maxY < minY || trail.minY > maxY) continue;
     const body = world.bodyById(bid);
     const base: Color = body ? body.color : [120, 130, 140];
-    const stride = Math.max(1, Math.ceil(n / MAX_TRAIL_VERTS));
+    // Decimate on the point's SERIAL, not its index in the ring. Serials
+    // are fixed for the life of a point, so the same physical points stay
+    // selected as the trail scrolls; keying on the index re-picks a
+    // different subset every frame, which makes the drawn path shimmer
+    // and warp in place (very visible on long, fast, chaotic orbits).
+    const stride = Math.max(1, Math.ceil(n / vertsPerTrail));
+    const phase = trail.firstSerial % stride;
+    const keep = (k: number): boolean => (k + phase) % stride === 0;
     const last = n - 1;
     // draw `bands` contiguous colour bands oldest -> newest; each band ends
     // exactly where the next begins so the line stays unbroken
@@ -242,17 +262,29 @@ function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
       if (i1 <= i0) continue;
       ctx.strokeStyle = fadedRgb(base, i0 / n);
       ctx.beginPath();
-      const [sx0, sy0] = cam.toScreenXY(trail.x(i0), trail.y(i0));
-      ctx.moveTo(sx0, sy0);
-      for (let k = i0 + stride; k < i1; k += stride) {
+      let [px, py] = cam.toScreenXY(trail.x(i0), trail.y(i0));
+      ctx.moveTo(px, py);
+      // Quadratic smoothing: each retained point becomes a control point
+      // and the curve passes through the midpoints between them. At high
+      // speed the samples are far apart and a raw polyline shows visible
+      // corners; this costs the same per segment and reads as a smooth
+      // arc. Sub-pixel-dense trails are unaffected (midpoints coincide).
+      let started = false;
+      for (let k = i0 + 1; k < i1; k++) {
+        if (!keep(k)) continue;
         const [sx, sy] = cam.toScreenXY(trail.x(k), trail.y(k));
-        ctx.lineTo(sx, sy);
+        ctx.quadraticCurveTo(px, py, (px + sx) * 0.5, (py + sy) * 0.5);
+        px = sx;
+        py = sy;
+        started = true;
       }
       const [sxE, syE] = cam.toScreenXY(trail.x(i1), trail.y(i1));
-      ctx.lineTo(sxE, syE);
+      if (started) ctx.quadraticCurveTo(px, py, sxE, syE);
+      else ctx.lineTo(sxE, syE);
       ctx.stroke();
     }
   }
+  ctx.lineJoin = "miter";
 }
 
 export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,

@@ -310,9 +310,12 @@ export class App {
     this.playing = false;
     this.undoStack.reset(this.world);
     const hints = preset.hints;
+    // view toggles follow the preset, so a scene always loads looking the
+    // way it is meant to be read (vectors are symmetric with trails: a
+    // preset that does not ask for them turns them off)
     this.view.trails = hints.trails ?? false;
     this.view.autoFit = hints.autoFit ?? false;
-    if (hints.vectors) this.view.velVectors = true;
+    this.view.velVectors = hints.vectors ?? false;
     if (hints.graph) {
       const mode = { energy: "Energy", momentum: "Mom.", phase: "Phase" }[hints.graph];
       this.setGraphMode(mode as GraphMode);
@@ -746,6 +749,13 @@ export class App {
       return;
     }
     const maxlen = this.view.trailLen;
+    const now = this.world.time;
+    // The trail is a window on the last `maxAge` seconds of SIMULATED
+    // time, so it decays even while a body sits still (a stationary body
+    // used to keep a frozen line forever) and covers the same amount of
+    // motion whatever the speed multiplier. maxlen stays the hard memory
+    // and drawing bound.
+    const maxAge = maxlen * PHYSICS_DT;
     const threshold = 0.5 / this.camera.zoom;
     const trailFor = (bid: number): Trail => {
       let t = this.trails.get(bid);
@@ -755,12 +765,16 @@ export class App {
       } else if (t.capacity !== maxlen) {
         t.setCapacity(maxlen); // the user changed Trail length
       }
+      // stepping back / re-simulating leaves points stamped in the
+      // future; they would never expire and would draw a path the body
+      // has not taken yet, so drop them
+      if (t.count > 0 && t.time(t.count - 1) > now + 1e-9) t.clear();
       return t;
     };
     // sub-step path samples captured inside the adaptive integrator
     // (close encounters turn around within a single step)
     if (this.world.trace.length > 0) {
-      for (const [bid, x, y] of this.world.trace) trailFor(bid).push(x, y);
+      for (const [bid, x, y] of this.world.trace) trailFor(bid).push(x, y, now);
       this.world.trace.length = 0;
     }
     for (const b of this.world.bodies) {
@@ -769,9 +783,10 @@ export class App {
       const n = t.count;
       if (n === 0 ||
           Math.abs(t.x(n - 1) - b.pos.x) + Math.abs(t.y(n - 1) - b.pos.y) > threshold) {
-        t.push(b.pos.x, b.pos.y);
+        t.push(b.pos.x, b.pos.y, now);
       }
     }
+    for (const t of this.trails.values()) t.expireBefore(now - maxAge);
   }
 
   private afterPhysics(): void {

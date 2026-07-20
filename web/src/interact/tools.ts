@@ -752,6 +752,26 @@ export class CanvasController {
   }
 
   // ---------------------------------------------------------------- deletion
+  /** Drop selection/hover entries that no longer exist in the world.
+   *
+   * Deleting a body cascade-deletes every link attached to it, so
+   * removing just the object that was asked for left the inspector
+   * editing ghosts - a selected spring whose endpoint was erased stayed
+   * "selected" although it no longer existed. */
+  private pruneDeleted(): void {
+    const app = this.app;
+    const w = app.world;
+    const alive = (o: Selectable): boolean =>
+      o instanceof Body ? w.bodies.includes(o)
+        : o instanceof Wall ? w.walls.includes(o)
+          : w.links.includes(o);
+    if (this.hover !== null && !alive(this.hover)) this.hover = null;
+    if (this.dragItems.some(({ body }) => !alive(body))) this.abortDrag();
+    if (app.selection.some((o) => !alive(o))) {
+      app.setSelection(app.selection.filter(alive));
+    }
+  }
+
   deleteObject(obj: Selectable): void {
     const app = this.app;
     if (obj instanceof Body) {
@@ -762,10 +782,7 @@ export class CanvasController {
     } else {
       app.world.removeLink(obj);
     }
-    if (app.selection.includes(obj)) {
-      app.setSelection(app.selection.filter((o) => o !== obj));
-    }
-    if (this.hover === obj) this.hover = null;
+    this.pruneDeleted();
   }
 
   deleteSelection(): void {

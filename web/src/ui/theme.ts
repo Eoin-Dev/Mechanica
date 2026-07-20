@@ -9,7 +9,7 @@
  */
 import { Color } from "../engine/body";
 
-export type ThemeName = "original" | "dark" | "light";
+export type ThemeName = "original" | "dark" | "void" | "light";
 
 interface Palette {
   BG: Color; PANEL: Color; PANEL_LIGHT: Color; PANEL_HOVER: Color;
@@ -44,6 +44,20 @@ const DARK: Palette = {
   ACC_COLOR: [235, 170, 90], FORCE_COLOR: [235, 110, 110],
 };
 
+// Void: dark taken further - near-black surfaces and hard, unmixed greys.
+// Text stays bright and outlines stay visible so the contrast reads as
+// deliberate rather than murky.
+const VOID: Palette = {
+  BG: [8, 8, 8], PANEL: [16, 16, 16], PANEL_LIGHT: [25, 25, 25],
+  PANEL_HOVER: [36, 36, 36], OUTLINE: [48, 48, 48], ACCENT: [92, 156, 214],
+  ACCENT_HOT: [130, 185, 240], ACCENT_DARK: [40, 72, 102],
+  TEXT: [238, 238, 238], TEXT_DIM: [152, 152, 152], TEXT_FAINT: [102, 102, 102],
+  GRID: [17, 17, 17], GRID_MAJOR: [32, 32, 32], AXIS: [64, 64, 64],
+  GOOD: [110, 195, 110], WARN: [235, 200, 80], BAD: [235, 95, 95],
+  SELECTION: [120, 190, 245], VEL_COLOR: [110, 215, 125],
+  ACC_COLOR: [240, 170, 80], FORCE_COLOR: [235, 95, 95],
+};
+
 const LIGHT: Palette = {
   BG: [246, 247, 249], PANEL: [255, 255, 255], PANEL_LIGHT: [240, 242, 245],
   PANEL_HOVER: [227, 230, 235], OUTLINE: [203, 208, 216], ACCENT: [35, 110, 180],
@@ -56,7 +70,7 @@ const LIGHT: Palette = {
 };
 
 const PALETTES: Record<ThemeName, Palette> = {
-  original: ORIGINAL, dark: DARK, light: LIGHT,
+  original: ORIGINAL, dark: DARK, void: VOID, light: LIGHT,
 };
 
 // live bindings, swapped by setTheme; defaults match the "original"
