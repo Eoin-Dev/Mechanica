@@ -858,7 +858,7 @@ export class Inspector implements Panel {
     this.body.append(el("div", { class: "faint",
       text: "The force is in newtons, applied to every body. Anything not " +
             "listed above is rejected and the error shows in red under the field.",
-      style: "font-size:11px;margin-top:6px;line-height:1.5" }));
+      style: "font-size:calc(11px * var(--fs, 1));margin-top:6px;line-height:1.5" }));
   }
 
   // ------------------------------------------------------------------- view

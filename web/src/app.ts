@@ -14,7 +14,7 @@ import { PRESETS, Preset } from "./scene/presets";
 import { CanvasController } from "./interact/tools";
 import { GRAPH_MAX_POINTS, GRAPH_WINDOW_S, PhasePlot, TimeSeries } from "./ui/plots";
 import * as theme from "./ui/theme";
-import { ThemeName, setTheme } from "./ui/theme";
+import { ThemeName, setAccent, setTheme } from "./ui/theme";
 import { css } from "./ui/theme";
 
 export const PHYSICS_DT = 1.0 / 120.0;
@@ -36,6 +36,9 @@ interface Settings {
   theme?: ThemeName;
   dyslexic_font?: boolean;
   cull?: boolean;
+  accent?: string;           // hex UI accent; unset = the theme's default
+  custom_accents?: string[]; // user-picked accents shown as extra swatches
+  font_scale?: number;       // UI font-size multiplier (0.9 - 1.2)
 }
 
 /** Panels register here; the app pokes them once per frame. */
@@ -129,8 +132,11 @@ export class App {
 
   /** Apply the persisted appearance settings (theme defaults to dark). */
   applyUiSettings(): void {
+    setAccent(this.settings.accent ?? null); // re-applies the theme too
     setTheme(this.settings.theme ?? "dark");
     document.body.classList.toggle("dyslexic", this.settings.dyslexic_font ?? false);
+    document.documentElement.style.setProperty(
+      "--fs", String(this.settings.font_scale ?? 1));
   }
 
   /** Skip drawing objects far outside the view (recommended; default on). */

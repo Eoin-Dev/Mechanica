@@ -380,16 +380,26 @@ function solveStaticFriction(manifolds: Manifold[]): void {
     const cx = a.pos.x + m.rax; // material contact point on a, this step
     const cy = a.pos.y + m.ray;
     const driftT = (cx - m.ax) * tx + (cy - m.ay) * ty;
-    if (driftT === 0.0) continue;
-    const corr = driftT / invSum;
-    if (aFix) {
-      a.pos.x -= corr * a.invMass * tx;
-      a.pos.y -= corr * a.invMass * ty;
+    if (driftT !== 0.0) {
+      const corr = driftT / invSum;
+      if (aFix) {
+        a.pos.x -= corr * a.invMass * tx;
+        a.pos.y -= corr * a.invMass * ty;
+      }
+      if (bFix) {
+        b!.pos.x += corr * b!.invMass * tx;
+        b!.pos.y += corr * b!.invMass * ty;
+      }
     }
-    if (bFix) {
-      b!.pos.x += corr * b!.invMass * tx;
-      b!.pos.y += corr * b!.invMass * ty;
-    }
+    // The anchor pins the position, so any residual velocity below the
+    // stillness threshold is pure solver noise - it flickers sign each
+    // substep in the inspector readouts of a body in limiting
+    // equilibrium. Zeroing it cannot change a trajectory the anchor
+    // already controls; a real force that saturates friction releases
+    // the anchor and restores normal physics untouched.
+    const STILL = 0.02; // m/s: far below anything visible, well above noise
+    if (aFix && a.vel.length2() < STILL * STILL) a.vel.set(0.0, 0.0);
+    if (bFix && b!.vel.length2() < STILL * STILL) b!.vel.set(0.0, 0.0);
   }
 }
 
