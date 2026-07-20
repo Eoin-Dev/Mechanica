@@ -295,7 +295,14 @@ label.checkbox {
   padding: 3px 0;
   cursor: pointer;
   color: var(--text);
+  /* hug the text: a block-level flex box stretches the full panel width,
+     so the click target and the tooltip fired far to the right of the
+     label itself */
+  width: fit-content;
+  max-width: 100%;
 }
+/* two-column checkbox pairs keep their own half, but still hug their text */
+.row-half > label.checkbox { flex: 0 1 auto; }
 label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; flex: none; }
 
 .segmented { display: flex; border: 1px solid var(--outline); border-radius: var(--radius); overflow: hidden; }
