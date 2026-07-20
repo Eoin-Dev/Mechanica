@@ -225,7 +225,7 @@ export class Library {
 
 // ----------------------------------------------------------------- settings
 const THEME_LABELS: Array<[string, ThemeName]> = [
-  ["Dark", "dark"], ["Void", "void"], ["Light", "light"],
+  ["Void", "void"], ["Dark", "dark"], ["Light", "light"],
   ["Original", "original"],
 ];
 
@@ -233,13 +233,14 @@ const THEME_LABELS: Array<[string, ThemeName]> = [
  * The theme-default swatch already shows the classic blue, so the blue
  * preset here is a distinctly darker midnight blue. */
 const ACCENT_PRESETS: string[] = [
+  "#781fb7", // deep purple - the red's saturation/darkness, in violet
   "#8b5cf6", // violet
   "#24427c", // midnight blue
   "#2fb4a8", // teal
   "#4caf72", // green
   "#e0964b", // amber
-  "#dc2828", // visceral red - the hard opposite of the dark blue
   "#e06c8a", // pink
+  "#b81f1f", // visceral red - the hard opposite of the dark blue
 ];
 
 export class SettingsPanel {
