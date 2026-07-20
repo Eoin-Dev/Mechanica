@@ -250,6 +250,29 @@ input[type="text"], input[type="number"] {
 input:focus { outline: none; border-color: var(--accent); }
 input.error { border-color: var(--bad); }
 
+/* Typeset formula editor (math-field is MathLive's element). Styled to sit
+   beside the plain text inputs: same border, focus ring and error accent. */
+.math-edit { flex: 1 1 auto; min-width: 0; }
+.math-edit math-field {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  font-size: calc(14px * var(--fs, 1));
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--outline);
+  border-radius: var(--radius);
+  padding: 1px 6px;
+  --caret-color: var(--accent);
+  --selection-background-color: var(--accent);
+  --selection-color: var(--bg);
+  --contains-highlight-background-color: transparent;
+  --placeholder-color: var(--text-faint);
+}
+.math-edit math-field:focus-within { outline: none; border-color: var(--accent); }
+.math-edit math-field.error { border-color: var(--bad); }
+math-field::part(menu-toggle) { display: none; }
+
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;

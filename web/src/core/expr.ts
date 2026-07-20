@@ -3,9 +3,13 @@
  * Compiles the same restricted expression language the desktop app accepts
  * (arithmetic, comparisons, `a if cond else b` ternaries, and/or/not, and
  * whitelisted math functions) into a fast callable. The compiler is a real
- * tokenizer + recursive-descent parser producing a closure tree — user text
- * is never passed to eval/new Function, so it cannot execute arbitrary code
- * and works under any Content-Security-Policy.
+ * tokenizer + recursive-descent parser producing an AST that is then folded
+ * into a closure tree — user text is never passed to eval/new Function, so
+ * it cannot execute arbitrary code and works under any Content-Security-Policy.
+ *
+ * The AST is exposed (`parseSource`) so the UI can re-render formulas in
+ * other notations (the typeset math editor); the engine only ever calls
+ * `compileExpr`.
  *
  * Allowed variables: x, y (position, m), vx, vy (velocity, m/s),
  * t (time, s), m (mass, kg), r (distance from origin, m).
@@ -34,7 +38,9 @@ const VAR_GETTERS: Record<string, Fn> = {
   t: (e) => e.t, m: (e) => e.m, r: (e) => e.r,
 };
 
-const CONSTS: Record<string, number> = {
+export const VAR_NAMES: ReadonlySet<string> = new Set(Object.keys(VAR_GETTERS));
+
+export const CONSTS: Record<string, number> = {
   pi: Math.PI, e: Math.E, tau: 2 * Math.PI, g: 9.81,
 };
 
@@ -49,7 +55,7 @@ function reduceMax(...a: number[]): number {
   return out;
 }
 
-const FUNCS: Record<string, { fn: (...a: number[]) => number; arity: number | "var" }> = {
+export const FUNCS: Record<string, { fn: (...a: number[]) => number; arity: number | "var" }> = {
   sin: { fn: Math.sin, arity: 1 }, cos: { fn: Math.cos, arity: 1 },
   tan: { fn: Math.tan, arity: 1 }, asin: { fn: Math.asin, arity: 1 },
   acos: { fn: Math.acos, arity: 1 }, atan: { fn: Math.atan, arity: 1 },
@@ -60,6 +66,18 @@ const FUNCS: Record<string, { fn: (...a: number[]) => number; arity: number | "v
   sign: { fn: Math.sign, arity: 1 }, floor: { fn: Math.floor, arity: 1 },
   ceil: { fn: Math.ceil, arity: 1 }, hypot: { fn: Math.hypot, arity: 2 },
 };
+
+/** Validate a call's argument count, throwing the same message everywhere
+ * a call can be built (the text parser and the math-editor converter). */
+export function checkArity(name: string, argCount: number): void {
+  const spec = FUNCS[name];
+  if (!spec) throw new ExprError("only math functions like sin, cos, sqrt may be called");
+  if (spec.arity === "var") {
+    if (argCount < 1) throw new ExprError(`${name}() needs at least one argument`);
+  } else if (argCount !== spec.arity) {
+    throw new ExprError(`${name}() takes ${spec.arity} argument${spec.arity === 1 ? "" : "s"}`);
+  }
+}
 
 // Python float % and //: result follows the divisor's sign.
 function pymod(a: number, b: number): number {
@@ -75,6 +93,22 @@ function pypow(a: number, b: number): number {
   }
   return r;
 }
+
+// --------------------------------------------------------------------- AST
+export type BinOp = "+" | "-" | "*" | "/" | "//" | "%" | "**";
+export type CmpOp = "<" | "<=" | ">" | ">=" | "==" | "!=";
+
+export type ExprNode =
+  | { kind: "num"; value: number }
+  | { kind: "var"; name: string }
+  | { kind: "const"; name: string }
+  | { kind: "call"; name: string; args: ExprNode[] }
+  | { kind: "neg"; operand: ExprNode }
+  | { kind: "not"; operand: ExprNode }
+  | { kind: "binary"; op: BinOp; left: ExprNode; right: ExprNode }
+  | { kind: "compare"; ops: CmpOp[]; operands: ExprNode[] }
+  | { kind: "logic"; op: "and" | "or"; left: ExprNode; right: ExprNode }
+  | { kind: "ternary"; body: ExprNode; cond: ExprNode; orelse: ExprNode };
 
 // ---------------------------------------------------------------- tokenizer
 type Token =
@@ -155,13 +189,13 @@ class Parser {
     this.next();
   }
 
-  parse(): Fn {
-    const fn = this.ternary();
+  parse(): ExprNode {
+    const node = this.ternary();
     if (this.peek().kind !== "end") throw new ExprError("unexpected trailing input");
-    return fn;
+    return node;
   }
 
-  private ternary(): Fn {
+  private ternary(): ExprNode {
     const body = this.orExpr();
     if (this.isKeyword("if")) {
       this.next();
@@ -169,102 +203,72 @@ class Parser {
       if (!this.isKeyword("else")) throw new ExprError("'if' expression needs an 'else'");
       this.next();
       const orelse = this.ternary();
-      return (e) => (cond(e) !== 0 ? body(e) : orelse(e));
+      return { kind: "ternary", body, cond, orelse };
     }
     return body;
   }
 
-  private orExpr(): Fn {
+  private orExpr(): ExprNode {
     let left = this.andExpr();
     while (this.isKeyword("or")) {
       this.next();
-      const l = left;
-      const r = this.andExpr();
-      left = (e) => { const a = l(e); return a !== 0 ? a : r(e); };
+      left = { kind: "logic", op: "or", left, right: this.andExpr() };
     }
     return left;
   }
 
-  private andExpr(): Fn {
+  private andExpr(): ExprNode {
     let left = this.notExpr();
     while (this.isKeyword("and")) {
       this.next();
-      const l = left;
-      const r = this.notExpr();
-      left = (e) => { const a = l(e); return a !== 0 ? r(e) : a; };
+      left = { kind: "logic", op: "and", left, right: this.notExpr() };
     }
     return left;
   }
 
-  private notExpr(): Fn {
+  private notExpr(): ExprNode {
     if (this.isKeyword("not")) {
       this.next();
-      const operand = this.notExpr();
-      return (e) => (operand(e) !== 0 ? 0.0 : 1.0);
+      return { kind: "not", operand: this.notExpr() };
     }
     return this.comparison();
   }
 
-  private comparison(): Fn {
+  private comparison(): ExprNode {
     const first = this.arith();
-    const ops: string[] = [];
-    const operands: Fn[] = [first];
+    const ops: CmpOp[] = [];
+    const operands: ExprNode[] = [first];
     while (this.peek().kind === "op" &&
            ["<", "<=", ">", ">=", "==", "!="].includes((this.peek() as { value: string }).value)) {
-      ops.push((this.next() as { kind: "op"; value: string }).value);
+      ops.push((this.next() as { kind: "op"; value: string }).value as CmpOp);
       operands.push(this.arith());
     }
     if (ops.length === 0) return first;
-    return (e) => {
-      let prev = operands[0](e);
-      for (let i = 0; i < ops.length; i++) {
-        const cur = operands[i + 1](e);
-        let ok: boolean;
-        switch (ops[i]) {
-          case "<": ok = prev < cur; break;
-          case "<=": ok = prev <= cur; break;
-          case ">": ok = prev > cur; break;
-          case ">=": ok = prev >= cur; break;
-          case "==": ok = prev === cur; break;
-          default: ok = prev !== cur;
-        }
-        if (!ok) return 0.0;
-        prev = cur;
-      }
-      return 1.0;
-    };
+    return { kind: "compare", ops, operands };
   }
 
-  private arith(): Fn {
+  private arith(): ExprNode {
     let left = this.term();
     while (this.isOp("+") || this.isOp("-")) {
-      const op = (this.next() as { kind: "op"; value: string }).value;
-      const l = left;
-      const r = this.term();
-      left = op === "+" ? (e) => l(e) + r(e) : (e) => l(e) - r(e);
+      const op = (this.next() as { kind: "op"; value: string }).value as BinOp;
+      left = { kind: "binary", op, left, right: this.term() };
     }
     return left;
   }
 
-  private term(): Fn {
+  private term(): ExprNode {
     let left = this.unary();
     while (this.isOp("*") || this.isOp("/") || this.isOp("//") || this.isOp("%")) {
-      const op = (this.next() as { kind: "op"; value: string }).value;
-      const l = left;
-      const r = this.unary();
-      if (op === "*") left = (e) => l(e) * r(e);
-      else if (op === "/") left = (e) => l(e) / r(e);
-      else if (op === "//") left = (e) => Math.floor(l(e) / r(e));
-      else left = (e) => pymod(l(e), r(e));
+      const op = (this.next() as { kind: "op"; value: string }).value as BinOp;
+      left = { kind: "binary", op, left, right: this.unary() };
     }
     return left;
   }
 
-  private unary(): Fn {
+  private unary(): ExprNode {
     if (this.isOp("-")) {
       this.next();
-      const operand = this.unary();
-      return (e) => -operand(e);
+      return { kind: "neg", operand: this.unary() };
     }
     if (this.isOp("+")) {
       this.next();
@@ -273,22 +277,21 @@ class Parser {
     return this.power();
   }
 
-  private power(): Fn {
+  private power(): ExprNode {
     const base = this.atom();
     if (this.isOp("**")) {
       this.next();
-      const exp = this.unary(); // right side may carry unary minus: 2**-3
-      return (e) => pypow(base(e), exp(e));
+      // right side may carry unary minus: 2**-3
+      return { kind: "binary", op: "**", left: base, right: this.unary() };
     }
     return base;
   }
 
-  private atom(): Fn {
+  private atom(): ExprNode {
     const t = this.peek();
     if (t.kind === "num") {
       this.next();
-      const v = t.value;
-      return () => v;
+      return { kind: "num", value: t.value };
     }
     if (t.kind === "op" && t.value === "(") {
       this.next();
@@ -301,10 +304,8 @@ class Parser {
       if (KEYWORDS.has(name)) throw new ExprError(`unexpected '${name}'`);
       this.next();
       if (this.isOp("(")) {
-        const spec = FUNCS[name];
-        if (!spec) throw new ExprError("only math functions like sin, cos, sqrt may be called");
         this.next();
-        const args: Fn[] = [];
+        const args: ExprNode[] = [];
         if (!this.isOp(")")) {
           args.push(this.ternary());
           while (this.isOp(",")) {
@@ -313,31 +314,123 @@ class Parser {
           }
         }
         this.expectOp(")");
-        if (spec.arity === "var") {
-          if (args.length < 1) throw new ExprError(`${name}() needs at least one argument`);
-        } else if (args.length !== spec.arity) {
-          throw new ExprError(`${name}() takes ${spec.arity} argument${spec.arity === 1 ? "" : "s"}`);
-        }
-        const fn = spec.fn;
-        if (args.length === 1) {
-          const a0 = args[0];
-          return (e) => fn(a0(e));
-        }
-        if (args.length === 2) {
-          const a0 = args[0];
-          const a1 = args[1];
-          return (e) => fn(a0(e), a1(e));
-        }
-        return (e) => fn(...args.map((a) => a(e)));
+        checkArity(name, args.length);
+        return { kind: "call", name, args };
       }
-      if (name in VAR_GETTERS) return VAR_GETTERS[name];
-      if (name in CONSTS) {
-        const v = CONSTS[name];
-        return () => v;
-      }
+      if (name in VAR_GETTERS) return { kind: "var", name };
+      if (name in CONSTS) return { kind: "const", name };
       throw new ExprError(`unknown name '${name}' (use x, y, vx, vy, t, m, r)`);
     }
     throw new ExprError("syntax error: expected a value");
+  }
+}
+
+// ----------------------------------------------------------------- compiler
+/** Fold an AST into a closure tree evaluating it against an environment. */
+function compileNode(node: ExprNode): Fn {
+  switch (node.kind) {
+    case "num": {
+      const v = node.value;
+      return () => v;
+    }
+    case "var":
+      return VAR_GETTERS[node.name];
+    case "const": {
+      const v = CONSTS[node.name];
+      return () => v;
+    }
+    case "call": {
+      const fn = FUNCS[node.name].fn;
+      const args = node.args.map(compileNode);
+      if (args.length === 1) {
+        const a0 = args[0];
+        return (e) => fn(a0(e));
+      }
+      if (args.length === 2) {
+        const a0 = args[0];
+        const a1 = args[1];
+        return (e) => fn(a0(e), a1(e));
+      }
+      return (e) => fn(...args.map((a) => a(e)));
+    }
+    case "neg": {
+      const operand = compileNode(node.operand);
+      return (e) => -operand(e);
+    }
+    case "not": {
+      const operand = compileNode(node.operand);
+      return (e) => (operand(e) !== 0 ? 0.0 : 1.0);
+    }
+    case "binary": {
+      const l = compileNode(node.left);
+      const r = compileNode(node.right);
+      switch (node.op) {
+        case "+": return (e) => l(e) + r(e);
+        case "-": return (e) => l(e) - r(e);
+        case "*": return (e) => l(e) * r(e);
+        case "/": return (e) => l(e) / r(e);
+        case "//": return (e) => Math.floor(l(e) / r(e));
+        case "%": return (e) => pymod(l(e), r(e));
+        case "**": return (e) => pypow(l(e), r(e));
+      }
+      break;
+    }
+    case "compare": {
+      const ops = node.ops;
+      const operands = node.operands.map(compileNode);
+      return (e) => {
+        let prev = operands[0](e);
+        for (let i = 0; i < ops.length; i++) {
+          const cur = operands[i + 1](e);
+          let ok: boolean;
+          switch (ops[i]) {
+            case "<": ok = prev < cur; break;
+            case "<=": ok = prev <= cur; break;
+            case ">": ok = prev > cur; break;
+            case ">=": ok = prev >= cur; break;
+            case "==": ok = prev === cur; break;
+            default: ok = prev !== cur;
+          }
+          if (!ok) return 0.0;
+          prev = cur;
+        }
+        return 1.0;
+      };
+    }
+    case "logic": {
+      const l = compileNode(node.left);
+      const r = compileNode(node.right);
+      if (node.op === "and") return (e) => { const a = l(e); return a !== 0 ? r(e) : a; };
+      return (e) => { const a = l(e); return a !== 0 ? a : r(e); };
+    }
+    case "ternary": {
+      const body = compileNode(node.body);
+      const cond = compileNode(node.cond);
+      const orelse = compileNode(node.orelse);
+      return (e) => (cond(e) !== 0 ? body(e) : orelse(e));
+    }
+  }
+  // unreachable: every kind returns above (the switch is exhaustive)
+  throw new ExprError("internal: unhandled expression node");
+}
+
+/** Parse `source` into an AST without compiling or probing it.
+ *
+ * Names and arities are validated during the parse, so a returned tree
+ * only contains known variables, constants and well-formed calls.
+ * Throws ExprError with a human-readable message on invalid input.
+ */
+export function parseSource(source: string): ExprNode {
+  source = source.trim();
+  if (!source) throw new ExprError("empty expression");
+  // mathy convenience: `^` means power (x^2 == x**2). Substituted in the
+  // text before parsing so it gets **'s precedence.
+  source = source.replaceAll("^", "**");
+  try {
+    return new Parser(tokenize(source)).parse();
+  } catch (exc) {
+    if (exc instanceof ExprError) throw exc;
+    throw new ExprError(`syntax error: ${(exc as Error).message}`);
   }
 }
 
@@ -346,18 +439,7 @@ class Parser {
  * Throws ExprError with a human-readable message on invalid input.
  */
 export function compileExpr(source: string): CompiledExpr {
-  source = source.trim();
-  if (!source) throw new ExprError("empty expression");
-  // mathy convenience: `^` means power (x^2 == x**2). Substituted in the
-  // text before parsing so it gets **'s precedence.
-  source = source.replaceAll("^", "**");
-  let fn: Fn;
-  try {
-    fn = new Parser(tokenize(source)).parse();
-  } catch (exc) {
-    if (exc instanceof ExprError) throw exc;
-    throw new ExprError(`syntax error: ${(exc as Error).message}`);
-  }
+  const fn = compileNode(parseSource(source));
 
   // Probe once so obviously broken expressions fail at compile time.
   const probe: Env = { x: 0.1, y: 0.1, vx: 0.0, vy: 0.0, t: 0.0, m: 1.0, r: 0.14 };
