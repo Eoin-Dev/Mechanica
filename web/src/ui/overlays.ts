@@ -375,15 +375,16 @@ export class SettingsPanel {
       }, "Interface text size (kept within limits so the layout holds)"));
 
     body.append(el("div", { class: "section", text: "Performance" }));
-    add(checkbox("Cull offscreen objects",
+    add(checkbox("Remove runaway objects",
       () => app.settings.cull ?? true,
       (v) => {
         app.settings.cull = v;
         app.saveSettings();
-      }, "Skip drawing objects far outside the view"));
-    note("Recommended: keeps large scenes fast, especially on modest " +
-         "hardware, by not drawing what you cannot see. Physics is " +
-         "unaffected.");
+      }, "Delete bodies that have drifted far beyond any usable view"));
+    note("Recommended: bodies that fall away forever are deleted once " +
+         "they are far past the furthest you can zoom out and still " +
+         "receding, so endless debris cannot pile up and slow the " +
+         "simulation. Anything on an orbit that brings it back is kept.");
 
     const helpRow = el("div", {
       style: "display:flex;justify-content:flex-end;margin-top:18px",

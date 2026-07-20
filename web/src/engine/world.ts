@@ -82,6 +82,56 @@ export function safeDragSpeed(world: World, body: Body, base: number): number {
   return Math.max(v, DRAG_SPEED_FLOOR);
 }
 
+/** Centre the runaway test on the scene's fixed furniture (walls,
+ * anchors, locked bodies), falling back to the origin. Never the camera:
+ * panning away to inspect something must not condemn everything else. */
+export function sceneAnchorPoint(world: World): { x: number; y: number } {
+  let x = 0.0;
+  let y = 0.0;
+  let n = 0;
+  for (const w of world.walls) {
+    x += (w.a.x + w.b.x) * 0.5;
+    y += (w.a.y + w.b.y) * 0.5;
+    n++;
+  }
+  for (const b of world.bodies) {
+    if (b.locked || b.isAnchor) {
+      x += b.pos.x;
+      y += b.pos.y;
+      n++;
+    }
+  }
+  return n > 0 ? { x: x / n, y: y / n } : { x: 0.0, y: 0.0 };
+}
+
+/** Bodies that have escaped for good and can be deleted.
+ *
+ * A body qualifies only if it is beyond `limit` from the scene anchor AND
+ * still moving further away (or its state has gone non-finite). The
+ * outward test is what protects a body at the far end of a wide bound
+ * orbit: it is far away, but it is on its way back, so it survives.
+ * Anchors, locked bodies and anything the user is holding are never
+ * touched.
+ */
+export function escapedBodies(world: World, limit: number): Body[] {
+  const c = sceneAnchorPoint(world);
+  const limit2 = limit * limit;
+  const out: Body[] = [];
+  for (const b of world.bodies) {
+    if (b.locked || b.isAnchor || b.held) continue;
+    const dx = b.pos.x - c.x;
+    const dy = b.pos.y - c.y;
+    const d2 = dx * dx + dy * dy;
+    if (!Number.isFinite(d2)) {
+      out.push(b); // diverged: it is never coming back
+      continue;
+    }
+    if (d2 <= limit2) continue;
+    if (dx * b.vel.x + dy * b.vel.y > 0.0) out.push(b); // heading further out
+  }
+  return out;
+}
+
 export interface FieldDict {
   name: string;
   fx: string;

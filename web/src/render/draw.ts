@@ -291,9 +291,12 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
                           world: World, view: ViewSettings,
                           selection: Selectable[], hover: Selectable | null,
                           trails: Map<number, Trail>,
-                          areaW: number, areaH: number, cull = true): void {
+                          areaW: number, areaH: number): void {
   const [minX, minY, maxX, maxY] = cam.visibleBounds();
-  // culling margin: springs/lines are a few px wide on screen
+  // Draw culling is unconditional: skipping what is outside the viewport
+  // can never change what the user sees, so there is nothing to trade.
+  // (The "remove runaway objects" setting is a separate, physical thing:
+  // it deletes bodies that have escaped for good - see App.cullEscaped.)
   const margin = 12.0 / cam.zoom;
 
   // --- trails ---------------------------------------------------------------
@@ -301,13 +304,11 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
 
   // --- links -----------------------------------------------------------------
   for (const link of world.links) {
-    if (cull) {
-      const ax = link.a.pos.x, ay = link.a.pos.y;
-      const bx = link.b.pos.x, by = link.b.pos.y;
-      if (Math.max(ax, bx) < minX - margin || Math.min(ax, bx) > maxX + margin ||
-          Math.max(ay, by) < minY - margin || Math.min(ay, by) > maxY + margin) {
-        continue;
-      }
+    const ax = link.a.pos.x, ay = link.a.pos.y;
+    const bx = link.b.pos.x, by = link.b.pos.y;
+    if (Math.max(ax, bx) < minX - margin || Math.min(ax, bx) > maxX + margin ||
+        Math.max(ay, by) < minY - margin || Math.min(ay, by) > maxY + margin) {
+      continue;
     }
     const pa = cam.toScreen(link.a.pos);
     const pb = cam.toScreen(link.b.pos);
@@ -340,14 +341,12 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
 
   // --- walls -------------------------------------------------------------------
   for (const wall of world.walls) {
-    if (cull) {
-      const m = margin + wall.thickness / 2;
-      if (Math.max(wall.a.x, wall.b.x) < minX - m ||
-          Math.min(wall.a.x, wall.b.x) > maxX + m ||
-          Math.max(wall.a.y, wall.b.y) < minY - m ||
-          Math.min(wall.a.y, wall.b.y) > maxY + m) {
-        continue;
-      }
+    const m = margin + wall.thickness / 2;
+    if (Math.max(wall.a.x, wall.b.x) < minX - m ||
+        Math.min(wall.a.x, wall.b.x) > maxX + m ||
+        Math.max(wall.a.y, wall.b.y) < minY - m ||
+        Math.min(wall.a.y, wall.b.y) > maxY + m) {
+      continue;
     }
     const pa = cam.toScreen(wall.a);
     const pb = cam.toScreen(wall.b);
@@ -371,9 +370,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   ctx.textAlign = "center";
   for (const body of world.bodies) {
     const r = body.radius;
-    if (cull &&
-        (body.pos.x + r < minX || body.pos.x - r > maxX ||
-         body.pos.y + r < minY || body.pos.y - r > maxY)) {
+    if (body.pos.x + r < minX || body.pos.x - r > maxX ||
+        body.pos.y + r < minY || body.pos.y - r > maxY) {
       continue;
     }
     const [sx, sy] = cam.toScreen(body.pos);

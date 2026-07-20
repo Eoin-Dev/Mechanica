@@ -5,7 +5,7 @@
  * happens on requestAnimationFrame and the UI chrome lives in the DOM.
  */
 import { Body } from "./engine/body";
-import { ENCOUNTER_ANGLE, World } from "./engine/world";
+import { ENCOUNTER_ANGLE, World, escapedBodies } from "./engine/world";
 import { Camera, MAX_ZOOM, MIN_ZOOM } from "./render/camera";
 import { Selectable, ViewSettings, drawGrid, drawScaleBar, drawWorld } from "./render/draw";
 import { Trail } from "./render/trail";
@@ -18,6 +18,11 @@ import { ThemeName, setAccent, setTheme } from "./ui/theme";
 import { css } from "./ui/theme";
 
 export const PHYSICS_DT = 1.0 / 120.0;
+
+// A body is "gone" once it is this many max-zoom-out viewports from the
+// scene. Generous on purpose: the point is to bin debris that is never
+// coming back, not to clip anything the user might still want.
+const CULL_VIEWPORTS = 4.0;
 const MAX_STEPS_PER_FRAME = 24; // bounds catch-up work per frame at high speeds
 // wall-clock ceiling for physics per frame: however heavy the scene, the
 // UI keeps redrawing and stays clickable (the sim just runs slower than
@@ -139,10 +144,47 @@ export class App {
       "--fs", String(this.settings.font_scale ?? 1));
   }
 
-  /** Skip drawing objects far outside the view (recommended; default on). */
+  /** Delete bodies that have escaped for good (recommended; default on). */
   get cullEnabled(): boolean {
     return this.settings.cull ?? true;
   }
+
+  /** How far a body must stray before it counts as gone: several times
+   * the widest view the camera can ever show (MIN_ZOOM), so anything the
+   * user could still zoom out to see is always safe. */
+  private cullLimit(): number {
+    const halfW = this.camera.screenW / (2 * MIN_ZOOM);
+    const halfH = this.camera.screenH / (2 * MIN_ZOOM);
+    return CULL_VIEWPORTS * Math.max(halfW, halfH, 1);
+  }
+
+  /** Bin runaway bodies.
+   *
+   * Debris dropped into empty space (or flung off a collision) otherwise
+   * accumulates forever: it costs physics time on every step and drags
+   * auto-fit out to nothing, while being impossible to see or reach.
+   * Only bodies far beyond any usable view AND still receding qualify,
+   * so a wide bound orbit is never touched.
+   */
+  private cullEscaped(): void {
+    if (!this.cullEnabled) return;
+    const gone = escapedBodies(this.world, this.cullLimit());
+    if (gone.length === 0) return;
+    for (const b of gone) this.controller.deleteObject(b);
+    this.culledTotal += gone.length;
+    // one throttled note rather than a stream of them
+    const nowS = performance.now() / 1000;
+    if (nowS > this.cullCooldown) {
+      this.cullCooldown = nowS + 8.0;
+      const n = this.culledTotal;
+      this.toast(`Removed ${n} object${n !== 1 ? "s" : ""} that drifted out ` +
+                 "of reach - turn off in Settings");
+      this.culledTotal = 0;
+    }
+  }
+
+  private cullCooldown = 0.0;
+  private culledTotal = 0;
 
   // ----------------------------------------------------------------- layout
   get canvasWidth(): number {
@@ -649,6 +691,7 @@ export class App {
         this.quality = Math.min(10.0, this.quality * 1.03);
       }
       this.checkSustainedOverload();
+      this.cullEscaped();
       this.afterPhysics();
       const nowS = performance.now() / 1000;
       if (this.world.diverged.length > 0 && nowS > this.divergeCooldown) {
@@ -843,7 +886,7 @@ export class App {
     ctx.fillRect(0, 0, w, h);
     if (this.view.grid) drawGrid(ctx, this.camera, w, h);
     drawWorld(ctx, this.camera, this.world, this.view, this.selection,
-              this.controller.hover, this.trails, w, h, this.cullEnabled);
+              this.controller.hover, this.trails, w, h);
     this.controller.drawOverlays(ctx);
     drawScaleBar(ctx, this.camera, w, h);
     // measured render cost feeds the physics budget in pickResolution
