@@ -297,6 +297,11 @@ export class World {
   trace: Array<[number, number, number]> = [];
   traceSpacing = 0.0; // 0 = tracing off
   private traceLast = new Map<number, [number, number]>();
+  // Base timestep the spring/damper stability clamps are measured
+  // against (see prepareStep). Must match the app's PHYSICS_DT: it is
+  // what makes a clamped spring behave identically however finely the
+  // scheduler subdivides a frame.
+  clampDt = 1.0 / 120.0;
   private contactCache: ContactCache = new Map(); // warm-start impulses between substeps
   private rods: DistanceLink[] = [];  // per-step caches, see prepareStep()
   private movers: Body[] = [];
@@ -332,15 +337,31 @@ export class World {
     // damping. Clamp the *effective* k and c to those limits each substep so
     // extreme user settings behave like "as stiff as this timestep can
     // carry" instead of blowing up.
-    const h2 = h * h;
+    // Clamp against a FIXED reference substep, not the one this step
+    // happens to be using.
+    //
+    // The app subdivides its timestep adaptively, and how far it
+    // subdivides depends on measured frame times - i.e. on how busy the
+    // machine is. Clamping against the live h therefore made a clamped
+    // spring's *effective* stiffness and damping vary with performance:
+    // the same scene, reset and replayed, could ring on one run and sit
+    // dead still on the next. Anchoring the limits to the base timestep
+    // makes them a property of the scene alone.
+    //
+    // Taking the larger of the two keeps this conservative: the app only
+    // ever steps finer than the reference (so the reference governs),
+    // while a caller stepping coarser clamps harder still, as stability
+    // at that step size demands.
+    const refH = Math.max(h, this.clampDt / Math.max(1, this.substeps));
+    const refH2 = refH * refH;
     for (const s of springs) {
       const wSum = s.a.invMass + s.b.invMass;
       let k = s.stiffness;
       let c = s.damping > 0.0 ? s.damping : 0.0;
       if (wSum > 0.0) {
-        const kLim = 1.0 / (h2 * wSum); // keeps h*omega <= 1
+        const kLim = 1.0 / (refH2 * wSum); // keeps h*omega <= 1
         if (k > kLim) k = kLim;
-        const cLim = 0.5 / (h * wSum);  // no single-step overshoot
+        const cLim = 0.5 / (refH * wSum);  // no single-step overshoot
         if (c > cLim) c = cLim;
       }
       s.kEff = k;

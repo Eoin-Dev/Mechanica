@@ -66,18 +66,12 @@ export class App {
   accumulator = 0.0;
   fpsNow = 0.0;
   overloaded = false;
-  // adaptive time resolution: extra, smaller physics steps during fast
-  // close encounters, budgeted against real frame headroom
+  // Adaptive time resolution: extra, smaller physics steps during fast
+  // close encounters. Chosen from the simulation state alone, so the
+  // result never depends on how busy the machine is (see pickResolution).
   adaptiveDt = true;
-  private physRes = 1;    // current subdivision (with hysteresis)
   qNow = 1;               // what actually ran this frame (for the UI)
   private stepMs = 0.2;   // EMA of wall-clock ms per world step
-  private lastPhysMs = 0.0;
-  // Headroom-driven quality: when physics uses well under half a display
-  // refresh, both precision systems get their thresholds tightened by this
-  // factor (finer slicing at moderate speeds -> smooth trails everywhere);
-  // it backs off before the frame rate could dip below the monitor's.
-  private quality = 1.0;
   private refreshMs = 1000 / 60; // estimated display refresh interval
   private renderMs = 1.0;        // EMA of measured render cost per frame
 
@@ -645,9 +639,7 @@ export class App {
       // instead of one full-size step every few frames (choppy).
       const effDt = PHYSICS_DT * Math.min(this.speed, 1.0);
       this.world.traceSpacing = this.view.trails ? 0.5 / this.camera.zoom : 0.0;
-      // quality > 1 lowers the slicing threshold, so the in-substep
-      // adaptive integrator also engages at moderate speeds
-      this.world.encounterAngle = ENCOUNTER_ANGLE / this.quality;
+      this.world.encounterAngle = ENCOUNTER_ANGLE;
       this.accumulator += dtFrame * this.speed;
       let quanta = 0;
       let smallSteps = 0;
@@ -657,7 +649,7 @@ export class App {
         // resolution is re-chosen per quantum from the freshest
         // accelerations, so a close encounter that flares up mid-frame
         // is caught within 1/120 s
-        const q = this.pickResolution(effDt, dtFrame);
+        const q = this.pickResolution(effDt);
         if (q > qUsed) qUsed = q;
         const h = effDt / q;
         for (let i = 0; i < q; i++) {
@@ -672,24 +664,12 @@ export class App {
         }
       }
       const elapsed = performance.now() - t0;
-      this.lastPhysMs = elapsed;
       if (smallSteps > 0) {
         this.stepMs = 0.9 * this.stepMs + (0.1 * elapsed) / smallSteps;
       }
       this.qNow = qUsed;
       this.overloaded = this.accumulator >= effDt;
       if (this.overloaded) this.accumulator = 0.0;
-      // spend spare headroom on finer time resolution: ramp quality up
-      // while physics stays well under half a display refresh, back off
-      // quickly as the budget tightens, reset outright on overload
-      const targetMs = 0.5 * this.refreshMs;
-      if (this.overloaded) {
-        this.quality = 1.0;
-      } else if (this.lastPhysMs > 0.8 * targetMs) {
-        this.quality = Math.max(1.0, this.quality * 0.85);
-      } else if (this.lastPhysMs < 0.45 * targetMs) {
-        this.quality = Math.min(10.0, this.quality * 1.03);
-      }
       this.checkSustainedOverload();
       this.cullEscaped();
       this.afterPhysics();
@@ -732,31 +712,23 @@ export class App {
     }
   }
 
-  /** Time-resolution multiplier for this frame: how many extra, smaller
+  /** How finely to subdivide this quantum: how many extra, smaller
    * physics steps to run in place of each normal one.
    *
-   * Need comes from the physics (world.subdivisionNeed: fast close
-   * encounters want finer time slicing, and the headroom-driven quality
-   * factor lowers that bar when the machine is idling); affordability
-   * comes from the measured step and render costs against the display's
-   * own refresh interval, so the extra work never pulls the frame rate
-   * meaningfully below the monitor's. */
-  private pickResolution(effDt: number, dtFrame: number): number {
-    if (!this.adaptiveDt) {
-      this.physRes = 1;
-      return 1;
-    }
-    const need = this.world.subdivisionNeed(effDt, 16, this.quality);
-    if (need > this.physRes) this.physRes = need; // react to spikes immediately...
-    else if (this.physRes > need) this.physRes--; // ...but relax gradually
-    let q = this.physRes;
-    if (q > 1) {
-      const baseSteps = Math.max(1.0, (dtFrame * this.speed) / effDt);
-      const budgetMs = Math.max(1.0, 0.75 * this.refreshMs - this.renderMs);
-      const afford = Math.floor(budgetMs / Math.max(this.stepMs * baseSteps, 1e-3));
-      q = Math.max(1, Math.min(q, afford));
-    }
-    return q;
+   * This is a function of the simulation state ALONE - never of frame
+   * timing or measured cost. The step size decides the numerical answer,
+   * so letting the machine's load pick it made a scene integrate
+   * differently from run to run: the same setup, reset and replayed,
+   * could ring on one attempt and sit still on the next.
+   *
+   * Performance is handled without touching the physics: a frame that
+   * runs out of budget simply advances less simulated time (the
+   * MAX_STEPS_PER_FRAME / PHYSICS_BUDGET_S ceilings in update()), so a
+   * slow machine runs the same simulation slower rather than a different
+   * simulation at speed. */
+  private pickResolution(effDt: number): number {
+    if (!this.adaptiveDt) return 1;
+    return this.world.subdivisionNeed(effDt, 16);
   }
 
   /** After several seconds of continuous overload the lag clearly won't
