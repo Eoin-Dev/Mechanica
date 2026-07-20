@@ -55,6 +55,28 @@ describe("Trail ring buffer", () => {
     expect(points(t)).toEqual([[3, 3], [4, 4], [5, 5], [6, 6], [7, 7], [8, 8]]);
   });
 
+  it("expires points older than a cut-off (decay while standing still)", () => {
+    const t = new Trail(100);
+    for (let i = 0; i < 10; i++) t.push(i, i, i * 0.1); // t = 0.0 .. 0.9
+    t.expireBefore(0.45);
+    expect(points(t)).toEqual([[5, 5], [6, 6], [7, 7], [8, 8], [9, 9]]);
+    // a body that stopped records nothing new, so the trail keeps
+    // shrinking as its points age out - and eventually vanishes
+    t.expireBefore(10.0);
+    expect(t.count).toBe(0);
+  });
+
+  it("keeps serials monotonic through eviction and resizing", () => {
+    const t = new Trail(3);
+    expect(t.firstSerial).toBe(0);
+    for (let i = 0; i < 5; i++) t.push(i, i, i); // evicts 2
+    expect(t.firstSerial).toBe(2);
+    t.expireBefore(3); // drops the point stamped t=2
+    expect(t.firstSerial).toBe(3);
+    t.setCapacity(1); // keeps only the newest
+    expect(t.firstSerial).toBe(4);
+  });
+
   it("append cost stays O(1): 200 trails * 350 cap is fast", () => {
     const trails = Array.from({ length: 200 }, () => new Trail(350));
     const t0 = performance.now();

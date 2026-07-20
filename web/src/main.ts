@@ -182,6 +182,28 @@ new ResizeObserver(resize).observe($("canvas-wrap"));
 window.addEventListener("resize", resize);
 resize();
 
+// --------------------------------------------------------------- page zoom
+// Zooming belongs to the simulation view and the graph, which handle their
+// own wheel/pinch gestures. Anywhere else the browser's page zoom would
+// scale the whole app - scrollbars, clipped panels, a canvas that no
+// longer lines up with the pointer - so suppress every route into it
+// outside those two surfaces.
+const zoomable = (target: EventTarget | null): boolean => {
+  const el = target instanceof Element ? target : null;
+  return el !== null && el.closest("#canvas-wrap, #dock") !== null;
+};
+document.addEventListener("wheel", (e) => {
+  if (e.ctrlKey && !zoomable(e.target)) e.preventDefault(); // trackpad pinch
+}, { passive: false });
+document.addEventListener("gesturestart", (e) => e.preventDefault());
+document.addEventListener("gesturechange", (e) => e.preventDefault());
+document.addEventListener("keydown", (e) => {
+  // Ctrl/Cmd +/-/0 page zoom
+  if ((e.ctrlKey || e.metaKey) && ["+", "=", "-", "_", "0"].includes(e.key)) {
+    e.preventDefault();
+  }
+}, { capture: true });
+
 // ------------------------------------------------------------------- start
 app.loadPreset(PRESETS[0], false);
 app.start();

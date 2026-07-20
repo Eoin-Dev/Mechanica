@@ -1116,7 +1116,7 @@ export const PRESETS: Preset[] = [
     "Asteroids sharing Jupiter's orbit, 60 degrees ahead (L4) and " +
     "behind (L5). These Lagrange points are gravitationally stable, " +
     "so the swarms slowly librate around them instead of drifting off.",
-    buildTrojans, { zoom: 55, trails: true }),
+    buildTrojans, { zoom: 55 }),
   // ---- the three-body problem, from stability to chaos -------------
   new Preset("Sun, Earth & Moon", "Three-Body Problem",
     "The one arrangement of three bodies that IS stable: a " +
@@ -1315,7 +1315,7 @@ export const PRESETS: Preset[] = [
     "pull, a comparison (r < 0.7) acting as a switch that hollows out a " +
     "calm eye, and drag. Open the World tab to read - and edit - the " +
     "formulas while it runs.",
-    buildCyclone, { zoom: 85, trails: true }),
+    buildCyclone, { zoom: 85 }),
 ];
 
 export const CATEGORIES: string[] = (() => {

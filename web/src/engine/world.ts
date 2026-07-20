@@ -263,9 +263,18 @@ export class World {
     for (const ln of this.links) {
       if (ln instanceof DistanceLink) rods.push(ln);
       else springs.push(ln);
-      const a = ln.a.id;
-      const b = ln.b.id;
-      noCollide.add(a < b ? `${a},${b}` : `${b},${a}`);
+      // Linked bodies DO collide with each other: a ball on a string
+      // still bounces off the ball it is tied to. The only exception is
+      // a link whose natural length is shorter than the bodies' combined
+      // radii - there the link holds them permanently overlapped, so the
+      // contact could never be satisfied and the two solvers would fight
+      // each other forever (constant jitter).
+      const gap = ln instanceof DistanceLink ? ln.length : ln.restLength;
+      if (gap < ln.a.radius + ln.b.radius) {
+        const a = ln.a.id;
+        const b = ln.b.id;
+        noCollide.add(a < b ? `${a},${b}` : `${b},${a}`);
+      }
     }
     this.rods = rods;
     // Stability clamp: an explicit spring is only stable while h*omega stays
@@ -288,9 +297,6 @@ export class World {
       s.cEff = c;
     }
     this.movers = this.bodies.filter((b) => b.invMass !== 0.0);
-    // directly linked bodies never collide with each other (their link
-    // already governs their separation); everything else does, which is
-    // what stops soft bodies from tangling through themselves
     this.contactStatic = { noCollide };
   }
 

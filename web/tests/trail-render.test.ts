@@ -21,6 +21,11 @@ function recCtx(): { ctx: CanvasRenderingContext2D; ops: Op[] } {
     stroke() { ops.push({ op: "stroke", style: strokeStyle }); },
     moveTo(x: number, y: number) { ops.push({ op: "moveTo", x, y }); },
     lineTo(x: number, y: number) { ops.push({ op: "lineTo", x, y }); },
+    // trails are drawn as quadratic curves through midpoints; record the
+    // segment endpoint so vertex counting still works
+    quadraticCurveTo(_cx: number, _cy: number, x: number, y: number) {
+      ops.push({ op: "quadraticCurveTo", x, y });
+    },
   };
   const ctx = new Proxy(base, {
     get(t, p) {
@@ -59,10 +64,11 @@ describe("trail rendering", () => {
     drawWorld(ctx, cam, worldWith(b), view(), [], null, trails, 800, 600);
 
     const moveTos = ops.filter((o) => o.op === "moveTo").length;
-    const lineTos = ops.filter((o) => o.op === "lineTo").length;
+    const segs = ops.filter((o) => o.op === "lineTo" ||
+                                   o.op === "quadraticCurveTo").length;
     const strokes = trailStrokes(ops).length;
     expect(strokes).toBeGreaterThan(1);          // multiple gradient bands
-    expect(lineTos).toBeGreaterThan(moveTos);    // real polylines, not dots
+    expect(segs).toBeGreaterThan(moveTos);       // real paths, not dots
     // bands connect: consecutive bands share their boundary vertex
     const distinctStyles = new Set(trailStrokes(ops).map((o) => o.style));
     expect(distinctStyles.size).toBeGreaterThan(1); // it actually fades
@@ -82,7 +88,7 @@ describe("trail rendering", () => {
     drawWorld(ctx, cam, worldWith(...bodies), view(), [], null, trails, 800, 600);
     // every recorded vertex must be for the on-screen trail (roughly within
     // a screen of the viewport); nothing near the off-screen 1000,1000 world
-    const verts = ops.filter((o) => o.op === "moveTo" || o.op === "lineTo");
+    const verts = ops.filter((o) => o.op === "moveTo" || o.op === "lineTo" || o.op === "quadraticCurveTo");
     const offScreenVerts = verts.filter((o) => (o.x ?? 0) > 2000 || (o.y ?? 0) > 2000
       || (o.x ?? 0) < -2000 || (o.y ?? 0) < -2000);
     expect(offScreenVerts.length).toBe(0);
@@ -117,10 +123,40 @@ describe("trail rendering", () => {
     const trails = new Map([[b.id, t]]);
     const { ctx, ops } = recCtx();
     drawWorld(ctx, new Camera(800, 600), worldWith(b), view(), [], null, trails, 800, 600);
-    const verts = ops.filter((o) => o.op === "moveTo" || o.op === "lineTo").length;
-    // 10k points must not become 10k line segments; decimation caps it well
-    // below the raw count (budget ~600 + a boundary vertex per band)
-    expect(verts).toBeLessThan(1200);
+    const verts = ops.filter((o) => o.op === "moveTo" || o.op === "lineTo" || o.op === "quadraticCurveTo").length;
+    // 10k points must not become 10k segments; the per-trail vertex
+    // ceiling caps it well below the raw count
+    expect(verts).toBeLessThan(6000);
     expect(verts).toBeGreaterThan(50); // still a detailed curve
+  });
+
+  it("keeps the drawn path stable as the trail scrolls (no shimmer)", () => {
+    // Decimation must select the same physical points as the ring
+    // scrolls. Keying it on the ring index re-picks a different subset
+    // every frame, which reads as the trail warping in place.
+    const b = new Body(new Vec2(0, 0), 0.1, 1);
+    const t = new Trail(4000);
+    const pt = (i: number): [number, number] =>
+      [Math.cos(i * 0.002) * 1.5, Math.sin(i * 0.002) * 1.5];
+    for (let i = 0; i < 4000; i++) t.push(...pt(i));
+    const cam = new Camera(800, 600);
+    const draw = (): Array<[number, number]> => {
+      const { ctx, ops } = recCtx();
+      drawWorld(ctx, cam, worldWith(b), view(), [], null,
+                new Map([[b.id, t]]), 800, 600);
+      return ops.filter((o) => o.op === "quadraticCurveTo")
+                .map((o) => [o.x ?? 0, o.y ?? 0]);
+    };
+    const before = draw();
+    // scroll the ring by a whole stride's worth of new points
+    for (let i = 4000; i < 4000 + 12; i++) t.push(...pt(i));
+    const after = draw();
+    // the overlapping tail of the two frames must contain the same
+    // vertices (shifted), not a freshly re-sampled set
+    const keyOf = (p: [number, number]): string =>
+      `${p[0].toFixed(3)},${p[1].toFixed(3)}`;
+    const beforeKeys = new Set(before.map(keyOf));
+    const shared = after.filter((p) => beforeKeys.has(keyOf(p))).length;
+    expect(shared).toBeGreaterThan(after.length * 0.85);
   });
 });

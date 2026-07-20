@@ -569,7 +569,6 @@ button.swatch:hover .swatch-x { opacity: 1; }
   background: var(--bg);
   cursor: pointer;
 }
-.accent-popover-note { font-size: calc(11px * var(--fs, 1)); }
 button.swatch:hover:not(:disabled) { background: transparent; border-color: var(--text-faint); }
 button.swatch.active { border-color: var(--text); }
 .swatch .dot {
@@ -587,8 +586,11 @@ button.swatch-add {
   border: 1.5px dashed var(--text-faint);
   background: transparent;
   color: var(--text-dim);
+  /* the glyph is centred by the flex box `button` already sets; a line
+     box would sit it off-centre because "+" has uneven side bearings */
   font-size: calc(15px * var(--fs, 1));
-  line-height: 1;
+  line-height: 0;
+  font-family: system-ui, sans-serif; /* not the dyslexic face: its + is offset */
 }
 button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--text); border-color: var(--text-dim); }
 .settings-note { font-size: calc(11px * var(--fs, 1)); line-height: 1.5; margin: 4px 0 10px; }

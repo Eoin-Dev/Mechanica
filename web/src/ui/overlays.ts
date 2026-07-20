@@ -225,7 +225,8 @@ export class Library {
 
 // ----------------------------------------------------------------- settings
 const THEME_LABELS: Array<[string, ThemeName]> = [
-  ["Dark", "dark"], ["Light", "light"], ["Original", "original"],
+  ["Dark", "dark"], ["Void", "void"], ["Light", "light"],
+  ["Original", "original"],
 ];
 
 /** Hand-picked UI accents (a good purple included, per popular demand).
@@ -237,6 +238,7 @@ const ACCENT_PRESETS: string[] = [
   "#2fb4a8", // teal
   "#4caf72", // green
   "#e0964b", // amber
+  "#dc2828", // visceral red - the hard opposite of the dark blue
   "#e06c8a", // pink
 ];
 
@@ -305,9 +307,7 @@ export class SettingsPanel {
       applyAccent(hex);
     }, { style: "primary" });
     const cancelBtn = button("Cancel", () => { popover.hidden = true; });
-    popover.append(colorInput, createBtn.root, cancelBtn.root,
-      el("span", { class: "faint accent-popover-note",
-                   text: "Nothing changes until you press Create" }));
+    popover.append(colorInput, createBtn.root, cancelBtn.root);
 
     const rebuildSwatches = (): void => {
       swatchRow.replaceChildren();
