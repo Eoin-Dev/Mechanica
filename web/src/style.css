@@ -17,6 +17,7 @@
   --selection: rgb(110, 180, 240);
   --radius: 6px;
   --font: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --fs: 1; /* user font-size multiplier (settings) */
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -41,7 +42,7 @@ html, body, #app { height: 100%; overflow: hidden; }
   /* OpenDyslexic's glyphs fill far more of the em box than Segoe UI;
      rendering it ~25% smaller matches the two fonts' visual size so
      the layout doesn't blow up when the option is toggled */
-  size-adjust: 74%;
+  size-adjust: 80%;
 }
 @font-face {
   font-family: "OpenDyslexic";
@@ -49,7 +50,7 @@ html, body, #app { height: 100%; overflow: hidden; }
   font-weight: 600 700;
   font-style: normal;
   font-display: swap;
-  size-adjust: 74%;
+  size-adjust: 80%;
 }
 body.dyslexic {
   --font: "OpenDyslexic", "Segoe UI", system-ui, sans-serif;
@@ -59,7 +60,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
-  font-size: 13px;
+  font-size: calc(13px * var(--fs, 1));
   -webkit-user-select: none;
   user-select: none;
   overscroll-behavior: none;
@@ -71,8 +72,8 @@ body {
 * { scrollbar-width: thin; scrollbar-color: var(--panel-hover) transparent; }
 ::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-thumb { background: var(--panel-hover); border-radius: 5px; }
-::-webkit-scrollbar-thumb:hover { background: rgb(78, 85, 100); }
-::-webkit-scrollbar-thumb:active { background: rgb(104, 113, 132); }
+::-webkit-scrollbar-thumb:hover { background: rgb(88, 88, 92); }
+::-webkit-scrollbar-thumb:active { background: rgb(112, 112, 118); }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
@@ -93,12 +94,12 @@ body {
 }
 #toolbar::-webkit-scrollbar { display: none; }
 
-.brand { font-size: 16px; font-weight: 600; margin-right: 10px; white-space: nowrap; }
+.brand { font-size: calc(16px * var(--fs, 1)); font-weight: 600; margin-right: 10px; white-space: nowrap; }
 .toolbar-spacer { flex: 1; min-width: 4px; }
 /* Speed control: trim the label and readout so the slider track gets the room. */
 .speed-ctrl .row .lbl { width: auto; }
 .speed-ctrl .row .val { width: 48px; }
-#fps { color: var(--text-faint); font-size: 12px; min-width: 48px; text-align: right; white-space: nowrap; }
+#fps { color: var(--text-faint); font-size: calc(12px * var(--fs, 1)); min-width: 48px; text-align: right; white-space: nowrap; }
 
 /* -------------------------------------------------------------- layout */
 #main { flex: 1; display: flex; min-height: 0; }
@@ -170,7 +171,7 @@ body {
 #dock-splitter { height: 7px; margin-bottom: -7px; z-index: 6; flex: none; cursor: ns-resize; background: transparent; }
 #dock-splitter:hover { background: var(--accent-dark); }
 .dock-header { display: flex; align-items: center; gap: 10px; flex: none; }
-.dock-hint { color: var(--text-faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.dock-hint { color: var(--text-faint); font-size: calc(11px * var(--fs, 1)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .dock-canvas-wrap { flex: 1; min-height: 0; position: relative; }
 .dock-canvas-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 
@@ -184,7 +185,7 @@ body {
   padding: 0 10px;
   background: var(--panel);
   border-top: 1px solid var(--outline);
-  font-size: 12px;
+  font-size: calc(12px * var(--fs, 1));
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -197,7 +198,7 @@ body {
 /* ------------------------------------------------------------- controls */
 button {
   font-family: var(--font);
-  font-size: 12px;
+  font-size: calc(12px * var(--fs, 1));
   color: var(--text);
   background: var(--panel-light);
   border: 1px solid var(--outline);
@@ -229,13 +230,13 @@ button svg .fill { fill: currentColor; stroke: none; }
   position: absolute;
   right: 2px;
   bottom: 0;
-  font-size: 9px;
+  font-size: calc(9px * var(--fs, 1));
   color: var(--text-faint);
 }
 
 input[type="text"], input[type="number"] {
   font-family: var(--font);
-  font-size: 12px;
+  font-size: calc(12px * var(--fs, 1));
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--outline);
@@ -330,7 +331,7 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 
 .section {
   color: var(--accent);
-  font-size: 11px;
+  font-size: calc(11px * var(--fs, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -341,8 +342,8 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 .row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
 .row.disabled { opacity: 0.4; }
 .row.disabled input { cursor: default; }
-.row .lbl { width: 62px; flex: none; color: var(--text-dim); font-size: 12px; }
-.row .val { width: 74px; flex: none; text-align: right; font-size: 11px; color: var(--text); font-variant-numeric: tabular-nums; }
+.row .lbl { width: 62px; flex: none; color: var(--text-dim); font-size: calc(12px * var(--fs, 1)); }
+.row .val { width: 74px; flex: none; text-align: right; font-size: calc(11px * var(--fs, 1)); color: var(--text); font-variant-numeric: tabular-nums; }
 .row input.val { background: transparent; border: 1px solid transparent; border-radius: var(--radius); padding: 2px 4px; cursor: text; }
 .row input.val:hover { border-color: var(--outline); }
 .row input.val:focus { border-color: var(--accent); background: var(--bg); }
@@ -352,17 +353,17 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 .row-half { display: flex; gap: 6px; margin: 4px 0; }
 .row-half > * { flex: 1; min-width: 0; }
 .num-row { display: flex; align-items: center; gap: 4px; }
-.num-row .lbl { color: var(--text-dim); font-size: 12px; flex: none; min-width: 16px; }
-.num-row .unit { color: var(--text-faint); font-size: 11px; flex: none; }
+.num-row .lbl { color: var(--text-dim); font-size: calc(12px * var(--fs, 1)); flex: none; min-width: 16px; }
+.num-row .unit { color: var(--text-faint); font-size: calc(11px * var(--fs, 1)); flex: none; }
 
 .dim { color: var(--text-dim); }
 .faint { color: var(--text-faint); }
-.error-text { color: var(--bad); font-size: 11px; margin: 2px 0; }
+.error-text { color: var(--bad); font-size: calc(11px * var(--fs, 1)); margin: 2px 0; }
 .btn-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin: 4px 0; }
 .btn-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 4px 0; }
 .btn-grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 4px 0; }
 
-.formula-ref { font-size: 11px; }
+.formula-ref { font-size: calc(11px * var(--fs, 1)); }
 .formula-ref .code { color: var(--accent); font-family: Consolas, monospace; }
 .formula-ref td { padding: 1px 6px 1px 0; vertical-align: top; }
 .formula-ref .desc { color: var(--text-faint); }
@@ -386,7 +387,7 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
   border: 1px solid var(--outline);
   border-radius: 8px;
   padding: 6px 14px;
-  font-size: 13px;
+  font-size: calc(13px * var(--fs, 1));
   white-space: nowrap;
   max-width: 70vw;
   overflow: hidden;
@@ -399,7 +400,7 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
   left: 50%;
   transform: translateX(-50%);
   color: var(--warn);
-  font-size: 12px;
+  font-size: calc(12px * var(--fs, 1));
   z-index: 4;
   white-space: nowrap;
 }
@@ -434,7 +435,7 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
   border-bottom: 1px solid var(--outline);
   flex: none;
 }
-.overlay-header h2 { font-size: 16px; flex: 1; }
+.overlay-header h2 { font-size: calc(16px * var(--fs, 1)); flex: 1; }
 .overlay-body { overflow-y: auto; padding: 14px 16px; }
 /* Library: no top padding so the sticky category bar sits flush under the
    header with no see-through gap above it. */
@@ -450,7 +451,7 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
   background: var(--panel);
   padding: 12px 0 10px;  /* opaque bar, flush under the header - no see-through gap */
 }
-.cat-chips button { padding: 4px 10px; border-radius: 12px; font-size: 12px; }
+.cat-chips button { padding: 4px 10px; border-radius: 12px; font-size: calc(12px * var(--fs, 1)); }
 
 .card-grid {
   display: grid;
@@ -467,11 +468,11 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
   min-height: 96px;
 }
 .preset-card:hover { background: var(--panel-hover); border-color: var(--accent-dark); }
-.preset-card h3 { font-size: 13px; margin-bottom: 4px; }
-.preset-card .cat { color: var(--accent); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+.preset-card h3 { font-size: calc(13px * var(--fs, 1)); margin-bottom: 4px; }
+.preset-card .cat { color: var(--accent); font-size: calc(10px * var(--fs, 1)); text-transform: uppercase; letter-spacing: 0.05em; }
 .preset-card p {
   color: var(--text-dim);
-  font-size: 11px;
+  font-size: calc(11px * var(--fs, 1));
   line-height: 1.45;
   margin-top: 4px;
   display: -webkit-box;
@@ -483,7 +484,7 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 .card-more {
   margin-top: 6px;
   padding: 2px 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--fs, 1));
   color: var(--accent);
   background: transparent;
   border: none;
@@ -512,12 +513,90 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 
 .settings-panel { width: min(440px, 100%); }
 .settings-panel .section:first-child { margin-top: 0; }
-.settings-note { font-size: 11px; line-height: 1.5; margin: 4px 0 10px; }
+.settings-label { margin: 10px 0 2px; }
+.swatch-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0 10px; }
+button.swatch {
+  width: 26px;
+  height: 26px;
+  padding: 2px;
+  border-radius: 50%;
+  background: transparent;
+  border: 2px solid transparent;
+  position: relative;
+  overflow: visible;
+}
+/* delete badge on user-created swatches (always shown on touch) */
+.swatch-x {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--panel-hover);
+  border: 1px solid var(--outline);
+  color: var(--text-dim);
+  font-size: calc(11px * var(--fs, 1));
+  line-height: 13px;
+  text-align: center;
+  opacity: 0;
+  cursor: pointer;
+}
+button.swatch:hover .swatch-x { opacity: 1; }
+.swatch-x:hover { color: var(--text); background: var(--bad); }
+@media (pointer: coarse) {
+  .swatch-x { opacity: 1; }
+}
+
+/* custom-colour popover: stage with the native picker, then Create */
+.accent-popover {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 2px 0 10px;
+  padding: 8px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius);
+  background: var(--panel-light);
+}
+.accent-popover input[type="color"] {
+  width: 46px;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius);
+  background: var(--bg);
+  cursor: pointer;
+}
+.accent-popover-note { font-size: calc(11px * var(--fs, 1)); }
+button.swatch:hover:not(:disabled) { background: transparent; border-color: var(--text-faint); }
+button.swatch.active { border-color: var(--text); }
+.swatch .dot {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+}
+button.swatch-add {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px dashed var(--text-faint);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: calc(15px * var(--fs, 1));
+  line-height: 1;
+}
+button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--text); border-color: var(--text-dim); }
+.settings-note { font-size: calc(11px * var(--fs, 1)); line-height: 1.5; margin: 4px 0 10px; }
 .settings-panel .segmented { margin: 4px 0; }
 
 .help-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
-.help-cols h3 { font-size: 13px; color: var(--accent); margin-bottom: 8px; }
-.shortcut-row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; font-size: 12px; }
+.help-cols h3 { font-size: calc(13px * var(--fs, 1)); color: var(--accent); margin-bottom: 8px; }
+.shortcut-row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; font-size: calc(12px * var(--fs, 1)); }
 .shortcut-row .keys { color: var(--text); font-family: Consolas, monospace; white-space: nowrap; }
 .shortcut-row .what { color: var(--text-dim); text-align: right; }
 kbd {
@@ -526,7 +605,7 @@ kbd {
   border-radius: 4px;
   padding: 0 5px;
   font-family: Consolas, monospace;
-  font-size: 11px;
+  font-size: calc(11px * var(--fs, 1));
 }
 
 /* --------------------------------------------------------------- mobile */

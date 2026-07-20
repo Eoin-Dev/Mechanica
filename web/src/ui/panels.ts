@@ -207,6 +207,7 @@ export class HintBar implements Panel {
       this.lastHint = hint;
       this.lastBarW = barW;
       this.hint.textContent = hint;
+      this.hint.title = hint; // hover reveals the full text when clipped
       this.fitHint();
     }
   }
@@ -408,7 +409,11 @@ export class GraphDock implements Panel {
     }
     if (app.graphMode !== this.lastMode) this.lastMode = app.graphMode;
     this.group.refreshAll();
-    this.hintEl.textContent = this.hint();
+    const dockHint = this.hint();
+    if (this.hintEl.textContent !== dockHint) {
+      this.hintEl.textContent = dockHint;
+      this.hintEl.title = dockHint; // hover reveals the full text when clipped
+    }
 
     const dpr = window.devicePixelRatio || 1;
     const w = this.canvas.clientWidth;

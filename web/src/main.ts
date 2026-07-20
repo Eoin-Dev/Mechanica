@@ -19,6 +19,7 @@ app.toastFn = (msg: string) => {
   const t = document.createElement("div");
   t.className = "toast";
   t.textContent = msg;
+  t.title = msg; // hover reveals the full text if the toast is clipped
   toastsEl.append(t);
   while (toastsEl.children.length > 3) toastsEl.firstChild!.remove();
   setTimeout(() => {

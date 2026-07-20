@@ -48,19 +48,23 @@ const ROD_FORCE_PASSES = 4;
 export const ENCOUNTER_ANGLE = 0.02; // rad of velocity swing per slice
 const ENCOUNTER_MAX_SLICES = 1024;   // floor: slice >= h / this
 
-// Mouse-drag speed limit tuning: a held body may not chase the cursor faster
-// than DRAG_GAMMA * rest_length * omega of its stiffest attached spring, so a
-// fast drag can never stretch a spring faster than it can respond - which is
-// what used to scramble soft bodies. The floor keeps dragging responsive
-// even on extremely stiff/light lattices.
+// Drag-speed tolerance tuning: DRAG_GAMMA * rest_length * omega of the
+// stiffest attached spring is the fastest a body can be dragged before it
+// stretches that spring faster than the spring can respond - which is what
+// used to scramble soft bodies. Beyond it the controller carries the whole
+// linked assembly rigidly instead. The floor keeps the threshold from
+// triggering constantly on extremely stiff/light lattices.
 const DRAG_GAMMA = 0.3;
 const DRAG_SPEED_FLOOR = 2.5; // m/s
 
-/** Maximum speed at which `body` may be dragged through the world.
+/** Fastest drag speed `body`'s attached springs can absorb gracefully.
  *
- * `base` is the caller's scale-derived cap (e.g. a few screen-widths per
- * second); it is tightened for bodies with springs attached so the drag
- * cannot outrun the spring response of whatever it is anchored to.
+ * `base` is the caller's scale-derived ceiling (a few screen-widths per
+ * second); it is tightened for bodies with springs attached so a drag
+ * faster than the spring response of whatever it is anchored to can be
+ * detected. The controller uses this as the threshold beyond which the
+ * whole linked assembly is carried rigidly with the cursor instead of
+ * letting resonant spring pumping inject energy.
  */
 export function safeDragSpeed(world: World, body: Body, base: number): number {
   let v = base;
@@ -243,10 +247,6 @@ export class World {
   trace: Array<[number, number, number]> = [];
   traceSpacing = 0.0; // 0 = tracing off
   private traceLast = new Map<number, [number, number]>();
-  // transient mouse-drag pins: held body -> [target_x, target_y, v_max].
-  // Each substep the body travels toward its target at up to v_max, so a
-  // fast drag stays a smooth, bounded motion instead of a teleport.
-  dragPins = new Map<Body, [number, number, number]>();
   private contactCache: ContactCache = new Map(); // warm-start impulses between substeps
   private rods: DistanceLink[] = [];  // per-step caches, see prepareStep()
   private movers: Body[] = [];
@@ -651,8 +651,6 @@ export class World {
     // close encounters can't blow up; everything else is untouched
     const adaptive = this.mutualGravity && this.G !== 0.0;
     for (let s = 0; s < n; s++) {
-      if (this.dragPins.size > 0) this.moveDragPins(h, invH);
-
       // (spin integration happens inside the integrator body loops;
       // torque only arises from contacts, applied there)
       if (adaptive) this.integrateAdaptive(h);
@@ -676,34 +674,6 @@ export class World {
     }
     this.sanitize();
     this.stepCount++;
-  }
-
-  /** Advance held bodies toward their drag targets, at most v_max each.
-   *
-   * The body keeps infinite mass (nothing can push it) but moves
-   * kinematically with a real velocity, so springs stretch smoothly,
-   * spring damping sees the true relative speed, and contacts treat it
-   * like a moving platform that carries other bodies along.
-   */
-  private moveDragPins(h: number, invH: number): void {
-    for (const [b, [tx, ty, vMax]] of this.dragPins) {
-      if (!b.held) continue; // released this frame; controller clears soon
-      const dx = tx - b.pos.x;
-      const dy = ty - b.pos.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const stepLen = vMax * h;
-      if (dist <= stepLen) {
-        b.pos.set(tx, ty);
-        b.vel.set(dx * invH, dy * invH);
-      } else {
-        const s = stepLen / dist;
-        const mx = dx * s;
-        const my = dy * s;
-        b.pos.x += mx;
-        b.pos.y += my;
-        b.vel.set(mx * invH, my * invH);
-      }
-    }
   }
 
   /** XPBD position solve for the residual link drift, with the

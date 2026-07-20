@@ -4,7 +4,7 @@ import { CATEGORIES, PRESETS } from "../scene/presets";
 import * as snap from "../scene/snapshot";
 import { Control, button, checkbox, el, isTouch, segmented } from "./dom";
 import { ICONS } from "./icons";
-import { ThemeName } from "./theme";
+import { ThemeName, css, defaultAccent } from "./theme";
 
 // ------------------------------------------------------------------ library
 type LibraryTab = "Examples" | "My scenes";
@@ -228,6 +228,18 @@ const THEME_LABELS: Array<[string, ThemeName]> = [
   ["Dark", "dark"], ["Light", "light"], ["Original", "original"],
 ];
 
+/** Hand-picked UI accents (a good purple included, per popular demand).
+ * The theme-default swatch already shows the classic blue, so the blue
+ * preset here is a distinctly darker midnight blue. */
+const ACCENT_PRESETS: string[] = [
+  "#8b5cf6", // violet
+  "#24427c", // midnight blue
+  "#2fb4a8", // teal
+  "#4caf72", // green
+  "#e0964b", // amber
+  "#e06c8a", // pink
+];
+
 export class SettingsPanel {
   visible = false;
   private root: HTMLElement;
@@ -260,6 +272,90 @@ export class SettingsPanel {
         app.applyUiSettings();
       }, "Colour theme"));
     note("Original is the classic blue-tinted dark palette.");
+
+    // accent colour: preset swatch circles + a custom picker. UI chrome
+    // and highlights only - physics object colours are never touched.
+    body.append(el("div", { class: "dim settings-label", text: "Accent colour" }));
+    const swatchRow = el("div", { class: "swatch-row" });
+    const applyAccent = (hex: string | null): void => {
+      if (hex === null) delete app.settings.accent;
+      else app.settings.accent = hex;
+      app.saveSettings();
+      app.applyUiSettings();
+      rebuildSwatches();
+    };
+
+    // Custom-colour popover: the native picker only stages a colour (its
+    // own swatch shows the preview); NOTHING is applied or saved until
+    // Create - dragging through the colour field can no longer spray
+    // intermediate colours into the saved list, and Cancel backs out.
+    const popover = el("div", { class: "accent-popover" });
+    popover.hidden = true;
+    const colorInput = el("input", { type: "color",
+                                     title: "Pick a colour (hex supported)" });
+    const createBtn = button("Create", () => {
+      const hex = colorInput.value.toLowerCase();
+      if (!ACCENT_PRESETS.includes(hex)) {
+        const customs = (app.settings.custom_accents ?? []).filter((h) => h !== hex);
+        customs.push(hex);
+        while (customs.length > 6) customs.shift(); // keep the last six
+        app.settings.custom_accents = customs;
+      }
+      popover.hidden = true;
+      applyAccent(hex);
+    }, { style: "primary" });
+    const cancelBtn = button("Cancel", () => { popover.hidden = true; });
+    popover.append(colorInput, createBtn.root, cancelBtn.root,
+      el("span", { class: "faint accent-popover-note",
+                   text: "Nothing changes until you press Create" }));
+
+    const rebuildSwatches = (): void => {
+      swatchRow.replaceChildren();
+      const current = app.settings.accent ?? null;
+      const mkSwatch = (hex: string | null, tip: string, colour: string,
+                        deletable = false): void => {
+        const b = el("button", { class: "swatch", title: tip });
+        b.append(el("span", { class: "dot", style: `background:${colour}` }));
+        if (hex === current) b.classList.add("active");
+        b.addEventListener("click", () => applyAccent(hex));
+        if (deletable) {
+          const x = el("span", { class: "swatch-x", text: "×",
+                                 title: "Remove this saved colour" });
+          x.addEventListener("click", (e) => {
+            e.stopPropagation();
+            app.settings.custom_accents =
+              (app.settings.custom_accents ?? []).filter((h) => h !== hex);
+            // deleting the colour in use falls back to the theme default
+            applyAccent(app.settings.accent === hex ? null
+                                                    : app.settings.accent ?? null);
+          });
+          b.append(x);
+        }
+        swatchRow.append(b);
+      };
+      mkSwatch(null, "Theme default",
+        css(defaultAccent(app.settings.theme ?? "dark")));
+      for (const hex of ACCENT_PRESETS) mkSwatch(hex, hex, hex);
+      for (const hex of app.settings.custom_accents ?? []) {
+        if (!ACCENT_PRESETS.includes(hex)) {
+          mkSwatch(hex, `${hex} (custom)`, hex, true);
+        }
+      }
+      const addBtn = el("button", { class: "swatch-add", text: "+",
+                                    title: "Create a custom colour" });
+      addBtn.addEventListener("click", () => {
+        colorInput.value = app.settings.accent ?? "#8b5cf6";
+        popover.hidden = false;
+      });
+      swatchRow.append(addBtn);
+    };
+    this.controls.push({ root: swatchRow, refresh: () => {
+      popover.hidden = true; // reopening settings starts with it closed
+      rebuildSwatches();
+    } });
+    rebuildSwatches();
+    body.append(swatchRow, popover);
+
     add(checkbox("Dyslexia-friendly font",
       () => app.settings.dyslexic_font ?? false,
       (v) => {
@@ -267,6 +363,15 @@ export class SettingsPanel {
         app.saveSettings();
         app.applyUiSettings();
       }, "Use a rounder, more distinct typeface across the interface"));
+
+    body.append(el("div", { class: "dim settings-label", text: "Font size" }));
+    add(segmented(["90%", "100%", "110%", "120%"],
+      () => `${Math.round((app.settings.font_scale ?? 1) * 100)}%`,
+      (v) => {
+        app.settings.font_scale = parseInt(v, 10) / 100;
+        app.saveSettings();
+        app.applyUiSettings();
+      }, "Interface text size (kept within limits so the layout holds)"));
 
     body.append(el("div", { class: "section", text: "Performance" }));
     add(checkbox("Cull offscreen objects",
@@ -392,7 +497,7 @@ export class Help {
       cols.append(col);
     }
     const about = el("div", { class: "faint", style:
-      "margin-top:16px;font-size:12px;line-height:1.5" });
+      "margin-top:16px;font-size:calc(12px * var(--fs, 1));line-height:1.5" });
     about.textContent =
       "Mechanica is a 2D physics lab: rigid discs with rotation, walls, " +
       "rods, strings, springs, N-body gravity, drag, drivers and custom " +

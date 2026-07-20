@@ -31,13 +31,15 @@ const ORIGINAL: Palette = {
   ACC_COLOR: [235, 170, 90], FORCE_COLOR: [235, 110, 110],
 };
 
+// Every surface/text grey is exactly neutral (equal RGB): no blue cast
+// anywhere - only the accent and semantic colours carry hue.
 const DARK: Palette = {
-  BG: [19, 19, 21], PANEL: [29, 29, 32], PANEL_LIGHT: [39, 39, 43],
-  PANEL_HOVER: [50, 50, 55], OUTLINE: [58, 58, 64], ACCENT: [92, 156, 214],
+  BG: [18, 18, 18], PANEL: [28, 28, 28], PANEL_LIGHT: [38, 38, 38],
+  PANEL_HOVER: [49, 49, 49], OUTLINE: [58, 58, 58], ACCENT: [92, 156, 214],
   ACCENT_HOT: [125, 180, 235], ACCENT_DARK: [52, 88, 122],
-  TEXT: [228, 228, 231], TEXT_DIM: [154, 154, 161], TEXT_FAINT: [107, 107, 115],
+  TEXT: [229, 229, 229], TEXT_DIM: [156, 156, 156], TEXT_FAINT: [110, 110, 110],
+  GRID: [27, 27, 27], GRID_MAJOR: [42, 42, 42], AXIS: [70, 70, 70],
   GOOD: [120, 190, 120], WARN: [230, 200, 90], BAD: [230, 110, 110],
-  GRID: [28, 28, 31], GRID_MAJOR: [42, 42, 47], AXIS: [68, 68, 76],
   SELECTION: [110, 180, 240], VEL_COLOR: [120, 210, 130],
   ACC_COLOR: [235, 170, 90], FORCE_COLOR: [235, 110, 110],
 };
@@ -83,6 +85,35 @@ export let FORCE_COLOR = ORIGINAL.FORCE_COLOR;
 
 export let themeName: ThemeName = "original";
 
+/** Parse "#rrggbb" into a Color (null on anything else). */
+export function parseHex(hex: string): Color | null {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
+  if (m === null) return null;
+  const v = parseInt(m[1], 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+}
+
+export function toHex(c: Color): string {
+  const h = (v: number) => v.toString(16).padStart(2, "0");
+  return `#${h(c[0])}${h(c[1])}${h(c[2])}`;
+}
+
+/** The accent a theme ships with (for the "theme default" swatch). */
+export function defaultAccent(name: ThemeName): Color {
+  return PALETTES[name].ACCENT;
+}
+
+// user accent override (settings): null = the theme's own accent
+let accentOverride: Color | null = null;
+
+/** Override the UI accent colour (hex, or null to restore the theme's
+ * default). Applies to chrome and highlights only - physics object
+ * colours are untouched. */
+export function setAccent(hex: string | null): void {
+  accentOverride = hex === null ? null : parseHex(hex);
+  setTheme(themeName);
+}
+
 /** Swap the active palette and mirror it into the DOM's CSS variables. */
 export function setTheme(name: ThemeName): void {
   const p = PALETTES[name];
@@ -94,6 +125,18 @@ export function setTheme(name: ThemeName): void {
   WARN = p.WARN; BAD = p.BAD; GRID = p.GRID; GRID_MAJOR = p.GRID_MAJOR;
   AXIS = p.AXIS; SELECTION = p.SELECTION; VEL_COLOR = p.VEL_COLOR;
   ACC_COLOR = p.ACC_COLOR; FORCE_COLOR = p.FORCE_COLOR;
+  if (accentOverride !== null) {
+    const a = accentOverride;
+    ACCENT = a;
+    ACCENT_HOT = lighten(a, 30);
+    // active/pressed shade: light themes tint toward white, dark toward black
+    ACCENT_DARK = name === "light"
+      ? [Math.round(a[0] + (255 - a[0]) * 0.75),
+         Math.round(a[1] + (255 - a[1]) * 0.75),
+         Math.round(a[2] + (255 - a[2]) * 0.75)]
+      : scale(a, 0.58);
+    SELECTION = lighten(a, 25); // the canvas highlight follows the accent
+  }
   if (typeof document === "undefined") return; // node (tests)
   const s = document.documentElement.style;
   const set = (v: string, c: Color) => s.setProperty(v, css(c));

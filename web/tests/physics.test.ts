@@ -406,20 +406,30 @@ describe("soft bodies", () => {
     expect(Math.hypot(p1.x - p0.x, p1.y - p0.y)).toBeLessThan(1e-9);
   });
 
-  it("violent drag: jelly lattice stays pristine", () => {
-    // Swinging a grabbed particle wildly must not scramble its lattice.
+  it("sub-threshold direct drag: jelly lattice stays pristine", () => {
+    // The controller teleports a grabbed body to the cursor each frame
+    // (with the true cursor velocity) as long as the cursor stays under
+    // safeDragSpeed; faster drags rigid-carry the whole lattice instead.
+    // The engine-level guarantee: direct teleport dragging at speeds the
+    // springs can absorb must not scramble the lattice.
     const w = preset("Jelly block");
     const parts = w.bodies.filter((b) => !b.locked);
     const grab = parts[Math.floor(parts.length / 2)];
     grab.held = true;
-    const vmax = safeDragSpeed(w, grab, 60.0);
-    for (let i = 0; i < Math.floor(1.0 / DT); i++) { // two fast loops, cursor at ~23 m/s
-      const ang = 2.0 * 2 * Math.PI * i * DT;
-      w.dragPins.set(grab, [1.8 * Math.cos(ang), 1.8 + 1.8 * Math.sin(ang), vmax]);
+    const vSafe = safeDragSpeed(w, grab, 60.0);
+    const rr = 0.8;
+    const omega = (0.8 * vSafe) / rr; // cursor at 80% of the carry threshold
+    const cx = grab.pos.x;
+    const cy = grab.pos.y;
+    for (let i = 0; i < Math.floor(1.0 / DT); i++) {
+      const ang = omega * i * DT;
+      const tx = cx + rr * Math.sin(ang);
+      const ty = cy + rr * (1 - Math.cos(ang));
+      grab.vel.set((tx - grab.pos.x) / DT, (ty - grab.pos.y) / DT);
+      grab.pos.set(tx, ty);
       w.step(DT);
     }
     grab.held = false;
-    w.dragPins.clear();
     run(w, 5.0);
     const springs = w.links.filter((ln): ln is SpringLink => ln instanceof SpringLink);
     const worst = Math.max(...springs.map(

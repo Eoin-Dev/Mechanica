@@ -29,7 +29,7 @@ function slope(thetaDeg: number, mu: number, noRotation: boolean, seconds = 5) {
   for (let i = 0; i < 12; i++) w.step(DT); // seat
   const s0 = along();
   for (let i = 0; i < seconds * 120; i++) w.step(DT);
-  return { slid: along() - s0, omega: disc.omega };
+  return { slid: along() - s0, omega: disc.omega, vel: disc.vel.length() };
 }
 
 describe("resting static friction (no creep)", () => {
@@ -63,5 +63,13 @@ describe("resting static friction (no creep)", () => {
     // drift must not grow with time - both are ~zero, not 8x apart
     expect(Math.abs(long)).toBeLessThan(1e-4);
     expect(Math.abs(short)).toBeLessThan(1e-4);
+  });
+
+  it("reads exactly zero velocity at rest (no solver-noise flicker)", () => {
+    // in limiting equilibrium the readout used to flicker with tiny
+    // sign-alternating solver noise; a body the anchor pins is STILL
+    for (const deg of [3, 20, 40]) {
+      expect(slope(deg, 1.0, true).vel).toBe(0);
+    }
   });
 });

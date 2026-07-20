@@ -110,6 +110,12 @@ export class CanvasController {
   // moves a few pixels; a plain inspect-click never touches the physics
   private dragPress: [number, number] = [0, 0];
   private dragActive = false;
+  // fast-drag rigid carry: link-connected bodies silently moved with the
+  // cursor while it outruns what their springs could absorb
+  private carried: Array<{ body: Body; offset: Vec2 }> = [];
+  private carrySlowSince = 0.0;
+  private dragPrev: { x: number; y: number; t: number } | null = null;
+  private dragSpeed = 0.0;
   // touch: active pointers for pinch detection
   private pointers = new Map<number, [number, number]>();
   private pinchDist = 0;
@@ -139,40 +145,117 @@ export class CanvasController {
 
   /** Drop any in-progress drag without a throw (e.g. world replaced). */
   abortDrag(): void {
+    this.releaseCarried();
     for (const { body } of this.dragItems) body.held = false;
     this.dragItems = [];
     this.dragActive = false;
     this.velDrag = null;
     this.wallDrag = null;
     this.wallGrab = null;
-    this.app.world.dragPins.clear();
+    this.dragPrev = null;
+    this.dragSpeed = 0.0;
   }
 
   /** Refresh the drag every frame (pointer-move events stop while the
    * cursor is parked, but the simulation keeps running).
    *
-   * While playing, held bodies are not teleported: the world moves each
-   * one toward its pin target at a bounded, spring-aware speed inside
-   * the physics substeps. While paused it is pure editing, so the body
-   * snaps straight to the cursor. */
+   * The dragged bodies follow the cursor DIRECTLY - no speed cap, no
+   * chase - and carry the true cursor velocity so contacts, spring
+   * damping and the release throw all see real motion. When the cursor
+   * moves faster than the attached springs can absorb (safeDragSpeed),
+   * the whole link-connected assembly is carried rigidly along - a
+   * silent, temporary grouping with no visual selection - and handed
+   * back to the physics once the cursor slows down. Anchors and locked
+   * bodies are never carried. */
   updateDrag(): void {
     if (this.dragItems.length === 0 || !this.dragActive) return;
     const app = this.app;
     const worldP = app.camera.toWorld(this.mouse[0], this.mouse[1]);
-    if (app.playing) {
-      const pins = app.world.dragPins;
-      for (const { body, offset, vMax } of this.dragItems) {
-        const t = this.snap(new Vec2(worldP.x + offset.x, worldP.y + offset.y));
-        pins.set(body, [t.x, t.y, vMax]);
-      }
-    } else {
+    if (!app.playing) {
       // paused = pure editing: reposition only, keep the velocity so a
       // click or drag never wipes the body's motion state
-      app.world.dragPins.clear();
+      this.releaseCarried();
+      this.dragPrev = null;
       for (const { body, offset } of this.dragItems) {
         body.pos.setVec(this.snap(new Vec2(worldP.x + offset.x, worldP.y + offset.y)));
       }
+      return;
     }
+
+    const now = performance.now() / 1000;
+    const dt = this.dragPrev === null
+      ? 1 / 60
+      : Math.min(0.1, Math.max(1e-3, now - this.dragPrev.t));
+    const dx = this.dragPrev === null ? 0.0 : worldP.x - this.dragPrev.x;
+    const dy = this.dragPrev === null ? 0.0 : worldP.y - this.dragPrev.y;
+    this.dragPrev = { x: worldP.x, y: worldP.y, t: now };
+    // smoothed cursor speed, so one jittery frame can't flip the mode
+    const inst = Math.hypot(dx, dy) / dt;
+    this.dragSpeed = 0.65 * this.dragSpeed + 0.35 * inst;
+
+    // fast-drag hysteresis: engage the rigid carry above the threshold,
+    // hand back to the physics only after ~0.12 s below half of it
+    let vSafe = Infinity;
+    for (const it of this.dragItems) vSafe = Math.min(vSafe, it.vMax);
+    if (this.carried.length === 0) {
+      if (this.dragSpeed > vSafe) this.engageCarry();
+    } else if (this.dragSpeed < 0.5 * vSafe) {
+      if (this.carrySlowSince === 0.0) this.carrySlowSince = now;
+      else if (now - this.carrySlowSince > 0.12) this.releaseCarried();
+    } else {
+      this.carrySlowSince = 0.0;
+    }
+
+    for (const { body, offset } of this.dragItems) {
+      const t = this.snap(new Vec2(worldP.x + offset.x, worldP.y + offset.y));
+      // real velocity = how far the body is about to move this frame
+      body.vel.set((t.x - body.pos.x) / dt, (t.y - body.pos.y) / dt);
+      body.pos.setVec(t);
+    }
+    for (const { body, offset } of this.carried) {
+      const tx = worldP.x + offset.x;
+      const ty = worldP.y + offset.y;
+      body.vel.set((tx - body.pos.x) / dt, (ty - body.pos.y) / dt);
+      body.pos.set(tx, ty);
+    }
+  }
+
+  /** Everything link-connected to the dragged bodies (transitively),
+   * excluding anchors, locked bodies and the dragged bodies themselves.
+   * Carried bodies are held (infinite mass) and follow the cursor
+   * rigidly at their current offsets - deliberately unhighlighted. */
+  private engageCarry(): void {
+    const world = this.app.world;
+    const inGroup = new Set<Body>(this.dragItems.map((it) => it.body));
+    const queue = [...inGroup];
+    while (queue.length > 0) {
+      const b = queue.pop()!;
+      for (const ln of world.links) {
+        let other: Body | null = null;
+        if (ln.a === b) other = ln.b;
+        else if (ln.b === b) other = ln.a;
+        if (other === null || inGroup.has(other)) continue;
+        if (other.isAnchor || other.locked || other.held) continue;
+        inGroup.add(other);
+        queue.push(other);
+      }
+    }
+    const cursor = this.dragPrev!;
+    for (const b of inGroup) {
+      if (this.dragItems.some((it) => it.body === b)) continue;
+      b.held = true;
+      this.carried.push({ body: b,
+                          offset: new Vec2(b.pos.x - cursor.x, b.pos.y - cursor.y) });
+    }
+    this.carrySlowSince = 0.0;
+  }
+
+  /** Hand carried bodies back to the physics (they keep the cursor's
+   * velocity, so the transition is seamless). */
+  private releaseCarried(): void {
+    for (const { body } of this.carried) body.held = false;
+    this.carried = [];
+    this.carrySlowSince = 0.0;
   }
 
   private snap(p: Vec2): Vec2 {
@@ -572,18 +655,20 @@ export class CanvasController {
     if (this.panning) this.panning = false;
     if (this.velDrag !== null || this.wallDrag !== null || this.dragItems.length > 0) {
       // An inactive (never-moved) press was a pure inspect-click: the
-      // bodies were never held or pinned, so there is nothing to undo.
-      // An active drag while playing releases at the pin's velocity -
-      // moving pin = a throw, parked pin = let go at rest. While
-      // paused it is pure editing and the velocity stays untouched.
+      // bodies were never held, so there is nothing to undo. An active
+      // drag while playing releases at the cursor's velocity - moving
+      // cursor = a throw, parked cursor = let go at rest. While paused
+      // it is pure editing and the velocity stays untouched.
+      this.releaseCarried();
       for (const { body } of this.dragItems) body.held = false;
-      app.world.dragPins.clear();
       if (this.dragMoved) app.pushUndo();
       this.velDrag = null;
       this.wallDrag = null;
       this.wallGrab = null;
       this.dragItems = [];
       this.dragActive = false;
+      this.dragPrev = null;
+      this.dragSpeed = 0.0;
     }
     if (this.rubber !== null) {
       const [x0, y0] = this.rubber;
