@@ -64,4 +64,10 @@ export const ICONS: Record<string, string> = {
             'L18.92 13.98 Z M15.3 12 A3.3 3.3 0 1 0 8.7 12 ' +
             'A3.3 3.3 0 1 0 15.3 12 Z"/>'),
   describe: svg('<path d="M5 6 H19 M5 10 H19 M5 14 H13 M5 18 H10" fill="none"/>'),
+  // radical with an x inside: "edit as typeset math"
+  math_mode: svg('<path d="M3 13.5 L5.5 13.5 L8 19 L11 5 L21 5" fill="none"/>' +
+                 '<path d="M12.5 10.5 L17 15.5 M17 10.5 L12.5 15.5" fill="none"/>'),
+  // a serif T over a text baseline: "edit as plain text"
+  text_mode: svg('<path d="M6 6 H18 M12 6 V16" fill="none"/>' +
+                 '<path d="M5 19 H19" fill="none"/>'),
 };

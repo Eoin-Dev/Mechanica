@@ -9,9 +9,11 @@ import { Body, MATERIALS, Wall } from "../engine/body";
 import { DistanceLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
 import { Selectable } from "../render/draw";
+import { isMathRenderable } from "../core/mathfmt";
 import { RefreshGroup, button, checkbox, el, fmt3dp, halfRow, isPhone, isTouch,
          numEdit, section, segmented, slider, textEdit } from "./dom";
 import { ICONS } from "./icons";
+import { mathEdit } from "./mathedit";
 
 const TABS = ["Selection", "World", "View"] as const;
 type Tab = (typeof TABS)[number];
@@ -25,6 +27,9 @@ export class Inspector implements Panel {
   private group = new RefreshGroup();
   private structureKey = "";
   private showFormulaHelp = false;
+  /** Formula rows where the user chose plain text over typeset math. */
+  private preferTextFormula =
+    new WeakMap<ForceField, Partial<Record<"fxSrc" | "fySrc", boolean>>>();
   private collapsed = false;
   private splitter: HTMLElement;
   private reopenStrip: HTMLElement;
@@ -758,7 +763,7 @@ export class Inspector implements Panel {
       for (const attr of ["fxSrc", "fySrc"] as const) {
         const row = el("div", { class: "num-row" });
         row.append(el("span", { class: "lbl", text: attr === "fxSrc" ? "Fx" : "Fy" }));
-        const edit = this.group.add(textEdit(() => field[attr], (s) => {
+        const commitSrc = (s: string): boolean => {
           // keep the text either way so the user can fix it; a bad
           // expression just disables the field and shows the error
           field[attr] = s;
@@ -766,8 +771,31 @@ export class Inspector implements Panel {
           if (ok) app.pushUndo();
           this.markDirty();
           return ok;
-        }, "e.g. -0.5*vx or -x*10"));
-        row.append(edit.root);
+        };
+        // Formulas in the "clean" arithmetic subset get the typeset math
+        // editor; if/else, logic, // and % have no math notation and stay
+        // in the text editor. A per-row toggle lets the user opt out.
+        const renderable = isMathRenderable(field[attr]);
+        const useMath = renderable && this.preferTextFormula.get(field)?.[attr] !== true;
+        const edit = this.group.add(useMath
+          ? mathEdit(() => field[attr], commitSrc,
+                     "Type math: ^ makes a power, / a fraction, sqrt a root")
+          : textEdit(() => field[attr], commitSrc, "e.g. -0.5*vx or -x*10"));
+        const toggle = this.group.add(button("", () => {
+          const p = this.preferTextFormula.get(field) ?? {};
+          p[attr] = useMath; // leaving math prefers text, and vice versa
+          this.preferTextFormula.set(field, p);
+          this.markDirty();
+        }, {
+          icon: useMath ? ICONS.text_mode : ICONS.math_mode,
+          style: "ghost",
+          isEnabled: () => renderable || useMath,
+          tooltip: useMath ? "Edit as plain text"
+            : renderable ? "Edit as typeset math"
+            : "Typeset editing handles plain arithmetic only — this " +
+              "formula uses if/else, comparisons, logic, // or %",
+        }));
+        row.append(edit.root, toggle.root);
         this.body.append(row);
       }
       if (field.error) {

@@ -12,6 +12,9 @@ const $ = (id: string): HTMLElement => document.getElementById(id)!;
 
 const canvas = $("canvas") as HTMLCanvasElement;
 const app = new App(canvas);
+// dev-only console handle, e.g. for driving the app when the tab is
+// backgrounded and requestAnimationFrame is suspended
+if (import.meta.env.DEV) (window as unknown as { __mech: App }).__mech = app;
 
 // ------------------------------------------------------------------- toasts
 const toastsEl = $("toasts");
@@ -67,7 +70,8 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   // let form fields keep their keys (widgets stopPropagation, but be safe)
   const target = e.target as HTMLElement;
-  if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+  if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" ||
+      target.tagName === "MATH-FIELD") return;
 
   const key = e.key.toLowerCase();
   if (e.ctrlKey || e.metaKey) {
