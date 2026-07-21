@@ -521,6 +521,53 @@ describe("soft bodies", () => {
   });
 });
 
+describe("independence of horizontal and vertical motion", () => {
+  it("preset 'Which lands first?' lands both balls at the same instant", () => {
+    // The whole point of the preset: a sideways launch cannot change the
+    // time to fall. Both balls must touch down together, and at the
+    // analytic free-fall time for their drop height.
+    const w = preset("Which lands first?");
+    const dropped = w.bodies.find((b) => b.name === "Dropped")!;
+    const launched = w.bodies.find((b) => b.name === "Launched 6 m/s")!;
+    // identical apart from the sideways velocity
+    expect(launched.radius).toBe(dropped.radius);
+    expect(launched.mass).toBe(dropped.mass);
+    expect(dropped.pos.y).toBe(launched.pos.y);
+    expect(dropped.vel.x).toBe(0);
+    expect(launched.vel.x).toBe(6);
+
+    const restY = 0.06 + dropped.radius; // floor surface + radius
+    const startY = dropped.pos.y;
+    const startX = launched.pos.x;
+    let tDropped = -1;
+    let tLaunched = -1;
+    let maxHeightGap = 0;
+    for (let i = 0; i < Math.round(3.0 / DT); i++) {
+      w.step(DT);
+      const t = (i + 1) * DT;
+      if (tDropped < 0 && dropped.pos.y <= restY + 1e-3) tDropped = t;
+      if (tLaunched < 0 && launched.pos.y <= restY + 1e-3) tLaunched = t;
+      // while both are still airborne they stay at the same height
+      if (tDropped < 0 && tLaunched < 0) {
+        maxHeightGap = Math.max(maxHeightGap, Math.abs(dropped.pos.y - launched.pos.y));
+      }
+      if (tDropped > 0 && tLaunched > 0) break;
+    }
+    expect(tDropped).toBeGreaterThan(0);
+    expect(tLaunched).toBeGreaterThan(0);
+    // they land together (within a step or two) and never drift apart
+    expect(Math.abs(tDropped - tLaunched)).toBeLessThan(3 * DT);
+    expect(maxHeightGap).toBeLessThan(1e-6);
+    // and at the analytic free-fall time for the 3 m drop
+    const exact = Math.sqrt((2 * (startY - restY)) / 9.81);
+    expect(Math.abs(tDropped - exact)).toBeLessThan(0.02);
+    // the launched ball really did travel sideways: x = v*t
+    expect(launched.pos.x - startX).toBeCloseTo(6.0 * tLaunched, 1);
+    // and it lands well inside the floor, not off the end
+    expect(launched.pos.x).toBeLessThan(11.0);
+  });
+});
+
 describe("gravity slingshot", () => {
   it("probe gains speed in a clean flyby behind the planet", () => {
     const w = preset("Gravity slingshot");

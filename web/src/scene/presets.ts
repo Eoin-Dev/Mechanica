@@ -647,6 +647,41 @@ function buildGalileo(): World {
   return w;
 }
 
+/** Independence of horizontal and vertical motion.
+ *
+ * Two identical balls released together from the same height; one is also
+ * launched sideways at 6 m/s. Gravity acts only downward, so the sideways
+ * velocity never touches the fall: both descend at exactly the same rate
+ * and land at the same instant, one straight down and one along a wide
+ * parabola. Trails make the two paths - and the shared landing - obvious.
+ */
+function buildIndependenceOfMotion(): World {
+  const w = new World();
+  w.substeps = 4;
+  // The launched ball covers ~4.7 m before touchdown and then rolls on
+  // (a disc that has settled into rolling keeps going), so the floor runs
+  // well past the landing point and a low bumper catches it at the end
+  // instead of letting it run off into space.
+  const floor = new Wall(new Vec2(-3, 0), new Vec2(12, 0), 0.12);
+  floor.friction = 0.6;
+  floor.restitution = 0.2;
+  w.walls.push(floor);
+  const bumper = new Wall(new Vec2(12, 0), new Vec2(12, 1.4), 0.12);
+  bumper.friction = 0.5;
+  bumper.restitution = 0.2;
+  w.walls.push(bumper);
+  // identical in every way except the initial sideways velocity, so the
+  // only variable on show is that velocity. Centres start one free-fall
+  // height above their resting height (floor half-thickness + radius).
+  const r = 0.16;
+  const dropY = 0.06 + r + 3.0;
+  addBody(w, -1.5, dropY, { r, m: 1.0, e: 0.2, mu: 0.4,
+                            color: [110, 170, 230], name: "Dropped" });
+  addBody(w, -0.9, dropY, { r, m: 1.0, e: 0.2, mu: 0.4, vx: 6.0,
+                            color: [235, 150, 90], name: "Launched 6 m/s" });
+  return w;
+}
+
 function buildWreckingBall(): World {
   const w = new World();
   w.substeps = 10;
@@ -1257,6 +1292,16 @@ export const PRESETS: Preset[] = [
     "together - without air, gravitational acceleration doesn't " +
     "depend on mass.",
     buildGalileo, { zoom: 110, vectors: true }),
+  new Preset("Which lands first?", "Projectiles & Friction",
+    "Two identical balls are released at the same instant from the same " +
+    "height - but one is also launched sideways at 6 m/s. Which lands " +
+    "first? Almost everyone picks the one falling straight down. Watch " +
+    "them stay exactly level the whole way: they touch down together, " +
+    "even though one has flown metres across the room. Gravity pulls " +
+    "down just as hard whether or not you are moving sideways, so " +
+    "horizontal motion cannot change the time to fall.",
+    buildIndependenceOfMotion,
+    { zoom: 95, centre: [1.2, 1.6], trails: true, vectors: true }),
   new Preset("Projectile angles", "Projectiles & Friction",
     "Four launches at 10 m/s. 45 degrees flies farthest, and the " +
     "30/60 pair lands on the same spot: range goes as sin(2*theta), " +
