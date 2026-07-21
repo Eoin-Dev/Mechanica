@@ -96,6 +96,11 @@ export class App {
   private lastFrame = 0.0;
   private fpsSmoothed = 0.0;
 
+  // true while a soft-body preset is loaded and the user has not yet been
+  // shown the "right-drag instead" hint; the controller consumes it on the
+  // first left-drag of a soft-body particle
+  softBodyHintArmed = false;
+
   // wired up by main.ts after the panels are constructed
   panels: Panel[] = [];
   onSelectionChange: () => void = () => {};
@@ -283,6 +288,10 @@ export class App {
 
   replaceWorld(world: World, keepInitial = false): void {
     this.world = world;
+    // any world swap (undo, reset, clear, load) disarms the soft-body drag
+    // hint; loadPreset re-arms it afterwards only for soft-body presets, so
+    // clearing the scene can never surface it
+    this.softBodyHintArmed = false;
     this.setSelection([]);
     this.controller.hover = null;
     this.controller.abortDrag();
@@ -358,6 +367,8 @@ export class App {
     }
     this.framePreset(hints.zoom, hints.centre);
     this.ensureInitial();
+    // arm the one-time "right-drag a soft body" hint for soft-body scenes
+    this.softBodyHintArmed = this.world.bodies.some((b) => b.softBody);
     this.onWorldReplaced();
     if (announce) this.toast(`Loaded '${preset.name}' - press Space to run`);
   }

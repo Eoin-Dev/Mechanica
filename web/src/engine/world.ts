@@ -48,40 +48,6 @@ const ROD_FORCE_PASSES = 4;
 export const ENCOUNTER_ANGLE = 0.02; // rad of velocity swing per slice
 const ENCOUNTER_MAX_SLICES = 1024;   // floor: slice >= h / this
 
-// Drag-speed tolerance tuning: DRAG_GAMMA * rest_length * omega of the
-// stiffest attached spring is the fastest a body can be dragged before it
-// stretches that spring faster than the spring can respond - which is what
-// used to scramble soft bodies. Beyond it the controller carries the whole
-// linked assembly rigidly instead. The floor keeps the threshold from
-// triggering constantly on extremely stiff/light lattices.
-const DRAG_GAMMA = 0.3;
-const DRAG_SPEED_FLOOR = 2.5; // m/s
-
-/** Fastest drag speed `body`'s attached springs can absorb gracefully.
- *
- * `base` is the caller's scale-derived ceiling (a few screen-widths per
- * second); it is tightened for bodies with springs attached so a drag
- * faster than the spring response of whatever it is anchored to can be
- * detected. The controller uses this as the threshold beyond which the
- * whole linked assembly is carried rigidly with the cursor instead of
- * letting resonant spring pumping inject energy.
- */
-export function safeDragSpeed(world: World, body: Body, base: number): number {
-  let v = base;
-  for (const ln of world.links) {
-    if (!(ln instanceof SpringLink)) continue;
-    let other: Body;
-    if (ln.a === body) other = ln.b;
-    else if (ln.b === body) other = ln.a;
-    else continue;
-    const iw = other.invMass;
-    if (iw <= 0.0 || ln.stiffness <= 0.0) continue; // anchored to something immovable
-    const omega = Math.sqrt(ln.stiffness * iw);
-    v = Math.min(v, DRAG_GAMMA * Math.max(ln.restLength, 0.05) * omega);
-  }
-  return Math.max(v, DRAG_SPEED_FLOOR);
-}
-
 /** Centre the runaway test on the scene's fixed furniture (walls,
  * anchors, locked bodies), falling back to the origin. Never the camera:
  * panning away to inspect something must not condemn everything else. */
@@ -744,6 +710,22 @@ export class World {
           b.vel.x *= decay;
           b.vel.y *= decay;
           b.omega *= decay;
+        }
+      }
+
+      // interactive speed caps (drag tone-down): clamping at the end of
+      // every substep bounds whatever the integrator, springs, rods and
+      // contacts injected this substep, so a dragged assembly can chase
+      // and jiggle but never run away
+      for (const b of this.bodies) {
+        const cap = b.speedCap;
+        if (cap !== Infinity) {
+          const v2 = b.vel.x * b.vel.x + b.vel.y * b.vel.y;
+          if (v2 > cap * cap) {
+            const s = cap / Math.sqrt(v2);
+            b.vel.x *= s;
+            b.vel.y *= s;
+          }
         }
       }
 

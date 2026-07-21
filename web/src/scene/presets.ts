@@ -775,8 +775,10 @@ function softGrid(w: World, x0: number, y0: number, cols: number, rows: number,
   for (let j = 0; j < rows; j++) {
     const row: Body[] = [];
     for (let i = 0; i < cols; i++) {
-      row.push(addBody(w, x0 + i * spacing, y0 + j * spacing,
-                       { r, m, e, mu, color }));
+      const b = addBody(w, x0 + i * spacing, y0 + j * spacing,
+                        { r, m, e, mu, color });
+      b.softBody = true;
+      row.push(b);
     }
     grid.push(row);
   }
@@ -814,7 +816,9 @@ function softBlob(w: World, cx: number, cy: number, radius: number,
   const m = massTotal / pts.length;
   const bodies: Body[] = [];
   for (const [x, py] of pts) {
-    bodies.push(addBody(w, cx + x, cy + py, { r: spacing * 0.38, m, e, mu, color }));
+    const b = addBody(w, cx + x, cy + py, { r: spacing * 0.38, m, e, mu, color });
+    b.softBody = true;
+    bodies.push(b);
   }
   const cutoff = spacing * 1.25;
   for (let i = 0; i < bodies.length; i++) {
@@ -1000,9 +1004,11 @@ function buildSoftWheel(): World {
   const ring: Body[] = [];
   for (let i = 0; i < n; i++) {
     const th = (2 * Math.PI * i) / n;
-    ring.push(addBody(w, centre.x + radius * Math.cos(th),
+    const b = addBody(w, centre.x + radius * Math.cos(th),
                       centre.y + radius * Math.sin(th),
-                      { r: 0.075, m: 0.09, e: 0.15, mu: 1.0, color: [235, 170, 90] }));
+                      { r: 0.075, m: 0.09, e: 0.15, mu: 1.0, color: [235, 170, 90] });
+    b.softBody = true;
+    ring.push(b);
   }
   for (let i = 0; i < n; i++) {
     softSpring(w, ring[i], ring[(i + 1) % n], 2200.0, 3.0); // tread

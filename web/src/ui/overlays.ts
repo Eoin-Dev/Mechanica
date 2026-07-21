@@ -143,7 +143,7 @@ export class Library {
       app.zoomToFit();
       app.toast(`Loaded scene '${result.name}'`);
       this.close();
-    }, { icon: ICONS.upload,
+    }, { icon: ICONS.import,
          tooltip: "Load a scene file saved from this app or the desktop version" }).root);
     this.content.append(actions);
 

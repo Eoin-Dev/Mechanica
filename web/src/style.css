@@ -424,11 +424,14 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
   vertical-align: top;
 }
 .guide-table .desc { color: var(--text-dim); padding: 3px 0; line-height: 1.45; }
+/* Formula on its own row, full width, caption beneath: the formula never
+   competes with the caption for width, so ordinary examples fit without a
+   scrollbar (overflow-x stays only as a fallback for a genuinely huge one). */
 .guide-example {
   display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
   background: var(--panel-light);
   border: 1px solid var(--outline);
   border-radius: 8px;
@@ -439,8 +442,6 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
   color: var(--text-dim);
   font-size: calc(11.5px * var(--fs, 1));
   line-height: 1.45;
-  flex: 1;
-  min-width: 200px;
 }
 .guide-formula { min-width: 0; }
 .guide-math { font-size: calc(14px * var(--fs, 1)); overflow-x: auto; }

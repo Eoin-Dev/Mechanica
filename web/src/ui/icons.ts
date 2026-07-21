@@ -52,6 +52,8 @@ export const ICONS: Record<string, string> = {
             'A1.5 1.5 0 0 1 5 18.5 Z M8 4 V9 H15.5 V4 M8 20 V14 H16 V20" fill="none"/>'),
   download: svg('<path d="M12 4 V15 M7.5 11 L12 15.5 L16.5 11 M5 19.5 H19" fill="none"/>'),
   upload: svg('<path d="M12 15.5 V4.5 M7.5 8.5 L12 4 L16.5 8.5 M5 19.5 H19" fill="none"/>'),
+  // import: arrow pointing DOWN into an open tray (bring a file into the app)
+  import: svg('<path d="M12 3 V13 M8.5 9.5 L12 13.5 L15.5 9.5 M4.5 12 V19 H19.5 V12" fill="none"/>'),
   panel: svg('<rect x="4" y="5" width="16" height="14" rx="1.5" fill="none"/><path d="M14.5 5 V19"/>'),
   rename: svg('<path d="M14.5 5.5 L18.5 9.5 L9 19 H5 V15 Z M12.5 7.5 L16.5 11.5" fill="none"/>'),
   gear: svg('<path class="fill" fill-rule="evenodd" d="M21.45 13.67 ' +
