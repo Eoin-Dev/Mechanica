@@ -288,21 +288,26 @@ export class FormulaGuide {
            "between the two views whenever both are possible."),
       heading("Typing math"),
       refTable(touch ? [
-        ["^", "Starts a superscript: x^2 shows as x squared"],
+        ["^", "Starts a superscript; you stay in it until you tap out or " +
+              "move the caret on"],
         ["/", "Builds a real fraction; the keyboard's arrows move between " +
               "numerator and denominator"],
         ["sqrt(", "Draws a radical you type inside"],
         ["vx, vy", "Become subscripts as you type"],
         ["pi, tau", "Become Greek letters"],
+        ["exp, abs, floor, ceil", "Convert to their standard notation as " +
+              "you type: e to a power, |x|, and the floor/ceiling brackets"],
         ["sin, cos, min...", "Function names format themselves"],
       ] : [
-        ["^", "Jumps into a superscript: type x^2 and the 2 rises. " +
-              "Right-arrow steps back out"],
+        ["^", "Jumps into a superscript and stays there while you type. " +
+              "Right-arrow (or a click) steps back out"],
         ["/", "Builds a real fraction and puts the cursor in the " +
               "denominator. Right-arrow steps out"],
         ["sqrt(", "Draws a radical you type inside"],
         ["vx, vy", "Become subscripts as you type"],
         ["pi, tau", "Become Greek letters"],
+        ["exp, abs, floor, ceil", "Convert to their standard notation as " +
+              "you type: e to a power, |x|, and the floor/ceiling brackets"],
         ["sin, cos, min...", "Function names format themselves"],
         ["2x, 3sin(t)", "Implicit multiplication is understood"],
       ]),
@@ -334,9 +339,9 @@ export class FormulaGuide {
 
   private buildRecipes(): void {
     this.body.append(para(
-      "Ready-made fields to drop into the world and take apart. Each " +
-      "button adds the recipe as a new force field (undo removes it); " +
-      "open the World tab to see and edit what arrived."));
+      "Ready-made fields to drop into the world and take apart. Click a " +
+      "card to add it as a new force field (undo removes it); open the " +
+      "World tab to see and edit what arrived."));
     const grid = el("div", { class: "card-grid guide-recipes" });
     for (const r of RECIPES) {
       const card = el("div", { class: "preset-card guide-recipe" },
@@ -345,13 +350,18 @@ export class FormulaGuide {
         el("span", { class: "guide-recipe-lbl", text: "Fx" }), formula(r.fx));
       const fy = el("div", { class: "guide-recipe-row" },
         el("span", { class: "guide-recipe-lbl", text: "Fy" }), formula(r.fy));
-      card.append(fx, fy, el("p", { text: r.blurb }));
-      const addBtn = button("Add as field", () => {
+      card.append(fx, fy, el("p", { text: r.blurb }),
+                  el("div", { class: "guide-add-hint", text: "+ Click to add" }));
+      card.addEventListener("click", () => {
         this.app.world.fields.push(new ForceField(r.name, r.fx, r.fy));
         this.app.pushUndo();
         this.app.toast(`Added force field "${r.name}" - see the World tab`);
-      }, { icon: ICONS.plus, style: "ghost", class: "guide-add" });
-      card.append(addBtn.root);
+        // flash the card border as the in-place cue; restart the
+        // animation cleanly when the same card is clicked again
+        card.classList.remove("guide-added");
+        void card.offsetWidth;
+        card.classList.add("guide-added");
+      });
       grid.append(card);
     }
     this.body.append(grid);

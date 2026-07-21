@@ -38,16 +38,21 @@ function loadMathlive(): Promise<Mathlive> {
   return loading;
 }
 
-/** Typing shortcuts for names MathLive doesn't know: our variables and the
- * non-classical function names. (sin, sqrt, pi are built in. atan is left
- * out on purpose: an eager atan → arctan conversion would make atan2
- * impossible to type; plain-letter atan still parses fine.) */
+/** Typing shortcuts for names MathLive doesn't know: our variables, and
+ * functions that convert to their standard mathematical notation as you
+ * type — exp becomes e^□, abs becomes |□|, floor/ceil become ⌊□⌋/⌈□⌉
+ * (#? is a placeholder box the caret lands in). (sin, sqrt, pi are built
+ * in. atan is left out on purpose: an eager atan → arctan conversion
+ * would make atan2 impossible to type; plain-letter atan still parses.) */
 const SHORTCUTS: Record<string, string> = {
   vx: "v_{x}", vy: "v_{y}", tau: "\\tau",
   asin: "\\arcsin", acos: "\\arccos",
   atan2: "\\operatorname{atan2}", hypot: "\\operatorname{hypot}",
-  sign: "\\operatorname{sign}", floor: "\\operatorname{floor}",
-  ceil: "\\operatorname{ceil}", abs: "\\operatorname{abs}",
+  sign: "\\operatorname{sign}",
+  exp: "\\exponentialE^{#?}",
+  abs: "\\left|#?\\right|",
+  floor: "\\left\\lfloor#?\\right\\rfloor",
+  ceil: "\\left\\lceil#?\\right\\rceil",
 };
 
 /** Typeset math field over source-text state; commit returns false to flag
@@ -146,6 +151,9 @@ export function mathEdit(get: () => string, commit: (s: string) => boolean,
     // options only work on a mounted field (the getters throw otherwise)
     mf.inlineShortcuts = { ...mf.inlineShortcuts, ...SHORTCUTS };
     mf.menuItems = []; // no context menu / hamburger in a one-line field
+    // stay inside a superscript until the user arrows/clicks out — the
+    // default hops out after a single digit, which reads as a glitch
+    mf.smartSuperscript = false;
     refreshActive = refresh;
     refresh();
   };

@@ -263,6 +263,12 @@ input.error { border-color: var(--bad); }
   border: 1px solid var(--outline);
   border-radius: var(--radius);
   padding: 1px 6px;
+  /* the app disables selection and touch gestures globally; both inherit
+     into the shadow DOM and break click/tap caret placement, so restore
+     them here like input[type=text] does */
+  -webkit-user-select: text;
+  user-select: text;
+  touch-action: auto;
   --caret-color: var(--accent);
   --selection-background-color: var(--accent);
   --selection-color: var(--bg);
@@ -453,14 +459,22 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 .guide-math[data-latex] + .guide-src { display: none; }
 .guide-src.only { font-size: calc(12px * var(--fs, 1)); color: var(--text); }
 .guide-recipes { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
-.guide-recipe { cursor: default; min-height: 0; display: flex;
-  flex-direction: column; }
-.guide-recipe:hover { background: var(--panel-light); border-color: var(--outline); }
+.guide-recipe { min-height: 0; display: flex; flex-direction: column; }
 .guide-recipe p { flex: 1; -webkit-line-clamp: unset; overflow: visible; }
 .guide-recipe-row { display: flex; gap: 8px; align-items: center; margin: 3px 0; }
 .guide-recipe-lbl { color: var(--text-faint);
   font-size: calc(11px * var(--fs, 1)); flex: none; width: 16px; }
-.guide-add { margin-top: 8px; align-self: flex-start; }
+.guide-add-hint {
+  margin-top: 8px;
+  color: var(--accent);
+  font-size: calc(11px * var(--fs, 1));
+}
+/* clicking a recipe adds it; flash the border as the in-place cue */
+@keyframes guide-added-flash {
+  0% { box-shadow: 0 0 0 2px var(--accent); border-color: var(--accent); }
+  100% { box-shadow: 0 0 0 2px transparent; border-color: var(--outline); }
+}
+.guide-recipe.guide-added { animation: guide-added-flash 0.9s ease-out; }
 
 /* -------------------------------------------------------------- canvas */
 #toasts {
