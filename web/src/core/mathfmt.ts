@@ -56,11 +56,13 @@ function renderable(node: ExprNode): boolean {
 }
 
 // ------------------------------------------------------------ AST → LaTeX
-// How functions typeset. Everything else falls back to \operatorname{}.
+// How functions typeset. exp/abs/floor/ceil use their standard notation
+// (e^x, |x|, floor/ceil brackets) in latexNode; everything not listed
+// falls back to \operatorname{}.
 const FUNC_LATEX: Record<string, string> = {
   sin: "\\sin", cos: "\\cos", tan: "\\tan",
   asin: "\\arcsin", acos: "\\arccos", atan: "\\arctan",
-  exp: "\\exp", log: "\\ln", // our log IS natural log; \ln says so
+  log: "\\ln", // our log IS natural log; \ln says so
   min: "\\min", max: "\\max",
 };
 const CONST_LATEX: Record<string, string> = {
@@ -122,6 +124,16 @@ function latexNode(node: ExprNode): string {
     case "call": {
       if (node.name === "sqrt") return `\\sqrt{${emitLatex(node.args[0], 0)}}`;
       if (node.name === "abs") return `\\left|${emitLatex(node.args[0], 0)}\\right|`;
+      // standard notation: exp(a) is the upright e^a (\exponentialE, so a
+      // plain italic e^a — which compiles to ** — stays distinguishable
+      // and both spellings survive round trips value-exact)
+      if (node.name === "exp") return `\\exponentialE^{${emitLatex(node.args[0], 0)}}`;
+      if (node.name === "floor") {
+        return `\\left\\lfloor ${emitLatex(node.args[0], 0)}\\right\\rfloor`;
+      }
+      if (node.name === "ceil") {
+        return `\\left\\lceil ${emitLatex(node.args[0], 0)}\\right\\rceil`;
+      }
       const head = FUNC_LATEX[node.name] ?? `\\operatorname{${node.name}}`;
       const args = node.args.map((a) => emitLatex(a, 0)).join(",");
       return `${head}\\left(${args}\\right)`;
@@ -131,10 +143,11 @@ function latexNode(node: ExprNode): string {
       if (op === "/") return `\\frac{${emitLatex(left, 0)}}{${emitLatex(right, 0)}}`;
       if (op === "**") {
         // base must read as a closed atom: 2^{x}, x^{2}, \sin(x)^{2}, but
-        // \left(-x\right)^{2} and \left(\frac{a}{b}\right)^{2}
+        // \left(-x\right)^{2}, \left(\frac{a}{b}\right)^{2} — and exp,
+        // which typesets as e^{...}, must never gain a second superscript
         const closed = left.kind === "num" || left.kind === "var" ||
           left.kind === "const" ||
-          (left.kind === "call" && left.name !== "sqrt");
+          (left.kind === "call" && left.name !== "sqrt" && left.name !== "exp");
         const base = closed ? latexNode(left) : `\\left(${latexNode(left)}\\right)`;
         return `${base}^{${emitLatex(right, 0)}}`;
       }
@@ -316,7 +329,9 @@ class LatexParser {
     // start an implicitly multiplied factor
     if (t.kind === "sym") return t.ch === "(" || t.ch === "[" || t.ch === "{";
     // any command except the ones that terminate or join expressions
-    return !["right", "mright", "cdot", "times", "ast", "div"].includes(t.name);
+    // (closing fences included: they end a factor, never start one)
+    return !["right", "mright", "cdot", "times", "ast", "div",
+             "rfloor", "rceil", "vert", "rvert"].includes(t.name);
   }
 
   private expr(): ExprNode {
@@ -456,6 +471,25 @@ class LatexParser {
       return { kind: "call", name: "sqrt", args: [this.cmdArg()] };
     }
     if (name === "left" || name === "mleft") return this.fenced();
+    if (name === "exponentialE") {
+      // the upright e of the e^x notation: with an exponent it IS exp()
+      // (a plain italic e^x stays a power - the two compile differently
+      // by an ulp, so the spellings must stay distinguishable)
+      if (this.isSym("^")) {
+        this.next();
+        return { kind: "call", name: "exp", args: [this.scriptArg()] };
+      }
+      return { kind: "const", name: "e" };
+    }
+    if (name === "lfloor" || name === "lceil") {
+      const fn = name === "lfloor" ? "floor" : "ceil";
+      const inner = this.expr();
+      if (!this.isCmd("rfloor", "rceil")) {
+        throw new ExprError(`expected '\\${name.replace("l", "r")}'`);
+      }
+      this.next();
+      return { kind: "call", name: fn, args: [inner] };
+    }
     if (name in CMD_CONSTS) return { kind: "const", name: CMD_CONSTS[name] };
     if (name in CMD_FUNCS) return this.callArgs(CMD_FUNCS[name]);
     if (name === "operatorname" || name === "mathrm" || name === "mathit" ||
@@ -478,17 +512,23 @@ class LatexParser {
     throw new ExprError(`'\\${name}' isn't supported in formulas`);
   }
 
-  /** \left<fence> expr \right<fence> — parens or |…| for abs. */
+  /** \left<fence> expr \right<fence> — parens, |…| for abs, or the
+   * floor/ceil brackets. */
   private fenced(): ExprNode {
     const open = this.next();
     if (open === undefined) throw new ExprError("the formula ends too soon");
-    const isAbs = (open.kind === "sym" && open.ch === "|") ||
-                  (open.kind === "cmd" && (open.name === "vert" || open.name === "lvert"));
+    let fn: string | null = null;
+    if (open.kind === "sym" && open.ch === "|") fn = "abs";
+    else if (open.kind === "cmd") {
+      if (open.name === "vert" || open.name === "lvert") fn = "abs";
+      else if (open.name === "lfloor") fn = "floor";
+      else if (open.name === "lceil") fn = "ceil";
+    }
     const inner = this.expr();
     if (!this.isCmd("right", "mright")) throw new ExprError("expected closing bracket");
     this.next();
     this.next(); // the closing fence character itself (or '.')
-    if (isAbs) return { kind: "call", name: "abs", args: [inner] };
+    if (fn) return { kind: "call", name: fn, args: [inner] };
     return inner;
   }
 
