@@ -5,6 +5,7 @@ import { App, PRESETS } from "./app";
 import { GraphMode } from "./app";
 import { TOOL_KEYS } from "./interact/tools";
 import { Inspector } from "./ui/inspector";
+import { FormulaGuide } from "./ui/guide";
 import { Help, Library, SettingsPanel } from "./ui/overlays";
 import { GraphDock, HintBar, Palette, Toolbar, overlayToggles } from "./ui/panels";
 
@@ -40,9 +41,11 @@ const hintbar = new HintBar(app, $("hint-text"), $("status-text"));
 const library = new Library(app, $("library"));
 const help = new Help($("help"));
 const settingsPanel = new SettingsPanel(app, $("settings"), () => help.open());
+const formulaGuide = new FormulaGuide(app, $("formula-guide"));
 overlayToggles["library"] = () => library.toggle();
 overlayToggles["help"] = () => help.toggle();
 overlayToggles["settings"] = () => settingsPanel.toggle();
+overlayToggles["formula-guide"] = () => formulaGuide.toggle();
 
 const overloadEl = $("overload-warning");
 app.panels = [toolbar, palette, inspector, dock, hintbar, {
@@ -97,11 +100,13 @@ document.addEventListener("keydown", (e) => {
   }
 
   // overlays swallow everything except their own close keys
-  if (library.visible || help.visible || settingsPanel.visible) {
+  if (library.visible || help.visible || settingsPanel.visible ||
+      formulaGuide.visible) {
     if (e.key === "Escape" || key === "l" || e.key === "F1") {
       library.close();
       help.close();
       settingsPanel.close();
+      formulaGuide.close();
       e.preventDefault();
     }
     return;
