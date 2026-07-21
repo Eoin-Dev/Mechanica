@@ -393,10 +393,74 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 .btn-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 4px 0; }
 .btn-grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 4px 0; }
 
-.formula-ref { font-size: calc(11px * var(--fs, 1)); }
-.formula-ref .code { color: var(--accent); font-family: Consolas, monospace; }
-.formula-ref td { padding: 1px 6px 1px 0; vertical-align: top; }
-.formula-ref .desc { color: var(--text-faint); }
+/* ------------------------------------------------------- formula guide */
+.guide-body { max-width: 100%; }
+#formula-guide .cat-chips { padding: 10px 16px; position: static;
+  border-bottom: 1px solid var(--outline); }
+.guide-p {
+  color: var(--text-dim);
+  font-size: calc(12.5px * var(--fs, 1));
+  line-height: 1.55;
+  margin: 6px 0 10px;
+  max-width: 72ch;
+}
+.guide-h {
+  color: var(--accent);
+  font-size: calc(13px * var(--fs, 1));
+  margin: 16px 0 6px;
+}
+.guide-table { font-size: calc(12px * var(--fs, 1)); border-spacing: 0; }
+.guide-table .code {
+  color: var(--accent);
+  font-family: Consolas, monospace;
+  white-space: nowrap;
+  padding: 3px 14px 3px 0;
+  vertical-align: top;
+}
+.guide-table .desc { color: var(--text-dim); padding: 3px 0; line-height: 1.45; }
+.guide-example {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: var(--panel-light);
+  border: 1px solid var(--outline);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 8px 0;
+}
+.guide-caption {
+  color: var(--text-dim);
+  font-size: calc(11.5px * var(--fs, 1));
+  line-height: 1.45;
+  flex: 1;
+  min-width: 200px;
+}
+.guide-formula { min-width: 0; }
+.guide-math { font-size: calc(14px * var(--fs, 1)); overflow-x: auto; }
+/* while (or if) the typeset renderer hasn't loaded, the source shows in
+   the math slot; once typeset markup lands, the small source line under
+   it keeps the plain-text spelling visible */
+.guide-math[data-latex] { font-family: Consolas, monospace;
+  color: var(--text); font-size: calc(12px * var(--fs, 1)); }
+.guide-src {
+  font-family: Consolas, monospace;
+  font-size: calc(10.5px * var(--fs, 1));
+  color: var(--text-faint);
+  margin-top: 2px;
+  word-break: break-all;
+}
+.guide-math[data-latex] + .guide-src { display: none; }
+.guide-src.only { font-size: calc(12px * var(--fs, 1)); color: var(--text); }
+.guide-recipes { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.guide-recipe { cursor: default; min-height: 0; display: flex;
+  flex-direction: column; }
+.guide-recipe:hover { background: var(--panel-light); border-color: var(--outline); }
+.guide-recipe p { flex: 1; -webkit-line-clamp: unset; overflow: visible; }
+.guide-recipe-row { display: flex; gap: 8px; align-items: center; margin: 3px 0; }
+.guide-recipe-lbl { color: var(--text-faint);
+  font-size: calc(11px * var(--fs, 1)); flex: none; width: 16px; }
+.guide-add { margin-top: 8px; align-self: flex-start; }
 
 /* -------------------------------------------------------------- canvas */
 #toasts {

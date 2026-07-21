@@ -862,8 +862,11 @@ function buildSquishyBall(): World {
  *
  * The field combines four ideas the formula language supports: a tangential
  * swirl with exponential falloff (exp), an inward pull (1/r-style terms), a
- * comparison used as a switch to hollow out a calm "eye" (r < 0.7), and
- * velocity damping. Open the World tab to read and edit the formulas live.
+ * smooth outward bump exp(-(r/0.7)^4) that hollows out a calm "eye" (a
+ * switch with no if - it is ~1 inside r = 0.7 and dies off fast beyond),
+ * and velocity damping. Everything stays in the typeset-math subset, so the
+ * World tab shows the formulas as real math - and the text toggle shows the
+ * same formulas as plain source. Edit either view live.
  */
 function buildCyclone(): World {
   const w = new World();
@@ -884,8 +887,8 @@ function buildCyclone(): World {
                       200 + rng.randint(0, 55)] });
   }
   w.fields.push(new ForceField("Cyclone",
-    "-9*y*exp(-r/5)/(r+0.15) - 3*x/(r+0.3) + 6*x*(r < 0.7) - 0.4*vx",
-    "9*x*exp(-r/5)/(r+0.15) - 3*y/(r+0.3) + 6*y*(r < 0.7) - 0.4*vy"));
+    "-9*y*exp(-r/5)/(r+0.15) - 3*x/(r+0.3) + 6*x*exp(-(r/0.7)^4) - 0.4*vx",
+    "9*x*exp(-r/5)/(r+0.15) - 3*y/(r+0.3) + 6*y*exp(-(r/0.7)^4) - 0.4*vy"));
   return w;
 }
 
@@ -1311,10 +1314,10 @@ export const PRESETS: Preset[] = [
     buildSinaiBilliard, { zoom: 125, trails: true, graph: "energy" }),
   new Preset("Cyclone", "Chaos",
     "Sixty particles caught in a storm written entirely as two force-field " +
-    "formulas: a swirling wind that fades with distance (exp), an inward " +
-    "pull, a comparison (r < 0.7) acting as a switch that hollows out a " +
-    "calm eye, and drag. Open the World tab to read - and edit - the " +
-    "formulas while it runs.",
+    "formulas: a swirling wind that fades with distance, an inward pull, a " +
+    "smooth exponential bump that hollows out a calm eye, and drag. Open " +
+    "the World tab to read the formulas as typeset math - and edit them " +
+    "while it runs.",
     buildCyclone, { zoom: 85 }),
 ];
 

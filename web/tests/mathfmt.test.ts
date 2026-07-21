@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 import { Env, ExprError, compileExpr, parseSource } from "../src/core/expr";
 import { astToSource, isMathRenderable, latexToAst, latexToSource,
          sourceToLatex } from "../src/core/mathfmt";
+import { PRESETS } from "../src/scene/presets";
+import { RECIPES } from "../src/ui/guide-recipes";
 
 /** Environments the equivalence checks sample — off-axis, signed, mixed
  * magnitudes, so precedence mistakes can't hide behind symmetry. */
@@ -244,6 +246,35 @@ describe("isMathRenderable", () => {
     "",                     // empty
   ])("text-only: '%s'", (src) => {
     expect(isMathRenderable(src)).toBe(false);
+  });
+});
+
+// --------------------------------------------- shipped formulas stay valid
+describe("shipped content", () => {
+  it("the Cyclone preset's formulas are typeset-renderable and round-trip", () => {
+    const preset = PRESETS.find((p) => p.name === "Cyclone")!;
+    const world = preset.build();
+    expect(world.fields.length).toBe(1);
+    const f = world.fields[0];
+    expect(f.error).toBe("");
+    for (const src of [f.fxSrc, f.fySrc]) {
+      expect(isMathRenderable(src), src).toBe(true);
+      expectSameValue(src, latexToSource(sourceToLatex(src)));
+    }
+  });
+
+  it("every guide recipe compiles, and typeset ones round-trip exactly", () => {
+    for (const r of RECIPES) {
+      for (const src of [r.fx, r.fy]) {
+        expect(() => compileExpr(src), `${r.name}: ${src}`).not.toThrow();
+        if (isMathRenderable(src)) {
+          expectSameValue(src, latexToSource(sourceToLatex(src)));
+        }
+      }
+    }
+    // the two advertised text-only recipes really are text-only
+    expect(isMathRenderable("-0.4*m*(y > 2)")).toBe(false);
+    expect(isMathRenderable("4 if floor(t) % 2 == 0 else -4")).toBe(false);
   });
 });
 

@@ -14,6 +14,7 @@ import { RefreshGroup, button, checkbox, el, fmt3dp, halfRow, isPhone, isTouch,
          numEdit, section, segmented, slider, textEdit } from "./dom";
 import { ICONS } from "./icons";
 import { mathEdit } from "./mathedit";
+import { overlayToggles } from "./panels";
 
 const TABS = ["Selection", "World", "View"] as const;
 type Tab = (typeof TABS)[number];
@@ -26,7 +27,6 @@ export class Inspector implements Panel {
   private tab: Tab = "Selection";
   private group = new RefreshGroup();
   private structureKey = "";
-  private showFormulaHelp = false;
   /** Formula rows where the user chose plain text over typeset math. */
   private preferTextFormula =
     new WeakMap<ForceField, Partial<Record<"fxSrc" | "fySrc", boolean>>>();
@@ -160,7 +160,7 @@ export class Inspector implements Panel {
       // World tab structure depends on fields/drivers/mutual gravity
       if (this.tab === "World") {
         return `world:${app.world.fields.length}:${app.world.drivers.length}:` +
-               `${app.world.mutualGravity}:${this.showFormulaHelp}:` +
+               `${app.world.mutualGravity}:` +
                app.world.fields.map((f) => f.error).join("|");
       }
       return this.tab;
@@ -817,16 +817,13 @@ export class Inspector implements Panel {
     }, { icon: ICONS.plus,
          tooltip: "A force (in N) applied to every body, written as plain " +
                   "math. Try Fy = -y*5 for a spring field." }));
-    const refBtn = this.group.add(button(
-      this.showFormulaHelp ? "Hide formula reference" : "Formula reference",
-      () => {
-        this.showFormulaHelp = !this.showFormulaHelp;
-        this.markDirty();
-      }, { style: "ghost", isActive: () => this.showFormulaHelp,
-           tooltip: "Every variable, function and operator you can use in " +
-                    "force-field formulas" }));
-    this.body.append(el("div", { class: "field-actions" }, addBtn.root, refBtn.root));
-    if (this.showFormulaHelp) this.buildFormulaReference();
+    const guideBtn = this.group.add(button("Formula guide", () => {
+      overlayToggles["formula-guide"]?.();
+    }, { style: "ghost",
+         tooltip: "Everything you can write in a force-field formula: " +
+                  "variables, functions, logic, the math editor, and " +
+                  "ready-made recipes" }));
+    this.body.append(el("div", { class: "field-actions" }, addBtn.root, guideBtn.root));
 
     if (world.drivers.length > 0) {
       this.body.append(section("Drivers"));
@@ -847,49 +844,6 @@ export class Inspector implements Panel {
         this.body.append(row);
       }
     }
-  }
-
-  /** The in-panel cheat sheet for force-field formulas. */
-  private buildFormulaReference(): void {
-    const table = (rows: Array<[string, string]>): HTMLElement => {
-      const t = el("table", { class: "formula-ref" });
-      for (const [code, desc] of rows) {
-        t.append(el("tr", {},
-          el("td", { class: "code", text: code }),
-          el("td", { class: "desc", text: desc })));
-      }
-      return t;
-    };
-    this.body.append(section("Examples"), table([
-      ["-0.5*vx", "Drag along x"],
-      ["-10*x", "Spring toward x = 0"],
-      ["3*sin(2*t)", "Oscillating push"],
-      ["-5*x/r^3", "Inverse-square pull"],
-      ["-0.4*m*(y > 2)", "Only above y = 2"],
-    ]));
-    this.body.append(section("Variables"), table([
-      ["x,  y", "Position (m)"],
-      ["vx,  vy", "Velocity (m/s)"],
-      ["t", "Time (s)"],
-      ["m", "Mass (kg)"],
-      ["r", "Distance from (0, 0)  (m)"],
-    ]));
-    this.body.append(section("Functions"), table([
-      ["sin cos tan", "asin acos atan atan2"],
-      ["sqrt exp log", "abs sign hypot"],
-      ["min(a, b, ...)", "max floor ceil"],
-    ]));
-    this.body.append(section("Constants & operators"), table([
-      ["pi  e  tau  g", "3.1416..., 2.7183..., 2*pi, 9.81"],
-      ["+ - * / %", "Arithmetic"],
-      ["^  or  **", "Power: x^2 is x squared"],
-      ["(m > 1)", "Comparisons give 1 or 0"],
-      ["a if y > 0 else b", "A true either/or"],
-    ]));
-    this.body.append(el("div", { class: "faint",
-      text: "The force is in newtons, applied to every body. Anything not " +
-            "listed above is rejected and the error shows in red under the field.",
-      style: "font-size:calc(11px * var(--fs, 1));margin-top:6px;line-height:1.5" }));
   }
 
   // ------------------------------------------------------------------- view
