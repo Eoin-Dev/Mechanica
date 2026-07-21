@@ -20,7 +20,6 @@
 import { Vec2 } from "../core/vec";
 import { Body, Wall } from "../engine/body";
 import { DistanceLink, SpringLink } from "../engine/links";
-import { safeDragSpeed } from "../engine/world";
 import { Selectable, VEL_ARROW_SCALE, drawVelocityHandle, snapStep } from "../render/draw";
 import { isTouch } from "../ui/dom";
 import { css } from "../ui/theme";
@@ -83,10 +82,21 @@ function makeAnchor(b: Body): Body {
   return b;
 }
 
+// How hard user dragging may hit the physics. A grabbed body follows the
+// cursor EXACTLY, and the velocity it reports to the physics is its TRUE
+// per-frame displacement (so the constraint solver, which reads relative
+// velocities, drives linked bodies correctly and a pendulum lunges) - just
+// capped at DRAG_VEL_CAP so a fast flick can't inject a huge amount of
+// energy. Everything link-connected to a grab is additionally speed-clamped
+// each substep at DRAG_CHASE_CAP as a blow-up guard. User interaction is not
+// physical anyway; the caps trade a little high-speed fidelity for the
+// energy staying sane, deliberately toned well down from the raw drag.
+const DRAG_VEL_CAP = 14.0;   // m/s - the grabbed body's reported speed
+const DRAG_CHASE_CAP = 20.0; // m/s - per-substep clamp on linked bodies
+
 interface DragItem {
   body: Body;
   offset: Vec2;
-  vMax: number;
 }
 
 export class CanvasController {
@@ -110,12 +120,9 @@ export class CanvasController {
   // moves a few pixels; a plain inspect-click never touches the physics
   private dragPress: [number, number] = [0, 0];
   private dragActive = false;
-  // fast-drag rigid carry: link-connected bodies silently moved with the
-  // cursor while it outruns what their springs could absorb
-  private carried: Array<{ body: Body; offset: Vec2 }> = [];
-  private carrySlowSince = 0.0;
   private dragPrev: { x: number; y: number; t: number } | null = null;
-  private dragSpeed = 0.0;
+  // bodies currently under a chase-speed cap, so release always clears it
+  private capped = new Set<Body>();
   // touch: active pointers for pinch detection
   private pointers = new Map<number, [number, number]>();
   private pinchDist = 0;
@@ -145,7 +152,7 @@ export class CanvasController {
 
   /** Drop any in-progress drag without a throw (e.g. world replaced). */
   abortDrag(): void {
-    this.releaseCarried();
+    this.clearChaseCaps();
     for (const { body } of this.dragItems) body.held = false;
     this.dragItems = [];
     this.dragActive = false;
@@ -153,20 +160,20 @@ export class CanvasController {
     this.wallDrag = null;
     this.wallGrab = null;
     this.dragPrev = null;
-    this.dragSpeed = 0.0;
   }
 
   /** Refresh the drag every frame (pointer-move events stop while the
    * cursor is parked, but the simulation keeps running).
    *
-   * The dragged bodies follow the cursor DIRECTLY - no speed cap, no
-   * chase - and carry the true cursor velocity so contacts, spring
-   * damping and the release throw all see real motion. When the cursor
-   * moves faster than the attached springs can absorb (safeDragSpeed),
-   * the whole link-connected assembly is carried rigidly along - a
-   * silent, temporary grouping with no visual selection - and handed
-   * back to the physics once the cursor slows down. Anchors and locked
-   * bodies are never carried. */
+   * Grabbed bodies follow the cursor EXACTLY - the position is never
+   * limited, so the body is always under the pointer. The velocity each
+   * reports to the physics is its TRUE per-frame displacement (consistent
+   * with the move, so the constraint solver reads correct relative
+   * velocities and links carry momentum - a stopped anchor lets a pendulum
+   * lunge on), only capped at DRAG_VEL_CAP so a fast flick can't inject a
+   * huge amount of energy. Everything link-connected keeps simulating with
+   * real link physics under a per-substep speed clamp, a blow-up guard that
+   * a normal drag never touches. */
   updateDrag(): void {
     if (this.dragItems.length === 0 || !this.dragActive) return;
     const app = this.app;
@@ -174,7 +181,7 @@ export class CanvasController {
     if (!app.playing) {
       // paused = pure editing: reposition only, keep the velocity so a
       // click or drag never wipes the body's motion state
-      this.releaseCarried();
+      this.clearChaseCaps();
       this.dragPrev = null;
       for (const { body, offset } of this.dragItems) {
         body.pos.setVec(this.snap(new Vec2(worldP.x + offset.x, worldP.y + offset.y)));
@@ -183,48 +190,39 @@ export class CanvasController {
     }
 
     const now = performance.now() / 1000;
-    const dt = this.dragPrev === null
+    const firstFrame = this.dragPrev === null;
+    const dt = firstFrame
       ? 1 / 60
-      : Math.min(0.1, Math.max(1e-3, now - this.dragPrev.t));
-    const dx = this.dragPrev === null ? 0.0 : worldP.x - this.dragPrev.x;
-    const dy = this.dragPrev === null ? 0.0 : worldP.y - this.dragPrev.y;
+      : Math.min(0.1, Math.max(1e-3, now - this.dragPrev!.t));
     this.dragPrev = { x: worldP.x, y: worldP.y, t: now };
-    // smoothed cursor speed, so one jittery frame can't flip the mode
-    const inst = Math.hypot(dx, dy) / dt;
-    this.dragSpeed = 0.65 * this.dragSpeed + 0.35 * inst;
-
-    // fast-drag hysteresis: engage the rigid carry above the threshold,
-    // hand back to the physics only after ~0.12 s below half of it
-    let vSafe = Infinity;
-    for (const it of this.dragItems) vSafe = Math.min(vSafe, it.vMax);
-    if (this.carried.length === 0) {
-      if (this.dragSpeed > vSafe) this.engageCarry();
-    } else if (this.dragSpeed < 0.5 * vSafe) {
-      if (this.carrySlowSince === 0.0) this.carrySlowSince = now;
-      else if (now - this.carrySlowSince > 0.12) this.releaseCarried();
-    } else {
-      this.carrySlowSince = 0.0;
-    }
 
     for (const { body, offset } of this.dragItems) {
       const t = this.snap(new Vec2(worldP.x + offset.x, worldP.y + offset.y));
-      // real velocity = how far the body is about to move this frame
-      body.vel.set((t.x - body.pos.x) / dt, (t.y - body.pos.y) / dt);
+      // true displacement velocity: exactly how far the body moves this
+      // frame, so position and velocity stay consistent for the solver.
+      // Capped to tone the energy way down on fast flicks; zero on the
+      // very first frame so the click-to-activate jump is not a spike.
+      let vx = 0.0;
+      let vy = 0.0;
+      if (!firstFrame) {
+        vx = (t.x - body.pos.x) / dt;
+        vy = (t.y - body.pos.y) / dt;
+        const sp = Math.hypot(vx, vy);
+        if (sp > DRAG_VEL_CAP) {
+          vx *= DRAG_VEL_CAP / sp;
+          vy *= DRAG_VEL_CAP / sp;
+        }
+      }
+      body.vel.set(vx, vy);
       body.pos.setVec(t);
     }
-    for (const { body, offset } of this.carried) {
-      const tx = worldP.x + offset.x;
-      const ty = worldP.y + offset.y;
-      body.vel.set((tx - body.pos.x) / dt, (ty - body.pos.y) / dt);
-      body.pos.set(tx, ty);
-    }
+    this.applyChaseCaps();
   }
 
-  /** Everything link-connected to the dragged bodies (transitively),
-   * excluding anchors, locked bodies and the dragged bodies themselves.
-   * Carried bodies are held (infinite mass) and follow the cursor
-   * rigidly at their current offsets - deliberately unhighlighted. */
-  private engageCarry(): void {
+  /** Speed-cap everything link-connected to the grabbed bodies
+   * (transitively; anchors and locked bodies excepted). Recomputed every
+   * frame so links added or deleted mid-drag are always honoured. */
+  private applyChaseCaps(): void {
     const world = this.app.world;
     const inGroup = new Set<Body>(this.dragItems.map((it) => it.body));
     const queue = [...inGroup];
@@ -240,22 +238,23 @@ export class CanvasController {
         queue.push(other);
       }
     }
-    const cursor = this.dragPrev!;
+    for (const b of this.capped) {
+      if (!inGroup.has(b)) {
+        b.speedCap = Infinity;
+        this.capped.delete(b);
+      }
+    }
     for (const b of inGroup) {
       if (this.dragItems.some((it) => it.body === b)) continue;
-      b.held = true;
-      this.carried.push({ body: b,
-                          offset: new Vec2(b.pos.x - cursor.x, b.pos.y - cursor.y) });
+      b.speedCap = DRAG_CHASE_CAP;
+      this.capped.add(b);
     }
-    this.carrySlowSince = 0.0;
   }
 
-  /** Hand carried bodies back to the physics (they keep the cursor's
-   * velocity, so the transition is seamless). */
-  private releaseCarried(): void {
-    for (const { body } of this.carried) body.held = false;
-    this.carried = [];
-    this.carrySlowSince = 0.0;
+  /** Lift every chase cap (drag ended, paused, or world replaced). */
+  private clearChaseCaps(): void {
+    for (const b of this.capped) b.speedCap = Infinity;
+    this.capped.clear();
   }
 
   private snap(p: Vec2): Vec2 {
@@ -580,14 +579,10 @@ export class CanvasController {
     if (shift) this.toggleInSelection(picked);
     else if (!app.selection.includes(picked)) app.setSelection([picked]);
     // begin dragging all selected bodies; held bodies act as infinite
-    // mass so they stay put while everything else collides with them.
-    // The base drag speed scales with the view (a few screen-widths per
-    // second) and is tightened per body by its attached springs.
-    const baseSpeed = (2.5 * app.canvasWidth) / app.camera.zoom;
+    // mass so they stay put while everything else collides with them
     this.dragItems = app.selection
       .filter((o): o is Body => o instanceof Body)
-      .map((b) => ({ body: b, offset: b.pos.sub(worldP),
-                     vMax: safeDragSpeed(app.world, b, baseSpeed) }));
+      .map((b) => ({ body: b, offset: b.pos.sub(worldP) }));
     // bodies are NOT held yet: the drag arms here and only activates
     // once the cursor moves, so an inspect-click leaves the physics alone
     this.dragPress = mouse;
@@ -639,6 +634,16 @@ export class CanvasController {
         if (dx * dx + dy * dy < 16) return; // a click's jitter never grabs
         this.dragActive = true;
         for (const { body } of this.dragItems) body.held = true;
+        // first left-drag of a soft-body particle: nudge the user toward
+        // right-drag (velocity drag), which pulls without deforming. Shown
+        // once per soft-body preset load (see App.softBodyHintArmed).
+        if (this.app.softBodyHintArmed &&
+            this.dragItems.some((it) => it.body.softBody)) {
+          this.app.softBodyHintArmed = false;
+          this.app.toast(isTouch()
+            ? "Tip: drag the green arrow to pull a soft body by velocity - it won't deform."
+            : "Tip: right-drag a soft body to pull it by velocity - it won't deform.");
+        }
       }
       // updateDrag() moves the bodies once per frame; here we only
       // note that the drag actually moved (for undo and throwing)
@@ -656,10 +661,10 @@ export class CanvasController {
     if (this.velDrag !== null || this.wallDrag !== null || this.dragItems.length > 0) {
       // An inactive (never-moved) press was a pure inspect-click: the
       // bodies were never held, so there is nothing to undo. An active
-      // drag while playing releases at the cursor's velocity - moving
-      // cursor = a throw, parked cursor = let go at rest. While paused
-      // it is pure editing and the velocity stays untouched.
-      this.releaseCarried();
+      // drag while playing releases at the capped cursor velocity -
+      // moving cursor = a throw, parked cursor = let go at rest. While
+      // paused it is pure editing and the velocity stays untouched.
+      this.clearChaseCaps();
       for (const { body } of this.dragItems) body.held = false;
       if (this.dragMoved) app.pushUndo();
       this.velDrag = null;
@@ -668,7 +673,6 @@ export class CanvasController {
       this.dragItems = [];
       this.dragActive = false;
       this.dragPrev = null;
-      this.dragSpeed = 0.0;
     }
     if (this.rubber !== null) {
       const [x0, y0] = this.rubber;
@@ -873,10 +877,16 @@ export class CanvasController {
       ctx.stroke();
     }
     // velocity handle: for the body being right-dragged (any tool), or
-    // for a single selected dynamic body with the select tool
+    // for a single selected dynamic body with the select tool. Hidden
+    // while a left-drag is active: that drag positions the body and only
+    // borrows its velocity for the throw, so a handle whipping around
+    // with the cursor would read as if left-drag were setting velocity -
+    // which is the right-drag gesture's job.
     let body = this.velDrag;
     if (body === null && this.tool === "select" && app.selection.length === 1 &&
-        app.selection[0] instanceof Body && !app.selection[0].locked) {
+        app.selection[0] instanceof Body && !app.selection[0].locked &&
+        !(this.dragActive &&
+          this.dragItems.some((it) => it.body === app.selection[0]))) {
       body = app.selection[0];
     }
     if (body !== null && !body.locked) {

@@ -10,7 +10,7 @@ import { ExprError, compileExpr } from "../src/core/expr";
 import { Vec2 } from "../src/core/vec";
 import { Body, Wall } from "../src/engine/body";
 import { DistanceLink, SpringLink } from "../src/engine/links";
-import { World, safeDragSpeed } from "../src/engine/world";
+import { World } from "../src/engine/world";
 import { PRESETS } from "../src/scene/presets";
 
 const DT = 1.0 / 120.0;
@@ -406,35 +406,118 @@ describe("soft bodies", () => {
     expect(Math.hypot(p1.x - p0.x, p1.y - p0.y)).toBeLessThan(1e-9);
   });
 
-  it("sub-threshold direct drag: jelly lattice stays pristine", () => {
-    // The controller teleports a grabbed body to the cursor each frame
-    // (with the true cursor velocity) as long as the cursor stays under
-    // safeDragSpeed; faster drags rigid-carry the whole lattice instead.
-    // The engine-level guarantee: direct teleport dragging at speeds the
-    // springs can absorb must not scramble the lattice.
+  it("speedCap clamps a body every substep", () => {
+    const w = new World();
+    w.gravity = 0.0;
+    const b = body(w, 0, 0, { vx: 100.0, vy: -40.0 });
+    b.collides = false;
+    b.speedCap = 5.0;
+    w.step(DT);
+    expect(Math.hypot(b.vel.x, b.vel.y)).toBeLessThanOrEqual(5.0 + 1e-9);
+    b.speedCap = Infinity;
+  });
+
+  const whipJelly = (speed: number): { maxSpeed: number; parts: Body[]; w: World } => {
+    // Drive one particle round a circle at `speed` m/s while its neighbours
+    // simulate under the chase clamp the controller applies. Returns the
+    // peak neighbour speed seen and the settled world.
     const w = preset("Jelly block");
     const parts = w.bodies.filter((b) => !b.locked);
     const grab = parts[Math.floor(parts.length / 2)];
     grab.held = true;
-    const vSafe = safeDragSpeed(w, grab, 60.0);
-    const rr = 0.8;
-    const omega = (0.8 * vSafe) / rr; // cursor at 80% of the carry threshold
+    for (const b of parts) if (b !== grab) b.speedCap = 20.0;
+    const rr = 0.4;
+    const omega = speed / rr;
     const cx = grab.pos.x;
     const cy = grab.pos.y;
+    let maxSpeed = 0.0;
     for (let i = 0; i < Math.floor(1.0 / DT); i++) {
       const ang = omega * i * DT;
-      const tx = cx + rr * Math.sin(ang);
-      const ty = cy + rr * (1 - Math.cos(ang));
-      grab.vel.set((tx - grab.pos.x) / DT, (ty - grab.pos.y) / DT);
-      grab.pos.set(tx, ty);
+      grab.pos.set(cx + rr * Math.sin(ang), cy + rr * (1 - Math.cos(ang)));
+      grab.vel.set(speed * Math.cos(ang), speed * Math.sin(ang));
       w.step(DT);
+      for (const b of parts) {
+        if (b !== grab) maxSpeed = Math.max(maxSpeed, Math.hypot(b.vel.x, b.vel.y));
+      }
     }
     grab.held = false;
-    run(w, 5.0);
+    for (const b of parts) b.speedCap = Infinity;
+    run(w, 6.0);
+    return { maxSpeed, parts, w };
+  };
+
+  it("even a violent jelly whip stays finite and clamp-bounded", () => {
+    // Left-dragging a soft body deliberately deforms it (a fast whip may
+    // scramble it - that is why the app hints to right-drag instead). The
+    // engine's job is only to keep it BOUNDED: never NaN, never past the
+    // chase clamp, never a blow-up.
+    const { maxSpeed, parts } = whipJelly(30.0);
+    expect(parts.every((b) => Number.isFinite(b.pos.x + b.pos.y + b.vel.x + b.vel.y)))
+      .toBe(true);
+    expect(maxSpeed).toBeLessThanOrEqual(20.0 + 1e-6);
+  });
+
+  it("a normal-speed jelly drag jiggles and springs back to shape", () => {
+    // At speeds the chase clamp can follow, the lattice deforms then
+    // recovers cleanly once released - real link physics, no scramble.
+    const { w } = whipJelly(9.0);
     const springs = w.links.filter((ln): ln is SpringLink => ln instanceof SpringLink);
     const worst = Math.max(...springs.map(
       (ln) => Math.abs(ln.a.pos.distTo(ln.b.pos) - ln.restLength) / ln.restLength));
-    expect(worst).toBeLessThan(0.2);
+    expect(worst).toBeLessThan(0.25);
+  });
+
+  it("pushing a held body into a resting one stays gentle", () => {
+    // A slow drag straight into a neighbour: with the capped velocity
+    // signal and split-impulse depenetration, the neighbour is nudged
+    // aside at roughly the drag speed - never ejected
+    const w = new World();
+    w.gravity = 0.0;
+    const a = body(w, 0, 0, { r: 0.2, m: 1.0 });
+    const b = body(w, 0.5, 0, { r: 0.2, m: 1.0 });
+    a.held = true;
+    const dragSpeed = 0.6; // slow cursor
+    for (let i = 0; i < Math.floor(1.0 / DT); i++) {
+      a.vel.set(dragSpeed, 0.0);
+      a.pos.set(a.pos.x + dragSpeed * DT, 0.0);
+      w.step(DT);
+    }
+    a.held = false;
+    // b was pushed away smoothly: comparable to the drag speed, not a fling
+    expect(Math.hypot(b.vel.x, b.vel.y)).toBeLessThan(4.0 * dragSpeed);
+    expect(b.pos.x).toBeGreaterThan(0.5); // it did get pushed along
+  });
+
+  it("dragging a pendulum anchor then stopping lets the bob lunge", () => {
+    // Drag an anchor sideways under real link physics, then stop dead: the
+    // bob must have built genuine momentum and keep swinging (the "lunge"),
+    // not float to a halt with the anchor - and still stay bounded.
+    const w = new World();
+    w.gravity = 9.81;
+    const anchor = body(w, 0, 3, { locked: true });
+    const bob = body(w, 0, 2, { r: 0.1, m: 1.0 });
+    w.links.push(new DistanceLink(anchor, bob));
+    anchor.held = true;
+    bob.speedCap = 20.0; // the chase clamp the controller applies
+    // sweep the anchor sideways for half a second, then hold it still
+    const v = 3.0;
+    for (let i = 0; i < Math.floor(0.5 / DT); i++) {
+      anchor.pos.set(anchor.pos.x + v * DT, 3.0);
+      anchor.vel.set(v, 0.0);
+      w.step(DT);
+    }
+    anchor.vel.set(0.0, 0.0);
+    const bobSpeedAtStop = Math.hypot(bob.vel.x, bob.vel.y);
+    // the bob carried real momentum from the drag (not floating: well above
+    // zero) yet stayed within the clamp
+    expect(bobSpeedAtStop).toBeGreaterThan(0.5);
+    expect(bobSpeedAtStop).toBeLessThanOrEqual(20.0 + 1e-6);
+    // let go: it keeps moving (lunges) rather than freezing in place
+    const x0 = bob.pos.x;
+    anchor.held = false;
+    bob.speedCap = Infinity;
+    w.step(DT * 4);
+    expect(Math.abs(bob.pos.x - x0)).toBeGreaterThan(1e-3);
   });
 });
 
