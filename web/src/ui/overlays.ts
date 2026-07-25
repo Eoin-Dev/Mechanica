@@ -161,7 +161,8 @@ export class Library {
       app.toast(`Loaded scene '${result.name}'`);
       this.close();
     }, { icon: ICONS.import,
-         tooltip: "Load a scene file saved from this app or the desktop version" }).root);
+         tooltip: "Load a .json scene saved from this app or the desktop " +
+                  "version." }).root);
     this.content.append(actions);
 
     const names = snap.listScenes();
@@ -278,9 +279,16 @@ export class SettingsPanel {
       { icon: ICONS.close, style: "ghost", tooltip: "Close (Esc)" }).root);
     const body = el("div", { class: "overlay-body settings-grid" });
     // Settings are grouped into cards laid out in columns rather than one
-    // long narrow list. Each group gets exactly one explanatory paragraph,
-    // written for someone who does not already know what the control does
-    // - enough to decide, not a manual.
+    // long narrow list.
+    //
+    // House style for every description in the app, here and in the
+    // Inspector: the tooltip is ONE sentence saying what the control does.
+    // The note below it adds only what the tooltip cannot - the meaning of
+    // each choice, or what the setting costs - in at most two short
+    // sentences. A recommendation is given only where one option is
+    // genuinely better for accuracy or performance, never for a matter of
+    // taste, and is written as "Recommended: Enabled." at the front so it
+    // can be read without reading the rest.
     let current: HTMLElement = body;
     const group = (title: string): void => {
       current = el("div", { class: "settings-group" },
@@ -305,19 +313,19 @@ export class SettingsPanel {
         app.settings.theme = THEME_LABELS.find(([lbl]) => lbl === v)![1];
         app.saveSettings();
         app.applyUiSettings();
-      }, "Colour theme for the whole interface and canvas background"));
-    note("Void is near-black and shows motion trails at their brightest; " +
-         "Dark is the default; Light suits a projector or a bright room; " +
-         "Original is the classic blue-tinted dark palette.");
+      }, "Colour theme for the interface and the canvas."));
+    note("Void: near-black, showing motion trails at their brightest. " +
+         "Dark: the default. Light: for bright rooms and projectors. " +
+         "Original: the classic blue-tinted dark palette.");
 
     // accent colour: preset swatch circles + a custom picker. UI chrome
     // and highlights only - physics object colours are never touched.
     label("Accent colour");
     const swatchRow = el("div", { class: "swatch-row" });
     const accentNote = el("div", { class: "faint settings-note",
-      text: "Used for buttons, selection outlines and graph lines. Physics " +
-            "object colours are never changed by this - set those per body " +
-            "in the Inspector." });
+      text: "Highlight colour for buttons, selection outlines and graph " +
+            "lines. Object colours are set per body in the Inspector and " +
+            "are not affected." });
     const applyAccent = (hex: string | null): void => {
       if (hex === null) delete app.settings.accent;
       else app.settings.accent = hex;
@@ -401,10 +409,9 @@ export class SettingsPanel {
         app.settings.dyslexic_font = v;
         app.saveSettings();
         app.applyUiSettings();
-      }, "Use a rounder, more distinct typeface across the interface"));
-    note("OpenDyslexic weights the bottom of each letter, which makes " +
-         "similar shapes (b/d, p/q) harder to confuse. Affects the " +
-         "interface text only, not the canvas.");
+      }, "Use the OpenDyslexic typeface for interface text."));
+    note("Weights the bottom of each letter so similar shapes (b/d, p/q) " +
+         "are easier to tell apart. Interface text only, not the canvas.");
 
     label("Font size");
     add(segmented(["90%", "100%", "110%", "120%"],
@@ -413,55 +420,45 @@ export class SettingsPanel {
         app.settings.font_scale = parseInt(v, 10) / 100;
         app.saveSettings();
         app.applyUiSettings();
-      }, "Interface text size"));
-    note("Scales every panel, label and button. The range is capped so the " +
-         "toolbar and inspector still fit their contents at either end.");
+      }, "Size of all interface text."));
+    note("Scales every panel, label and button.");
 
     group("Interaction");
     add(checkbox("Dragged objects collide with walls",
       () => app.dragHitsWalls,
       (v) => app.setDragHitsWalls(v),
-      "Stop a body you are dragging at the wall instead of letting it " +
-      "pass through"));
-    note("Off (the default): a body you drag ignores walls, which is the " +
-         "quickest way to place something on the far side of one. On: the " +
-         "body is held outside any wall it meets and slides along it, so " +
-         "you can push a ball up a ramp or wedge it into a corner by hand. " +
-         "Either way the drag never stops following your cursor - what " +
-         "changes is where the body is allowed to sit.");
+      "Stop a dragged body at walls instead of letting it pass through."));
+    note("Off: a dragged body passes through walls, the quickest way to " +
+         "place something on the far side of one. On: it is held outside " +
+         "walls and slides along them, so you can push a ball up a ramp by " +
+         "hand.");
 
     group("Accuracy & performance");
     add(checkbox("Adaptive resolution",
       () => app.adaptiveDt,
       (v) => app.setAdaptiveDt(v),
-      "Run extra, smaller physics steps through fast close encounters"));
-    note("Recommended. When a body's path curves sharply within a single " +
-         "step - a gravity slingshot, the tip of a whipping pendulum - the " +
-         "step is split into several smaller ones, so the trajectory stays " +
-         "accurate and its motion trail stays smooth. How far to split is " +
-         "decided from the simulation itself and never from the frame rate, " +
-         "so a scene behaves identically on any machine; a slow one simply " +
-         "takes longer to get there. Substeps and iterations, in the " +
-         "Inspector's World tab, are per-scene and saved with it - this is " +
-         "a preference of this browser.");
+      "Add extra, smaller physics steps through fast close encounters."));
+    note("Recommended: Enabled. Keeps trajectories accurate and trails " +
+         "smooth where a path curves sharply within one step, such as a " +
+         "gravity slingshot. Substeps and iterations are separate, " +
+         "per-scene settings in the Inspector's World tab.");
 
     add(checkbox("Remove runaway objects",
       () => app.settings.cull ?? true,
       (v) => {
         app.settings.cull = v;
         app.saveSettings();
-      }, "Delete bodies that have drifted far beyond any usable view"));
-    note("Recommended. A body that falls away forever still costs time on " +
-         "every step and drags the auto-fit camera out to nothing. One is " +
-         "deleted only once it is far past the widest view you could zoom " +
-         "out to AND still receding, so anything on an orbit that brings it " +
-         "back is always kept.");
+      }, "Delete bodies that have drifted far beyond any usable view."));
+    note("Recommended: Enabled. Debris that will never return still costs " +
+         "simulation time and pulls the auto-fit camera out. A body is " +
+         "removed only once it is outside the widest possible view and " +
+         "still receding, so bound orbits are never affected.");
 
     const helpRow = el("div", { class: "settings-actions" });
     helpRow.append(button("Replay the tour", () => {
       this.close();
       startTour();
-    }, { tooltip: "Walk through the interface again from the beginning" }).root);
+    }, { tooltip: "Walk through the interface again from the start." }).root);
     helpRow.append(button("Help & shortcuts", () => {
       this.close();
       openHelp();
@@ -591,7 +588,7 @@ export class Help {
     header.append(button("Take the tour", () => {
       this.close();
       startTour();
-    }, { tooltip: "A guided walk through the interface" }).root);
+    }, { tooltip: "A guided walk through the interface." }).root);
     header.append(button("", () => this.close(),
       { icon: ICONS.close, style: "ghost", tooltip: "Close (Esc)" }).root);
 

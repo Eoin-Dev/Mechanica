@@ -806,7 +806,14 @@ export class CanvasController {
     }
   }
 
-  deleteObject(obj: Selectable): void {
+  /** Remove one object (and anything that depended on it).
+   *
+   * `deferPrune` skips the selection/hover/drag reconciliation, which is a
+   * scan of the world per surviving reference. A caller deleting many
+   * objects at once - the runaway cull can bin hundreds in a frame - should
+   * pass it and call `prune()` once at the end instead of paying that scan
+   * per object. */
+  deleteObject(obj: Selectable, deferPrune = false): void {
     const app = this.app;
     if (obj instanceof Body) {
       app.world.removeBody(obj);
@@ -816,12 +823,19 @@ export class CanvasController {
     } else {
       app.world.removeLink(obj);
     }
+    if (!deferPrune) this.pruneDeleted();
+  }
+
+  /** Reconcile selection, hover and any active drag with the world after a
+   * batch of deferred deletions. */
+  prune(): void {
     this.pruneDeleted();
   }
 
   deleteSelection(): void {
     if (this.app.selection.length === 0) return;
-    for (const obj of [...this.app.selection]) this.deleteObject(obj);
+    for (const obj of [...this.app.selection]) this.deleteObject(obj, true);
+    this.prune();
     this.app.setSelection([]);
     this.app.pushUndo();
   }

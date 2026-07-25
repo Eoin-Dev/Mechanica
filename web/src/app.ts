@@ -41,6 +41,19 @@ const SETTINGS_KEY = "mechanica.settings";
 // JS string). 24M chars is roughly 48 MB - generous for a rewind buffer,
 // and small enough that a heavy scene can't quietly consume the heap.
 const HISTORY_BUDGET_CHARS = 24_000_000;
+// Snapshot characters a single displayed frame may spend on rewind.
+//
+// Each captured frame is a full JSON serialization of the world, and on a
+// dense scene that costs about as much as the physics step it is recording
+// (measured: 0.53 ms and 69 kB of garbage per frame for the 200-particle
+// gas, against 0.56 ms of physics) - a lot to spend on a convenience
+// feature, and megabytes a second of pressure on the collector. Above this
+// size the buffer captures every Nth frame instead, so small scenes keep
+// exact frame-by-frame rewind and large ones trade granularity for frame
+// time. Derived from the scene's own size rather than from measured
+// timings, so it never varies with how busy the machine is.
+const HISTORY_TARGET_CHARS = 12_000;
+const HISTORY_MAX_STRIDE = 16;
 
 export type GraphMode = "Off" | "Energy" | "Mom." | "Phase";
 
@@ -214,7 +227,10 @@ export class App {
     if (!this.cullEnabled) return;
     const gone = escapedBodies(this.world, this.cullLimit());
     if (gone.length === 0) return;
-    for (const b of gone) this.controller.deleteObject(b);
+    // a debris storm can bin hundreds at once: reconcile the selection and
+    // any drag once at the end rather than per body
+    for (const b of gone) this.controller.deleteObject(b, true);
+    this.controller.prune();
     this.culledTotal += gone.length;
     // one throttled note rather than a stream of them
     const nowS = performance.now() / 1000;
@@ -279,7 +295,9 @@ export class App {
         this.recordTrails();
       }
     }
-    this.afterPhysics();
+    // stepping frame by frame must be exactly reversible, so this frame is
+    // always captured whatever stride a heavy scene is using
+    this.afterPhysics(true);
   }
 
   /** Rewind the simulation by one displayed frame (,). */
@@ -855,12 +873,6 @@ export class App {
     }
     const maxlen = this.view.trailLen;
     const now = this.world.time;
-    // The trail is a window on the last `maxAge` seconds of SIMULATED
-    // time, so it decays even while a body sits still (a stationary body
-    // used to keep a frozen line forever) and covers the same amount of
-    // motion whatever the speed multiplier. maxlen stays the hard memory
-    // and drawing bound.
-    const maxAge = maxlen * PHYSICS_DT;
     const threshold = 0.5 / this.camera.zoom;
     const trailFor = (bid: number): Trail => {
       let t = this.trails.get(bid);
@@ -882,10 +894,8 @@ export class App {
       for (const [bid, x, y] of this.world.trace) trailFor(bid).push(x, y, now);
       this.world.trace.length = 0;
     }
-    const live = new Set<number>();
     for (const b of this.world.bodies) {
       if (b.locked) continue;
-      live.add(b.id);
       const t = trailFor(b.id);
       const n = t.count;
       if (n === 0 ||
@@ -893,35 +903,78 @@ export class App {
         t.push(b.pos.x, b.pos.y, now);
       }
     }
-    // Drop trails whose body is gone. Ids are never reused, so without this
-    // the map grows for the whole session - every culled runaway, every
-    // erased body and every duplicate leaves its buffers behind, which in a
-    // debris-heavy scene is a steady leak of megabytes.
+  }
+
+  /** Age out trail points and drop the trails of bodies that no longer
+   * exist.
+   *
+   * Split out of recordTrails and run once per displayed frame rather than
+   * once per physics step. Recording has to happen every step - that is
+   * what makes an adaptively subdivided close encounter draw as a smooth
+   * curve - but the housekeeping does not, and a frame can contain up to
+   * MAX_STEPS_PER_FRAME x the subdivision factor of those steps. Doing a
+   * live-set build and a full scan of the trail map inside that loop cost
+   * a thousandfold what it needed to at high speed multipliers.
+   *
+   * Ids are never reused, so without the sweep the map grows for the whole
+   * session: every culled runaway, every erased body and every duplicate
+   * would leave its buffers behind - a steady leak of megabytes in a
+   * debris-heavy scene. */
+  private sweepTrails(): void {
+    if (!this.view.trails || this.trails.size === 0) return;
+    // The trail is a window on the last trailLen x PHYSICS_DT seconds of
+    // SIMULATED time, so it decays even while a body sits still (a
+    // stationary body used to keep a frozen line forever) and covers the
+    // same amount of motion whatever the speed multiplier. trailLen stays
+    // the hard memory and drawing bound.
+    const cutoff = this.world.time - this.view.trailLen * PHYSICS_DT;
+    const live = this.trailLive;
+    live.clear();
+    for (const b of this.world.bodies) {
+      if (!b.locked) live.add(b.id);
+    }
     for (const [bid, t] of this.trails) {
-      if (live.has(bid)) t.expireBefore(now - maxAge);
+      if (live.has(bid)) t.expireBefore(cutoff);
       else this.trails.delete(bid);
     }
   }
 
-  private afterPhysics(): void {
+  private trailLive = new Set<number>();
+
+  private afterPhysics(exact = false): void {
     // the world just moved, so anything cached against the old state is
     // stale - including a single-step (`.`) outside the animation frame
     this.frameSeq++;
+    this.sweepTrails();
     // rolling per-frame history so the user can step backwards (,)
-    this.pushHistory();
+    this.pushHistory(exact);
     this.recordGraphSample();
   }
 
   /** Push a rewind state, bounding the history by BYTES rather than by
-   * frame count.
+   * frame count, and its per-frame COST by capture stride.
    *
    * Every entry is a full JSON snapshot of the world, so 600 of them costs
    * whatever the scene costs times 600: a few hundred kB for a pendulum,
    * but hundreds of megabytes for a thousand-particle lattice, which is
-   * enough to stall the tab on garbage collection alone. Big scenes now
-   * keep fewer frames of rewind instead of eating the heap. */
-  private pushHistory(): void {
+   * enough to stall the tab on garbage collection alone. Big scenes keep
+   * fewer frames of rewind instead of eating the heap.
+   *
+   * Making one is also not free: on the densest scenes in the library it
+   * doubled the cost of a frame's physics all by itself. So above
+   * HISTORY_TARGET_CHARS the buffer captures every Nth frame, which costs
+   * those scenes rewind granularity (a step back moves a few frames rather
+   * than one) and buys back the frame time. `force` overrides it for the
+   * single-frame step, where the whole point is to land on an exact frame.
+   */
+  private pushHistory(force = false): void {
+    if (!force && this.historySkip > 0) {
+      this.historySkip--;
+      return;
+    }
     const state = snap.snapshot(this.world);
+    this.historySkip = Math.max(0, Math.min(HISTORY_MAX_STRIDE,
+      Math.round(state.length / HISTORY_TARGET_CHARS)) - 1);
     this.history.push(state);
     this.historyBytes += state.length;
     while (this.history.length > 600 ||
@@ -931,10 +984,12 @@ export class App {
   }
 
   private historyBytes = 0;
+  private historySkip = 0;
 
   private clearHistory(): void {
     this.history.length = 0;
     this.historyBytes = 0;
+    this.historySkip = 0;
   }
 
   private lastGraphSampleT = -Infinity;

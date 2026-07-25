@@ -44,11 +44,19 @@ export class Contact {
 }
 
 /** Per-step detection state that cannot change within a step (collider
- * lists, link exclusions); pass a fresh object at the start of every step. */
+ * lists, link exclusions); pass a fresh object at the start of every step.
+ *
+ * The size split and hash cell below are functions of the radii and the
+ * `collides` flags alone - neither of which a substep can change - so they
+ * are derived once per step rather than rebuilt (with a sort and four
+ * throwaway arrays) on every one of them. */
 export interface ContactStatic {
   noCollide?: Set<string>;
   colliders?: Body[];
   movers?: Body[];
+  small?: Body[];
+  large?: Body[];
+  cell?: number;
 }
 
 /** Closest point to `p` on the segment a-b.
@@ -551,6 +559,31 @@ function pairManifold(a: Body, b: Body, out: Manifold[],
   out.push(new Manifold(a, b, nx, ny, penetration, px, py, e, mu));
 }
 
+/** A body whose position the broadphase can safely compare.
+ *
+ * A NaN coordinate fails every comparison, so an unguarded pair test with
+ * one would report "not overlapping" and "overlapping" in different places
+ * and could emit a NaN manifold into the solver. Non-finite bodies are
+ * frozen by World.sanitize at the end of the step; until then they simply
+ * do not collide. */
+function placed(b: Body): boolean {
+  return Number.isFinite(b.pos.x) && Number.isFinite(b.pos.y);
+}
+
+// forward half-neighbourhood: every unordered cell pair visited once
+const CELL_OFFSETS: ReadonlyArray<readonly [number, number]> =
+  [[1, 0], [1, 1], [0, 1], [-1, 1]];
+
+/** One occupied hash cell. Holding the coordinates next to the bodies
+ * costs one small object per cell and saves a whole parallel Map (plus a
+ * tuple per cell) that existed only so the neighbour scan could recover
+ * them from the key. */
+interface Cell {
+  gx: number;
+  gy: number;
+  bodies: Body[];
+}
+
 function detectBodies(bodies: Body[], out: Manifold[],
                       staticState: ContactStatic): void {
   let colliders = staticState.colliders;
@@ -559,67 +592,81 @@ function detectBodies(bodies: Body[], out: Manifold[],
   }
   if (colliders.length < 2) return;
   const excl = staticState.noCollide ?? null;
-  const finite = colliders.filter(
-    (b) => Number.isFinite(b.pos.x) && Number.isFinite(b.pos.y));
-  const n = finite.length;
-  if (n < 2) return;
+  const n = colliders.length;
   if (n <= 6) {
     for (let i = 0; i < n; i++) {
-      const a = finite[i];
-      for (let j = i + 1; j < n; j++) pairManifold(a, finite[j], out, excl);
+      const a = colliders[i];
+      if (!placed(a)) continue;
+      for (let j = i + 1; j < n; j++) {
+        const b = colliders[j];
+        if (placed(b)) pairManifold(a, b, out, excl);
+      }
     }
     return;
   }
 
-  // split off outsize bodies so they don't inflate the hash cells
-  const radii = finite.map((b) => b.radius).sort((x, y) => x - y);
-  const rMed = radii[n >> 1];
-  const bigCut = 3.0 * rMed;
-  const small: Body[] = [];
-  const large: Body[] = [];
-  for (const b of finite) (b.radius > bigCut ? large : small).push(b);
+  // split off outsize bodies so they don't inflate the hash cells; the
+  // split and the cell size come from the radii, so they are derived once
+  // per step and reused by every substep
+  let small = staticState.small;
+  let large = staticState.large;
+  let cell = staticState.cell;
+  if (small === undefined || large === undefined || cell === undefined) {
+    const radii = colliders.map((b) => b.radius).sort((x, y) => x - y);
+    const bigCut = 3.0 * radii[n >> 1];
+    small = [];
+    large = [];
+    for (const b of colliders) (b.radius > bigCut ? large : small).push(b);
+    let maxR = 0.0;
+    for (const b of small) if (b.radius > maxR) maxR = b.radius;
+    cell = 2.0 * maxR;
+    staticState.small = small;
+    staticState.large = large;
+    staticState.cell = cell;
+  }
 
   for (let i = 0; i < large.length; i++) {
     const a = large[i];
-    for (let j = i + 1; j < large.length; j++) pairManifold(a, large[j], out, excl);
-    for (const b of small) pairManifold(a, b, out, excl);
+    if (!placed(a)) continue;
+    for (let j = i + 1; j < large.length; j++) {
+      const b = large[j];
+      if (placed(b)) pairManifold(a, b, out, excl);
+    }
+    for (const b of small) {
+      if (placed(b)) pairManifold(a, b, out, excl);
+    }
   }
 
-  if (small.length < 2) return;
-  let maxR = 0.0;
-  for (const b of small) if (b.radius > maxR) maxR = b.radius;
-  const cell = 2.0 * maxR;
-  if (cell <= 1e-9) return;
+  if (small.length < 2 || cell <= 1e-9) return;
   const invCell = 1.0 / cell;
-  const grid = new Map<string, Body[]>();
-  const coords = new Map<string, [number, number]>();
+  const grid = new Map<string, Cell>();
+  const cells: Cell[] = [];
   for (const b of small) {
+    if (!placed(b)) continue;
     const gx = Math.floor(b.pos.x * invCell);
     const gy = Math.floor(b.pos.y * invCell);
     const key = `${gx},${gy}`;
-    const bucket = grid.get(key);
-    if (bucket === undefined) {
-      grid.set(key, [b]);
-      coords.set(key, [gx, gy]);
+    const found = grid.get(key);
+    if (found === undefined) {
+      const made: Cell = { gx, gy, bodies: [b] };
+      grid.set(key, made);
+      cells.push(made);
     } else {
-      bucket.push(b);
+      found.bodies.push(b);
     }
   }
-  // forward half-neighbourhood: every unordered cell pair visited once
-  const OFFSETS: ReadonlyArray<readonly [number, number]> =
-    [[1, 0], [1, 1], [0, 1], [-1, 1]];
-  for (const [key, bucket] of grid) {
+  for (const c of cells) {
+    const bucket = c.bodies;
     const ln = bucket.length;
     for (let i = 0; i < ln; i++) {
       const a = bucket[i];
       for (let j = i + 1; j < ln; j++) pairManifold(a, bucket[j], out, excl);
     }
-    const [gx, gy] = coords.get(key)!;
-    for (const [ox, oy] of OFFSETS) {
-      const other = grid.get(`${gx + ox},${gy + oy}`);
+    for (const [ox, oy] of CELL_OFFSETS) {
+      const other = grid.get(`${c.gx + ox},${c.gy + oy}`);
       if (other !== undefined) {
         for (const a of bucket) {
-          for (const b of other) pairManifold(a, b, out, excl);
+          for (const b of other.bodies) pairManifold(a, b, out, excl);
         }
       }
     }

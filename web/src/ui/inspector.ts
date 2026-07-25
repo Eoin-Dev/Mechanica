@@ -289,7 +289,7 @@ export class Inspector implements Panel {
           this.add(button(`All ${lbl} (${grp.length})`,
             () => this.deleteObjs([...grp], lbl),
             { style: "danger",
-              tooltip: `Remove every ${lbl} in the scene (undo with Ctrl+Z)` }));
+              tooltip: `Remove every ${lbl} in the scene. Ctrl+Z restores them.` }));
         }
       }
       return;
@@ -315,10 +315,10 @@ export class Inspector implements Panel {
     this.nameEdit(b);
     this.add(slider("Mass", () => b.mass, (v) => { b.mass = v; },
       0.001, 10000.0, { unit: "kg", log: true, onCommit: this.commit,
-        tooltip: "Inertial (and gravitational) mass m" }));
+        tooltip: "Mass of the body, both inertial and gravitational." }));
     this.add(slider("Radius", () => b.radius, (v) => { b.radius = v; },
       0.01, 10.0, { unit: "m", log: true, onCommit: this.commit,
-        tooltip: "Collision radius (mass is independent of size here)" }));
+        tooltip: "Size of the body. Mass is set separately." }));
     this.addHalf(
       numEdit("x", () => b.pos.x, (v) => { b.pos.x = v; }, "m", this.commit, fmt3dp),
       numEdit("y", () => b.pos.y, (v) => { b.pos.y = v; }, "m", this.commit, fmt3dp));
@@ -328,27 +328,26 @@ export class Inspector implements Panel {
     this.add(slider("Spin", () => b.omega, (v) => { b.omega = v; },
       -100.0, 100.0, { unit: "rad/s", fmt: (v) => v.toFixed(2), onCommit: this.commit,
         disabled: () => b.noRotation,
-        tooltip: "Angular velocity omega about the body's centre " +
-                 "(disabled while No rotation is on)" }));
+        tooltip: "Rate the body spins about its own centre. Unavailable " +
+                 "while No rotation is on." }));
     this.addHalf(
       checkbox("Locked", () => b.locked, (v) => { b.locked = v; this.commit(); },
-        "A locked body never moves: use as pivot or anchor (K)"),
+        "Hold the body permanently in place, as a pivot or obstacle (K)."),
       checkbox("Collides", () => b.collides, (v) => { b.collides = v; this.commit(); },
-        "Disable to let this body pass through others"));
+        "Let the body collide. Off, it passes through everything."));
     this.add(checkbox("No rotation", () => b.noRotation,
       (v) => { b.noRotation = v; if (v) b.omega = 0.0; this.commit(); },
-      "Body can't spin (infinite rotational inertia): it behaves like a " +
-      "point particle, so friction can hold it in limiting equilibrium on a " +
-      "slope (mu >= tan theta) instead of rolling"));
+      "Stop the body spinning, so it behaves as a point particle. Friction " +
+      "can then hold it still on a slope instead of rolling it down."));
 
     this.sub("Material");
     this.add(slider("Bounce", () => b.restitution, (v) => { b.restitution = v; },
       0.0, 1.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-        tooltip: "Coefficient of restitution e: fraction of approach speed " +
-                 "kept after a bounce (1 = perfectly elastic, 0 = perfectly inelastic)" }));
+        tooltip: "Fraction of approach speed kept after an impact. " +
+                 "1 = perfectly elastic, 0 = no bounce at all." }));
     this.add(slider("Friction", () => b.friction, (v) => { b.friction = v; },
       0.0, 10.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-        tooltip: "Coefficient of friction mu (Coulomb model: |F_t| <= mu N)" }));
+        tooltip: "Resistance to sliding at contact. 0 = frictionless." }));
     this.materialButtons([b]);
     this.colourRow([b]);
 
@@ -364,7 +363,9 @@ export class Inspector implements Panel {
         app.world.drivers.push(new Driver(b.id));
         app.pushUndo();
         this.markDirty();
-      }, { icon: ICONS.plus, tooltip: "Apply F = A sin(2 pi f t) to this body" }));
+      }, { icon: ICONS.plus,
+           tooltip: "Apply an oscillating force F = A sin(2 pi f t) to this " +
+                    "body." }));
     } else {
       this.driverControls([drv]);
       this.add(button("Remove driver", () => {
@@ -384,20 +385,22 @@ export class Inspector implements Panel {
       style: "font-weight:600;margin-bottom:6px" }));
     this.add(slider("Radius", () => b.radius, (v) => { b.radius = v; },
       0.01, 10.0, { unit: "m", log: true, onCommit: this.commit,
-        tooltip: "Collision radius of the anchor" }));
+        tooltip: "Size of the anchor." }));
     this.addHalf(
       numEdit("x", () => b.pos.x, (v) => { b.pos.x = v; }, "m", this.commit, fmt3dp),
       numEdit("y", () => b.pos.y, (v) => { b.pos.y = v; }, "m", this.commit, fmt3dp));
     this.add(checkbox("Collides", () => b.collides, (v) => { b.collides = v; this.commit(); },
-      "Disable to let bodies pass through this anchor"));
+      "Let bodies collide with this anchor. Off, they pass through it."));
 
     this.sub("Material");
     this.add(slider("Bounce", () => b.restitution, (v) => { b.restitution = v; },
       0.0, 1.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-        tooltip: "Coefficient of restitution e for bodies bouncing off this anchor" }));
+        tooltip: "Fraction of approach speed a body keeps after hitting " +
+                 "this anchor. 1 = perfectly elastic, 0 = no bounce at all." }));
     this.add(slider("Friction", () => b.friction, (v) => { b.friction = v; },
       0.0, 10.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-        tooltip: "Coefficient of friction mu at contact with this anchor" }));
+        tooltip: "Resistance to sliding against this anchor. " +
+                 "0 = frictionless." }));
     this.materialButtons([b]);
     this.colourRow([b]);
 
@@ -416,8 +419,8 @@ export class Inspector implements Panel {
       (c) => { for (const o of objs) o.color = [...c]; },
       { presets: BODY_PALETTE, onCommit: this.commit,
         tooltip: objs.length > 1
-          ? "Colour, applied to every selected object. Saved with the scene."
-          : "Drawing colour. Saved with the scene; the swatches below are " +
+          ? "Drawing colour for every selected object. Saved with the scene."
+          : "Drawing colour, saved with the scene. The swatches below are " +
             "the palette new bodies are picked from." }));
   }
 
@@ -431,7 +434,7 @@ export class Inspector implements Panel {
           body.friction = mu;
         }
         this.commit();
-      }, { tooltip: `bounce ${e}, friction ${mu}` });
+      }, { tooltip: `Set bounce to ${e} and friction to ${mu}.` });
       grid.append(b.root);
     }
     this.target.append(grid);
@@ -479,25 +482,26 @@ export class Inspector implements Panel {
       this.add(slider("Bounce", () => first.restitution,
         (v) => bodies.forEach((b) => { b.restitution = v; }), 0.0, 1.0,
         { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-          tooltip: "Coefficient of restitution e, applied to every selected body" }));
+          tooltip: "Fraction of approach speed kept after an impact. " +
+                   "1 = perfectly elastic, 0 = no bounce at all." }));
       this.add(slider("Friction", () => first.friction,
         (v) => bodies.forEach((b) => { b.friction = v; }), 0.0, 10.0,
         { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-          tooltip: "Coefficient of friction mu, applied to every selected body" }));
+          tooltip: "Resistance to sliding at contact. 0 = frictionless." }));
       this.materialButtons(bodies);
       this.colourRow(bodies);
       this.addHalf(
         checkbox("Locked", () => first.locked,
           (v) => { bodies.forEach((b) => { b.locked = v; }); this.commit(); },
-          "Lock / unlock every selected body"),
+          "Hold the bodies permanently in place, as pivots or obstacles (K)."),
         checkbox("Collides", () => first.collides,
           (v) => { bodies.forEach((b) => { b.collides = v; }); this.commit(); },
-          "Enable / disable collisions for every selected body"));
+          "Let the bodies collide. Off, they pass through everything."));
       this.add(checkbox("No rotation", () => first.noRotation,
         (v) => { bodies.forEach((b) => { b.noRotation = v; if (v) b.omega = 0.0; });
                  this.commit(); },
-        "Stop every selected body from spinning: each behaves like a point " +
-        "particle (can rest in limiting equilibrium on a slope)"));
+        "Stop the bodies spinning, so each behaves as a point particle. " +
+        "Friction can then hold them still on a slope instead of rolling."));
       this.sub("Constant force");
       this.addHalf(
         numEdit("Fx", () => first.constForce.x,
@@ -509,10 +513,10 @@ export class Inspector implements Panel {
         this.sub("Align");
         const grid = el("div", { class: "btn-grid-4" });
         const items: Array<[string, string, () => void]> = [
-          ["|x", "Align to the same x", () => this.align(bodies, "x")],
-          ["y—", "Align to the same y", () => this.align(bodies, "y")],
-          ["↔", "Space evenly in x", () => this.distribute(bodies, "x")],
-          ["↕", "Space evenly in y", () => this.distribute(bodies, "y")],
+          ["|x", "Align the bodies to the same x.", () => this.align(bodies, "x")],
+          ["y—", "Align the bodies to the same y.", () => this.align(bodies, "y")],
+          ["↔", "Space the bodies evenly in x.", () => this.distribute(bodies, "x")],
+          ["↕", "Space the bodies evenly in y.", () => this.distribute(bodies, "y")],
         ];
         for (const [label, tip, fn] of items) {
           grid.append(button(label, fn, { tooltip: tip }).root);
@@ -527,20 +531,22 @@ export class Inspector implements Panel {
       this.add(slider("Radius", () => af.radius,
         (v) => anchors.forEach((a) => { a.radius = v; }), 0.01, 10.0,
         { unit: "m", log: true, onCommit: this.commit,
-          tooltip: "Collision radius, applied to every selected anchor" }));
+          tooltip: "Size of the anchors." }));
       this.add(slider("Bounce", () => af.restitution,
         (v) => anchors.forEach((a) => { a.restitution = v; }), 0.0, 1.0,
         { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-          tooltip: "Coefficient of restitution e, applied to every selected anchor" }));
+          tooltip: "Fraction of approach speed a body keeps after hitting " +
+                   "these anchors. 1 = perfectly elastic, 0 = no bounce." }));
       this.add(slider("Friction", () => af.friction,
         (v) => anchors.forEach((a) => { a.friction = v; }), 0.0, 10.0,
         { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-          tooltip: "Coefficient of friction mu, applied to every selected anchor" }));
+          tooltip: "Resistance to sliding against these anchors. " +
+                   "0 = frictionless." }));
       this.materialButtons(anchors);
       this.colourRow(anchors);
       this.add(checkbox("Collides", () => af.collides,
         (v) => { anchors.forEach((a) => { a.collides = v; }); this.commit(); },
-        "Enable / disable collisions for every selected anchor"));
+        "Let bodies collide with these anchors. Off, they pass through."));
     }
 
     if (walls.length > 0) {
@@ -564,11 +570,12 @@ export class Inspector implements Panel {
       this.add(slider("Stiffness", () => sf.stiffness,
         (v) => springs.forEach((s) => { s.stiffness = v; }), 0.01, 100000.0,
         { unit: "N/m", log: true, onCommit: this.commit,
-          tooltip: "Spring constant k, applied to every selected spring/string" }));
+          tooltip: "Force per metre of stretch, k in F = -k x." }));
       this.add(slider("Damping", () => sf.damping,
         (v) => springs.forEach((s) => { s.damping = v; }), 0.0, 500.0,
         { unit: "Ns/m", fmt: (v) => v.toFixed(2), onCommit: this.commit,
-          tooltip: "Damping coefficient c, applied to every selected spring/string" }));
+          tooltip: "Resistance to stretching and compressing, which bleeds " +
+                   "energy out of the oscillation." }));
     }
 
     if (rods.length > 0) {
@@ -577,7 +584,7 @@ export class Inspector implements Panel {
       this.add(slider("Length", () => rf.length,
         (v) => rods.forEach((r) => { r.length = v; }), 0.01, 100.0,
         { unit: "m", log: true, onCommit: this.commit,
-          tooltip: "Rigid length, applied to every selected rod" }));
+          tooltip: "Fixed separation the rods hold between their bodies." }));
     }
 
     this.endGroups();
@@ -595,7 +602,8 @@ export class Inspector implements Panel {
         grid.append(button(`${lbl[0].toUpperCase()}${lbl.slice(1)} (${grp.length})`,
           () => this.deleteObjs([...grp], lbl),
           { style: "danger",
-            tooltip: `Delete only the selected ${lbl}, keeping everything else` }).root);
+            tooltip: `Delete only the selected ${lbl}, keeping the rest of the ` +
+                     "selection." }).root);
       }
       this.body.append(grid);
     }
@@ -617,20 +625,23 @@ export class Inspector implements Panel {
     };
     if (drvs.length === 0) {
       this.add(button("Add driver to all selected", addAll,
-        { icon: ICONS.plus, tooltip: "Apply F = A sin(2 pi f t) to every selected body" }));
+        { icon: ICONS.plus,
+          tooltip: "Apply an oscillating force F = A sin(2 pi f t) to every " +
+                   "selected body." }));
       return;
     }
     this.driverControls(drvs);
     const grid = el("div", { class: "btn-grid-2" });
     if (drvs.length < bodies.length) {
       grid.append(button("Drive rest", addAll,
-        { tooltip: "Add drivers to the selected bodies that lack one" }).root);
+        { tooltip: "Add a driver to each selected body that has none." }).root);
     }
     grid.append(button("Remove all", () => {
       app.world.drivers = app.world.drivers.filter((d) => !drvs.includes(d));
       app.pushUndo();
       this.markDirty();
-    }, { style: "danger", tooltip: "Remove every selected body's driver" }).root);
+    }, { style: "danger",
+         tooltip: "Remove the driver from every selected body." }).root);
     this.target.append(grid);
   }
 
@@ -667,12 +678,16 @@ export class Inspector implements Panel {
       numEdit("x2", () => w.b.x, (v) => { w.b.x = v; }, "m", this.commit, fmt3dp),
       numEdit("y2", () => w.b.y, (v) => { w.b.y = v; }, "m", this.commit, fmt3dp));
     this.add(slider("Thickness", () => w.thickness, (v) => { w.thickness = v; },
-      0.01, 2.0, { unit: "m", log: true, fmt: (v) => v.toFixed(2), onCommit: this.commit }));
+      0.01, 2.0, { unit: "m", log: true, fmt: (v) => v.toFixed(2),
+        onCommit: this.commit, tooltip: "Width of the wall across its length." }));
     this.body.append(section("Material"));
     this.add(slider("Bounce", () => w.restitution, (v) => { w.restitution = v; },
-      0.0, 1.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit }));
+      0.0, 1.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
+        tooltip: "Fraction of approach speed a body keeps after hitting " +
+                 "this wall. 1 = perfectly elastic, 0 = no bounce at all." }));
     this.add(slider("Friction", () => w.friction, (v) => { w.friction = v; },
-      0.0, 10.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit }));
+      0.0, 10.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
+        tooltip: "Resistance to sliding along this wall. 0 = frictionless." }));
     this.colourRow([w]);
     this.actionButtons();
   }
@@ -695,33 +710,35 @@ export class Inspector implements Panel {
         style: "font-weight:600;margin-bottom:6px" }));
       this.add(slider("Nat. len", () => link.restLength, (v) => { link.restLength = v; },
         0.01, 50.0, { unit: "m", log: true, onCommit: this.commit,
-          tooltip: "Natural (rest) length L0: the length at which it exerts no force" }));
+          tooltip: "Length at which it exerts no force." }));
       this.add(slider("Stiffness", () => link.stiffness, (v) => { link.stiffness = v; },
         0.01, 100000.0, { unit: "N/m", log: true, onCommit: this.commit,
-          tooltip: "Spring constant k (Hooke's law F = -k times extension)" }));
+          tooltip: "Force per metre of stretch, k in F = -k x." }));
       this.add(slider("Damping", () => link.damping, (v) => { link.damping = v; },
         0.0, 500.0, { unit: "Ns/m", fmt: (v) => v.toFixed(2), onCommit: this.commit,
-          tooltip: "Damping coefficient c: axial force F = -c times the stretch rate" }));
+          tooltip: "Resistance to stretching and compressing, which bleeds " +
+                   "energy out of the oscillation." }));
       if (isString) {
         this.add(checkbox("Inelastic (fixed length)", () => false,
           () => this.replaceLink(link,
             new DistanceLink(link.a, link.b, link.restLength, true)),
-          "Replace with a perfectly inelastic string: rigid at its natural " +
-          "length when taut, still slack when shorter"));
+          "Make the string unstretchable: rigid at its natural length when " +
+          "taut, still slack when shorter."));
       }
     } else {
       this.body.append(el("div", { text: link.isRope ? "String (inelastic)" : "Rod",
         style: "font-weight:600;margin-bottom:6px" }));
       this.add(slider("Nat. len", () => link.length, (v) => { link.length = v; },
         0.01, 100.0, { unit: "m", log: true, onCommit: this.commit,
-          tooltip: link.isRope ? "Natural length L0: rigid when taut, free when slack"
-                               : "Rigid length the rod maintains" }));
+          tooltip: link.isRope
+            ? "Length at which it goes taut. Rigid when taut, free when slack."
+            : "Fixed separation the rod holds between the two bodies." }));
       if (link.isRope) {
         this.add(checkbox("Inelastic (fixed length)", () => true,
           () => this.replaceLink(link,
             new SpringLink(link.a, link.b, link.length, 1000.0, 2.0, true)),
-          "Untick to make the string elastic: it stretches under load " +
-          "following Hooke's law (adds stiffness and damping)"));
+          "Untick to make the string elastic, so it stretches under load. " +
+          "Adds stiffness and damping."));
       }
     }
     this.add(button("Delete", () => app.controller.deleteSelection(),
@@ -733,16 +750,18 @@ export class Inspector implements Panel {
     this.body.append(section("Actions"));
     const g1 = el("div", { class: "btn-grid-2" });
     g1.append(button("Duplicate", () => app.controller.duplicateSelection(),
-      { tooltip: "Copy the selection (Ctrl+D)" }).root);
+      { tooltip: "Create a copy of the selection (Ctrl+D)." }).root);
     g1.append(button("Delete", () => app.controller.deleteSelection(),
-      { style: "danger", tooltip: "Remove the selection (Del)" }).root);
+      { style: "danger",
+        tooltip: "Delete the selected objects (Del)." }).root);
     this.body.append(g1);
     const g2 = el("div", { class: "btn-grid-2" });
     g2.append(button("Copy props", () => app.copyProps(),
-      { tooltip: "Copy material and physical properties (Ctrl+C)" }).root);
+      { tooltip: "Copy this body's material and physical properties " +
+                 "(Ctrl+C)." }).root);
     const paste = this.group.add(button("Paste props", () => app.pasteProps(),
       { isEnabled: () => app.clipboardProps !== null,
-        tooltip: "Apply copied properties to the selection (Ctrl+V)" }));
+        tooltip: "Apply the copied properties to the selection (Ctrl+V)." }));
     g2.append(paste.root);
     this.body.append(g2);
   }
@@ -754,38 +773,40 @@ export class Inspector implements Panel {
     this.body.append(section("Gravity"));
     this.add(slider("g", () => world.gravity, (v) => { world.gravity = v; },
       -100.0, 100.0, { unit: "m/s²", fmt: (v) => v.toFixed(2), onCommit: this.commit,
-        tooltip: "Gravitational field strength g (uniform, downward). " +
-                 "9.81 = Earth, 24.8 = Jupiter, 0 = space, negative = upward" }));
+        tooltip: "Uniform downward gravity. 9.81 = Earth, 24.8 = Jupiter, " +
+                 "0 = space, negative = upward." }));
     this.add(checkbox("Bodies attract each other", () => world.mutualGravity,
       (v) => { world.mutualGravity = v; this.commit(); this.markDirty(); },
-      "Newtonian N-body gravity for orbital mechanics"));
+      "Newtonian attraction between every pair of bodies, for orbits."));
     if (world.mutualGravity) {
       this.add(slider("G", () => world.G, (v) => { world.G = v; },
         0.0001, 100000.0, { log: true, onCommit: this.commit,
-          tooltip: "Gravitational constant (scaled units)" }));
+          tooltip: "Gravitational constant, in this scene's scaled units." }));
       this.add(slider("Softening", () => world.softening, (v) => { world.softening = v; },
         0.0001, 2.0, { unit: "m", log: true, onCommit: this.commit,
-          tooltip: "Smooths the force at tiny separations" }));
+          tooltip: "Smooths the attraction at very small separations." }));
       this.add(checkbox("Point-mass gravity", () => world.pointGravity,
         (v) => { world.pointGravity = v; this.commit(); },
-        "On: each body's whole mass acts from its centre, so overlapping " +
-        "bodies can slingshot to extreme speeds. Off: bodies attract like " +
-        "solid uniform discs - inside an overlap the pull fades to zero at " +
-        "the centre, as in reality."));
+        "Recommended: Disabled. Concentrates each body's mass at its " +
+        "centre, which lets overlapping bodies slingshot to extreme " +
+        "speeds. Off, bodies attract as solid discs and the pull fades to " +
+        "zero at the centre of an overlap, as in reality."));
     }
 
     this.body.append(section("Air & damping"));
     this.add(slider("Linear drag", () => world.dragLinear, (v) => { world.dragLinear = v; },
       0.0, 20.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-        tooltip: "F = -c v (Stokes drag)" }));
+        tooltip: "Viscous drag proportional to speed: F = -c v." }));
     this.add(slider("Quad. drag", () => world.dragQuadratic,
       (v) => { world.dragQuadratic = v; }, 0.0, 20.0,
       { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-        tooltip: "F = -c |v| v (aerodynamic drag)" }));
+        tooltip: "Aerodynamic drag proportional to speed squared: " +
+                 "F = -c |v| v." }));
     this.add(slider("Damping", () => world.globalDamping,
       (v) => { world.globalDamping = v; }, 0.0, 20.0,
       { unit: "1/s", fmt: (v) => v.toFixed(2), onCommit: this.commit,
-        tooltip: "Exponential decay applied to all velocities" }));
+        tooltip: "Exponential decay applied to every velocity, bleeding " +
+                 "energy out of the whole scene." }));
 
     this.body.append(section("Solver"));
     const short: Record<Integrator, string> = {
@@ -795,14 +816,16 @@ export class Inspector implements Panel {
     for (const i of INTEGRATORS) rev[short[i]] = i;
     this.add(segmented(Object.values(short), () => short[world.integrator],
       (v) => { world.integrator = rev[v]; this.commit(); },
-      "Verlet: symplectic, best all-round choice. Euler: fastest, less " +
-      "accurate. RK4: highest short-term accuracy for smooth forces."));
+      "Numerical method used to advance the simulation. Verlet: best " +
+      "all-round, excellent long-term energy behaviour. Euler: fastest, " +
+      "least accurate. RK4: most accurate over short spans, drifts on long " +
+      "orbits."));
     this.add(slider("Substeps", () => world.substeps,
       (v) => { world.substeps = Math.round(v); world.substepsCappedFrom = null; },
       1, 64,
       { fmt: (v) => v.toFixed(0), step: 1, log: true, onCommit: this.commit,
-        tooltip: "Physics substeps per 1/120 s step: more = more accurate " +
-                 "but slower. Takes effect immediately." }));
+        tooltip: "Physics substeps per 1/120 s step. Higher is more " +
+                 "accurate and slower." }));
     // A preset whose substeps were cut to fit the cost ceiling shows a
     // smaller number than it was authored with, which looks like the scene
     // simply chose it. Say what happened and that it can be undone - the
@@ -812,15 +835,15 @@ export class Inspector implements Panel {
       const from = world.substepsCappedFrom;
       const show = from !== null && from > world.substeps;
       capNote.style.display = show ? "" : "none";
-      const want = `Reduced from ${from} so this scene runs in real time on ` +
-                   "a modest machine. Raise it if yours can afford it.";
+      const want = `Reduced from ${from} so this scene runs in real time ` +
+                   "on a modest machine. Raise it if yours can afford it.";
       if (show && capNote.textContent !== want) capNote.textContent = want;
     } });
     this.add(slider("Iterations", () => world.iterations,
       (v) => { world.iterations = Math.round(v); }, 1, 64,
       { fmt: (v) => v.toFixed(0), step: 1, log: true, onCommit: this.commit,
-        tooltip: "Solver iterations per substep for links and contacts " +
-                 "(they exit early once converged)" }));
+        tooltip: "Solver passes per substep for links and contacts. Higher " +
+                 "is more stable in stacks and chains." }));
     // Adaptive resolution lives in Settings, not here: substeps and
     // iterations are properties of the SCENE and travel with it, while
     // adaptive resolution is a preference of this browser and does not.
@@ -834,7 +857,7 @@ export class Inspector implements Panel {
       const nameRow = el("div", { class: "row" });
       const chk = this.group.add(checkbox("", () => field.enabled,
         (v) => { field.enabled = v; this.commit(); },
-        "Enable / disable this force field"));
+        "Apply this force field to the scene."));
       const nameEd = this.group.add(textEdit(() => field.name, (s) => {
         field.name = s.trim() || field.name;
         this.commit();
@@ -874,10 +897,10 @@ export class Inspector implements Panel {
           icon: useMath ? ICONS.text_mode : ICONS.math_mode,
           style: "ghost",
           isEnabled: () => renderable || useMath,
-          tooltip: useMath ? "Edit as plain text"
-            : renderable ? "Edit as typeset math"
-            : "Typeset editing handles plain arithmetic only — this " +
-              "formula uses if/else, comparisons, logic, // or %",
+          tooltip: useMath ? "Edit as plain text."
+            : renderable ? "Edit as typeset math."
+            : "Typeset editing handles plain arithmetic only. This formula " +
+              "uses if/else, comparisons, logic, // or %.",
         }));
         row.append(edit.root, toggle.root);
         this.body.append(row);
@@ -899,14 +922,13 @@ export class Inspector implements Panel {
       app.pushUndo();
       this.markDirty();
     }, { icon: ICONS.plus,
-         tooltip: "A force (in N) applied to every body, written as plain " +
-                  "math. Try Fy = -y*5 for a spring field." }));
+         tooltip: "Add a force in newtons applied to every body, written " +
+                  "as a formula. Try Fy = -y*5 for a spring field." }));
     const guideBtn = this.group.add(button("Formula guide", () => {
       overlayToggles["formula-guide"]?.();
     }, { style: "ghost",
-         tooltip: "Everything you can write in a force-field formula: " +
-                  "variables, functions, logic, the math editor, and " +
-                  "ready-made recipes" }));
+         tooltip: "Variables, functions and ready-made recipes for " +
+                  "force-field formulas." }));
     this.body.append(el("div", { class: "field-actions" }, addBtn.root, guideBtn.root));
 
     if (world.drivers.length > 0) {
@@ -938,31 +960,35 @@ export class Inspector implements Panel {
                  tip = "") => this.add(checkbox(label, get, set, tip));
 
     this.body.append(section("Canvas"));
-    chk("Grid", () => view.grid, (v) => { view.grid = v; });
+    chk("Grid", () => view.grid, (v) => { view.grid = v; },
+        "Show a scaled reference grid behind the scene.");
     chk("Snap to grid", () => view.snap, (v) => { view.snap = v; },
-        "New and dragged objects snap to grid points (N)");
-    chk("Body labels", () => view.labels, (v) => { view.labels = v; });
+        "Align new and dragged objects to grid points (N).");
+    chk("Body labels", () => view.labels, (v) => { view.labels = v; },
+        "Show each body's name on the canvas.");
     chk("Follow selection", () => view.follow, (v) => { view.follow = v; },
         "Keep the camera centred on the selected body (C). Zoom-to-fit and " +
-        "the auto-fit camera live in the toolbar.");
+        "auto-fit are in the toolbar.");
 
     this.body.append(section("Vectors"));
     chk("Velocity vectors", () => view.velVectors, (v) => { view.velVectors = v; },
-        "Green arrows (also editable by dragging) (D)");
+        "Green arrow showing each body's velocity (D). Drag the tip to set it.");
     chk("Acceleration vectors", () => view.accVectors, (v) => { view.accVectors = v; },
-        "Orange arrows");
+        "Orange arrow showing each body's acceleration.");
     chk("Net force vectors", () => view.forceVectors, (v) => { view.forceVectors = v; },
-        "Red arrows: F = ma");
+        "Red arrow showing the net force on each body, F = ma.");
     this.add(slider("Vector size", () => view.vectorScale,
       (v) => { view.vectorScale = v; }, 0.02, 20.0,
-      { unit: "x", log: true, fmt: (v) => v.toFixed(2) }));
+      { unit: "x", log: true, fmt: (v) => v.toFixed(2),
+        tooltip: "Length multiplier for every vector arrow." }));
 
     this.body.append(section("Analysis"));
     this.add(checkbox("Motion trails", () => view.trails, (v) => app.setTrails(v),
-      "Fading path behind each moving body (T)"));
+      "Draw a fading path behind each moving body (T)."));
     this.add(slider("Trail length", () => view.trailLen,
       (v) => { view.trailLen = Math.round(v); }, 10, 10000,
-      { unit: "pts", fmt: (v) => v.toFixed(0), step: 10, log: true }));
+      { unit: "pts", fmt: (v) => v.toFixed(0), step: 10, log: true,
+        tooltip: "Points kept per trail, which sets how far back it reaches." }));
     const trailWarn = el("div", { class: "error-text",
       text: "Long trails or many bodies at once can lower the frame rate.",
       style: "display:none" });
@@ -972,15 +998,16 @@ export class Inspector implements Panel {
         (view.trailLen >= 1500 || moving >= 40 || view.trailLen * moving >= 30000);
       trailWarn.style.display = heavy ? "" : "none";
     } });
-    chk("Centre of mass", () => view.com, (v) => { view.com = v; });
+    chk("Centre of mass", () => view.com, (v) => { view.com = v; },
+        "Mark the centre of mass of the whole scene.");
     chk("Contact normals", () => view.contacts, (v) => { view.contacts = v; },
-        "Arrow at every collision this frame");
+        "Draw an arrow at every contact resolved this frame.");
     chk("Broadphase grid", () => view.spatialGrid, (v) => { view.spatialGrid = v; },
-        "Spatial-hash cells used by the collision engine (G)");
+        "Show the cells collision detection uses to find candidate pairs (G).");
 
     this.body.append(section("Graph dock"));
     this.add(segmented(["Off", "Energy", "Mom.", "Phase"], () => app.graphMode,
       (v) => app.setGraphMode(v as GraphMode),
-      "Live plots along the bottom of the screen (keys 1, 2, 3)"));
+      "Live plot shown along the bottom of the screen (keys 1, 2, 3)."));
   }
 }
