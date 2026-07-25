@@ -247,10 +247,18 @@ export class App {
   stepOnce(): void {
     this.ensureInitial();
     this.playing = false;
-    // one 60 Hz frame, stepped at the normal rate so accuracy matches play
-    for (let i = 0; i < 2; i++) {
-      this.safeStep(this.world, PHYSICS_DT);
-      this.recordTrails();
+    // One 60 Hz frame, run through the SAME path as play: same quantum
+    // count, same adaptive subdivision. Stepping used to take two flat
+    // PHYSICS_DT steps, so frame-stepping through a close encounter - the
+    // exact thing anyone steps frame by frame to study - integrated more
+    // coarsely than just watching it, and the two disagreed.
+    for (let q = 0; q < 2; q++) {
+      const n = this.pickResolution(PHYSICS_DT);
+      const h = PHYSICS_DT / n;
+      for (let i = 0; i < n; i++) {
+        this.safeStep(this.world, h);
+        this.recordTrails();
+      }
     }
     this.afterPhysics();
   }

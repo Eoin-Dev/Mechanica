@@ -2,7 +2,7 @@
 import { App } from "../app";
 import { CATEGORIES, PRESETS } from "../scene/presets";
 import * as snap from "../scene/snapshot";
-import { Control, button, checkbox, el, isTouch, segmented } from "./dom";
+import { Control, ModalFocus, button, checkbox, el, isTouch, segmented } from "./dom";
 import { ICONS } from "./icons";
 import { ThemeName, css, defaultAccent } from "./theme";
 
@@ -13,6 +13,7 @@ export class Library {
   visible = false;
   private app: App;
   private root: HTMLElement;
+  private focus!: ModalFocus;
   private tab: LibraryTab = "Examples";
   private category = "All";
   private tabBtns = new Map<LibraryTab, HTMLButtonElement>();
@@ -31,11 +32,14 @@ export class Library {
     this.visible = true;
     this.root.hidden = false;
     this.render();
+    this.focus.enter();
   }
 
   close(): void {
+    if (!this.visible) return;
     this.visible = false;
     this.root.hidden = true;
+    this.focus.exit();
   }
 
   toggle(): void {
@@ -62,7 +66,9 @@ export class Library {
       { icon: ICONS.close, style: "ghost", tooltip: "Close (Esc)" }).root);
 
     this.content = el("div", { class: "overlay-body" });
-    this.root.append(el("div", { class: "overlay-panel" }, header, this.content));
+    const panel = el("div", { class: "overlay-panel" }, header, this.content);
+    this.focus = new ModalFocus(panel, "Library");
+    this.root.append(panel);
   }
 
   private render(): void {
@@ -258,8 +264,10 @@ export class SettingsPanel {
   visible = false;
   private root: HTMLElement;
   private controls: Control[] = [];
+  private focus: ModalFocus;
 
-  constructor(app: App, root: HTMLElement, openHelp: () => void) {
+  constructor(app: App, root: HTMLElement, openHelp: () => void,
+              startTour: () => void) {
     this.root = root;
     root.addEventListener("pointerdown", (e) => {
       if (e.target === root) this.close();
@@ -268,16 +276,29 @@ export class SettingsPanel {
       el("h2", { text: "Settings" }));
     header.append(button("", () => this.close(),
       { icon: ICONS.close, style: "ghost", tooltip: "Close (Esc)" }).root);
-    const body = el("div", { class: "overlay-body" });
+    const body = el("div", { class: "overlay-body settings-grid" });
+    // Settings are grouped into cards laid out in columns rather than one
+    // long narrow list. Each group gets exactly one explanatory paragraph,
+    // written for someone who does not already know what the control does
+    // - enough to decide, not a manual.
+    let current: HTMLElement = body;
+    const group = (title: string): void => {
+      current = el("div", { class: "settings-group" },
+                    el("div", { class: "section", text: title }));
+      body.append(current);
+    };
     const add = (c: Control): void => {
       this.controls.push(c);
-      body.append(c.root);
+      current.append(c.root);
     };
     const note = (text: string): void => {
-      body.append(el("div", { class: "faint settings-note", text }));
+      current.append(el("div", { class: "faint settings-note", text }));
+    };
+    const label = (text: string): void => {
+      current.append(el("div", { class: "dim settings-label", text }));
     };
 
-    body.append(el("div", { class: "section", text: "Appearance" }));
+    group("Appearance");
     add(segmented(THEME_LABELS.map(([lbl]) => lbl),
       () => THEME_LABELS.find(([, t]) => t === (app.settings.theme ?? "dark"))![0],
       (v) => {
@@ -291,7 +312,7 @@ export class SettingsPanel {
 
     // accent colour: preset swatch circles + a custom picker. UI chrome
     // and highlights only - physics object colours are never touched.
-    body.append(el("div", { class: "dim settings-label", text: "Accent colour" }));
+    label("Accent colour");
     const swatchRow = el("div", { class: "swatch-row" });
     const accentNote = el("div", { class: "faint settings-note",
       text: "Used for buttons, selection outlines and graph lines. Physics " +
@@ -372,7 +393,7 @@ export class SettingsPanel {
       rebuildSwatches();
     } });
     rebuildSwatches();
-    body.append(swatchRow, accentNote, popover);
+    current.append(swatchRow, accentNote, popover);
 
     add(checkbox("Dyslexia-friendly font",
       () => app.settings.dyslexic_font ?? false,
@@ -385,7 +406,7 @@ export class SettingsPanel {
          "similar shapes (b/d, p/q) harder to confuse. Affects the " +
          "interface text only, not the canvas.");
 
-    body.append(el("div", { class: "dim settings-label", text: "Font size" }));
+    label("Font size");
     add(segmented(["90%", "100%", "110%", "120%"],
       () => `${Math.round((app.settings.font_scale ?? 1) * 100)}%`,
       (v) => {
@@ -396,7 +417,7 @@ export class SettingsPanel {
     note("Scales every panel, label and button. The range is capped so the " +
          "toolbar and inspector still fit their contents at either end.");
 
-    body.append(el("div", { class: "section", text: "Interaction" }));
+    group("Interaction");
     add(checkbox("Dragged objects collide with walls",
       () => app.dragHitsWalls,
       (v) => app.setDragHitsWalls(v),
@@ -409,40 +430,60 @@ export class SettingsPanel {
          "Either way the drag never stops following your cursor - what " +
          "changes is where the body is allowed to sit.");
 
-    body.append(el("div", { class: "section", text: "Performance" }));
+    group("Accuracy & performance");
+    add(checkbox("Adaptive resolution",
+      () => app.adaptiveDt,
+      (v) => app.setAdaptiveDt(v),
+      "Run extra, smaller physics steps through fast close encounters"));
+    note("Recommended. When a body's path curves sharply within a single " +
+         "step - a gravity slingshot, the tip of a whipping pendulum - the " +
+         "step is split into several smaller ones, so the trajectory stays " +
+         "accurate and its motion trail stays smooth. How far to split is " +
+         "decided from the simulation itself and never from the frame rate, " +
+         "so a scene behaves identically on any machine; a slow one simply " +
+         "takes longer to get there. Substeps and iterations, in the " +
+         "Inspector's World tab, are per-scene and saved with it - this is " +
+         "a preference of this browser.");
+
     add(checkbox("Remove runaway objects",
       () => app.settings.cull ?? true,
       (v) => {
         app.settings.cull = v;
         app.saveSettings();
       }, "Delete bodies that have drifted far beyond any usable view"));
-    note("Recommended: bodies that fall away forever are deleted once " +
-         "they are far past the furthest you can zoom out and still " +
-         "receding, so endless debris cannot pile up and slow the " +
-         "simulation. Anything on an orbit that brings it back is kept.");
+    note("Recommended. A body that falls away forever still costs time on " +
+         "every step and drags the auto-fit camera out to nothing. One is " +
+         "deleted only once it is far past the widest view you could zoom " +
+         "out to AND still receding, so anything on an orbit that brings it " +
+         "back is always kept.");
 
-    const helpRow = el("div", {
-      style: "display:flex;justify-content:flex-end;margin-top:18px",
-    });
+    const helpRow = el("div", { class: "settings-actions" });
+    helpRow.append(button("Replay the tour", () => {
+      this.close();
+      startTour();
+    }, { tooltip: "Walk through the interface again from the beginning" }).root);
     helpRow.append(button("Help & shortcuts", () => {
       this.close();
       openHelp();
     }).root);
-    body.append(helpRow);
-
-    root.append(el("div", { class: "overlay-panel settings-panel" },
-      header, body));
+    const panel = el("div", { class: "overlay-panel settings-panel" },
+      header, body, helpRow);
+    this.focus = new ModalFocus(panel, "Settings");
+    root.append(panel);
   }
 
   open(): void {
     this.visible = true;
     this.root.hidden = false;
     for (const c of this.controls) c.refresh?.();
+    this.focus.enter();
   }
 
   close(): void {
+    if (!this.visible) return;
     this.visible = false;
     this.root.hidden = true;
+    this.focus.exit();
   }
 
   toggle(): void {
@@ -491,6 +532,7 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
     ["1 / 2 / 3", "Energy / momentum / phase graph"],
     ["Scroll / right-drag", "Zoom at cursor / pan"],
     ["\\", "Hide / show the inspector"],
+    ["Tab", "Move between controls"],
     ["L", "Library"],
     ["F1", "This help"],
   ], "pc"],
@@ -504,11 +546,39 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
   ]],
 ];
 
+/** The workflow, in the order someone new needs it. The shortcut tables
+ * below answer "which key does X"; these answer "what do I do first",
+ * which is the question the help overlay never used to address at all. */
+const GETTING_STARTED: Array<[string, string, string]> = [
+  ["1", "Open the Library",
+   "47 worked examples across eight topics, each with a note on what it " +
+   "shows. Loading one is the fastest way to see what this can do."],
+  ["2", "Run it, then interfere",
+   "Play, then drag something mid-flight. Nothing is on rails: throw a " +
+   "planet out of its orbit, catch a pendulum at the top of its swing."],
+  ["3", "Build something",
+   "Place two bodies and connect them. Clicking empty space with a rod, " +
+   "string or spring creates the anchor or body you need, so a pendulum " +
+   "is two clicks and a chain is a few more."],
+  ["4", "Change the physics",
+   "Select anything and the Inspector edits it live - mass, bounce, " +
+   "friction. The World tab has gravity, air drag, N-body attraction and " +
+   "custom force fields you write as formulas."],
+  ["5", "Measure it",
+   "The View tab turns on velocity and force arrows, motion trails, the " +
+   "centre of mass, and live energy, momentum and phase-space graphs. The " +
+   "status bar tracks total energy drift so you can see the solver working."],
+  ["6", "Keep it",
+   "Ctrl+S saves to this browser; the Library exports and imports .json, " +
+   "which is the same format the desktop version used."],
+];
+
 export class Help {
   visible = false;
   private root: HTMLElement;
+  private focus: ModalFocus;
 
-  constructor(root: HTMLElement) {
+  constructor(root: HTMLElement, startTour: () => void) {
     this.root = root;
     root.addEventListener("pointerdown", (e) => {
       if (e.target === root) this.close();
@@ -518,8 +588,23 @@ export class Help {
     const touch = isTouch();
     const header = el("div", { class: "overlay-header" },
       el("h2", { text: touch ? "Help" : "Help & shortcuts" }));
+    header.append(button("Take the tour", () => {
+      this.close();
+      startTour();
+    }, { tooltip: "A guided walk through the interface" }).root);
     header.append(button("", () => this.close(),
       { icon: ICONS.close, style: "ghost", tooltip: "Close (Esc)" }).root);
+
+    // orientation first, reference second
+    const startGrid = el("div", { class: "start-grid" });
+    for (const [n, title, what] of GETTING_STARTED) {
+      startGrid.append(el("div", { class: "start-step" },
+        el("div", { class: "start-num", text: n }),
+        el("div", {},
+          el("h4", { text: title }),
+          el("p", { text: what }))));
+    }
+
     const cols = el("div", { class: "help-cols" });
     for (const [title, rows, sectionTag] of SHORTCUT_SECTIONS) {
       if (touch && sectionTag === "pc") continue;
@@ -540,18 +625,28 @@ export class Help {
       "rods, strings, springs, N-body gravity, drag, drivers and custom " +
       "force fields, integrated with symplectic solvers. Everything is in " +
       "SI units. All simulation runs locally in your browser.";
-    const body = el("div", { class: "overlay-body" }, cols, about);
-    root.append(el("div", { class: "overlay-panel" }, header, body));
+    const body = el("div", { class: "overlay-body" },
+      el("h3", { class: "help-heading", text: "Getting started" }),
+      startGrid,
+      el("h3", { class: "help-heading",
+                 text: touch ? "Gestures" : "Keys and gestures" }),
+      cols, about);
+    const panel = el("div", { class: "overlay-panel" }, header, body);
+    this.focus = new ModalFocus(panel, "Help and shortcuts");
+    root.append(panel);
   }
 
   open(): void {
     this.visible = true;
     this.root.hidden = false;
+    this.focus.enter();
   }
 
   close(): void {
+    if (!this.visible) return;
     this.visible = false;
     this.root.hidden = true;
+    this.focus.exit();
   }
 
   toggle(): void {

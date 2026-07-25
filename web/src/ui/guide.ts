@@ -11,7 +11,7 @@
 import { App } from "../app";
 import { isMathRenderable, sourceToLatex } from "../core/mathfmt";
 import { ForceField } from "../engine/world";
-import { button, el, isTouch } from "./dom";
+import { ModalFocus, button, el, isTouch } from "./dom";
 import { RECIPES } from "./guide-recipes";
 import { ICONS } from "./icons";
 
@@ -99,6 +99,7 @@ export class FormulaGuide {
   private chips = new Map<Page, HTMLButtonElement>();
   private page: Page = "Basics";
   private app: App;
+  private focus: ModalFocus;
 
   constructor(app: App, root: HTMLElement) {
     this.app = app;
@@ -124,7 +125,9 @@ export class FormulaGuide {
     }
 
     this.body = el("div", { class: "overlay-body guide-body" });
-    root.append(el("div", { class: "overlay-panel" }, header, chipRow, this.body));
+    const panel = el("div", { class: "overlay-panel" }, header, chipRow, this.body);
+    this.focus = new ModalFocus(panel, "Force-field formula guide");
+    root.append(panel);
   }
 
   open(page: Page = this.page): void {
@@ -132,11 +135,14 @@ export class FormulaGuide {
     this.visible = true;
     this.root.hidden = false;
     this.render();
+    this.focus.enter();
   }
 
   close(): void {
+    if (!this.visible) return;
     this.visible = false;
     this.root.hidden = true;
+    this.focus.exit();
   }
 
   toggle(): void {
