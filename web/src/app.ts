@@ -84,6 +84,24 @@ export class App {
   adaptiveDt = true;
   qNow = 1;               // what actually ran this frame (for the UI)
 
+  // Adaptive trail detail: a multiplier on the renderer's vertex budget,
+  // raised while frames are cheap and lowered when they are not.
+  //
+  // Note this is the opposite call from pickResolution, which deliberately
+  // ignores frame timing. The difference is that the physics step size
+  // decides the ANSWER - letting machine load choose it makes the same
+  // scene integrate differently from run to run - whereas the trail vertex
+  // count only decides how finely an already-computed path is drawn. No
+  // simulation state depends on it, so spending spare frame time here is
+  // free accuracy rather than a source of nondeterminism.
+  trailQuality = 1.0;
+  private renderMs = 4.0; // EMA of measured render cost, ms
+  // Aim to leave the rest of a 60 Hz frame alone. Trails are the only part
+  // of rendering that can be scaled, so this is the whole render budget.
+  private static RENDER_TARGET_MS = 6.0;
+  private static TRAIL_QUALITY_MIN = 0.35;
+  private static TRAIL_QUALITY_MAX = 6.0;
+
   undoStack = new snap.UndoStack(this.world);
   initialSnapshot: string | null = null;
   baselineEnergy: number | null = null;
@@ -948,7 +966,25 @@ export class App {
   }
 
   // ------------------------------------------------------------------ render
+  /** Nudge the trail vertex budget toward whatever this machine can hold.
+   *
+   * Climbs slowly and falls fast: overshooting costs dropped frames, while
+   * undershooting only costs a little smoothness for a few frames more.
+   * Only runs while trails are actually drawn, so the factor cannot drift
+   * up to its ceiling during a cheap frame and then blow the first frame
+   * after they are switched on. */
+  private tuneTrailQuality(): void {
+    if (!this.view.trails) return;
+    const target = App.RENDER_TARGET_MS;
+    if (this.renderMs < target * 0.6) {
+      this.trailQuality = Math.min(App.TRAIL_QUALITY_MAX, this.trailQuality * 1.04);
+    } else if (this.renderMs > target) {
+      this.trailQuality = Math.max(App.TRAIL_QUALITY_MIN, this.trailQuality * 0.85);
+    }
+  }
+
   private render(): void {
+    const t0 = performance.now();
     const ctx = this.ctx;
     const dpr = window.devicePixelRatio || 1;
     const w = this.camera.screenW;
@@ -958,9 +994,11 @@ export class App {
     ctx.fillRect(0, 0, w, h);
     if (this.view.grid) drawGrid(ctx, this.camera, w, h);
     drawWorld(ctx, this.camera, this.world, this.view, this.selection,
-              this.controller.hover, this.trails, w, h);
+              this.controller.hover, this.trails, w, h, this.trailQuality);
     this.controller.drawOverlays(ctx);
     drawScaleBar(ctx, this.camera, w, h);
+    this.renderMs = 0.85 * this.renderMs + 0.15 * (performance.now() - t0);
+    this.tuneTrailQuality();
   }
 }
 

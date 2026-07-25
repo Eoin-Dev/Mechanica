@@ -9,7 +9,8 @@ import { Camera } from "../src/render/camera";
 import { ViewSettings, drawWorld } from "../src/render/draw";
 import { Trail } from "../src/render/trail";
 
-interface Op { op: string; style?: string; x?: number; y?: number; }
+interface Op { op: string; style?: string; x?: number; y?: number;
+               cx?: number; cy?: number; }
 
 /** A 2D-context that records the drawing calls we care about and no-ops the
  * rest, so drawWorld runs unmodified. */
@@ -21,10 +22,12 @@ function recCtx(): { ctx: CanvasRenderingContext2D; ops: Op[] } {
     stroke() { ops.push({ op: "stroke", style: strokeStyle }); },
     moveTo(x: number, y: number) { ops.push({ op: "moveTo", x, y }); },
     lineTo(x: number, y: number) { ops.push({ op: "lineTo", x, y }); },
-    // trails are drawn as quadratic curves through midpoints; record the
-    // segment endpoint so vertex counting still works
-    quadraticCurveTo(_cx: number, _cy: number, x: number, y: number) {
-      ops.push({ op: "quadraticCurveTo", x, y });
+    // Trails are drawn as quadratic curves through midpoints: the endpoint
+    // is a midpoint and the CONTROL point is the retained trail sample.
+    // Both are recorded - decimation behaviour can only be checked against
+    // the control points, since midpoints move whenever the stride does.
+    quadraticCurveTo(cx: number, cy: number, x: number, y: number) {
+      ops.push({ op: "quadraticCurveTo", x, y, cx, cy });
     },
   };
   const ctx = new Proxy(base, {
@@ -158,5 +161,149 @@ describe("trail rendering", () => {
     const beforeKeys = new Set(before.map(keyOf));
     const shared = after.filter((p) => beforeKeys.has(keyOf(p))).length;
     expect(shared).toBeGreaterThan(after.length * 0.85);
+  });
+});
+
+/** The specific rendering defects behind "it glitches between the sharp
+ * turns and the smooth curve drawn between them". */
+describe("trail curve fidelity", () => {
+  /** Every drawn vertex, in order, for one trail. */
+  const vertsOf = (t: Trail, b: Body, cam = new Camera(800, 600),
+                   quality = 1): Array<[number, number]> => {
+    const { ctx, ops } = recCtx();
+    drawWorld(ctx, cam, worldWith(b), view(), [], null,
+              new Map([[b.id, t]]), 800, 600, quality);
+    return ops.filter((o) => o.op === "moveTo" || o.op === "lineTo" ||
+                             o.op === "quadraticCurveTo")
+              .map((o) => [o.x ?? 0, o.y ?? 0]);
+  };
+
+  it("draws no straight chord where the rest of the line curves", () => {
+    // Bands used to be cut on RAW indices while decimation was applied
+    // separately, so a band could retain no points at all and fall back to
+    // a single lineTo spanning it - a straight chord sitting between two
+    // smoothly curved neighbours, in a different place every frame.
+    const b = new Body(new Vec2(0, 0), 0.1, 1);
+    const t = new Trail(6000);
+    for (let i = 0; i < 6000; i++) {
+      t.push(Math.cos(i * 0.001) * 1.5, Math.sin(i * 0.001) * 1.5);
+    }
+    const { ctx, ops } = recCtx();
+    drawWorld(ctx, new Camera(800, 600), worldWith(b), view(), [], null,
+              new Map([[b.id, t]]), 800, 600);
+    const curves = ops.filter((o) => o.op === "quadraticCurveTo").length;
+    const lines = ops.filter((o) => o.op === "lineTo").length;
+    const strokes = ops.filter((o) => o.op === "stroke").length;
+    expect(strokes).toBeGreaterThan(4);   // it really is banded
+    expect(curves).toBeGreaterThan(100);  // and really is curved
+    // a smooth circle has no corners, so the only lineTo is the final
+    // segment of each trail - never one per band
+    expect(lines).toBeLessThan(strokes);
+  });
+
+  it("cuts every colour band on the curve, never across it", () => {
+    // Each band is its own stroke, so a band boundary is a moveTo. That
+    // moveTo has to land exactly on the point the previous band finished
+    // at - a point that lies ON the curve - or the colour cut introduces a
+    // kink whose position drifts along the line as the trail scrolls.
+    // Every band must also actually be curved: bands used to be cut on raw
+    // indices while decimation ran separately, so a band could retain no
+    // points and degenerate into one straight chord.
+    const b = new Body(new Vec2(0, 0), 0.1, 1);
+    const t = new Trail(4000);
+    for (let i = 0; i < 4000; i++) {
+      t.push(Math.cos(i * 0.0015) * 1.5, Math.sin(i * 0.0015) * 1.5);
+    }
+    const { ctx, ops } = recCtx();
+    drawWorld(ctx, new Camera(800, 600), worldWith(b), view(), [], null,
+              new Map([[b.id, t]]), 800, 600);
+
+    // split the op stream into sub-paths, one per stroke
+    const paths: Op[][] = [];
+    let cur: Op[] = [];
+    for (const o of ops) {
+      if (o.op === "stroke") { paths.push(cur); cur = []; }
+      else cur.push(o);
+    }
+    expect(paths.length).toBeGreaterThan(4); // genuinely banded
+
+    let joins = 0;
+    for (let i = 1; i < paths.length; i++) {
+      const prev = paths[i - 1];
+      const here = paths[i];
+      if (prev.length === 0 || here.length === 0) continue;
+      const tail = prev[prev.length - 1];
+      const head = here[0];
+      expect(head.op).toBe("moveTo");
+      expect(head.x).toBeCloseTo(tail.x ?? 0, 6); // seamless, and on-curve
+      expect(head.y).toBeCloseTo(tail.y ?? 0, 6);
+      joins++;
+      // a smooth circle: every band carries real curvature, no bare chords
+      expect(here.some((o) => o.op === "quadraticCurveTo")).toBe(true);
+    }
+    expect(joins).toBeGreaterThan(3);
+  });
+
+  it("keeps a genuine sharp corner instead of rounding it off", () => {
+    // a bounce: straight in, straight back out at a right angle
+    const b = new Body(new Vec2(0, 0), 0.1, 1);
+    const t = new Trail(200);
+    for (let i = 0; i < 50; i++) t.push(-1 + i * 0.02, 0);   // travel +x
+    for (let i = 0; i < 50; i++) t.push(0, i * 0.02);        // turn to +y
+    const cam = new Camera(800, 600);
+    const verts = vertsOf(t, b, cam);
+    // the corner itself must be one of the drawn vertices; a midpoint-only
+    // curve cuts it off and never touches the actual turning point
+    const [cx, cy] = cam.toScreenXY(0, 0);
+    const hit = verts.some(([x, y]) =>
+      Math.abs(x - cx) < 0.51 && Math.abs(y - cy) < 0.51);
+    expect(hit).toBe(true);
+  });
+
+  it("spends a larger vertex budget when quality is raised", () => {
+    const b = new Body(new Vec2(0, 0), 0.1, 1);
+    const t = new Trail(8000);
+    for (let i = 0; i < 8000; i++) {
+      t.push(Math.cos(i * 0.0008) * 1.5, Math.sin(i * 0.0008) * 1.5);
+    }
+    const cam = new Camera(800, 600);
+    const lean = vertsOf(t, b, cam, 0.35).length;
+    const rich = vertsOf(t, b, cam, 4.0).length;
+    expect(rich).toBeGreaterThan(lean * 1.5);
+    // detail is bought from the samples that exist, never invented: even
+    // an unlimited budget draws at most one vertex per recorded point
+    // (plus one moveTo and one closing lineTo per colour band)
+    expect(rich).toBeLessThanOrEqual(8000 + 2 * 24);
+    expect(lean).toBeLessThan(8000);
+  });
+
+  it("nests the retained points as the budget changes", () => {
+    // Power-of-two strides mean a change in budget adds or removes points
+    // rather than reshuffling which ones are drawn - an arbitrary stride
+    // re-picks the whole set and the line twitches.
+    const b = new Body(new Vec2(0, 0), 0.1, 1);
+    const t = new Trail(4000);
+    for (let i = 0; i < 4000; i++) {
+      t.push(Math.cos(i * 0.0015) * 1.5, Math.sin(i * 0.0015) * 1.5);
+    }
+    const cam = new Camera(800, 600);
+    // Compare CONTROL points, which are the retained samples themselves.
+    // The drawn endpoints are midpoints between consecutive retained
+    // points, so they necessarily move when the stride does even though
+    // the underlying selection is nested.
+    const controls = (quality: number): Set<string> => {
+      const { ctx, ops } = recCtx();
+      drawWorld(ctx, cam, worldWith(b), view(), [], null,
+                new Map([[b.id, t]]), 800, 600, quality);
+      return new Set(ops.filter((o) => o.op === "quadraticCurveTo")
+        .map((o) => `${(o.cx ?? 0).toFixed(2)},${(o.cy ?? 0).toFixed(2)}`));
+    };
+    const coarse = controls(0.5);
+    const fine = controls(2.0);
+    expect(fine.size).toBeGreaterThan(coarse.size);
+    // nearly every point the coarse pass drew is still drawn by the fine
+    // one: raising the budget ADDS detail rather than re-picking it
+    const kept = [...coarse].filter((k) => fine.has(k)).length;
+    expect(kept).toBeGreaterThan(coarse.size * 0.9);
   });
 });

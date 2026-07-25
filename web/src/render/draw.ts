@@ -206,9 +206,27 @@ const TRAIL_STROKE_BUDGET = 900;
 const MAX_BANDS = 24;
 // Vertex budget shared across all trails on screen, with a generous
 // per-trail ceiling: a lone trail can spend a lot (long orbit paths stay
-// detailed) while a swarm still can't blow the frame.
+// detailed) while a swarm still can't blow the frame. Both are scaled by
+// the adaptive quality factor the app measures (see App.trailQuality).
 const TRAIL_VERT_BUDGET = 12000;
 const MAX_TRAIL_VERTS = 4000;
+
+/** Turn angle past which a trail vertex is drawn as a CORNER rather than
+ * smoothed through.
+ *
+ * The quadratic smoothing below rounds every vertex off, which is right
+ * for a sampled curve and quite wrong at a bounce or a slingshot
+ * periapsis, where the real path genuinely has a kink - there the smooth
+ * arc visibly cuts the corner and disagrees with where the body actually
+ * went. Only near-reversals qualify; a well-sampled curve never turns this
+ * hard between adjacent samples. cos(80 degrees). */
+const CORNER_COS = 0.1736;
+
+// Screen-space scratch for the decimated points of one trail. Reused
+// across trails and frames: this runs for every visible trail every frame,
+// and two arrays of a few thousand numbers is a lot of garbage otherwise.
+const SX: number[] = [];
+const SY: number[] = [];
 
 /** rgb() string faded from the background toward `base` by fraction f,
  * without allocating an intermediate Color (this runs per band per trail). */
@@ -220,8 +238,84 @@ function fadedRgb(base: Color, f: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
+/** Draw one decimated trail as a smoothed, colour-banded path.
+ *
+ * The curve is the standard midpoint quadratic: every retained point is a
+ * control point and the path runs through the midpoints between them. Two
+ * things make it behave, both of which the previous version got wrong:
+ *
+ * 1. Colour bands are cut at MIDPOINTS - points that lie exactly on the
+ *    curve - so the geometry is identical however many bands there are and
+ *    wherever they fall. Cutting at vertices instead made the curve pass
+ *    exactly through the boundary vertex while passing through midpoints
+ *    everywhere else, so each boundary sat in a slightly different place
+ *    than the rest of the line. Worse, bands were cut on RAW indices while
+ *    decimation was applied separately, so a band could contain no
+ *    retained points at all and drew as a straight chord between two
+ *    curved neighbours. Both boundaries move as the ring scrolls, so those
+ *    artefacts crawled along the trail every frame - the glitching between
+ *    the sharp turns and the smooth curve.
+ *
+ * 2. Genuine corners are kept. A vertex whose turn exceeds CORNER_COS is
+ *    drawn as a corner instead of being rounded off, so a bounce stays a
+ *    bounce.
+ */
+function strokeTrail(ctx: CanvasRenderingContext2D, m: number,
+                     base: Color, bands: number): void {
+  if (m < 2) return;
+  if (m === 2) {
+    ctx.strokeStyle = fadedRgb(base, 0.5);
+    ctx.beginPath();
+    ctx.moveTo(SX[0], SY[0]);
+    ctx.lineTo(SX[1], SY[1]);
+    ctx.stroke();
+    return;
+  }
+  const edges = m - 1;
+  let band = 0;
+  let boundary = Math.ceil(edges / bands);
+  ctx.strokeStyle = fadedRgb(base, 0);
+  ctx.beginPath();
+  ctx.moveTo(SX[0], SY[0]);
+  let curX = SX[0];
+  let curY = SY[0];
+  for (let i = 1; i <= m - 2; i++) {
+    // turn at this vertex, from the unit incoming and outgoing directions
+    const ax = SX[i] - SX[i - 1];
+    const ay = SY[i] - SY[i - 1];
+    const bx = SX[i + 1] - SX[i];
+    const by = SY[i + 1] - SY[i];
+    const la = Math.sqrt(ax * ax + ay * ay);
+    const lb = Math.sqrt(bx * bx + by * by);
+    const sharp = la > 1e-9 && lb > 1e-9 &&
+                  (ax * bx + ay * by) / (la * lb) < CORNER_COS;
+    if (sharp) {
+      ctx.lineTo(SX[i], SY[i]); // into the corner, and back out next pass
+      curX = SX[i];
+      curY = SY[i];
+    } else {
+      const mx = (SX[i] + SX[i + 1]) * 0.5;
+      const my = (SY[i] + SY[i + 1]) * 0.5;
+      ctx.quadraticCurveTo(SX[i], SY[i], mx, my);
+      curX = mx;
+      curY = my;
+    }
+    if (i >= boundary && band < bands - 1) {
+      // split on the curve: the next band resumes from exactly here
+      ctx.stroke();
+      band++;
+      boundary = Math.ceil(((band + 1) * edges) / bands);
+      ctx.strokeStyle = fadedRgb(base, i / edges);
+      ctx.beginPath();
+      ctx.moveTo(curX, curY);
+    }
+  }
+  ctx.lineTo(SX[m - 1], SY[m - 1]);
+  ctx.stroke();
+}
+
 function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
-                    trails: Map<number, Trail>,
+                    trails: Map<number, Trail>, quality: number,
                     minX: number, minY: number, maxX: number, maxY: number): void {
   ctx.lineWidth = 1;
   ctx.lineJoin = "round";
@@ -239,8 +333,11 @@ function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
   if (visible === 0) return;
   const bands = Math.max(1, Math.min(MAX_BANDS,
     Math.floor(TRAIL_STROKE_BUDGET / visible)));
-  const vertsPerTrail = Math.max(64,
-    Math.min(MAX_TRAIL_VERTS, Math.floor(TRAIL_VERT_BUDGET / visible)));
+  // spare frame time buys detail: see App.trailQuality for why measuring
+  // frame time is legitimate here when it is not for the physics step
+  const vertsPerTrail = Math.max(64, Math.min(
+    Math.floor(MAX_TRAIL_VERTS * quality),
+    Math.floor((TRAIL_VERT_BUDGET * quality) / visible)));
   for (const [bid, trail] of trails) {
     const n = trail.count;
     if (n < 2) continue;
@@ -254,39 +351,29 @@ function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
     // selected as the trail scrolls; keying on the index re-picks a
     // different subset every frame, which makes the drawn path shimmer
     // and warp in place (very visible on long, fast, chaotic orbits).
-    const stride = Math.max(1, Math.ceil(n / vertsPerTrail));
+    //
+    // The stride is rounded UP to a power of two so the retained set is
+    // nested: when the trail grows past a threshold, or the adaptive
+    // budget moves, the stride doubles or halves and the kept points are a
+    // subset or superset of what they were. An arbitrary stride reshuffles
+    // the whole selection instead, which reads as the line twitching.
+    const want = Math.max(1, n / vertsPerTrail);
+    let stride = 1;
+    while (stride < want) stride *= 2;
     const phase = trail.firstSerial % stride;
-    const keep = (k: number): boolean => (k + phase) % stride === 0;
     const last = n - 1;
-    // draw `bands` contiguous colour bands oldest -> newest; each band ends
-    // exactly where the next begins so the line stays unbroken
-    for (let bnd = 0; bnd < bands; bnd++) {
-      const i0 = Math.floor((bnd * last) / bands);
-      const i1 = Math.floor(((bnd + 1) * last) / bands);
-      if (i1 <= i0) continue;
-      ctx.strokeStyle = fadedRgb(base, i0 / n);
-      ctx.beginPath();
-      let [px, py] = cam.toScreenXY(trail.x(i0), trail.y(i0));
-      ctx.moveTo(px, py);
-      // Quadratic smoothing: each retained point becomes a control point
-      // and the curve passes through the midpoints between them. At high
-      // speed the samples are far apart and a raw polyline shows visible
-      // corners; this costs the same per segment and reads as a smooth
-      // arc. Sub-pixel-dense trails are unaffected (midpoints coincide).
-      let started = false;
-      for (let k = i0 + 1; k < i1; k++) {
-        if (!keep(k)) continue;
-        const [sx, sy] = cam.toScreenXY(trail.x(k), trail.y(k));
-        ctx.quadraticCurveTo(px, py, (px + sx) * 0.5, (py + sy) * 0.5);
-        px = sx;
-        py = sy;
-        started = true;
-      }
-      const [sxE, syE] = cam.toScreenXY(trail.x(i1), trail.y(i1));
-      if (started) ctx.quadraticCurveTo(px, py, sxE, syE);
-      else ctx.lineTo(sxE, syE);
-      ctx.stroke();
+
+    // gather the retained points in screen space; the ends are always kept
+    // so the trail spans its true extent whatever the stride
+    let m = 0;
+    for (let k = 0; k <= last; k++) {
+      if (k !== 0 && k !== last && (k + phase) % stride !== 0) continue;
+      const [sx, sy] = cam.toScreenXY(trail.x(k), trail.y(k));
+      SX[m] = sx;
+      SY[m] = sy;
+      m++;
     }
+    strokeTrail(ctx, m, base, bands);
   }
   ctx.lineJoin = "miter";
 }
@@ -295,7 +382,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
                           world: World, view: ViewSettings,
                           selection: Selectable[], hover: Selectable | null,
                           trails: Map<number, Trail>,
-                          areaW: number, areaH: number): void {
+                          areaW: number, areaH: number,
+                          trailQuality = 1.0): void {
   const [minX, minY, maxX, maxY] = cam.visibleBounds();
   // Draw culling is unconditional: skipping what is outside the viewport
   // can never change what the user sees, so there is nothing to trade.
@@ -309,7 +397,9 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   const picked = new Set<Selectable>(selection);
 
   // --- trails ---------------------------------------------------------------
-  if (view.trails) drawTrails(ctx, cam, world, trails, minX, minY, maxX, maxY);
+  if (view.trails) {
+    drawTrails(ctx, cam, world, trails, trailQuality, minX, minY, maxX, maxY);
+  }
 
   // --- links -----------------------------------------------------------------
   for (const link of world.links) {

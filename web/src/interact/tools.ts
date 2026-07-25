@@ -184,8 +184,19 @@ export class CanvasController {
       // click or drag never wipes the body's motion state
       this.clearChaseCaps();
       this.dragPrev = null;
+      const solidPaused = app.dragHitsWalls;
       for (const { body, offset } of this.dragItems) {
-        body.pos.setVec(this.snap(new Vec2(worldP.x + offset.x, worldP.y + offset.y)));
+        let t = this.snap(new Vec2(worldP.x + offset.x, worldP.y + offset.y));
+        // Walls are solid while paused too. Whether the clock is running
+        // is irrelevant to where a body is allowed to BE - and placing
+        // things is mostly done paused, so applying it only during play
+        // meant the setting appeared to do nothing most of the time.
+        if (solidPaused && !body.locked) {
+          const [cx, cy] =
+            sweepClearOfWalls(app.world.walls, body.pos, t, body.radius);
+          t = new Vec2(cx, cy);
+        }
+        body.pos.setVec(t);
       }
       return;
     }

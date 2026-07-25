@@ -18,9 +18,12 @@ import { el, isTouch } from "./dom";
 /** One stop on the tour.
  *
  * `target` is a CSS selector for the element to spotlight; omit it for a
- * centred card with no anchor. `enter` runs when the step is shown - used
- * to put the app in a state the step is talking about (running, paused),
- * never to change what the user has built.
+ * centred card with no anchor. A selector LIST spotlights the union of
+ * everything it matches, which is how a step that talks about two things
+ * at once (the scene and the readout below it) can point at both instead
+ * of leaving half its sentence unhighlighted. `enter` runs when the step
+ * is shown - used to put the app in a state the step is talking about
+ * (running, paused), never to change what the user has built.
  */
 export interface Step {
   target?: string;
@@ -39,7 +42,8 @@ export const STEPS: Step[] = [
           "browser. Six quick stops and you are done.",
   },
   {
-    target: "#canvas-wrap",
+    // the bar below the canvas is half of what this step describes
+    target: "#canvas-wrap, #hintbar",
     title: "The scene",
     body: "This is the world. Scroll to zoom at the cursor, right-drag or " +
           "middle-drag to pan. The bar at the bottom always shows where " +
@@ -98,7 +102,8 @@ export const STEPS: Step[] = [
           "graphs.",
   },
   {
-    target: "#toolbar",
+    // the two buttons this step is about, not the whole toolbar
+    target: "#btn-library, #btn-settings",
     title: "Start from a worked example",
     body: "The Library has 47 ready-made simulations - orbits, pendulums, " +
           "collisions, gases, chaos, soft bodies - each with a note on what " +
@@ -110,10 +115,14 @@ export const STEPS: Step[] = [
 
 const TOUR_KEY = "tour_done";
 
+interface Rect { x: number; y: number; w: number; h: number; }
+
 export class Tour {
   private app: App;
   private root: HTMLElement | null = null;
-  private spot!: HTMLElement;
+  private scrim!: HTMLElement;
+  private cells: HTMLElement[] = []; // pooled dark tiles
+  private rings: HTMLElement[] = []; // pooled outlines, one per hole
   private card!: HTMLElement;
   private index = 0;
   private wasPlaying = false;
@@ -145,7 +154,8 @@ export class Tour {
     // steps whose target is missing (a panel hidden on this viewport) are
     // dropped rather than shown pointing at nothing
     this.steps = STEPS.filter(
-      (s) => s.target === undefined || document.querySelector(s.target) !== null);
+      (s) => s.target === undefined ||
+             document.querySelectorAll(s.target).length > 0);
     if (this.steps.length === 0) return;
     this.wasPlaying = this.app.playing;
     this.index = 0;
@@ -154,10 +164,10 @@ export class Tour {
   }
 
   private build(): void {
-    this.spot = el("div", { class: "tour-spot" });
+    this.scrim = el("div", { class: "tour-scrim" });
     this.card = el("div", { class: "tour-card", role: "dialog",
                             "aria-modal": "true", "aria-label": "Guided tour" });
-    this.root = el("div", { class: "tour-root" }, this.spot, this.card);
+    this.root = el("div", { class: "tour-root" }, this.scrim, this.card);
     document.body.append(this.root);
     // capture phase: the tour owns the keyboard while it is up, so its keys
     // never also reach the app's global shortcuts underneath
@@ -209,6 +219,82 @@ export class Tour {
     next.focus();
   }
 
+  /** Dim everything except `holes`, and ring each one.
+   *
+   * The obvious trick - one element with a huge spread box-shadow - can
+   * only ever punch a single hole, and a bounding box around several
+   * targets swallows whatever sits between them. So the dimming is tiled
+   * instead: cut the viewport along every hole edge and fill the cells
+   * that no hole covers. With a handful of targets that is a handful of
+   * divs, and it is exact.
+   *
+   * The tiles are pure black inside a container that carries the opacity,
+   * rather than each being translucent. Translucent tiles double-darken
+   * where they overlap and leave a pale seam where they do not, and no
+   * amount of rounding avoids both on a fractional-pixel layout; composited
+   * opaque and faded once, a half-pixel overlap is invisible. */
+  private paintHoles(holes: Rect[]): void {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const xs = new Set<number>([0, vw]);
+    const ys = new Set<number>([0, vh]);
+    for (const r of holes) {
+      xs.add(Math.max(0, Math.min(vw, r.x)));
+      xs.add(Math.max(0, Math.min(vw, r.x + r.w)));
+      ys.add(Math.max(0, Math.min(vh, r.y)));
+      ys.add(Math.max(0, Math.min(vh, r.y + r.h)));
+    }
+    const ux = [...xs].sort((a, b) => a - b);
+    const uy = [...ys].sort((a, b) => a - b);
+
+    let used = 0;
+    const tile = (x: number, y: number, w: number, h: number): void => {
+      let n = this.cells[used];
+      if (n === undefined) {
+        n = el("div", { class: "tour-tile" });
+        this.cells.push(n);
+        this.scrim.append(n);
+      }
+      // half-pixel bleed closes seams; overlap is harmless here
+      n.style.cssText = `left:${x - 0.5}px;top:${y - 0.5}px;` +
+                        `width:${w + 1}px;height:${h + 1}px`;
+      n.hidden = false;
+      used++;
+    };
+    for (let i = 0; i < ux.length - 1; i++) {
+      for (let j = 0; j < uy.length - 1; j++) {
+        const x = ux[i];
+        const y = uy[j];
+        const w = ux[i + 1] - x;
+        const h = uy[j + 1] - y;
+        if (w <= 0 || h <= 0) continue;
+        const mx = x + w / 2;
+        const my = y + h / 2;
+        const inHole = holes.some((r) => mx > r.x && mx < r.x + r.w &&
+                                         my > r.y && my < r.y + r.h);
+        if (!inHole) tile(x, y, w, h);
+      }
+    }
+    for (let i = used; i < this.cells.length; i++) this.cells[i].hidden = true;
+
+    for (let i = 0; i < Math.max(holes.length, this.rings.length); i++) {
+      let ring = this.rings[i];
+      if (ring === undefined) {
+        ring = el("div", { class: "tour-ring" });
+        this.rings.push(ring);
+        this.root!.insertBefore(ring, this.card);
+      }
+      const r = holes[i];
+      if (r === undefined) {
+        ring.hidden = true;
+        continue;
+      }
+      ring.hidden = false;
+      ring.style.cssText =
+        `left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`;
+    }
+  }
+
   /** Put the spotlight over the current target and the card beside it.
    *
    * The card is placed on whichever side of the target has room, and is
@@ -218,30 +304,49 @@ export class Tour {
   private place(): void {
     if (this.root === null) return;
     const step = this.steps[this.index];
-    const target = step.target ? document.querySelector(step.target) : null;
+    const targets = step.target
+      ? [...document.querySelectorAll(step.target)].filter(
+          (n) => (n as HTMLElement).offsetParent !== null ||
+                 n === document.body)
+      : [];
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     const M = 12; // gap between spotlight and card
 
-    if (target === null) {
-      this.spot.style.display = "none";
+    // One hole PER match, not one box around them all. A bounding box over
+    // the canvas and the full-width bar beneath it also swallows the side
+    // panels between them, which highlights everything and so highlights
+    // nothing.
+    const pad = 4;
+    const holes: Rect[] = [];
+    for (const n of targets) {
+      const b = n.getBoundingClientRect();
+      if (b.width === 0 || b.height === 0) continue;
+      const hx = Math.max(0, b.left - pad);
+      const hy = Math.max(0, b.top - pad);
+      holes.push({ x: hx, y: hy,
+                   w: Math.min(vw, b.right + pad) - hx,
+                   h: Math.min(vh, b.bottom + pad) - hy });
+    }
+    this.paintHoles(holes);
+    if (holes.length === 0) {
       this.card.style.left = `${Math.round((vw - this.card.offsetWidth) / 2)}px`;
       this.card.style.top = `${Math.round((vh - this.card.offsetHeight) / 2)}px`;
       return;
     }
-    const r = target.getBoundingClientRect();
-    // inset slightly so the ring hugs a full-height panel instead of
-    // bleeding off the window edge
-    const pad = 4;
-    const x = Math.max(0, r.left - pad);
-    const y = Math.max(0, r.top - pad);
-    const w = Math.min(vw, r.right + pad) - x;
-    const h = Math.min(vh, r.bottom + pad) - y;
-    this.spot.style.display = "";
-    this.spot.style.left = `${x}px`;
-    this.spot.style.top = `${y}px`;
-    this.spot.style.width = `${w}px`;
-    this.spot.style.height = `${h}px`;
+    // the card is placed against the union, so it clears every hole
+    let x = Infinity;
+    let y = Infinity;
+    let rgt = -Infinity;
+    let bot = -Infinity;
+    for (const r of holes) {
+      if (r.x < x) x = r.x;
+      if (r.y < y) y = r.y;
+      if (r.x + r.w > rgt) rgt = r.x + r.w;
+      if (r.y + r.h > bot) bot = r.y + r.h;
+    }
+    const w = rgt - x;
+    const h = bot - y;
 
     const cw = this.card.offsetWidth;
     const ch = this.card.offsetHeight;
