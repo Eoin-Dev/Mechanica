@@ -26,25 +26,29 @@ export class Toolbar implements Panel {
     root.append(el("span", { class: "brand", text: "Mechanica" }));
 
     const play = g.add(button("", () => app.togglePlay(),
-      { icon: ICONS.play, style: "primary", tooltip: "Play / pause (Space)" }));
+      { icon: ICONS.play, style: "primary",
+        tooltip: "Start or pause the simulation (Space)." }));
     this.playBtn = play.root as HTMLButtonElement;
     root.append(play.root);
     root.append(g.add(button("", () => app.stepBack(),
-      { icon: ICONS.step_back, tooltip: "Step one frame back (Left arrow or ,)" })).root);
+      { icon: ICONS.step_back,
+        tooltip: "Step one frame back (Left arrow or ,)." })).root);
     root.append(g.add(button("", () => app.stepOnce(),
-      { icon: ICONS.step, tooltip: "Advance one frame (Right arrow or .)" })).root);
+      { icon: ICONS.step,
+        tooltip: "Advance one frame (Right arrow or .)." })).root);
     root.append(g.add(button("", () => app.resetSim(),
-      { icon: ICONS.reset, tooltip: "Reset to the initial state (Ctrl+R)" })).root);
+      { icon: ICONS.reset,
+        tooltip: "Return the scene to its starting state (Ctrl+R)." })).root);
 
     const speedWrap = el("div", { class: "speed-ctrl", style: "width:200px;flex:none;" });
     speedWrap.append(g.add(slider("Speed", () => app.speed,
       (v) => { app.speed = v; }, 0.01, 16.0,
       { unit: "x", log: true, fmt: (v) => v.toFixed(2),
-        tooltip: "Simulation speed multiplier. Keys: + and - double/halve, " +
-                 "0 resets." })).root);
+        tooltip: "How fast simulated time runs against real time. " +
+                 "+ and - double or halve it, 0 resets." })).root);
     root.append(speedWrap);
     root.append(g.add(button("1x", () => app.resetSpeed(),
-      { tooltip: "Reset the speed to 1x - press 0" })).root);
+      { tooltip: "Reset the speed to real time (0)." })).root);
 
     // simulation clock: type a time to re-simulate to it
     this.timeInput = el("input", {
@@ -78,27 +82,29 @@ export class Toolbar implements Panel {
     root.append(el("div", { class: "toolbar-spacer" }));
 
     root.append(g.add(button("", () => app.undo(),
-      { icon: ICONS.undo, tooltip: "Undo (Ctrl+Z)",
+      { icon: ICONS.undo, tooltip: "Undo the last edit (Ctrl+Z).",
         isEnabled: () => app.undoStack.canUndo })).root);
     root.append(g.add(button("", () => app.redo(),
-      { icon: ICONS.redo, tooltip: "Redo (Ctrl+Y)",
+      { icon: ICONS.redo, tooltip: "Redo the last undone edit (Ctrl+Y).",
         isEnabled: () => app.undoStack.canRedo })).root);
     root.append(g.add(button("", () => app.newScene(),
-      { icon: ICONS.trash, tooltip: "Clear the scene (undo-able)" })).root);
+      { icon: ICONS.trash,
+        tooltip: "Remove everything from the scene. Ctrl+Z restores it." })).root);
     root.append(g.add(button("", () => app.zoomToFit(),
-      { icon: ICONS.fit, tooltip: "Zoom to fit the scene once (F)" })).root);
+      { icon: ICONS.fit, tooltip: "Frame the whole scene once (F)." })).root);
     root.append(g.add(button("", () => app.toggleAutoFit(),
       { icon: ICONS.autofit, isActive: () => app.view.autoFit,
-        tooltip: "Auto-fit camera: continuously keep the whole scene framed (Shift+F)" })).root);
+        tooltip: "Keep the whole scene framed as it spreads out (Shift+F)." })).root);
     // ids so the guided tour can spotlight these two specifically rather
     // than the whole toolbar strip
     const libraryBtn = g.add(button("Library", () => toggleOverlay("library"),
-      { icon: ICONS.library, tooltip: "Example simulations and saved scenes (L)" }));
+      { icon: ICONS.library,
+        tooltip: "Example simulations and saved scenes (L)." }));
     libraryBtn.root.id = "btn-library";
     root.append(libraryBtn.root);
     const settingsBtn = g.add(button("", () => toggleOverlay("settings"),
       { icon: ICONS.gear,
-        tooltip: "Settings - theme, font, performance, help" }));
+        tooltip: "Settings: appearance, interaction, accuracy and help." }));
     settingsBtn.root.id = "btn-settings";
     root.append(settingsBtn.root);
 
@@ -264,9 +270,11 @@ export class GraphDock implements Panel {
     this.liveBtn.addEventListener("click", () => { this.viewEnd = null; });
     header.append(this.liveBtn);
     header.append(this.group.add(button("", () => this.clearData(),
-      { icon: ICONS.trash, style: "ghost", tooltip: "Clear all collected graph data" })).root);
+      { icon: ICONS.trash, style: "ghost",
+        tooltip: "Discard all recorded graph data." })).root);
     header.append(this.group.add(button("", () => app.setGraphMode("Off"),
-      { icon: ICONS.close, style: "ghost", tooltip: "Close the graph dock" })).root);
+      { icon: ICONS.close, style: "ghost",
+        tooltip: "Close the graph dock." })).root);
 
     this.canvas = el("canvas");
     const wrap = el("div", { class: "dock-canvas-wrap" }, this.canvas);

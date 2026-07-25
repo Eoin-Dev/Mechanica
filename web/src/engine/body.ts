@@ -107,6 +107,12 @@ export class Body {
   prev = new Vec2();
   corrX = 0.0;
   corrY = 0.0;
+  // acceleration at the previous adaptive slice boundary, and nothing else:
+  // the in-substep slicer sizes its slices from how fast the acceleration
+  // is CHANGING along the trajectory (see World.maxAccelChangeRate), which
+  // needs one earlier sample to difference against. Never serialized.
+  accPrevX = 0.0;
+  accPrevY = 0.0;
 
   constructor(pos: Vec2, radius = 0.15, mass = 1.0, color: Color | null = null) {
     this.id = Body.nextId++;

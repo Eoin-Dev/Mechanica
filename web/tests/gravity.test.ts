@@ -93,3 +93,111 @@ describe("gravity model", () => {
     expect(World.fromDict(legacy).pointGravity).toBe(false);
   });
 });
+
+/** The attraction pass, written the obvious way: straight off the objects,
+ * one pair at a time. World.accumulateGravity runs the same arithmetic over
+ * packed typed arrays because the object form cost ~20x more per pair; this
+ * is the reference it has to keep agreeing with, exactly. */
+function referenceGravity(w: World): Array<[number, number]> {
+  const bodies = w.bodies;
+  const n = bodies.length;
+  const G = w.G;
+  const eps2 = w.softening * w.softening;
+  const solid = !w.pointGravity;
+  const acc = bodies.map((b): [number, number] => [b.acc.x, b.acc.y]);
+  for (let i = 0; i < n; i++) {
+    const bi = bodies[i];
+    if (bi.isAnchor) continue;
+    const bix = bi.pos.x;
+    const biy = bi.pos.y;
+    const biMovable = bi.invMass !== 0.0;
+    for (let j = i + 1; j < n; j++) {
+      const bj = bodies[j];
+      if (bj.isAnchor) continue;
+      const dx = bj.pos.x - bix;
+      const dy = bj.pos.y - biy;
+      let r2 = dx * dx + dy * dy;
+      if (solid) {
+        const R = bi.radius + bj.radius;
+        if (r2 < R * R) r2 = R * R;
+      }
+      const d2 = r2 + eps2;
+      const s = G / (d2 * Math.sqrt(d2));
+      if (biMovable) {
+        const m = s * bj.mass;
+        acc[i][0] += m * dx;
+        acc[i][1] += m * dy;
+      }
+      if (bj.invMass !== 0.0) {
+        const m = s * bi.mass;
+        acc[j][0] -= m * dx;
+        acc[j][1] -= m * dy;
+      }
+    }
+  }
+  return acc;
+}
+
+describe("packed attraction pass", () => {
+  it("matches the reference implementation bit for bit", () => {
+    let seed = 991;
+    const rand = (): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    for (const point of [false, true]) {
+      for (const n of [2, 3, 17, 64]) {
+        const w = new World();
+        w.gravity = 0.0;
+        w.mutualGravity = true;
+        w.pointGravity = point;
+        w.G = 1.7;
+        w.softening = 0.013;
+        for (let i = 0; i < n; i++) {
+          const b = new Body(new Vec2(rand() * 12 - 6, rand() * 12 - 6),
+                             0.03 + rand() * 0.6, 0.2 + rand() * 40);
+          b.vel.set(rand() * 3 - 1.5, rand() * 3 - 1.5);
+          // a mix of movable, locked and anchor bodies: each takes a
+          // different branch in the pass
+          if (i % 11 === 3) b.locked = true;
+          if (i % 13 === 5) { b.isAnchor = true; b.locked = true; }
+          w.bodies.push(b);
+        }
+        const proto = Object.getPrototypeOf(w);
+        proto.prepareStep.call(w, DT);
+        // base accelerations only, so the reference starts where the
+        // packed pass starts
+        for (const b of w.bodies) b.acc.set(b.locked ? 0 : 0.25, b.locked ? 0 : -0.5);
+        const want = referenceGravity(w);
+        proto.accumulateGravity.call(w);
+        w.bodies.forEach((b, i) => {
+          expect(b.acc.x, `n=${n} point=${point} body ${i} ax`).toBe(want[i][0]);
+          expect(b.acc.y, `n=${n} point=${point} body ${i} ay`).toBe(want[i][1]);
+        });
+      }
+    }
+  });
+
+  it("stays correct as bodies are added and removed between passes", () => {
+    const w = new World();
+    w.gravity = 0.0;
+    w.mutualGravity = true;
+    w.G = 1.0;
+    const proto = Object.getPrototypeOf(w);
+    for (let round = 0; round < 40; round++) {
+      if (round % 3 !== 2 || w.bodies.length < 2) {
+        w.bodies.push(new Body(new Vec2(round * 0.37 - 5, round * 0.11), 0.1, 1 + round));
+      } else {
+        w.removeBody(w.bodies[round % w.bodies.length]);
+      }
+      proto.prepareStep.call(w, DT);
+      for (const b of w.bodies) b.acc.set(0, 0);
+      const want = referenceGravity(w);
+      proto.accumulateGravity.call(w);
+      w.bodies.forEach((b, i) => {
+        expect(b.acc.x).toBe(want[i][0]);
+        expect(b.acc.y).toBe(want[i][1]);
+      });
+    }
+  });
+});

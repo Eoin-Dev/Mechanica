@@ -36,19 +36,46 @@ export type Integrator = (typeof INTEGRATORS)[number];
 const ROD_FORCE_PASSES = 4;
 
 // Adaptive close-encounter integration (mutual-gravity scenes only): a
-// substep is marched through in slices sized so that no body's velocity
-// direction swings more than ENCOUNTER_ANGLE radians per slice, with at
-// most ENCOUNTER_MAX_SLICES-fold refinement. Deep two-body encounters
-// (which would otherwise blow up the energy) then get automatically and
-// smoothly resolved down to microsecond slices, while calm stretches take
-// a single slice at zero extra cost.
-// Fixed: the slice size is a function of the simulation state alone, never
-// of measured frame times, so a scene integrates identically however busy
-// the machine is (see App.pickResolution for the same rule at the step
-// level). Performance is handled by advancing less simulated time, not by
+// substep is marched through in slices sized so that no body's
+// acceleration changes by more than a fraction ENCOUNTER_ANGLE of itself
+// per slice, with at most ENCOUNTER_MAX_SLICES-fold refinement. Deep
+// two-body encounters (which would otherwise blow up the energy) then get
+// automatically and smoothly resolved down to microsecond slices, while
+// calm stretches take a single slice at zero extra cost.
+//
+// The name is historical but still apt: for a body in a circular orbit the
+// acceleration vector rotates with it, so a 2% relative change per slice is
+// 0.02 rad of arc. What it is NOT is a function of how fast the body
+// happens to be moving - see World.maxAccelChangeRate for why that
+// distinction is the whole ballgame.
+//
+// The slice size is a function of the simulation state alone, never of
+// measured frame times, so a scene integrates identically however busy the
+// machine is (see App.pickResolution for the same rule at the step level).
+// Performance is handled by advancing less simulated time, not by
 // integrating differently.
-export const ENCOUNTER_ANGLE = 0.02; // rad of velocity swing per slice
-const ENCOUNTER_MAX_SLICES = 1024;   // floor: slice >= h / this
+export const ENCOUNTER_ANGLE = 0.02; // relative change of a per slice
+const ENCOUNTER_MAX_SLICES = 256;    // floor: slice >= h / this
+
+// Hard ceiling on the slicing WORK one step() may spend, in units of
+// body-force-evaluations (one RK4 slice costs 4 x the per-evaluation body
+// count). Slicing is the only part of the pipeline whose cost is decided
+// by the state rather than by the scene's size, so without a ceiling a
+// single unlucky body can make one step cost hundreds of times a normal
+// one - which is exactly the failure this budget exists to bound. It is a
+// function of the scene alone (never of measured time), so the simulation
+// stays reproducible: a step that runs out of budget integrates its
+// remaining slices at the substep's own resolution, which is the same
+// answer the non-adaptive path would have given.
+const SLICE_WORK_BUDGET = 24_000;
+
+/** How far a body may deviate from its straight chord within a step before
+ * the path is worth resolving more finely: a small fraction of the body's
+ * own size, with a floor for point-like bodies. */
+function deviationTol(b: Body): number {
+  const tol = b.radius * 0.04;
+  return tol < 0.002 ? 0.002 : tol;
+}
 
 /** Centre the runaway test on the scene's fixed furniture (walls,
  * anchors, locked bodies), falling back to the origin. Never the camera:
@@ -291,6 +318,10 @@ export class World {
   // evaluation - RK4 calls that four times per slice.
   private driven: Array<[Driver, Body]> = [];
   private contactStatic: ContactStatic = {};
+  // slices the current step may still spend (see SLICE_WORK_BUDGET)
+  private sliceBudget = 0;
+  // interval separating each body's `acc` from its `accPrev` sample
+  private accSampleDt = 0.0;
 
   // ------------------------------------------------------------------ forces
   /** Rebuild the per-step caches. Body/link lists cannot change during a
@@ -353,6 +384,18 @@ export class World {
       s.cEff = c;
     }
     this.movers = this.bodies.filter((b) => b.invMass !== 0.0);
+    // The trace anchors are keyed by body id and ids are never reused, so
+    // without pruning the map keeps an entry for every body that has ever
+    // been culled, erased or duplicated - a slow leak in a debris-heavy
+    // scene, and a growing cost on every sliced substep. Only worth a pass
+    // once it has clearly outgrown the live set.
+    if (this.traceLast.size > this.movers.length * 2 + 16) {
+      const live = new Set<number>();
+      for (const b of this.movers) live.add(b.id);
+      for (const id of this.traceLast.keys()) {
+        if (!live.has(id)) this.traceLast.delete(id);
+      }
+    }
     this.driven = [];
     if (this.drivers.length > 0) {
       const byId = new Map<number, Body>();
@@ -390,54 +433,159 @@ export class World {
       b.acc.set(ax, ay);
     }
 
-    if (this.mutualGravity && this.G !== 0.0) {
-      const bodies = this.bodies;
-      const n = bodies.length;
-      const G = this.G;
-      const eps2 = this.softening * this.softening;
-      const solid = !this.pointGravity;
+    if (this.mutualGravity && this.G !== 0.0) this.accumulateGravity();
+
+    for (const link of this.links) {
+      if (link instanceof SpringLink) link.applyForces();
+    }
+    this.applyDriversAndFields(t);
+  }
+
+  // Flat scratch for the O(n^2) attraction pass, grown geometrically and
+  // reused. See accumulateGravity for why the bodies are packed at all.
+  private nbCap = 0;
+  private nbX = new Float64Array(0);
+  private nbY = new Float64Array(0);
+  private nbMass = new Float64Array(0);
+  private nbRadius = new Float64Array(0);
+  private nbAx = new Float64Array(0);
+  private nbAy = new Float64Array(0);
+  private nbMovable = new Uint8Array(0);
+  private nbBody: Body[] = [];
+
+  /** Pairwise Newtonian attraction between every non-anchor body.
+   *
+   * This is the hottest loop in the engine - it is the only O(n^2) term,
+   * and every integrator runs it once to four times per slice. It reads
+   * from flat typed arrays rather than straight off the bodies because
+   * the object form was costing 88 ns per pair at 400 bodies, roughly
+   * twenty times the arithmetic in it. Two things were responsible:
+   *
+   *   - `invMass` is a GETTER (three branches and a division), and it was
+   *     being evaluated once per PAIR for the inner body;
+   *   - every coordinate came through two hops, Body -> Vec2 -> number,
+   *     scattering the reads across as many small objects as there are
+   *     bodies times five.
+   *
+   * Packing is O(n) and disappears next to the O(n^2) it feeds. The
+   * accumulators are SEEDED with each body's existing acceleration rather
+   * than with zero, so every addition happens in the same order and on the
+   * same running total as the straightforward object loop: the result is
+   * bit-for-bit identical, not merely equivalent (see the reference
+   * comparison in gravity.test.ts).
+   */
+  private accumulateGravity(): void {
+    const bodies = this.bodies;
+    const total = bodies.length;
+    if (total < 2) return;
+    if (this.nbCap < total) {
+      let cap = this.nbCap > 0 ? this.nbCap : 16;
+      while (cap < total) cap *= 2;
+      this.nbCap = cap;
+      this.nbX = new Float64Array(cap);
+      this.nbY = new Float64Array(cap);
+      this.nbMass = new Float64Array(cap);
+      this.nbRadius = new Float64Array(cap);
+      this.nbAx = new Float64Array(cap);
+      this.nbAy = new Float64Array(cap);
+      this.nbMovable = new Uint8Array(cap);
+      this.nbBody = new Array<Body>(cap);
+    }
+    const px = this.nbX;
+    const py = this.nbY;
+    const mass = this.nbMass;
+    const radius = this.nbRadius;
+    const ax = this.nbAx;
+    const ay = this.nbAy;
+    const movable = this.nbMovable;
+    const ref = this.nbBody;
+
+    let n = 0;
+    for (let k = 0; k < total; k++) {
+      const b = bodies[k];
+      if (b.isAnchor) continue; // anchors neither pull nor are pulled
+      px[n] = b.pos.x;
+      py[n] = b.pos.y;
+      mass[n] = b.mass;
+      radius[n] = b.radius;
+      movable[n] = b.invMass !== 0.0 ? 1 : 0;
+      ax[n] = b.acc.x; // seeded, not zeroed: see the note above
+      ay[n] = b.acc.y;
+      ref[n] = b;
+      n++;
+    }
+    if (n < 2) return;
+
+    const G = this.G;
+    const eps2 = this.softening * this.softening;
+    if (this.pointGravity) {
+      // point masses: the whole mass acts from the centre, singular as r->0
       for (let i = 0; i < n; i++) {
-        const bi = bodies[i];
-        if (bi.isAnchor) continue; // anchors neither pull nor are pulled
-        const bix = bi.pos.x;
-        const biy = bi.pos.y;
-        const biAcc = bi.acc;
-        const biMovable = bi.invMass !== 0.0;
-        const biMass = bi.mass;
-        const biR = bi.radius;
+        const bix = px[i];
+        const biy = py[i];
+        const biMass = mass[i];
+        const biMovable = movable[i];
         for (let j = i + 1; j < n; j++) {
-          const bj = bodies[j];
-          if (bj.isAnchor) continue;
-          const dx = bj.pos.x - bix;
-          const dy = bj.pos.y - biy;
-          let r2 = dx * dx + dy * dy;
-          if (solid) {
-            // solid uniform bodies: once the discs overlap the pull ramps
-            // linearly to zero at the centre (interior field of a uniform
-            // body) instead of diverging like a point-mass singularity
-            const R = biR + bj.radius;
-            if (r2 < R * R) r2 = R * R;
+          const dx = px[j] - bix;
+          const dy = py[j] - biy;
+          const d2 = dx * dx + dy * dy + eps2;
+          const s = G / (d2 * Math.sqrt(d2)); // G / d^3
+          if (biMovable !== 0) {
+            const m = s * mass[j];
+            ax[i] += m * dx;
+            ay[i] += m * dy;
           }
+          if (movable[j] !== 0) {
+            const m = s * biMass;
+            ax[j] -= m * dx;
+            ay[j] -= m * dy;
+          }
+        }
+      }
+    } else {
+      // solid uniform bodies: once the discs overlap the pull ramps
+      // linearly to zero at the centre (interior field of a uniform body)
+      // instead of diverging like a point-mass singularity
+      for (let i = 0; i < n; i++) {
+        const bix = px[i];
+        const biy = py[i];
+        const biMass = mass[i];
+        const biR = radius[i];
+        const biMovable = movable[i];
+        for (let j = i + 1; j < n; j++) {
+          const dx = px[j] - bix;
+          const dy = py[j] - biy;
+          let r2 = dx * dx + dy * dy;
+          const R = biR + radius[j];
+          const R2 = R * R;
+          if (r2 < R2) r2 = R2;
           const d2 = r2 + eps2;
           const s = G / (d2 * Math.sqrt(d2)); // G / d^3
-          if (biMovable) {
-            const m = s * bj.mass;
-            biAcc.x += m * dx;
-            biAcc.y += m * dy;
+          if (biMovable !== 0) {
+            const m = s * mass[j];
+            ax[i] += m * dx;
+            ay[i] += m * dy;
           }
-          if (bj.invMass !== 0.0) {
+          if (movable[j] !== 0) {
             const m = s * biMass;
-            bj.acc.x -= m * dx;
-            bj.acc.y -= m * dy;
+            ax[j] -= m * dx;
+            ay[j] -= m * dy;
           }
         }
       }
     }
 
-    for (const link of this.links) {
-      if (link instanceof SpringLink) link.applyForces();
+    for (let k = 0; k < n; k++) {
+      const acc = ref[k].acc;
+      acc.x = ax[k];
+      acc.y = ay[k];
     }
+  }
 
+  /** Sinusoidal drivers, user force fields and the rod tension solve - the
+   * tail of accumulateForces, split out only to keep that function short
+   * enough to read alongside the packed attraction pass above. */
+  private applyDriversAndFields(t: number): void {
     if (this.driven.length > 0) {
       const TAU = 2 * Math.PI;
       for (const [drv, b] of this.driven) {
@@ -542,46 +690,113 @@ export class World {
   }
 
   // -------------------------------------------------------------- integrators
-  /** Largest a/|v| over the moving bodies: how fast (rad/s) the
-   * fastest-turning body's velocity direction is being swung by the
-   * current accelerations. Spikes during gravitational close passes.
+  /** How fast (1/s) the acceleration acting on the worst-affected body is
+   * CHANGING along its trajectory: max |da/dt| / |a|, estimated by
+   * differencing each body's acceleration against the one recorded a
+   * slice ago.
    *
-   * Bodies in persistent contact are skipped: the contact impulses cancel
-   * their acceleration each substep (a resting stack has huge a and ~zero
-   * v forever), so slicing them buys no accuracy and used to cost tens of
-   * times the frame budget in resting mutual-gravity clusters. */
-  private maxSwingRate(): number {
-    let worst = 0.0;
-    for (const b of this.bodies) {
-      if (b.invMass === 0.0 || b.touching) continue;
+   * This is the quantity the slicer actually needs. Every integrator here
+   * is exact for constant acceleration and accurate to its own order while
+   * the acceleration varies slowly; what breaks a close encounter is that
+   * the force changes by a large factor within one step, which no fixed
+   * step size can follow. Differencing measures precisely that, and it
+   * subsumes the "velocity swing" the criterion was named for: in a
+   * circular orbit the acceleration vector rotates at the orbital rate, so
+   * ENCOUNTER_ANGLE keeps its original meaning of radians per slice.
+   *
+   * The previous form, |a| / (|v| + 0.05), measured neither. It grew
+   * without bound as a body merely slowed down, so a single particle
+   * resting on a heavy star - a completely static configuration, with an
+   * acceleration that barely changes at all - pinned the slicer at its
+   * refinement floor for as long as the particle existed and multiplied
+   * the cost of the entire scene by two orders of magnitude. Its
+   * replacement reports ~0 there and still resolves a genuine near-
+   * singular flyby down to microsecond slices.
+   *
+   * `dt` is the interval the two samples are separated by. Bodies in
+   * persistent contact are skipped: the contact impulses discard their
+   * acceleration each substep, so its history says nothing about their
+   * path. Bodies whose acceleration is negligible next to the scene's
+   * largest are skipped too, so that a distant coasting body's rounding
+   * noise cannot divide its way to a huge relative rate.
+   */
+  private maxAccelChangeRate(dt: number): number {
+    const movers = this.movers;
+    let aMax = 0.0;
+    for (const b of movers) {
       const a2 = b.acc.x * b.acc.x + b.acc.y * b.acc.y;
-      if (a2 === 0.0) continue;
-      const v = Math.sqrt(b.vel.x * b.vel.x + b.vel.y * b.vel.y);
-      const w = Math.sqrt(a2) / (v + 0.05);
-      if (w > worst) worst = w;
+      if (a2 > aMax) aMax = a2;
+    }
+    if (aMax === 0.0 || dt <= 0.0) return 0.0;
+    const floor2 = aMax * 1e-8; // (1e-4 of the largest acceleration)^2
+    const invDt = 1.0 / dt;
+    let worst = 0.0;
+    for (const b of movers) {
+      if (b.touching) continue;
+      const ax = b.acc.x;
+      const ay = b.acc.y;
+      const a2 = ax * ax + ay * ay;
+      if (a2 <= floor2) continue;
+      // an exactly zero reference means no history yet (a body added this
+      // step, or the very first step of a scene), not an infinitely fast
+      // change: a real acceleration is never exactly zero for long, and
+      // treating the seeding sample as a jump used to slice the first
+      // substep of every scene for no reason
+      if (b.accPrevX === 0.0 && b.accPrevY === 0.0) continue;
+      const dx = ax - b.accPrevX;
+      const dy = ay - b.accPrevY;
+      const d2 = dx * dx + dy * dy;
+      if (d2 === 0.0) continue;
+      const rate = Math.sqrt(d2 / a2) * invDt;
+      if (rate > worst) worst = rate;
     }
     return worst;
   }
 
-  /** March through one substep in adaptively sized slices.
+  /** Record the current accelerations as the reference the next slice's
+   * change rate is measured against. */
+  private noteAccel(): void {
+    for (const b of this.movers) {
+      b.accPrevX = b.acc.x;
+      b.accPrevY = b.acc.y;
+    }
+  }
+
+  /** March through one substep in adaptively sized slices, starting at
+   * simulated time `t0`.
    *
-   * Each slice is capped at ENCOUNTER_ANGLE / (max a/|v|), re-evaluated
+   * Each slice is capped at ENCOUNTER_ANGLE / (rate of change of the
+   * acceleration), re-evaluated
    * from the freshest accelerations after every slice, so a close
    * encounter deepening mid-substep keeps getting finer resolution
    * (down to h/ENCOUNTER_MAX_SLICES). This is what keeps the energy of
    * near-collision N-body orbits from exploding, at no cost to calm
-   * scenes. */
-  private integrateAdaptive(h: number): void {
+   * scenes.
+   *
+   * `this.sliceBudget` bounds the total refinement one step() may buy, so
+   * the cost of a step stays within a constant factor of the scene's size
+   * however the state evolves. Slices are charged against it across all of
+   * the step's substeps; once it is spent the remainder integrates at the
+   * substep's own resolution.
+   */
+  private integrateAdaptive(h: number, t0: number): void {
     let remaining = h;
     const floor = h / ENCOUNTER_MAX_SLICES;
     let guard = 2 * ENCOUNTER_MAX_SLICES; // hard bound on work
     const spacing = this.traceSpacing;
+    let elapsed = 0.0;
     while (remaining > 1e-12 && guard > 0) {
       guard--;
-      const w = this.maxSwingRate();
+      const w = this.sliceBudget > 0
+        ? this.maxAccelChangeRate(this.accSampleDt) : 0.0;
       let hh = w <= 0.0 ? remaining : Math.min(remaining, this.encounterAngle / w);
       if (hh < floor) hh = floor;
+      if (hh > remaining) hh = remaining;
       const sliced = hh < remaining;
+      // the accelerations standing now become the reference the next
+      // slice's change rate is differenced against
+      this.noteAccel();
+      this.accSampleDt = hh;
       if (sliced && spacing > 0.0) {
         // capture the path inside the slicing so trails show the
         // encounter's curve instead of a step-to-step corner
@@ -589,7 +804,8 @@ export class World {
           const last = this.traceLast.get(b.id);
           if (last === undefined ||
               Math.abs(last[0] - b.pos.x) + Math.abs(last[1] - b.pos.y) >= spacing) {
-            this.traceLast.set(b.id, [b.pos.x, b.pos.y]);
+            if (last === undefined) this.traceLast.set(b.id, [b.pos.x, b.pos.y]);
+            else { last[0] = b.pos.x; last[1] = b.pos.y; }
             this.trace.push([b.id, b.pos.x, b.pos.y]);
           }
         }
@@ -600,21 +816,28 @@ export class World {
         // so mid-encounter it has no edge - while RK4's O(h^5) local error
         // makes the brief violent stretch essentially exact, and it is too
         // short for RK4's long-term drift to matter.
-        this.integrateRk4(hh);
+        this.sliceBudget--;
+        this.integrateRk4(hh, t0 + elapsed);
       } else {
-        this.integrate(hh);
+        this.integrate(hh, t0 + elapsed);
       }
       remaining -= hh;
+      elapsed += hh;
     }
   }
 
-  private integrate(h: number): void {
+  /** Advance every mover by `h`, evaluating time-dependent forces from
+   * simulated time `t0`. `t0` is passed rather than read from `this.time`
+   * because the slicer marches several of these through one substep, and
+   * a driver or a force field containing `t` must see each slice's own
+   * time rather than the substep's start for all of them. */
+  private integrate(h: number, t0: number): void {
     const name = this.integrator;
     const movers = this.movers;
     if (name === "RK4") {
-      this.integrateRk4(h);
+      this.integrateRk4(h, t0);
     } else if (name === "Symplectic Euler") {
-      this.accumulateForces(this.time);
+      this.accumulateForces(t0);
       for (const b of movers) {
         b.angle += b.omega * h;
         b.vel.x += b.acc.x * h;
@@ -623,7 +846,7 @@ export class World {
         b.pos.y += b.vel.y * h;
       }
     } else { // Velocity Verlet
-      this.accumulateForces(this.time);
+      this.accumulateForces(t0);
       const half = 0.5 * h;
       for (const b of movers) {
         b.angle += b.omega * h;
@@ -632,7 +855,7 @@ export class World {
         b.pos.x += b.vel.x * h;
         b.pos.y += b.vel.y * h;
       }
-      this.accumulateForces(this.time + h);
+      this.accumulateForces(t0 + h);
       for (const b of movers) {
         b.vel.x += b.acc.x * half;
         b.vel.y += b.acc.y * half;
@@ -640,53 +863,73 @@ export class World {
     }
   }
 
-  private integrateRk4(h: number): void {
+  // RK4 scratch: [px, py, vx, vy] per mover for the base state and the four
+  // stage derivatives. Reused across calls and grown geometrically, because
+  // the slicer can invoke RK4 hundreds of times inside a single step and
+  // allocating five typed arrays plus two closures per call made the garbage
+  // collector, not the physics, the dominant cost of a close encounter.
+  private rkScratch: Float64Array[] = [];
+  private rkCapacity = 0;
+
+  private rkEnsure(n: number): void {
+    if (this.rkCapacity >= n) return;
+    let cap = this.rkCapacity > 0 ? this.rkCapacity : 8;
+    while (cap < n) cap *= 2;
+    this.rkCapacity = cap;
+    this.rkScratch = [0, 1, 2, 3, 4].map(() => new Float64Array(4 * cap));
+  }
+
+  /** One RK4 stage: evaluate the derivative of [px, py, vx, vy] at time
+   * `t` into `out`. */
+  private rkDeriv(t: number, out: Float64Array): void {
+    this.accumulateForces(t);
+    const movers = this.movers;
+    for (let i = 0; i < movers.length; i++) {
+      const b = movers[i];
+      const o = 4 * i;
+      out[o] = b.vel.x;
+      out[o + 1] = b.vel.y;
+      out[o + 2] = b.acc.x;
+      out[o + 3] = b.acc.y;
+    }
+  }
+
+  /** Write base + scale * deriv back into the bodies (an RK4 trial state). */
+  private rkLoad(base: Float64Array, deriv: Float64Array, scale: number): void {
+    const movers = this.movers;
+    for (let i = 0; i < movers.length; i++) {
+      const b = movers[i];
+      const o = 4 * i;
+      b.pos.x = base[o] + scale * deriv[o];
+      b.pos.y = base[o + 1] + scale * deriv[o + 1];
+      b.vel.x = base[o + 2] + scale * deriv[o + 2];
+      b.vel.y = base[o + 3] + scale * deriv[o + 3];
+    }
+  }
+
+  private integrateRk4(h: number, t0: number): void {
     const movers = this.movers;
     const n = movers.length;
     if (n === 0) return;
     for (const b of movers) b.angle += b.omega * h;
-    // state and derivative arrays: [px, py, vx, vy] per mover
-    const x0 = new Float64Array(4 * n);
+    this.rkEnsure(n);
+    const [x0, k1, k2, k3, k4] = this.rkScratch;
     for (let i = 0; i < n; i++) {
       const b = movers[i];
-      x0[4 * i] = b.pos.x;
-      x0[4 * i + 1] = b.pos.y;
-      x0[4 * i + 2] = b.vel.x;
-      x0[4 * i + 3] = b.vel.y;
+      const o = 4 * i;
+      x0[o] = b.pos.x;
+      x0[o + 1] = b.pos.y;
+      x0[o + 2] = b.vel.x;
+      x0[o + 3] = b.vel.y;
     }
 
-    const evalAcc = (t: number, out: Float64Array): void => {
-      // derivative of [px, py, vx, vy] is [vx, vy, ax, ay]
-      this.accumulateForces(t);
-      for (let i = 0; i < n; i++) {
-        const b = movers[i];
-        out[4 * i] = b.vel.x;
-        out[4 * i + 1] = b.vel.y;
-        out[4 * i + 2] = b.acc.x;
-        out[4 * i + 3] = b.acc.y;
-      }
-    };
-    const load = (base: Float64Array, deriv: Float64Array, scale: number): void => {
-      for (let i = 0; i < n; i++) {
-        const b = movers[i];
-        b.pos.x = base[4 * i] + scale * deriv[4 * i];
-        b.pos.y = base[4 * i + 1] + scale * deriv[4 * i + 1];
-        b.vel.x = base[4 * i + 2] + scale * deriv[4 * i + 2];
-        b.vel.y = base[4 * i + 3] + scale * deriv[4 * i + 3];
-      }
-    };
-
-    const k1 = new Float64Array(4 * n);
-    const k2 = new Float64Array(4 * n);
-    const k3 = new Float64Array(4 * n);
-    const k4 = new Float64Array(4 * n);
-    evalAcc(this.time, k1);
-    load(x0, k1, 0.5 * h);
-    evalAcc(this.time + 0.5 * h, k2);
-    load(x0, k2, 0.5 * h);
-    evalAcc(this.time + 0.5 * h, k3);
-    load(x0, k3, h);
-    evalAcc(this.time + h, k4);
+    this.rkDeriv(t0, k1);
+    this.rkLoad(x0, k1, 0.5 * h);
+    this.rkDeriv(t0 + 0.5 * h, k2);
+    this.rkLoad(x0, k2, 0.5 * h);
+    this.rkDeriv(t0 + 0.5 * h, k3);
+    this.rkLoad(x0, k3, h);
+    this.rkDeriv(t0 + h, k4);
 
     const sixth = h / 6.0;
     for (let i = 0; i < n; i++) {
@@ -717,11 +960,28 @@ export class World {
     // N-body scenes get adaptive slice-marching inside each substep so
     // close encounters can't blow up; everything else is untouched
     const adaptive = this.mutualGravity && this.G !== 0.0;
+    if (adaptive) {
+      // One evaluation costs roughly (bodies + pairs); one slice is four of
+      // them. Spending the budget in work rather than in slices lets a
+      // three-body choreography refine deeply - it is nearly free - while a
+      // crowded cloud, where the same refinement would cost a hundred times
+      // as much, keeps its frame.
+      const nb = this.bodies.length;
+      const perEval = nb + (nb * (nb - 1)) / 2;
+      // No floor: a scene too large to afford even one slice gets none,
+      // and integrates at its substep resolution exactly as it would with
+      // adaptive resolution switched off. A floor of a few slices sounds
+      // harmless and is not - at 400 bodies each one costs four O(n^2)
+      // evaluations, which quadrupled the cost of the step it was meant to
+      // be a rounding error on.
+      this.sliceBudget = Math.min(ENCOUNTER_MAX_SLICES * n,
+        Math.floor(SLICE_WORK_BUDGET / (4 * Math.max(1, perEval))));
+    }
     for (let s = 0; s < n; s++) {
       // (spin integration happens inside the integrator body loops;
       // torque only arises from contacts, applied there)
-      if (adaptive) this.integrateAdaptive(h);
-      else this.integrate(h);
+      if (adaptive) this.integrateAdaptive(h, this.time);
+      else this.integrate(h, this.time);
 
       if (rigid.length > 0) this.solveRodPositions(rigid, invH, iters);
 
@@ -889,8 +1149,7 @@ export class World {
       const ax = b.acc.x;
       const ay = b.acc.y;
       const dev = Math.sqrt(ax * ax + ay * ay) * k;
-      let tol = b.radius * 0.04;
-      if (tol < 0.002) tol = 0.002;
+      const tol = deviationTol(b);
       if (dev > tol * q * q) { // only beat the current best
         const need = Math.floor(Math.sqrt(dev / tol)) + 1;
         if (need >= maxQ) return maxQ;
