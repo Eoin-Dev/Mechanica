@@ -130,7 +130,11 @@ document.addEventListener("keydown", (e) => {
       // cancel an in-progress link/wall first, then clear the selection
       if (!app.controller.cancelPending()) app.setSelection([]);
       break;
-    case "Tab":
+    // NOT Tab. Binding Tab here (and preventing its default) meant focus
+    // could never leave the document body, so nothing in the app was
+    // reachable by keyboard at all - no tool button, no checkbox, no
+    // slider. Backslash is unclaimed and adjacent to the same hand.
+    case "\\":
       inspector.toggleCollapsed();
       break;
     case "F1":

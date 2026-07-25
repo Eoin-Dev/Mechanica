@@ -42,6 +42,12 @@ export const GRAPH_MAX_POINTS = 1200;
  * at the sampling cadence this is ~10k samples per channel. */
 export const GRAPH_HISTORY_S = 120.0;
 
+/** How many expired samples may sit at the front of the backing arrays
+ * before they are collected. This is a memory-reclaim threshold only: an
+ * expired sample is already invisible to every reader the moment it
+ * expires, so the retained span is unaffected by how large this is. */
+const COMPACT_BLOCK = 512;
+
 /** How far the phase plot may overrun its point cap before compacting.
  * Unlike TimeSeries it exposes no retention guarantee - it is a shape, not
  * a time axis - so it can trade a little slack for O(1) amortised adds. */
@@ -62,8 +68,15 @@ export interface GraphView {
  */
 export class TimeSeries {
   channels: string[];
-  t: number[] = [];
-  data: Map<string, number[]>;
+  // Backing storage. Samples before `head` have expired and are logically
+  // gone - `count`, `firstT` and every accessor below skip them - but the
+  // memory is only reclaimed in blocks (see evict). Splitting the logical
+  // window from the physical array is what lets eviction be O(1) while the
+  // retained span stays EXACTLY historyS: dropping a sample costs one
+  // increment, not a shift of every element in four channel arrays.
+  private ts: number[] = [];
+  private data: Map<string, number[]>;
+  private head = 0;
   hidden = new Set<string>();
   /** Bumped on every mutation so renderers can skip unchanged frames. */
   rev = 0;
@@ -81,23 +94,44 @@ export class TimeSeries {
     this.data = new Map(channels.map((c) => [c, []]));
   }
 
+  /** Number of live (unexpired) samples. */
+  get count(): number { return this.ts.length - this.head; }
+
+  /** Time of the i-th live sample, oldest first. */
+  timeAt(i: number): number { return this.ts[this.head + i]; }
+
+  /** Value of `channel` at the i-th live sample, oldest first. */
+  valueAt(channel: string, i: number): number {
+    return this.data.get(channel)![this.head + i];
+  }
+
+  /** Every live value of one channel, oldest first (tests and callers that
+   * want a plain array; the draw path uses valueAt and never allocates). */
+  values(channel: string): number[] {
+    return this.data.get(channel)!.slice(this.head);
+  }
+
+  /** Live sample times, oldest first. */
+  times(): number[] { return this.ts.slice(this.head); }
+
   /** Oldest / newest retained sample time (NaN when empty). */
-  get firstT(): number { return this.t.length > 0 ? this.t[0] : NaN; }
+  get firstT(): number { return this.count > 0 ? this.ts[this.head] : NaN; }
   get lastT(): number {
-    return this.t.length > 0 ? this.t[this.t.length - 1] : NaN;
+    return this.count > 0 ? this.ts[this.ts.length - 1] : NaN;
   }
 
   clear(): void {
-    this.t.length = 0;
+    this.ts.length = 0;
     for (const d of this.data.values()) d.length = 0;
+    this.head = 0;
     this.view = null;
     this.rev++;
   }
 
   /** Drop samples newer than time t (stepping the simulation back). */
   truncate(t: number): void {
-    while (this.t.length > 0 && this.t[this.t.length - 1] > t + 1e-9) {
-      this.t.pop();
+    while (this.count > 0 && this.ts[this.ts.length - 1] > t + 1e-9) {
+      this.ts.pop();
       for (const d of this.data.values()) d.pop();
       this.rev++;
     }
@@ -110,21 +144,21 @@ export class TimeSeries {
     for (const v of Object.values(values)) {
       if (!Number.isFinite(v)) return;
     }
-    if (this.t.length > 0 && t < this.t[this.t.length - 1]) {
+    if (this.count > 0 && t < this.ts[this.ts.length - 1]) {
       this.clear(); // simulation was reset/rewound
     }
     // a re-sample at the same time (seeding an opened graph, or a frame
     // where the clock didn't advance) updates in place instead of stacking
     // duplicate points
-    const last = this.t.length - 1;
-    if (last >= 0 && t === this.t[last]) {
+    const last = this.ts.length - 1;
+    if (this.count > 0 && t === this.ts[last]) {
       for (const c of this.channels) {
         this.data.get(c)![last] = values[c] ?? 0.0;
       }
       this.rev++;
       return;
     }
-    this.t.push(t);
+    this.ts.push(t);
     for (const c of this.channels) {
       this.data.get(c)!.push(values[c] ?? 0.0);
     }
@@ -138,21 +172,27 @@ export class TimeSeries {
    * so an all-day run cannot grow memory without bound; maxlen is a hard
    * safety cap on top.
    *
-   * Deliberately EXACT rather than batched: the retained span is a
-   * user-visible guarantee (it is exactly how far back the graph can be
-   * scrolled), so trailing extra samples to make eviction cheaper is not a
-   * free trade. One `splice` per add rather than a `shift` per expired
-   * sample keeps the common case at one array move instead of several, and
-   * makes catching up after a long stall a single operation. */
+   * Exact AND cheap. Expiring a sample only advances `head`, so the
+   * retained span is precisely historyS from the first add onward - the
+   * span is a user-visible guarantee (it is exactly how far back the graph
+   * scrolls), so it is not something to trade away. Reclaiming the memory
+   * is the expensive half, and that is the part deferred: once the dead
+   * prefix is worth collecting, one splice drops the lot.
+   *
+   * The previous version shifted every element of five arrays on every
+   * add. Past the first two minutes a sample expires on essentially every
+   * add, so that was ~50k element moves per sample for the rest of the
+   * run. */
   private evict(now: number): void {
     const cutoff = now - this.historyS;
-    const n = this.t.length;
-    let drop = 0;
-    while (drop < n - 2 && this.t[drop] < cutoff) drop++;
-    if (n - drop > this.maxlen) drop = n - this.maxlen;
-    if (drop <= 0) return;
-    this.t.splice(0, drop);
-    for (const d of this.data.values()) d.splice(0, drop);
+    const n = this.ts.length;
+    // keep at least two live samples so a line always has something to draw
+    while (this.head < n - 2 && this.ts[this.head] < cutoff) this.head++;
+    if (n - this.head > this.maxlen) this.head = n - this.maxlen;
+    if (this.head < COMPACT_BLOCK) return;
+    this.ts.splice(0, this.head);
+    for (const d of this.data.values()) d.splice(0, this.head);
+    this.head = 0;
   }
 
   /** Toggle a channel's visibility when its legend entry is clicked. */
@@ -175,7 +215,7 @@ export class TimeSeries {
     for (let ci = this.channels.length - 1; ci >= 0; ci--) {
       const c = this.channels[ci];
       const d = this.data.get(c)!;
-      const val = d.length > 0 ? d[d.length - 1] : 0.0;
+      const val = this.count > 0 ? d[d.length - 1] : 0.0;
       const off = this.hidden.has(c);
       const lbl = `${c}: ${fmt(val)}`;
       const tw = ctx.measureText(lbl).width;
@@ -189,16 +229,16 @@ export class TimeSeries {
     }
   }
 
-  /** First index with t >= tv (binary search; ts is sorted ascending). */
+  /** First LIVE index with t >= tv (binary search; times ascending). */
   private lowerBound(tv: number): number {
-    let a = 0;
-    let b = this.t.length;
+    let a = this.head;
+    let b = this.ts.length;
     while (a < b) {
       const m = (a + b) >> 1;
-      if (this.t[m] < tv) a = m + 1;
+      if (this.ts[m] < tv) a = m + 1;
       else b = m;
     }
-    return a;
+    return a - this.head;
   }
 
   draw(ctx: CanvasRenderingContext2D, w: number, h: number, title: string,
@@ -209,7 +249,7 @@ export class TimeSeries {
     ctx.fillText(title, 10, 15);
     ctx.font = "11px system-ui, sans-serif";
     this.drawLegend(ctx, w);
-    if (this.t.length === 0) {
+    if (this.count === 0) {
       ctx.fillStyle = css(theme.TEXT_FAINT);
       ctx.textAlign = "center";
       ctx.fillText("Run the simulation to collect data", w / 2, h / 2);
@@ -227,7 +267,11 @@ export class TimeSeries {
     }
     const plot = { x: 8, y: 26, w: w - 16, h: h - 42 };
     if (plot.w < 20 || plot.h < 16) return;
-    const ts = this.t;
+    // i0/i1 below are LIVE indices (0 = oldest unexpired sample); H turns
+    // one into an index in the backing arrays
+    const ts = this.ts;
+    const H = this.head;
+    const n = this.count;
     // Visible time range. Live (end null): right edge follows the newest
     // sample, and while the data is younger than the span the plot
     // stretches what exists (the familiar early squeeze). Detached
@@ -235,17 +279,17 @@ export class TimeSeries {
     const span = view?.span ?? GRAPH_WINDOW_S;
     const detached = view !== undefined && view.end !== null;
     const t1 = detached ? (view.end as number) : ts[ts.length - 1];
-    const t0 = detached ? t1 - span : Math.max(ts[0], t1 - span);
+    const t0 = detached ? t1 - span : Math.max(ts[H], t1 - span);
     // indices covering [t0, t1] plus one sample either side so the line
     // enters and exits the plot instead of stopping at the first sample
     const i0 = Math.max(0, this.lowerBound(t0) - 1);
-    const i1 = Math.min(ts.length - 1, this.lowerBound(t1 + 1e-12));
+    const i1 = Math.min(n - 1, this.lowerBound(t1 + 1e-12));
     let lo = Infinity;
     let hi = -Infinity;
     for (const c of visible) {
       const d = this.data.get(c)!;
       for (let i = i0; i <= i1; i++) {
-        const v = d[i];
+        const v = d[H + i];
         if (v < lo) lo = v;
         if (v > hi) hi = v;
       }
@@ -328,18 +372,18 @@ export class TimeSeries {
       const d = this.data.get(c)!;
       if (i1 === i0) {
         // single visible sample: a stroke needs two points, so mark it
-        const px = plot.x + (ts[i0] - t0) * xScale;
+        const px = plot.x + (ts[H + i0] - t0) * xScale;
         ctx.fillStyle = css(seriesColor(ci));
         ctx.beginPath();
         ctx.arc(Math.max(plot.x, Math.min(plot.x + plot.w, px)),
-                plotBottom - (d[i0] - lo) * yScale, 2.5, 0, 2 * Math.PI);
+                plotBottom - (d[H + i0] - lo) * yScale, 2.5, 0, 2 * Math.PI);
         ctx.fill();
         continue;
       }
       ctx.beginPath();
       for (let i = i0; i <= i1; i++) {
-        const px = plot.x + (ts[i] - t0) * xScale;
-        const py = plotBottom - (d[i] - lo) * yScale;
+        const px = plot.x + (ts[H + i] - t0) * xScale;
+        const py = plotBottom - (d[H + i] - lo) * yScale;
         if (i === i0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
       }

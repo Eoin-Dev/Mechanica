@@ -116,10 +116,10 @@ describe("time-series rendering", () => {
     const s = new TimeSeries(["E"]);
     s.add(1.0, { E: 5 });
     s.add(1.0, { E: 9 }); // seeded again (e.g. graph toggled twice)
-    expect(s.t.length).toBe(1);
-    expect(s.data.get("E")).toEqual([9]);
+    expect(s.count).toBe(1);
+    expect(s.values("E")).toEqual([9]);
     s.add(1.5, { E: 4 });
-    expect(s.t).toEqual([1.0, 1.5]);
+    expect(s.times()).toEqual([1.0, 1.5]);
   });
 
   it("draws a smooth wave's full vertical extent (peaks kept)", () => {
@@ -138,11 +138,15 @@ describe("time-series rendering", () => {
     for (let i = 0; i < 60 * 60; i++) {
       s.add((t += 1 / 60), { E: Math.sin(i * 0.1) }); // a 60 s run
     }
-    const span = s.t[s.t.length - 1] - s.t[0];
+    // the retained span is EXACT - expiry is a head advance, so deferring
+    // the memory reclaim (see TimeSeries.evict) cannot widen it
+    const span = s.lastT - s.firstT;
     expect(span).toBeLessThanOrEqual(10 + 1e-9);
     expect(span).toBeGreaterThan(10 * 0.95);
-    // memory stays bounded: samples for the retained span only
-    expect(s.t.length).toBeLessThanOrEqual(10 * 60 + 2);
+    // memory stays bounded: samples for the retained span, plus at most one
+    // uncollected block of expired ones
+    expect(s.count).toBeLessThanOrEqual(10 * 60 + 2);
+    expect(s.times().length).toBe(s.count);
   });
 
   it("draws only the requested view range when zoomed/scrolled back", () => {

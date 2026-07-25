@@ -351,6 +351,68 @@ export function textEdit(get: () => string, commit: (s: string) => boolean,
   return { root: input, refresh };
 }
 
+// --------------------------------------------------------------- colourEdit
+/** #rrggbb for an 0-255 RGB triple, and back. The native colour input
+ * speaks hex only, while bodies and walls store integer channels. */
+export function rgbToHex(c: readonly number[]): string {
+  const h = (v: number) =>
+    Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0");
+  return `#${h(c[0])}${h(c[1])}${h(c[2])}`;
+}
+
+export function hexToRgb(hex: string): [number, number, number] {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (m === null) return [128, 128, 128];
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+/** Colour swatch backed by the native picker, plus optional preset chips.
+ *
+ * `input` fires continuously as the user drags through the colour field,
+ * so the value is applied live (you want to see it on the canvas) but the
+ * undo entry is only pushed on `change`, once they settle - otherwise a
+ * single pick would bury the undo stack under a hundred near-identical
+ * states. */
+export function colourEdit(label: string, get: () => readonly number[],
+                           set: (c: [number, number, number]) => void,
+                           opts: { presets?: readonly (readonly number[])[];
+                                   onCommit?: () => void;
+                                   tooltip?: string } = {}): Control {
+  const input = el("input", { type: "color", class: "colour-well" });
+  const row = el("div", { class: "row" },
+                 el("span", { class: "lbl", text: label }), input);
+  if (opts.tooltip) row.title = opts.tooltip;
+  input.addEventListener("input", () => set(hexToRgb(input.value)));
+  input.addEventListener("change", () => {
+    set(hexToRgb(input.value));
+    opts.onCommit?.();
+  });
+
+  let chips: HTMLElement | null = null;
+  if (opts.presets && opts.presets.length > 0) {
+    chips = el("div", { class: "swatch-row colour-presets" });
+    for (const c of opts.presets) {
+      const hex = rgbToHex(c);
+      const b = el("button", { class: "swatch", title: hex });
+      b.append(el("span", { class: "dot", style: `background:${hex}` }));
+      b.addEventListener("click", () => {
+        set(hexToRgb(hex));
+        opts.onCommit?.();
+      });
+      chips.append(b);
+    }
+  }
+
+  const wrap = chips ? el("div", {}, row, chips) : row;
+  const refresh = () => {
+    const hex = rgbToHex(get());
+    if (input.value !== hex) input.value = hex;
+  };
+  refresh();
+  return { root: wrap, refresh };
+}
+
 // ------------------------------------------------------------------ layout
 export function section(title: string): HTMLElement {
   return el("div", { class: "section", text: title });

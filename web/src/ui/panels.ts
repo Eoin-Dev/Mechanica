@@ -285,7 +285,7 @@ export class GraphDock implements Panel {
 
     this.canvas.addEventListener("wheel", (e) => {
       const series = this.activeSeries();
-      if (series === undefined || series.t.length === 0) return;
+      if (series === undefined || series.count === 0) return;
       e.preventDefault();
       const factor = 1.1 ** (-e.deltaY / 100);
       const newSpan = Math.min(GRAPH_HISTORY_S,
@@ -319,7 +319,7 @@ export class GraphDock implements Panel {
       const dx = e.clientX - lastX;
       if (!moved && Math.abs(dx) < 4) return; // not a drag yet
       const series = this.activeSeries();
-      if (series === undefined || series.t.length === 0) return;
+      if (series === undefined || series.count === 0) return;
       moved = true;
       lastX = e.clientX;
       this.setViewEnd((this.viewEnd ?? series.lastT) - spanFor(dx), series);
@@ -424,7 +424,7 @@ export class GraphDock implements Panel {
     // bounded history: rejoin the live edge and tell the user why.
     const series = this.activeSeries();
     if (this.viewEnd !== null && series !== undefined &&
-        series.t.length > 0 && this.viewEnd <= series.firstT) {
+        series.count > 0 && this.viewEnd <= series.firstT) {
       this.viewEnd = null;
       app.toast("That part of the graph history has expired - back to live");
     }

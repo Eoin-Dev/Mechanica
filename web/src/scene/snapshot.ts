@@ -67,10 +67,24 @@ export class UndoStack {
 }
 
 // ------------------------------------------------------- local scene storage
+/** Sanitize a user-supplied scene name into a storage key.
+ *
+ * Letters and digits in ANY script are kept: these are localStorage keys,
+ * not filesystem paths, so there is no reason to restrict them to ASCII -
+ * and doing so silently mangled perfectly ordinary names ("Épreuve" saved
+ * as "preuve", "実験" as "scene"), which also made unrelated names collide
+ * and overwrite one another. What is stripped is only what makes a key
+ * ambiguous or unreadable: control characters, and punctuation beyond
+ * space/underscore/hyphen. Length is capped so one name cannot fill the
+ * storage quota on its own. The .json download path re-sanitizes for the
+ * filesystem separately. */
 function safeName(name: string): string {
-  const cleaned = [...name.trim()]
-    .filter((ch) => /[A-Za-z0-9 _-]/.test(ch))
-    .join("");
+  const cleaned = [...name.normalize("NFC").trim()]
+    .filter((ch) => /[\p{L}\p{N} _-]/u.test(ch))
+    .join("")
+    .replace(/\s+/g, " ")
+    .slice(0, 80)
+    .trim();
   return cleaned || "scene";
 }
 
@@ -167,7 +181,11 @@ export function downloadScene(world: World, name: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `${safeName(name)}.json`;
+  // the storage key may hold any script; a download name additionally has
+  // to survive a filesystem, so fold anything exotic to an underscore -
+  // falling back to "scene" rather than handing over a row of them
+  const folded = safeName(name).replace(/[^A-Za-z0-9 _-]/g, "_");
+  a.download = `${/[A-Za-z0-9]/.test(folded) ? folded : "scene"}.json`;
   a.click();
   // Revoking synchronously races the browser's own fetch of the blob:
   // Chrome usually wins, Firefox and Safari can end up saving an empty

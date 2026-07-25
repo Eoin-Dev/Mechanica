@@ -52,6 +52,7 @@ interface Settings {
   theme?: ThemeName;
   dyslexic_font?: boolean;
   cull?: boolean;
+  drag_hits_walls?: boolean; // a dragged body is stopped by walls
   accent?: string;           // hex UI accent; unset = the theme's default
   custom_accents?: string[]; // user-picked accents shown as extra swatches
   font_scale?: number;       // UI font-size multiplier (0.9 - 1.2)
@@ -154,6 +155,23 @@ export class App {
   /** Delete bodies that have escaped for good (recommended; default on). */
   get cullEnabled(): boolean {
     return this.settings.cull ?? true;
+  }
+
+  /** Whether a body being dragged is stopped by walls.
+   *
+   * Off by default, which is the long-standing behaviour: a held body is
+   * infinite mass so it tracks the cursor exactly, and the contact solver
+   * skips infinite-mass-vs-wall pairs, so it passes through scenery. That
+   * is genuinely useful for placing something on the far side of a wall,
+   * and it is also how every existing scene was built - so it stays the
+   * default and the solid behaviour is opt-in. */
+  get dragHitsWalls(): boolean {
+    return this.settings.drag_hits_walls ?? false;
+  }
+
+  setDragHitsWalls(on: boolean): void {
+    this.settings.drag_hits_walls = on;
+    this.saveSettings();
   }
 
   /** How far a body must stray before it counts as gone: several times

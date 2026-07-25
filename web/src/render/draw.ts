@@ -533,19 +533,24 @@ export function drawScaleBar(ctx: CanvasRenderingContext2D, cam: Camera,
   ctx.textAlign = "left";
 }
 
-/** Hit test helpers shared by the interaction layer. */
-export function distToSegment(px: number, py: number, ax: number, ay: number,
-                              bx: number, by: number): number {
-  const sx = bx - ax;
-  const sy = by - ay;
+/** Shortest distance from a point to the segment a-b.
+ *
+ * The one hit-test primitive, used by the interaction layer to pick links
+ * and walls. There were two copies of this - one here, one private to
+ * tools.ts - and the interaction layer used the private one, so the
+ * "shared" label on this one had been false for a while. */
+export function distToSegment(p: Vec2, a: Vec2, b: Vec2): number {
+  const sx = b.x - a.x;
+  const sy = b.y - a.y;
   const len2 = sx * sx + sy * sy;
   let t = 0.0;
   if (len2 > 0) {
-    t = ((px - ax) * sx + (py - ay) * sy) / len2;
-    t = Math.max(0, Math.min(1, t));
+    t = ((p.x - a.x) * sx + (p.y - a.y) * sy) / len2;
+    if (t < 0) t = 0;
+    else if (t > 1) t = 1;
   }
-  const dx = px - (ax + sx * t);
-  const dy = py - (ay + sy * t);
+  const dx = p.x - (a.x + sx * t);
+  const dy = p.y - (a.y + sy * t);
   return Math.sqrt(dx * dx + dy * dy);
 }
 
