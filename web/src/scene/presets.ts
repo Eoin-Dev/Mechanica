@@ -19,13 +19,90 @@ export interface PresetHints {
 }
 
 export class Preset {
+  /** Build the scene, then apply the shared solver cost ceiling. */
+  build: () => World;
+
   constructor(
     public name: string,
     public category: string,
     public description: string,
-    public build: () => World,
+    builder: () => World,
     public hints: PresetHints = {},
-  ) {}
+  ) {
+    this.build = () => capSolverCost(builder());
+  }
+}
+
+/** Solver settings for one preset, stated rather than defaulted.
+ *
+ * The library is the first thing a visitor runs, and often on a school
+ * laptop, a Chromebook or a phone. `substeps` is the accuracy this
+ * particular scene needs - a delicate three-body choreography needs a lot
+ * and costs nothing because it has three bodies; a 200-particle gas needs
+ * very little and could not afford it anyway. `iterations` is the contact
+ * and link solver budget, which is what actually dominates scenes with
+ * stacks or lattices.
+ *
+ * These are a starting point, not a guarantee: capSolverCost below still
+ * has the last word on genuinely large scenes.
+ */
+function solver(w: World, substeps: number, iterations = 8): World {
+  w.substeps = substeps;
+  w.iterations = iterations;
+  return w;
+}
+
+/** Rough per-substep work in a scene, in arbitrary units.
+ *
+ * Deliberately crude - it cannot know how many contacts will actually form
+ * - but it captures the terms that grow without bound: body count, the
+ * O(n^2) mutual-gravity pass, link count, and the cost of evaluating a
+ * user force field for every body (which the integrator does twice per
+ * substep, and which is by far the most expensive per-body work there is).
+ */
+export function sceneWork(w: World): number {
+  const n = w.bodies.length;
+  const pairs = w.mutualGravity && w.G !== 0 ? (n * (n - 1)) / 2 : 0;
+  // A field is two compiled expressions with transcendentals in them,
+  // evaluated per body and twice per substep by Velocity Verlet - an order
+  // of magnitude more work than a body's ordinary force accumulation, and
+  // measurably the most expensive thing in the library.
+  const fieldCost = w.fields.length * n * 10;
+  // Contacts cannot be counted before they form, but a scene with walls is
+  // a scene where bodies pile up, and each contact costs iterations x
+  // substeps in the solver. Measured on the dense scenes (a 141-particle
+  // Brownian box, a 200-particle gas), contact work runs about three times
+  // the plain per-body cost.
+  const contactish = w.walls.length > 0 ? n * 3 : n * 0.5;
+  return n + pairs + 2 * w.links.length + fieldCost + contactish;
+}
+
+// Work x substeps a preset may cost per step. Calibrated so the heaviest
+// scenes in the library land near a tenth of a real-time frame budget on a
+// mid-range laptop, which leaves a machine several times slower still
+// running them in real time. Physical fidelity is traded away here quite
+// deliberately: someone loading "Gas in a box" is watching 200 particles
+// jostle, not measuring one.
+export const SOLVER_WORK_BUDGET = 1400;
+
+/** Clamp a built scene's solver settings to something a modest machine can
+ * actually run. Applied to every preset centrally so a new one cannot ship
+ * without it, and so the ceiling can be tuned in one place. */
+function capSolverCost(w: World): World {
+  const work = sceneWork(w);
+  if (work > 0) {
+    const affordable = Math.floor(SOLVER_WORK_BUDGET / work);
+    // never below 2: one substep per 1/120 s frame makes stiff springs and
+    // stacked contacts visibly mushy, which is past "less accurate" and
+    // into "looks broken"
+    w.substeps = Math.max(2, Math.min(w.substeps, affordable));
+  }
+  // Contact-heavy scenes get fewer solver iterations. The contact solver
+  // already sheds iterations under load on its own (see solveContacts), so
+  // this only pre-empts the worst cases; 4 still resolves a stack.
+  if (w.bodies.length >= 40) w.iterations = Math.min(w.iterations, 6);
+  if (w.bodies.length >= 120) w.iterations = Math.min(w.iterations, 4);
+  return w;
 }
 
 /** Small deterministic RNG (mulberry32) for the randomized scenes: same
@@ -55,14 +132,17 @@ class Random {
 }
 
 // ----------------------------------------------------------------- helpers
-function spaceWorld(substeps = 4): World {
+/** Zero-gravity world with pairwise attraction on: the base for every
+ * orbital scene. These are small (a handful of bodies) and delicate, so
+ * they can and should spend substeps - the cost ceiling leaves anything
+ * under a few dozen bodies alone. */
+function spaceWorld(substeps = 4, iterations = 8): World {
   const w = new World();
   w.gravity = 0.0;
   w.mutualGravity = true;
   w.G = 1.0;
   w.integrator = "Velocity Verlet";
-  w.substeps = substeps;
-  return w;
+  return solver(w, substeps, iterations);
 }
 
 const PIVOT_GREY: Color = [120, 125, 135];
@@ -359,29 +439,28 @@ const buildButterflyOrbit = (): World => choreography(0.30689, 0.12551);
 // ----------------------------------------------------------------- pendulums
 function buildSimplePendulum(): World {
   const w = new World();
-  w.substeps = 8;
+  solver(w, 8);
   pendulumChain(w, 0, 1.5, 1, 1.5, 1.0, 0.12, 20, [86, 156, 214]);
   return w;
 }
 
 function buildDoublePendulum(): World {
   const w = new World();
-  w.substeps = 12;
+  solver(w, 12);
   pendulumChain(w, 0, 1.2, 2, 0.9, 1.0, 0.12, 115, [220, 130, 90]);
   return w;
 }
 
 function buildTriplePendulum(): World {
   const w = new World();
-  w.substeps = 12;
+  solver(w, 12);
   pendulumChain(w, 0, 1.5, 3, 0.7, 1.0, 0.12, 100, [200, 110, 180]);
   return w;
 }
 
 function buildRope(): World {
   const w = new World();
-  w.substeps = 12;
-  w.iterations = 8;
+  solver(w, 12, 8);
   // elastic string segments: stiff enough that the rope stretches under
   // its own weight by only ~1.5% at the top, slack when compressed - so
   // the rope can fold and whip like real cord. Many short segments give a
@@ -394,7 +473,9 @@ function buildRope(): World {
 
 function buildNewtonsCradle(): World {
   const w = new World();
-  w.substeps = 10;
+  // One ball in, one ball out comes from the sequential impact pass rather
+  // than from fine stepping, so 8 substeps buys the same cradle for less.
+  solver(w, 8, 10);
   const r = 0.15;
   const gap = 0.302; // just over the diameter so balls rest touching
   for (let i = 0; i < 5; i++) {
@@ -413,7 +494,7 @@ function buildNewtonsCradle(): World {
 
 function buildCoupledPendulums(): World {
   const w = new World();
-  w.substeps = 10;
+  solver(w, 10);
   const chainA = pendulumChain(w, -0.8, 1.2, 1, 1.2, 1.0, 0.12, 25, [86, 156, 214]);
   const chainB = pendulumChain(w, 0.8, 1.2, 1, 1.2, 1.0, 0.12, 0, [220, 130, 90]);
   w.links.push(new SpringLink(chainA[1], chainB[1], null, 3.0));
@@ -423,7 +504,7 @@ function buildCoupledPendulums(): World {
 // --------------------------------------------------------------- oscillators
 function buildShm(): World {
   const w = new World();
-  w.substeps = 6;
+  solver(w, 6);
   const anchor = addBody(w, 0, 2.0, { r: 0.06, m: 1.0, anchor: true });
   const bob = addBody(w, 0, 0.2, { r: 0.16, m: 1.0, color: [86, 156, 214], name: "Mass" });
   w.links.push(new SpringLink(anchor, bob, 1.2, 25.0));
@@ -432,7 +513,7 @@ function buildShm(): World {
 
 function buildDampingRegimes(): World {
   const w = new World();
-  w.substeps = 6;
+  solver(w, 6);
   const k = 25.0;
   const m = 1.0;
   const crit = 2.0 * Math.sqrt(k * m);
@@ -455,7 +536,7 @@ function buildDampingRegimes(): World {
 function buildResonance(): World {
   const w = new World();
   w.gravity = 0.0;
-  w.substeps = 6;
+  solver(w, 6);
   const anchor = addBody(w, 0, 0, { r: 0.06, m: 1.0, anchor: true });
   const bob = addBody(w, 1.2, 0, { r: 0.16, m: 1.0, color: [230, 120, 120],
                                    name: "Driven mass" });
@@ -469,7 +550,7 @@ function buildResonance(): World {
 function buildCoupledOscillators(): World {
   const w = new World();
   w.gravity = 0.0;
-  w.substeps = 6;
+  solver(w, 6);
   const left = addBody(w, -2.4, 0, { r: 0.06, m: 1.0, anchor: true });
   const right = addBody(w, 2.4, 0, { r: 0.06, m: 1.0, anchor: true });
   const masses: Body[] = [];
@@ -489,7 +570,7 @@ function buildCoupledOscillators(): World {
 
 function buildSpringPendulum(): World {
   const w = new World();
-  w.substeps = 8;
+  solver(w, 8);
   const anchor = addBody(w, 0, 1.5, { r: 0.06, m: 1.0, anchor: true });
   const bob = addBody(w, 0.9, 0.6, { r: 0.15, m: 1.0, color: [200, 110, 180], name: "Bob" });
   w.links.push(new SpringLink(anchor, bob, 1.0, 30.0));
@@ -500,7 +581,7 @@ function buildSpringPendulum(): World {
 function buildBilliards(): World {
   const w = new World();
   w.gravity = 0.0;
-  w.substeps = 4;
+  solver(w, 4);
   addBox(w, 3.4, 1.8, 0.9, 0.1);
   w.globalDamping = 0.25; // cloth friction
   const r = 0.11;
@@ -521,7 +602,7 @@ function buildBilliards(): World {
 
 function buildRestitutionLadder(): World {
   const w = new World();
-  w.substeps = 6;
+  solver(w, 6);
   const floor = new Wall(new Vec2(-3.2, 0), new Vec2(3.2, 0), 0.12);
   floor.restitution = 1.0;
   floor.friction = 0.2;
@@ -539,7 +620,7 @@ function buildRestitutionLadder(): World {
 function gasWorld(count: number, half: number, seed: number): World {
   const w = new World();
   w.gravity = 0.0;
-  w.substeps = 2;
+  solver(w, 2);
   w.integrator = "Symplectic Euler";
   addBox(w, half, half, 1.0, 0.0);
   const rng = new Random(seed);
@@ -558,7 +639,7 @@ function gasWorld(count: number, half: number, seed: number): World {
 function buildBrownian(): World {
   const w = new World();
   w.gravity = 0.0;
-  w.substeps = 3;
+  solver(w, 3);
   addBox(w, 2.6, 2.6, 1.0, 0.0);
   const big = addBody(w, 0, 0, { r: 0.42, m: 12.0, e: 1.0, mu: 0.0,
                                  color: [230, 200, 90], name: "Pollen grain" });
@@ -580,7 +661,7 @@ function buildBrownian(): World {
 // ------------------------------------------------------ projectiles/friction
 function buildDragRace(): World {
   const w = new World();
-  w.substeps = 6;
+  solver(w, 6);
   w.integrator = "RK4";
   const floor = new Wall(new Vec2(-1, 0), new Vec2(24, 0), 0.12);
   floor.restitution = 0.3;
@@ -600,7 +681,7 @@ function buildDragRace(): World {
 
 function buildFrictionRamp(): World {
   const w = new World();
-  w.substeps = 8;
+  solver(w, 8);
   const ang = (-25 * Math.PI) / 180;
   const length = 8.0;
   const ramp = new Wall(new Vec2(0, 0),
@@ -633,7 +714,7 @@ function buildFrictionRamp(): World {
 
 function buildGalileo(): World {
   const w = new World();
-  w.substeps = 4;
+  solver(w, 4);
   const floor = new Wall(new Vec2(-2.5, 0), new Vec2(2.5, 0), 0.12);
   floor.restitution = 0.15;
   w.walls.push(floor);
@@ -657,7 +738,7 @@ function buildGalileo(): World {
  */
 function buildIndependenceOfMotion(): World {
   const w = new World();
-  w.substeps = 4;
+  solver(w, 4);
   // The launched ball covers ~4.7 m before touchdown and then rolls on
   // (a disc that has settled into rolling keeps going), so the floor runs
   // well past the landing point and a low bumper catches it at the end
@@ -684,7 +765,11 @@ function buildIndependenceOfMotion(): World {
 
 function buildWreckingBall(): World {
   const w = new World();
-  w.substeps = 10;
+  // An 18-brick tower is bound by CONTACT solving, not by step size: the
+  // iterations are what stop it sinking into itself, so they stay while the
+  // substeps come down. At 10 substeps this was the most expensive scene in
+  // the library by a wide margin, and the tower topples identically at 6.
+  solver(w, 6, 8);
   const floor = new Wall(new Vec2(-4, 0), new Vec2(4, 0), 0.12);
   floor.friction = 0.7;
   floor.restitution = 0.05;
@@ -708,8 +793,7 @@ function buildWreckingBall(): World {
 
 function buildChainBridge(): World {
   const w = new World();
-  w.substeps = 12;
-  w.iterations = 16;
+  solver(w, 12, 16);
   const left = addBody(w, -2.4, 1.0, { r: 0.07, m: 1.0, anchor: true });
   const right = addBody(w, 2.4, 1.0, { r: 0.07, m: 1.0, anchor: true });
   const n = 11;
@@ -731,7 +815,7 @@ function buildChainBridge(): World {
 
 function buildProjectileAngles(): World {
   const w = new World();
-  w.substeps = 4;
+  solver(w, 4);
   const floor = new Wall(new Vec2(-1, 0), new Vec2(14, 0), 0.12);
   floor.restitution = 0.05;
   floor.friction = 0.8;
@@ -754,7 +838,7 @@ function buildProjectileAngles(): World {
 function buildElasticVsInelastic(): World {
   const w = new World();
   w.gravity = 0.0;
-  w.substeps = 4;
+  solver(w, 4);
   const lanes: Array<[number, string, string, Color]> = [
     [1.0, "Elastic 2 m/s", "Elastic at rest", [86, 156, 214]],
     [0.0, "Inelastic 2 m/s", "Inelastic at rest", [220, 130, 90]],
@@ -774,7 +858,7 @@ function buildElasticVsInelastic(): World {
 
 function buildTerminalVelocity(): World {
   const w = new World();
-  w.substeps = 6;
+  solver(w, 6);
   w.integrator = "RK4";
   w.dragQuadratic = 0.4;
   addBody(w, -1.0, 8.0, { r: 0.12, m: 0.3, e: 0.2, color: [110, 200, 210],
@@ -868,7 +952,7 @@ function softBlob(w: World, cx: number, cy: number, radius: number,
 
 function buildJellyBlock(): World {
   const w = new World();
-  w.substeps = 8;
+  solver(w, 8);
   const floor = new Wall(new Vec2(-4.5, 0), new Vec2(4.5, 0), 0.14);
   floor.friction = 0.6;
   floor.restitution = 0.1;
@@ -884,7 +968,7 @@ function buildJellyBlock(): World {
 
 function buildSquishyBall(): World {
   const w = new World();
-  w.substeps = 8;
+  solver(w, 8);
   // a V-shaped ramp: the ball splats at the bottom, oozes and settles
   const left = new Wall(new Vec2(-4.0, 3.0), new Vec2(0.0, 0.0), 0.14);
   const right = new Wall(new Vec2(0.0, 0.0), new Vec2(4.0, 3.0), 0.14);
@@ -910,7 +994,7 @@ function buildSquishyBall(): World {
 function buildCyclone(): World {
   const w = new World();
   w.gravity = 0.0;
-  w.substeps = 4;
+  solver(w, 4);
   const rng = new Random(9);
   for (let i = 0; i < 60; i++) {
     const d = rng.uniform(0.8, 4.2);
@@ -933,7 +1017,7 @@ function buildCyclone(): World {
 
 function buildTrampoline(): World {
   const w = new World();
-  w.substeps = 10;
+  solver(w, 10);
   const n = 21;
   const rest = 0.18;   // natural length of each bed segment (unchanged)
   const K = 100000.0;  // maximum spring stiffness (inspector slider max)
@@ -965,12 +1049,25 @@ function buildTrampoline(): World {
     side.restitution = 0.5;
     w.walls.push(side);
   }
+  // The gymnast is added BEFORE the bed is relaxed, even though it takes no
+  // part in the relaxation, because it changes the body count and therefore
+  // the substep count the cost ceiling picks - see below.
+  addBody(w, 0.0, 2.6, { r: 0.3, m: 64.0, e: 1.0, mu: 0.0, color: [220, 130, 90],
+                         name: "Gymnast" });
+
   // Settle the bed into its rest shape under the new stiffness and anchor
   // positions (rest lengths untouched). A small dedicated relaxation loop is
   // used instead of World.step so preset construction stays instant; it
   // applies exactly the engine's per-substep-clamped spring force model
   // (see World.prepareStep), so a force balance here is a true fixed point
   // of the runtime simulation - the bed loads perfectly still.
+  //
+  // That fixed point depends on the substep size, because the engine clamps
+  // spring stiffness against it. The cost ceiling is therefore applied here
+  // rather than left to the caller: relaxing against one substep count and
+  // then running at another would settle the bed to the wrong shape and it
+  // would sag the moment the scene loaded.
+  capSolverCost(w);
   const hSub = 1 / 120 / w.substeps;
   const springs = w.links.filter((l): l is SpringLink => l instanceof SpringLink);
   const kEff = springs.map((s) =>
@@ -1003,14 +1100,12 @@ function buildTrampoline(): World {
     b.vel.set(0, 0);
     b.acc.set(0, 0);
   }
-  addBody(w, 0.0, 2.6, { r: 0.3, m: 64.0, e: 1.0, mu: 0.0, color: [220, 130, 90],
-                         name: "Gymnast" });
   return w;
 }
 
 function buildSoftWheel(): World {
   const w = new World();
-  w.substeps = 10;
+  solver(w, 10);
   const ang = (-14 * Math.PI) / 180;
   const length = 11.0;
   const ramp = new Wall(new Vec2(0, 0),
@@ -1062,7 +1157,7 @@ function buildSoftWheel(): World {
 
 function buildJellySmash(): World {
   const w = new World();
-  w.substeps = 8;
+  solver(w, 8);
   // floor sits below the swing arc's lowest point (y = 0.344 minus the
   // ball radius), so the ball reaches the jelly before touching ground
   const floor = new Wall(new Vec2(-5.0, -0.5), new Vec2(5.0, -0.5), 0.14);
@@ -1080,7 +1175,7 @@ function buildJellySmash(): World {
 // -------------------------------------------------------------------- chaos
 function buildButterfly(): World {
   const w = new World();
-  w.substeps = 12;
+  solver(w, 12);
   const cols: Color[] = [[230, 120, 120], [120, 190, 120], [120, 160, 230]];
   for (let i = 0; i < 3; i++) {
     pendulumChain(w, 0, 1.2, 2, 0.9, 1.0, 0.12, 115 + i * 0.01, cols[i]);
@@ -1093,7 +1188,7 @@ function buildButterfly(): World {
 function buildSinaiBilliard(): World {
   const w = new World();
   w.gravity = 0.0;
-  w.substeps = 4;
+  solver(w, 4);
   addBox(w, 2.4, 2.4, 1.0, 0.0);
   addBody(w, 0, 0, { r: 0.75, m: 1.0, locked: true, e: 1.0, mu: 0.0,
                      color: PIVOT_GREY, name: "Scatterer" });

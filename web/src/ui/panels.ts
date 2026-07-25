@@ -202,8 +202,15 @@ export class HintBar implements Panel {
     const nLinks = app.world.links.length;
     const drift = app.energyDriftText();
     const res = app.playing && app.qNow > 1 ? `dt/${app.qNow}   ` : "";
+    // The trail vertex budget moves itself with the frame rate, so say so
+    // when it has moved: otherwise a trail quietly getting coarser on a
+    // struggling machine looks like a rendering fault rather than the
+    // deliberate trade it is. Only shown once it is off 1x.
+    const q = app.trailQuality;
+    const trail = app.view.trails && (q < 0.95 || q > 1.05)
+      ? `trail ${q.toFixed(1)}x   ` : "";
     const stats = `${nBodies} bodies   ${nAnchors} anchors   ${nLinks} links   ` +
-                  `${app.world.contacts.length} contacts   ${res}${drift}`;
+                  `${app.world.contacts.length} contacts   ${res}${trail}${drift}`;
     // the cursor position is a hover readout - meaningless on any touch
     // device, and the room is better spent on the counts
     if (isTouch()) {

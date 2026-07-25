@@ -93,13 +93,22 @@ export const STEPS: Step[] = [
     enter: (app) => { app.playing = false; },
   },
   {
-    target: "#inspector",
+    // On a phone the inspector is a closed drawer, so there is nothing to
+    // point at - but the handle that opens it is right there, and is
+    // exactly what a phone user needs to be shown. Whichever of the two is
+    // visible gets the ring; the other is skipped as hidden.
+    target: "#inspector, #inspector-handle",
     title: "Change anything, measure everything",
     body: "Select an object and every property is here to edit: mass, " +
           "radius, bounce, friction, colour. The World tab holds gravity, " +
           "air drag and the solver; View turns on velocity arrows, motion " +
           "trails, the centre of mass and the live energy and momentum " +
           "graphs.",
+    touchBody: "Tap the tab on the right edge to slide the panel open. " +
+               "Select an object and every property is there to edit: mass, " +
+               "radius, bounce, friction, colour. The World tab holds " +
+               "gravity and air drag; View turns on velocity arrows, motion " +
+               "trails and the live energy and momentum graphs.",
   },
   {
     // the two buttons this step is about, not the whole toolbar
@@ -116,6 +125,22 @@ export const STEPS: Step[] = [
 const TOUR_KEY = "tour_done";
 
 interface Rect { x: number; y: number; w: number; h: number; }
+
+/** Elements a selector matches that are actually laid out and on screen.
+ *
+ * Tested by client rects rather than `offsetParent`, which is null for
+ * every position:fixed element - the phone drawer handle is fixed, so an
+ * offsetParent test silently discarded the one thing a phone user needs
+ * pointing at. An element that is display:none or [hidden] has no rects at
+ * all, which is what actually distinguishes the collapsed inspector and
+ * the desktop-hidden handle from the one that is really on screen. */
+function visibleTargets(selector: string): Element[] {
+  return [...document.querySelectorAll(selector)].filter((n) => {
+    if (n.getClientRects().length === 0) return false;
+    const b = n.getBoundingClientRect();
+    return b.width > 0 && b.height > 0;
+  });
+}
 
 export class Tour {
   private app: App;
@@ -153,9 +178,13 @@ export class Tour {
     if (this.root !== null) return;
     // steps whose target is missing (a panel hidden on this viewport) are
     // dropped rather than shown pointing at nothing
+    // Same visibility test place() uses, so the two can never disagree:
+    // existing in the DOM is not enough, since a panel that is collapsed or
+    // below the phone breakpoint is present but has nothing to ring. A step
+    // with no visible target would otherwise show as an unanchored card
+    // describing something the reader cannot see.
     this.steps = STEPS.filter(
-      (s) => s.target === undefined ||
-             document.querySelectorAll(s.target).length > 0);
+      (s) => s.target === undefined || visibleTargets(s.target).length > 0);
     if (this.steps.length === 0) return;
     this.wasPlaying = this.app.playing;
     this.index = 0;
@@ -304,11 +333,7 @@ export class Tour {
   private place(): void {
     if (this.root === null) return;
     const step = this.steps[this.index];
-    const targets = step.target
-      ? [...document.querySelectorAll(step.target)].filter(
-          (n) => (n as HTMLElement).offsetParent !== null ||
-                 n === document.body)
-      : [];
+    const targets = step.target ? visibleTargets(step.target) : [];
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     const M = 12; // gap between spotlight and card
