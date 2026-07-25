@@ -741,8 +741,10 @@ export class Inspector implements Panel {
     this.add(checkbox("Adaptive resolution", () => app.adaptiveDt,
       (v) => app.setAdaptiveDt(v),
       "Automatically run extra, smaller physics steps during fast close " +
-      "encounters (gravity slingshots, whipping pendulums), as long as the " +
-      "frame rate can afford it. Keeps trajectories and motion trails smooth."));
+      "encounters (gravity slingshots, whipping pendulums). Keeps " +
+      "trajectories and motion trails smooth. Chosen from the simulation " +
+      "state alone, never from the frame rate, so a scene runs the same " +
+      "way on any machine - a slow one just takes longer."));
 
     this.body.append(section("Custom force fields"));
     for (const field of [...world.fields]) {

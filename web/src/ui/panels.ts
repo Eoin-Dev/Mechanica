@@ -2,7 +2,7 @@
 import { App, GraphMode, Panel } from "../app";
 import { Body } from "../engine/body";
 import { SpringLink } from "../engine/links";
-import { TOOLS, TOOL_INFO, TOOL_KEYS, Tool } from "../interact/tools";
+import { TOOL_INFO, TOOL_KEYS, Tool } from "../interact/tools";
 import { RefreshGroup, button, el, isTouch, segmented, slider } from "./dom";
 import { ICONS } from "./icons";
 import { GRAPH_HISTORY_S, GRAPH_WINDOW_S, TimeSeries } from "./plots";
@@ -148,7 +148,6 @@ export class Palette implements Panel {
         root.append(b.root);
       }
     });
-    void TOOLS;
   }
 
   refresh(): void {
@@ -223,7 +222,6 @@ export class GraphDock implements Panel {
   private hintEl: HTMLElement;
   private liveBtn: HTMLButtonElement;
   private group = new RefreshGroup();
-  private lastMode: GraphMode = "Off";
   // time-axis view: zoom (span) and scroll-back position (end; null=live)
   private viewSpan = GRAPH_WINDOW_S;
   private viewEnd: number | null = null;
@@ -403,11 +401,7 @@ export class GraphDock implements Panel {
       this.splitter.hidden = !visible;
       app.resizeCanvas();
     }
-    if (!visible) {
-      this.lastMode = "Off";
-      return;
-    }
-    if (app.graphMode !== this.lastMode) this.lastMode = app.graphMode;
+    if (!visible) return;
     this.group.refreshAll();
     const dockHint = this.hint();
     if (this.hintEl.textContent !== dockHint) {

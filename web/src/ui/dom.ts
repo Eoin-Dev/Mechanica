@@ -274,7 +274,13 @@ export function numEdit(label: string, get: () => number,
   const refresh = () => {
     if (focused) return;
     const s = fmt(get());
-    if (input.value !== s) input.value = s;
+    if (input.value !== s) {
+      input.value = s;
+      // The field has been rewritten with the real value, so whatever the
+      // user typed that failed to parse is gone - keeping the red border
+      // left it flagging an error against text that is no longer there.
+      input.classList.remove("error");
+    }
   };
   refresh();
   return { root: wrap, refresh };

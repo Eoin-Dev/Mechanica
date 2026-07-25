@@ -5,7 +5,7 @@
  * happens on requestAnimationFrame and the UI chrome lives in the DOM.
  */
 import { Body } from "./engine/body";
-import { ENCOUNTER_ANGLE, World, escapedBodies } from "./engine/world";
+import { World, escapedBodies } from "./engine/world";
 import { Camera, MAX_ZOOM, MIN_ZOOM } from "./render/camera";
 import { Selectable, ViewSettings, drawGrid, drawScaleBar, drawWorld } from "./render/draw";
 import { Trail } from "./render/trail";
@@ -23,12 +23,23 @@ export const PHYSICS_DT = 1.0 / 120.0;
 // scene. Generous on purpose: the point is to bin debris that is never
 // coming back, not to clip anything the user might still want.
 const CULL_VIEWPORTS = 4.0;
-const MAX_STEPS_PER_FRAME = 24; // bounds catch-up work per frame at high speeds
+// Bounds catch-up work per frame. It must comfortably clear the worst
+// legitimate demand - 16x speed on a 30 Hz display needs 64 quanta - or the
+// top of the speed slider is unreachable by construction: the accumulator
+// can never drain, `overloaded` latches on however fast the machine is, and
+// after four seconds the sustained-overload guard resets the speed to 1x.
+// The real protection against a heavy scene is PHYSICS_BUDGET_S below,
+// which is measured wall-clock rather than a step count.
+const MAX_STEPS_PER_FRAME = 64;
 // wall-clock ceiling for physics per frame: however heavy the scene, the
 // UI keeps redrawing and stays clickable (the sim just runs slower than
 // real time, with the existing "can't keep up" warning)
 const PHYSICS_BUDGET_S = 0.045;
 const SETTINGS_KEY = "mechanica.settings";
+// Total size of the rewind history, in JSON characters (~2 bytes each in a
+// JS string). 24M chars is roughly 48 MB - generous for a rewind buffer,
+// and small enough that a heavy scene can't quietly consume the heap.
+const HISTORY_BUDGET_CHARS = 24_000_000;
 
 export type GraphMode = "Off" | "Energy" | "Mom." | "Phase";
 
@@ -71,9 +82,6 @@ export class App {
   // result never depends on how busy the machine is (see pickResolution).
   adaptiveDt = true;
   qNow = 1;               // what actually ran this frame (for the UI)
-  private stepMs = 0.2;   // EMA of wall-clock ms per world step
-  private refreshMs = 1000 / 60; // estimated display refresh interval
-  private renderMs = 1.0;        // EMA of measured render cost per frame
 
   undoStack = new snap.UndoStack(this.world);
   initialSnapshot: string | null = null;
@@ -234,13 +242,14 @@ export class App {
     this.playing = false;
     let state: string | null = null;
     if (this.history.length >= 2) {
-      this.history.pop();                           // the frame we are on
-      state = this.history[this.history.length - 1]; // the one before it
+      this.historyBytes -= this.history.pop()!.length; // the frame we are on
+      state = this.history[this.history.length - 1];   // the one before it
     } else if (this.initialSnapshot !== null) {
-      this.history.length = 0;
+      this.clearHistory();
       state = this.initialSnapshot;
     }
     if (state === null) return;
+    this.frameSeq++; // the world is about to be swapped: drop cached energy
     const selIds = new Set(this.selection
       .filter((o): o is Body => o instanceof Body).map((o) => o.id));
     const world = snap.restore(state);
@@ -262,7 +271,10 @@ export class App {
 
   resetSim(): void {
     if (this.initialSnapshot === null) return;
-    this.replaceWorld(snap.restore(this.initialSnapshot));
+    // keepInitial: resetting must not consume the thing it resets TO.
+    // Without it the second Ctrl+R in a row did nothing at all (no toast,
+    // no feedback) and the dE readout went blank until the next play.
+    this.replaceWorld(snap.restore(this.initialSnapshot), true);
     this.playing = false;
     this.toast("Reset to the initial state");
   }
@@ -299,10 +311,15 @@ export class App {
     this.energySeries.clear();
     this.momentumSeries.clear();
     this.phasePlot.clear();
-    this.history.length = 0;
+    this.clearHistory();
+    this.frameSeq++; // new world: any cached energy belongs to the old one
     if (!keepInitial) {
       this.initialSnapshot = null;
       this.baselineEnergy = null;
+      // A world that is already at t = 0 IS a start state, so adopt it
+      // immediately rather than waiting for the next play. Undoing back to
+      // the beginning otherwise left Ctrl+R inert and the dE readout blank.
+      if (world.time === 0.0) this.ensureInitial();
     }
     // an open graph should show the new world's state straight away (the
     // sampling throttle is reset - the old world's clock is meaningless)
@@ -495,8 +512,13 @@ export class App {
     const name = `Scene ${now.getFullYear()}-${pad(now.getMonth() + 1)}-` +
       `${pad(now.getDate())} ${pad(now.getHours())}${pad(now.getMinutes())}` +
       `${pad(now.getSeconds())}`;
-    const saved = snap.saveScene(this.world, name);
-    this.toast(`Saved scene '${saved}' - press L to browse scenes`);
+    try {
+      const saved = snap.saveScene(this.world, name);
+      this.toast(`Saved scene '${saved}' - press L to browse scenes`);
+    } catch (exc) {
+      this.toast(exc instanceof snap.SceneSaveError ? exc.message
+                                                    : "Could not save the scene");
+    }
   }
 
   toggleFollow(): void {
@@ -594,9 +616,29 @@ export class App {
     this.toastFn(msg);
   }
 
+  /** `world.energy()` for the current frame, computed at most once.
+   *
+   * It is O(n^2) under mutual gravity and had two callers per frame - the
+   * graph sampler and the status-bar drift readout - so an N-body scene
+   * paid for it twice. The cache is scoped to one animation frame, and
+   * everything that can change the energy (a step, an inspector edit)
+   * happens between frames, so a reader can never see a stale value. */
+  private energyFrame = -1;
+  private energyCached: { ke: number; pe: number; total: number } | null = null;
+
+  energyNow(): { ke: number; pe: number; total: number } {
+    if (this.energyCached === null || this.energyFrame !== this.frameSeq) {
+      this.energyFrame = this.frameSeq;
+      this.energyCached = this.world.energy();
+    }
+    return this.energyCached;
+  }
+
+  private frameSeq = 0;
+
   energyDriftText(): string {
     if (this.baselineEnergy === null) return "";
-    const e = this.world.energy().total;
+    const e = this.energyNow().total;
     const base = this.baselineEnergy;
     if (Math.abs(base) < 1e-9) {
       const d = e - base;
@@ -618,6 +660,7 @@ export class App {
   start(): void {
     this.lastFrame = performance.now();
     const frame = (now: number) => {
+      this.frameSeq++; // invalidates the per-frame energy cache
       const dtFrame = Math.min(0.25, (now - this.lastFrame) / 1000);
       this.lastFrame = now;
       if (dtFrame > 0) {
@@ -635,14 +678,6 @@ export class App {
   }
 
   private update(dtFrame: number): void {
-    // display-refresh estimate: snap down to the fastest frame interval seen
-    // (the monitor cap), drift up slowly so one slow frame doesn't stick
-    const frameMs = dtFrame * 1000.0;
-    if (frameMs > 1.0) {
-      this.refreshMs = Math.min(34.0,
-        Math.min(this.refreshMs * 1.002, Math.max(4.0, frameMs)));
-    }
-
     if (this.playing) {
       // Below 1x, keep stepping at the normal 120 Hz real-time rate but
       // with a proportionally smaller dt: slow motion then produces a
@@ -650,10 +685,8 @@ export class App {
       // instead of one full-size step every few frames (choppy).
       const effDt = PHYSICS_DT * Math.min(this.speed, 1.0);
       this.world.traceSpacing = this.view.trails ? 0.5 / this.camera.zoom : 0.0;
-      this.world.encounterAngle = ENCOUNTER_ANGLE;
       this.accumulator += dtFrame * this.speed;
       let quanta = 0;
-      let smallSteps = 0;
       let qUsed = 1;
       const t0 = performance.now();
       while (this.accumulator >= effDt && quanta < MAX_STEPS_PER_FRAME) {
@@ -666,17 +699,12 @@ export class App {
         for (let i = 0; i < q; i++) {
           this.safeStep(this.world, h);
           this.recordTrails();
-          smallSteps++;
         }
         this.accumulator -= effDt;
         quanta++;
         if (performance.now() - t0 > PHYSICS_BUDGET_S * 1000) {
           break; // frame-time ceiling: stay responsive, dilate time
         }
-      }
-      const elapsed = performance.now() - t0;
-      if (smallSteps > 0) {
-        this.stepMs = 0.9 * this.stepMs + (0.1 * elapsed) / smallSteps;
       }
       this.qNow = qUsed;
       this.overloaded = this.accumulator >= effDt;
@@ -803,8 +831,10 @@ export class App {
       for (const [bid, x, y] of this.world.trace) trailFor(bid).push(x, y, now);
       this.world.trace.length = 0;
     }
+    const live = new Set<number>();
     for (const b of this.world.bodies) {
       if (b.locked) continue;
+      live.add(b.id);
       const t = trailFor(b.id);
       const n = t.count;
       if (n === 0 ||
@@ -812,14 +842,48 @@ export class App {
         t.push(b.pos.x, b.pos.y, now);
       }
     }
-    for (const t of this.trails.values()) t.expireBefore(now - maxAge);
+    // Drop trails whose body is gone. Ids are never reused, so without this
+    // the map grows for the whole session - every culled runaway, every
+    // erased body and every duplicate leaves its buffers behind, which in a
+    // debris-heavy scene is a steady leak of megabytes.
+    for (const [bid, t] of this.trails) {
+      if (live.has(bid)) t.expireBefore(now - maxAge);
+      else this.trails.delete(bid);
+    }
   }
 
   private afterPhysics(): void {
+    // the world just moved, so anything cached against the old state is
+    // stale - including a single-step (`.`) outside the animation frame
+    this.frameSeq++;
     // rolling per-frame history so the user can step backwards (,)
-    this.history.push(snap.snapshot(this.world));
-    if (this.history.length > 600) this.history.shift();
+    this.pushHistory();
     this.recordGraphSample();
+  }
+
+  /** Push a rewind state, bounding the history by BYTES rather than by
+   * frame count.
+   *
+   * Every entry is a full JSON snapshot of the world, so 600 of them costs
+   * whatever the scene costs times 600: a few hundred kB for a pendulum,
+   * but hundreds of megabytes for a thousand-particle lattice, which is
+   * enough to stall the tab on garbage collection alone. Big scenes now
+   * keep fewer frames of rewind instead of eating the heap. */
+  private pushHistory(): void {
+    const state = snap.snapshot(this.world);
+    this.history.push(state);
+    this.historyBytes += state.length;
+    while (this.history.length > 600 ||
+           (this.history.length > 2 && this.historyBytes > HISTORY_BUDGET_CHARS)) {
+      this.historyBytes -= this.history.shift()!.length;
+    }
+  }
+
+  private historyBytes = 0;
+
+  private clearHistory(): void {
+    this.history.length = 0;
+    this.historyBytes = 0;
   }
 
   private lastGraphSampleT = -Infinity;
@@ -841,7 +905,7 @@ export class App {
     this.lastGraphSampleT = this.world.time;
     // every series records continuously whatever the dock shows, so
     // switching graph views never leaves gaps in the data
-    const e = this.world.energy();
+    const e = this.energyNow();
     this.energySeries.add(this.world.time, { KE: e.ke, PE: e.pe, Total: e.total });
     const p = this.world.momentum();
     this.momentumSeries.add(this.world.time, {
@@ -859,7 +923,6 @@ export class App {
 
   // ------------------------------------------------------------------ render
   private render(): void {
-    const t0 = performance.now();
     const ctx = this.ctx;
     const dpr = window.devicePixelRatio || 1;
     const w = this.camera.screenW;
@@ -872,8 +935,6 @@ export class App {
               this.controller.hover, this.trails, w, h);
     this.controller.drawOverlays(ctx);
     drawScaleBar(ctx, this.camera, w, h);
-    // measured render cost feeds the physics budget in pickResolution
-    this.renderMs = 0.9 * this.renderMs + 0.1 * (performance.now() - t0);
   }
 }
 

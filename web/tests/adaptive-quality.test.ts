@@ -1,6 +1,11 @@
-/** Headroom-driven adaptive quality: the app tightens subdivisionNeed's
- * tolerance and lowers World.encounterAngle when frame time is to spare, so
- * moderate-speed curves get the same fine slicing as extreme encounters. */
+/** Adaptive time resolution.
+ *
+ * Both knobs are functions of the simulation state ALONE - never of frame
+ * timing (see App.pickResolution for why: a step size chosen from machine
+ * load makes the same scene integrate differently from run to run).
+ * `subdivisionNeed` picks whole extra steps from path curvature, and
+ * `encounterAngle` governs slicing inside one substep.
+ */
 import { describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";
@@ -9,25 +14,40 @@ import { ENCOUNTER_ANGLE, World } from "../src/engine/world";
 const DT = 1.0 / 120.0;
 
 describe("adaptive quality", () => {
-  it("higher quality demands subdivision at gentler curvature", () => {
-    const w = new World();
-    w.gravity = 0.0;
-    const b = new Body(new Vec2(0, 0), 0.15, 1.0);
-    b.constForce.set(200.0, 0.0); // strong curving force: acc = 200 m/s^2
-    w.bodies.push(b);
-    w.step(DT); // populate b.acc
-    expect(w.subdivisionNeed(DT)).toBe(1);          // default: below tolerance
-    expect(w.subdivisionNeed(DT, 16, 8.0)).toBeGreaterThan(1); // headroom mode
+  it("subdivision tracks curvature, not speed", () => {
+    const curving = (force: number) => {
+      const w = new World();
+      w.gravity = 0.0;
+      const b = new Body(new Vec2(0, 0), 0.15, 1.0);
+      b.constForce.set(force, 0.0); // acc = force / 1 kg
+      w.bodies.push(b);
+      w.step(DT); // populate b.acc
+      return w.subdivisionNeed(DT);
+    };
+    expect(curving(200.0)).toBe(1);                  // sagitta below tolerance
+    expect(curving(60000.0)).toBeGreaterThan(1);     // deviates within a step
   });
 
-  it("quality never subdivides straight-line/idle motion", () => {
+  it("never subdivides straight-line/idle motion", () => {
     const w = new World();
     w.gravity = 0.0;
     const b = new Body(new Vec2(0, 0), 0.15, 1.0);
     b.vel.set(50.0, 0.0); // fast but dead straight: nothing to smooth
     w.bodies.push(b);
     w.step(DT);
-    expect(w.subdivisionNeed(DT, 16, 10.0)).toBe(1);
+    expect(w.subdivisionNeed(DT)).toBe(1);
+  });
+
+  it("subdivision is capped at maxQ however violent the curve", () => {
+    const w = new World();
+    w.gravity = 0.0;
+    const b = new Body(new Vec2(0, 0), 0.15, 1.0);
+    // large enough to demand far more than maxQ, but not so large that
+    // sanitize() freezes the body and zeroes the acceleration we read
+    b.constForce.set(1e6, 0.0);
+    w.bodies.push(b);
+    w.step(DT);
+    expect(w.subdivisionNeed(DT, 16)).toBe(16);
   });
 
   it("lower encounterAngle engages in-substep slicing at moderate swings", () => {
@@ -53,7 +73,7 @@ describe("adaptive quality", () => {
                drift: Math.abs(w.energy().total - e0) / Math.abs(e0) };
     };
     const coarse = orbit(ENCOUNTER_ANGLE);        // default: no slicing here
-    const fine = orbit(ENCOUNTER_ANGLE / 10.0);   // headroom mode: slices
+    const fine = orbit(ENCOUNTER_ANGLE / 10.0);   // tightened: slices
     expect(coarse.trace).toBe(0);
     expect(fine.trace).toBeGreaterThan(0);        // in-slice path captured
     expect(fine.drift).toBeLessThan(0.01);        // and accuracy stays tight

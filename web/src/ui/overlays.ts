@@ -125,10 +125,21 @@ export class Library {
     actions.append(button("Save current scene", () => {
       const name = prompt("Scene name:",
         `Scene ${new Date().toISOString().slice(0, 10)}`);
-      if (name) {
+      if (!name) return;
+      // Names are sanitized before use, so "Run #1" and "Run 1" land on the
+      // same key: without this the second save replaced the first with no
+      // warning and no way back.
+      if (snap.sceneExists(name) &&
+          !confirm(`A saved scene called '${name}' already exists. Replace it?`)) {
+        return;
+      }
+      try {
         const saved = snap.saveScene(app.world, name);
         app.toast(`Saved scene '${saved}'`);
         this.render();
+      } catch (exc) {
+        app.toast(exc instanceof snap.SceneSaveError ? exc.message
+                                                     : "Could not save the scene");
       }
     }, { icon: ICONS.save }).root);
     actions.append(button("Import .json", async () => {
