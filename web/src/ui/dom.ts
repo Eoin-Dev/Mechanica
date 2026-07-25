@@ -90,6 +90,76 @@ export class RefreshGroup {
   }
 }
 
+// --------------------------------------------------------------- modal a11y
+const FOCUSABLE = [
+  "button:not([disabled])", "input:not([disabled])", "select:not([disabled])",
+  "textarea:not([disabled])", "a[href]", "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+/** Keyboard containment for an overlay.
+ *
+ * A modal has to hold the focus ring while it is up: without this, tabbing
+ * out of an open dialog walks invisibly through the toolbar and inspector
+ * underneath it, and closing the dialog drops focus back to the document
+ * body so the next Tab restarts from the top of the page. Marks the panel
+ * as a dialog for assistive tech at the same time, which the overlays were
+ * missing entirely.
+ */
+export class ModalFocus {
+  private previous: Element | null = null;
+  private panel: HTMLElement;
+
+  private onKey = (e: KeyboardEvent): void => {
+    if (e.key !== "Tab") return;
+    const items = [...this.panel.querySelectorAll<HTMLElement>(FOCUSABLE)]
+      .filter((n) => n.offsetParent !== null || n === document.activeElement);
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    // wrap at both ends, and pull focus in if it somehow escaped
+    if (e.shiftKey && (active === first || !this.panel.contains(active))) {
+      last.focus();
+      e.preventDefault();
+    } else if (!e.shiftKey && (active === last || !this.panel.contains(active))) {
+      first.focus();
+      e.preventDefault();
+    }
+  };
+
+  constructor(panel: HTMLElement, label: string) {
+    this.panel = panel;
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
+    panel.setAttribute("aria-label", label);
+  }
+
+  enter(): void {
+    this.previous = document.activeElement;
+    document.addEventListener("keydown", this.onKey, true);
+    // focus the panel itself rather than its first control: landing on a
+    // button makes Enter feel pre-armed, and on a scrollable body it also
+    // jumps the scroll position to wherever that control happens to be
+    this.panel.tabIndex = -1;
+    this.panel.focus({ preventScroll: true });
+  }
+
+  exit(): void {
+    document.removeEventListener("keydown", this.onKey, true);
+    const prev = this.previous;
+    this.previous = null;
+    if (prev instanceof HTMLElement && prev.isConnected) {
+      prev.focus({ preventScroll: true });
+    }
+    // `body.focus()` is a no-op, so a dialog opened by a shortcut rather
+    // than a click would keep the focus ring inside a now-hidden panel and
+    // the next Tab would resume from nowhere. Drop it explicitly.
+    if (this.panel.contains(document.activeElement)) {
+      (document.activeElement as HTMLElement).blur();
+    }
+  }
+}
+
 // -------------------------------------------------------------------- button
 export interface ButtonOpts {
   icon?: string;               // inner SVG markup

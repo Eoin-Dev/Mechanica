@@ -8,6 +8,7 @@ import { Inspector } from "./ui/inspector";
 import { FormulaGuide } from "./ui/guide";
 import { Help, Library, SettingsPanel } from "./ui/overlays";
 import { GraphDock, HintBar, Palette, Toolbar, overlayToggles } from "./ui/panels";
+import { Tour } from "./ui/tour";
 
 const $ = (id: string): HTMLElement => document.getElementById(id)!;
 
@@ -39,8 +40,10 @@ const inspector = new Inspector(app, $("inspector"), $("inspector-splitter"));
 const dock = new GraphDock(app, $("dock"), $("dock-splitter"));
 const hintbar = new HintBar(app, $("hint-text"), $("status-text"));
 const library = new Library(app, $("library"));
-const help = new Help($("help"));
-const settingsPanel = new SettingsPanel(app, $("settings"), () => help.open());
+const tour = new Tour(app);
+const help = new Help($("help"), () => tour.start());
+const settingsPanel = new SettingsPanel(app, $("settings"), () => help.open(),
+                                        () => tour.start());
 const formulaGuide = new FormulaGuide(app, $("formula-guide"));
 overlayToggles["library"] = () => library.toggle();
 overlayToggles["help"] = () => help.toggle();
@@ -98,6 +101,10 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     return;
   }
+
+  // the tour owns the keyboard while it is up (it handles Esc and the
+  // arrows itself, in the capture phase); nothing else should also fire
+  if (tour.visible) return;
 
   // overlays swallow everything except their own close keys
   if (library.visible || help.visible || settingsPanel.visible ||
@@ -219,10 +226,16 @@ document.addEventListener("keydown", (e) => {
 // ------------------------------------------------------------------- start
 app.loadPreset(PRESETS[0], false);
 app.start();
-app.toast("Welcome! Press L for the library, F1 for help.");
+// First visit gets the guided tour instead of a toast that scrolls away
+// before it has been read; afterwards, the toast is the reminder.
+if (app.settings.tour_done === true) {
+  app.toast("Welcome back! Press L for the library, F1 for help.");
+} else {
+  tour.maybeAutoStart();
+}
 
 // dev-only hook for driving the app from tests/tooling
 if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).__mechanica =
-    { app, library, help, inspector };
+    { app, library, help, inspector, tour, settingsPanel };
 }

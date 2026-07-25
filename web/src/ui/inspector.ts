@@ -28,9 +28,15 @@ export class Inspector implements Panel {
   private tab: Tab = "Selection";
   private group = new RefreshGroup();
   private structureKey = "";
-  /** Formula rows where the user chose plain text over typeset math. */
-  private preferTextFormula =
-    new WeakMap<ForceField, Partial<Record<"fxSrc" | "fySrc", boolean>>>();
+  /** Formula rows where the user chose plain text over typeset math.
+   *
+   * Keyed by "<field row>:<component>", NOT by ForceField identity. Undo
+   * and redo rebuild the whole world from a snapshot, so every ForceField
+   * is a fresh object afterwards - an identity-keyed WeakMap silently
+   * forgot the choice on any undo, dropping the user back into the typeset
+   * editor they had just left. The row index is what survives, and it is
+   * also what the user is actually pointing at. */
+  private preferTextFormula = new Set<string>();
   private collapsed = false;
   private splitter: HTMLElement;
   private reopenStrip: HTMLElement;
@@ -762,16 +768,14 @@ export class Inspector implements Panel {
       { fmt: (v) => v.toFixed(0), step: 1, log: true, onCommit: this.commit,
         tooltip: "Solver iterations per substep for links and contacts " +
                  "(they exit early once converged)" }));
-    this.add(checkbox("Adaptive resolution", () => app.adaptiveDt,
-      (v) => app.setAdaptiveDt(v),
-      "Automatically run extra, smaller physics steps during fast close " +
-      "encounters (gravity slingshots, whipping pendulums). Keeps " +
-      "trajectories and motion trails smooth. Chosen from the simulation " +
-      "state alone, never from the frame rate, so a scene runs the same " +
-      "way on any machine - a slow one just takes longer."));
+    // Adaptive resolution lives in Settings, not here: substeps and
+    // iterations are properties of the SCENE and travel with it, while
+    // adaptive resolution is a preference of this browser and does not.
+    // Sitting in the same section, it read as if saving the scene would
+    // carry it along.
 
     this.body.append(section("Custom force fields"));
-    for (const field of [...world.fields]) {
+    [...world.fields].forEach((field, fieldIndex) => {
       // enabled toggle + editable name on one row (the name is saved with
       // the scene, so it survives save/export like everything else)
       const nameRow = el("div", { class: "row" });
@@ -802,15 +806,16 @@ export class Inspector implements Panel {
         // editor; if/else, logic, // and % have no math notation and stay
         // in the text editor. A per-row toggle lets the user opt out.
         const renderable = isMathRenderable(field[attr]);
-        const useMath = renderable && this.preferTextFormula.get(field)?.[attr] !== true;
+        const prefKey = `${fieldIndex}:${attr}`;
+        const useMath = renderable && !this.preferTextFormula.has(prefKey);
         const edit = this.group.add(useMath
           ? mathEdit(() => field[attr], commitSrc,
                      "Type math: ^ makes a power, / a fraction, sqrt a root")
           : textEdit(() => field[attr], commitSrc, "e.g. -0.5*vx or -x*10"));
         const toggle = this.group.add(button("", () => {
-          const p = this.preferTextFormula.get(field) ?? {};
-          p[attr] = useMath; // leaving math prefers text, and vice versa
-          this.preferTextFormula.set(field, p);
+          // leaving math prefers text, and vice versa
+          if (useMath) this.preferTextFormula.add(prefKey);
+          else this.preferTextFormula.delete(prefKey);
           this.markDirty();
         }, {
           icon: useMath ? ICONS.text_mode : ICONS.math_mode,
@@ -835,7 +840,7 @@ export class Inspector implements Panel {
       // breathing room: the button sat flush against the Fy row above it
       remove.root.style.marginTop = "8px";
       this.body.append(remove.root);
-    }
+    });
     const addBtn = this.group.add(button("Add force field", () => {
       world.fields.push(new ForceField(`Field ${world.fields.length + 1}`, "0", "0"));
       app.pushUndo();
