@@ -284,13 +284,19 @@ export class SettingsPanel {
         app.settings.theme = THEME_LABELS.find(([lbl]) => lbl === v)![1];
         app.saveSettings();
         app.applyUiSettings();
-      }, "Colour theme"));
-    note("Original is the classic blue-tinted dark palette.");
+      }, "Colour theme for the whole interface and canvas background"));
+    note("Void is near-black and shows motion trails at their brightest; " +
+         "Dark is the default; Light suits a projector or a bright room; " +
+         "Original is the classic blue-tinted dark palette.");
 
     // accent colour: preset swatch circles + a custom picker. UI chrome
     // and highlights only - physics object colours are never touched.
     body.append(el("div", { class: "dim settings-label", text: "Accent colour" }));
     const swatchRow = el("div", { class: "swatch-row" });
+    const accentNote = el("div", { class: "faint settings-note",
+      text: "Used for buttons, selection outlines and graph lines. Physics " +
+            "object colours are never changed by this - set those per body " +
+            "in the Inspector." });
     const applyAccent = (hex: string | null): void => {
       if (hex === null) delete app.settings.accent;
       else app.settings.accent = hex;
@@ -366,7 +372,7 @@ export class SettingsPanel {
       rebuildSwatches();
     } });
     rebuildSwatches();
-    body.append(swatchRow, popover);
+    body.append(swatchRow, accentNote, popover);
 
     add(checkbox("Dyslexia-friendly font",
       () => app.settings.dyslexic_font ?? false,
@@ -375,6 +381,9 @@ export class SettingsPanel {
         app.saveSettings();
         app.applyUiSettings();
       }, "Use a rounder, more distinct typeface across the interface"));
+    note("OpenDyslexic weights the bottom of each letter, which makes " +
+         "similar shapes (b/d, p/q) harder to confuse. Affects the " +
+         "interface text only, not the canvas.");
 
     body.append(el("div", { class: "dim settings-label", text: "Font size" }));
     add(segmented(["90%", "100%", "110%", "120%"],
@@ -383,7 +392,22 @@ export class SettingsPanel {
         app.settings.font_scale = parseInt(v, 10) / 100;
         app.saveSettings();
         app.applyUiSettings();
-      }, "Interface text size (kept within limits so the layout holds)"));
+      }, "Interface text size"));
+    note("Scales every panel, label and button. The range is capped so the " +
+         "toolbar and inspector still fit their contents at either end.");
+
+    body.append(el("div", { class: "section", text: "Interaction" }));
+    add(checkbox("Dragged objects collide with walls",
+      () => app.dragHitsWalls,
+      (v) => app.setDragHitsWalls(v),
+      "Stop a body you are dragging at the wall instead of letting it " +
+      "pass through"));
+    note("Off (the default): a body you drag ignores walls, which is the " +
+         "quickest way to place something on the far side of one. On: the " +
+         "body is held outside any wall it meets and slides along it, so " +
+         "you can push a ball up a ramp or wedge it into a corner by hand. " +
+         "Either way the drag never stops following your cursor - what " +
+         "changes is where the body is allowed to sit.");
 
     body.append(el("div", { class: "section", text: "Performance" }));
     add(checkbox("Remove runaway objects",
@@ -466,7 +490,7 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
     ["G", "Broadphase debug grid"],
     ["1 / 2 / 3", "Energy / momentum / phase graph"],
     ["Scroll / right-drag", "Zoom at cursor / pan"],
-    ["Tab", "Hide / show the inspector"],
+    ["\\", "Hide / show the inspector"],
     ["L", "Library"],
     ["F1", "This help"],
   ], "pc"],

@@ -114,7 +114,11 @@ export class Body {
     this.pos = pos;
     this.mass = mass;
     this.radius = radius;
-    this.color = color ?? BODY_PALETTE[this.id % BODY_PALETTE.length];
+    // copy, never alias: handing out a reference into BODY_PALETTE means an
+    // in-place edit (the inspector's colour picker) would repaint every
+    // other body that landed on the same palette slot
+    this.color = color !== null ? [...color]
+                                : [...BODY_PALETTE[this.id % BODY_PALETTE.length]];
   }
 
   // --- derived quantities ---------------------------------------------------

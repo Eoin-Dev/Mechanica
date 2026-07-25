@@ -703,6 +703,27 @@ button.swatch-add {
 }
 button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--text); border-color: var(--text-dim); }
 .settings-note { font-size: calc(11px * var(--fs, 1)); line-height: 1.5; margin: 4px 0 10px; }
+
+/* Body / wall colour picker (Inspector). The native colour input carries a
+   thick platform chrome by default; strip it back to a plain swatch that
+   matches the accent swatches above. */
+.colour-well {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius);
+  background: transparent;
+  cursor: pointer;
+}
+.colour-well::-webkit-color-swatch-wrapper { padding: 2px; }
+.colour-well::-webkit-color-swatch { border: none; border-radius: 3px; }
+.colour-well::-moz-color-swatch { border: none; border-radius: 3px; }
+.colour-well:hover { border-color: var(--text-faint); }
+/* the palette chips sit under the well, indented to the control column */
+.colour-presets { margin: 4px 0 8px 76px; gap: 6px; }
+.colour-presets button.swatch { width: 18px; height: 18px; }
 .settings-panel .segmented { margin: 4px 0; }
 
 .help-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }

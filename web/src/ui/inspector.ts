@@ -5,13 +5,14 @@
  * velocities) stay current without stealing focus.
  */
 import { App, GraphMode, Panel } from "../app";
-import { Body, MATERIALS, Wall } from "../engine/body";
+import { BODY_PALETTE, Body, Color, MATERIALS, Wall } from "../engine/body";
 import { DistanceLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
 import { Selectable } from "../render/draw";
 import { isMathRenderable } from "../core/mathfmt";
-import { RefreshGroup, button, checkbox, el, fmt3dp, halfRow, isPhone, isTouch,
-         numEdit, section, segmented, slider, textEdit } from "./dom";
+import { RefreshGroup, button, checkbox, colourEdit, el, fmt3dp, halfRow,
+         isPhone, isTouch, numEdit, section, segmented, slider,
+         textEdit } from "./dom";
 import { ICONS } from "./icons";
 import { mathEdit } from "./mathedit";
 import { overlayToggles } from "./panels";
@@ -42,7 +43,7 @@ export class Inspector implements Panel {
 
     // slim clickable strip shown while the panel is collapsed
     this.reopenStrip = el("div", { class: "reopen-strip",
-                                   title: "Show the panel (Tab)" });
+                                   title: "Show the panel (\\)" });
     this.reopenStrip.insertAdjacentHTML("beforeend", ICONS.chev_left);
     this.reopenStrip.hidden = true;
     this.reopenStrip.addEventListener("click", () => this.toggleCollapsed());
@@ -59,7 +60,7 @@ export class Inspector implements Panel {
       tabs.append(b);
     }
     const collapseBtn = el("button", { class: "collapse-btn",
-                                       title: "Hide the panel (Tab)" });
+                                       title: "Hide the panel (\\)" });
     collapseBtn.insertAdjacentHTML("beforeend", ICONS.chev_right);
     collapseBtn.addEventListener("click", () => this.toggleCollapsed());
     tabs.append(collapseBtn);
@@ -97,7 +98,7 @@ export class Inspector implements Panel {
 
     // Phones: the panel becomes a slide-over drawer. It starts closed, and
     // a fixed handle on the right screen edge opens it - without one there
-    // is no way in at all (no Tab key, and the desktop reopen strip lives
+    // is no way in at all (no keyboard, and the desktop reopen strip lives
     // inside the hidden panel).
     this.handle = el("div", { id: "inspector-handle", title: "Open the panel" });
     this.handle.insertAdjacentHTML("beforeend", ICONS.chev_left);
@@ -143,7 +144,7 @@ export class Inspector implements Panel {
     this.collapsed = !this.collapsed;
     this.applyCollapsed();
     if (this.collapsed && !isPhone()) {
-      this.app.toast("Panel hidden - press Tab or click the right edge to reopen");
+      this.app.toast("Panel hidden - press \\ or click the right edge to reopen");
     }
   }
 
@@ -305,6 +306,7 @@ export class Inspector implements Panel {
       "Body can't spin (infinite rotational inertia): it behaves like a " +
       "point particle, so friction can hold it in limiting equilibrium on a " +
       "slope (mu >= tan theta) instead of rolling"));
+    this.colourRow([b]);
 
     this.body.append(section("Material"));
     this.add(slider("Bounce", () => b.restitution, (v) => { b.restitution = v; },
@@ -354,6 +356,7 @@ export class Inspector implements Panel {
       numEdit("y", () => b.pos.y, (v) => { b.pos.y = v; }, "m", this.commit, fmt3dp));
     this.add(checkbox("Collides", () => b.collides, (v) => { b.collides = v; this.commit(); },
       "Disable to let bodies pass through this anchor"));
+    this.colourRow([b]);
 
     this.body.append(section("Material"));
     this.add(slider("Bounce", () => b.restitution, (v) => { b.restitution = v; },
@@ -365,6 +368,23 @@ export class Inspector implements Panel {
     this.materialButtons([b]);
 
     this.actionButtons();
+  }
+
+  /** Colour editor writing to every object passed in.
+   *
+   * Colours are per-object and saved with the scene, so this is the one
+   * place they can be set - the accent picker in Settings is UI chrome only
+   * and deliberately never touches them. Each object gets its OWN array:
+   * bodies used to be handed a reference into BODY_PALETTE, so writing
+   * through it would have recoloured every body sharing that palette slot. */
+  private colourRow(objs: Array<{ color: Color }>, label = "Colour"): void {
+    this.add(colourEdit(label, () => objs[0].color,
+      (c) => { for (const o of objs) o.color = [...c]; },
+      { presets: BODY_PALETTE, onCommit: this.commit,
+        tooltip: objs.length > 1
+          ? "Colour, applied to every selected object. Saved with the scene."
+          : "Drawing colour. Saved with the scene; the swatches below are " +
+            "the palette new bodies are picked from." }));
   }
 
   private materialButtons(bodies: Body[]): void {
@@ -431,6 +451,7 @@ export class Inspector implements Panel {
         { fmt: (v) => v.toFixed(2), onCommit: this.commit,
           tooltip: "Coefficient of friction mu, applied to every selected body" }));
       this.materialButtons(bodies);
+      this.colourRow(bodies);
       this.addHalf(
         checkbox("Locked", () => first.locked,
           (v) => { bodies.forEach((b) => { b.locked = v; }); this.commit(); },
@@ -482,6 +503,7 @@ export class Inspector implements Panel {
         { fmt: (v) => v.toFixed(2), onCommit: this.commit,
           tooltip: "Coefficient of friction mu, applied to every selected anchor" }));
       this.materialButtons(anchors);
+      this.colourRow(anchors);
       this.add(checkbox("Collides", () => af.collides,
         (v) => { anchors.forEach((a) => { a.collides = v; }); this.commit(); },
         "Enable / disable collisions for every selected anchor"));
@@ -499,6 +521,7 @@ export class Inspector implements Panel {
       this.add(slider("Friction", () => wf.friction,
         (v) => walls.forEach((w) => { w.friction = v; }), 0.0, 10.0,
         { fmt: (v) => v.toFixed(2), onCommit: this.commit }));
+      this.colourRow(walls);
     }
 
     if (springs.length > 0) {
@@ -605,6 +628,7 @@ export class Inspector implements Panel {
       0.0, 1.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit }));
     this.add(slider("Friction", () => w.friction, (v) => { w.friction = v; },
       0.0, 10.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit }));
+    this.colourRow([w]);
     this.actionButtons();
   }
 

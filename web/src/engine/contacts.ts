@@ -51,6 +51,121 @@ export interface ContactStatic {
   movers?: Body[];
 }
 
+/** Closest point to `p` on the segment a-b.
+ *
+ * The capsule narrowphase's core query, shared with the kinematic sweep
+ * below. */
+export function closestOnSegment(px: number, py: number,
+                                 ax: number, ay: number,
+                                 bx: number, by: number): [number, number] {
+  const sx = bx - ax;
+  const sy = by - ay;
+  const len2 = sx * sx + sy * sy;
+  let t = 0.0;
+  if (len2 > 0.0) {
+    t = ((px - ax) * sx + (py - ay) * sy) / len2;
+    if (t < 0.0) t = 0.0;
+    else if (t > 1.0) t = 1.0;
+  }
+  return [ax + sx * t, ay + sy * t];
+}
+
+// Work bound for the kinematic sweep below. At half a radius per step this
+// covers 8 m of travel for a 0.25 m body in one frame - about 480 m/s of
+// dragging - so it only bites on a wild jump.
+const MAX_SWEEP_STEPS = 64;
+
+/** Push `p` out of every wall a disc of `radius` would overlap there.
+ *
+ * `prev` is the last position known to be legal. It decides which SIDE of
+ * a wall to leave by: resolving to the nearer face instead is what lets a
+ * body walk through, one step at a time, once it is past the centreline.
+ * It also disambiguates the normal when the disc sits exactly on the
+ * segment, where there is no nearer face at all. */
+export function clearOfWalls(walls: Wall[], px: number, py: number,
+                             radius: number,
+                             prev?: readonly [number, number]): [number, number] {
+  if (walls.length === 0) return [px, py];
+  let x = px;
+  let y = py;
+  for (let pass = 0; pass < 4; pass++) {
+    let moved = false;
+    for (const w of walls) {
+      const reach = radius + w.thickness * 0.5;
+      const [cx, cy] = closestOnSegment(x, y, w.a.x, w.a.y, w.b.x, w.b.y);
+      let dx = x - cx;
+      let dy = y - cy;
+      let d = Math.hypot(dx, dy);
+      if (d >= reach) continue;
+      if (d < 1e-9) {
+        // dead centre on the segment: the surface normal is ambiguous
+        const sx = w.b.x - w.a.x;
+        const sy = w.b.y - w.a.y;
+        const len = Math.hypot(sx, sy) || 1.0;
+        dx = -sy / len;
+        dy = sx / len;
+        d = 1.0;
+      }
+      if (prev !== undefined) {
+        const pdx = prev[0] - cx;
+        const pdy = prev[1] - cy;
+        if (pdx * pdx + pdy * pdy > 1e-18 && dx * pdx + dy * pdy < 0.0) {
+          d = Math.hypot(pdx, pdy);
+          dx = pdx;
+          dy = pdy;
+        }
+      }
+      x = cx + (dx / d) * reach;
+      y = cy + (dy / d) * reach;
+      moved = true;
+    }
+    if (!moved) break;
+  }
+  return [x, y];
+}
+
+/** Move a disc of `radius` from `from` toward `to` without entering a wall.
+ *
+ * This is the kinematic counterpart to the contact solver, for a body whose
+ * position is being written directly rather than integrated - i.e. one the
+ * user is dragging. Such a body is infinite mass so that it tracks the
+ * cursor exactly, and infinite mass is also how the solver recognises a
+ * wall, so the pair has no solution and the narrowphase skips it: giving it
+ * a contact would not help, because neither side can be pushed.
+ *
+ * Resolving the overlap at the destination is not enough on its own. A
+ * quick flick covers more than a wall's thickness in one frame, so the body
+ * lands genuinely clear on the far side and stays there. The path is
+ * therefore MARCHED in steps smaller than the disc, and each step advances
+ * from where the body actually got to rather than to an absolute point on
+ * the line - otherwise a blocked step is simply skipped and the body
+ * teleports past. Sliding along a wall and wedging into a corner fall out
+ * of the same loop.
+ */
+export function sweepClearOfWalls(walls: Wall[], from: { x: number; y: number },
+                                  to: { x: number; y: number },
+                                  radius: number): [number, number] {
+  if (walls.length === 0) return [to.x, to.y];
+  const dist = Math.hypot(to.x - from.x, to.y - from.y);
+  // Step no further than half a radius, so nothing thinner than the disc
+  // can be skipped, and bound the count so one absurd jump (dragging across
+  // the screen while zoomed all the way out) cannot cost unbounded work.
+  // Past that budget the TRAVEL is shortened rather than the resolution
+  // coarsened: lagging the cursor for a frame is a far smaller lie than
+  // passing through a wall, and the next frame closes the gap.
+  const step = radius * 0.5;
+  const steps = Math.min(MAX_SWEEP_STEPS, Math.max(1, Math.ceil(dist / step)));
+  const reach = Math.min(dist, steps * step);
+  const scale = dist > 1e-12 ? reach / (dist * steps) : 0.0;
+  const sx = (to.x - from.x) * scale;
+  const sy = (to.y - from.y) * scale;
+  let cur = clearOfWalls(walls, from.x, from.y, radius);
+  for (let i = 0; i < steps; i++) {
+    cur = clearOfWalls(walls, cur[0] + sx, cur[1] + sy, radius, cur);
+  }
+  return cur;
+}
+
 /** Persistent per-contact cache carried between substeps: [pn, pt] for warm
  * starting, optionally followed by [ax, ay] - a tangential position anchor for
  * static resting friction (see solveStaticFriction). */

@@ -18,9 +18,11 @@
  * fingers pinch-zoom and pan (something the desktop app never had).
  */
 import { Vec2 } from "../core/vec";
+import { sweepClearOfWalls } from "../engine/contacts";
 import { Body, Wall } from "../engine/body";
 import { DistanceLink, SpringLink } from "../engine/links";
-import { Selectable, VEL_ARROW_SCALE, drawVelocityHandle, snapStep } from "../render/draw";
+import { Selectable, VEL_ARROW_SCALE, distToSegment, drawVelocityHandle,
+         snapStep } from "../render/draw";
 import { isTouch } from "../ui/dom";
 import type { App } from "../app";
 
@@ -195,8 +197,18 @@ export class CanvasController {
       : Math.min(0.1, Math.max(1e-3, now - this.dragPrev!.t));
     this.dragPrev = { x: worldP.x, y: worldP.y, t: now };
 
+    const solid = this.app.dragHitsWalls;
     for (const { body, offset } of this.dragItems) {
-      const t = this.snap(new Vec2(worldP.x + offset.x, worldP.y + offset.y));
+      let t = this.snap(new Vec2(worldP.x + offset.x, worldP.y + offset.y));
+      // sweep from where the body actually is, so a fast flick cannot
+      // step over a wall between frames
+      if (solid && !body.locked) {
+        // sweep from where the body actually is, so a fast flick cannot
+        // step over a wall between frames
+        const [cx, cy] =
+          sweepClearOfWalls(this.app.world.walls, body.pos, t, body.radius);
+        t = new Vec2(cx, cy);
+      }
       if (body.locked) {
         // A locked body or anchor is being repositioned, not thrown: it
         // never integrates, so a "velocity" written here would just sit in
@@ -902,12 +914,4 @@ export class CanvasController {
       drawVelocityHandle(ctx, app.camera, body, app.view);
     }
   }
-}
-
-function distToSegment(p: Vec2, a: Vec2, b: Vec2): number {
-  const ab = b.sub(a);
-  const ab2 = ab.length2();
-  if (ab2 === 0) return p.distTo(a);
-  const t = Math.max(0.0, Math.min(1.0, p.sub(a).dot(ab) / ab2));
-  return p.distTo(new Vec2(a.x + ab.x * t, a.y + ab.y * t));
 }
