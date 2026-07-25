@@ -140,7 +140,11 @@ export class SpringLink {
   potentialEnergy(): number {
     const ext = this.a.pos.distTo(this.b.pos) - this.restLength;
     if (this.tensionOnly && ext <= 0.0) return 0.0;
-    return 0.5 * this.stiffness * ext * ext;
+    // kEff, not stiffness: the solver applies the stability-clamped
+    // constant, so reporting the raw one made the energy plot of a
+    // clamped spring disagree with the force actually doing the work
+    // (a steady bogus drift the user had no way to explain).
+    return 0.5 * this.kEff * ext * ext;
   }
 
   toDict(): SpringDict {

@@ -73,7 +73,15 @@ export class Trail {
       this.firstSerial++;
       dropped++;
     }
-    if (dropped > 0) this.recomputeBounds();
+    // Do NOT recompute the bounds here. At steady state a point expires on
+    // essentially every frame, so recomputing made this O(capacity) per
+    // body per frame - with long trails on a busy scene that alone was a
+    // large slice of the budget. Eviction can only ever leave the box too
+    // LARGE, which costs nothing but a missed cull (the same contract push
+    // already relies on), so amortise it the same way: charge the drops
+    // against the periodic recompute and let that catch up.
+    this.sinceRecompute += dropped;
+    if (this.sinceRecompute >= this.cap) this.recomputeBounds();
   }
 
   /** Discard everything (a rewind/reset invalidates recorded history). */

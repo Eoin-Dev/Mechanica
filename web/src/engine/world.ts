@@ -42,9 +42,11 @@ const ROD_FORCE_PASSES = 4;
 // (which would otherwise blow up the energy) then get automatically and
 // smoothly resolved down to microsecond slices, while calm stretches take
 // a single slice at zero extra cost.
-// Base threshold; World.encounterAngle starts here and the app may lower it
-// at runtime when there is frame-time headroom, so moderate-speed curves get
-// the same fine slicing (and smooth trails) as extreme encounters.
+// Fixed: the slice size is a function of the simulation state alone, never
+// of measured frame times, so a scene integrates identically however busy
+// the machine is (see App.pickResolution for the same rule at the step
+// level). Performance is handled by advancing less simulated time, not by
+// integrating differently.
 export const ENCOUNTER_ANGLE = 0.02; // rad of velocity swing per slice
 const ENCOUNTER_MAX_SLICES = 1024;   // floor: slice >= h / this
 
@@ -211,6 +213,13 @@ export interface WorldDict {
   drivers: DriverDict[];
 }
 
+/** An integer in [lo, hi], or `fallback` when the value is absent or not
+ * a finite number. Used on every deserialized solver setting. */
+function clampInt(v: unknown, fallback: number, lo: number, hi: number): number {
+  const n = typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : fallback;
+  return n < lo ? lo : n > hi ? hi : n;
+}
+
 interface RodRow {
   ln: DistanceLink;
   a: Body;
@@ -247,9 +256,9 @@ export class World {
   integrator: Integrator = "Velocity Verlet";
   substeps = 4;
   iterations = 8;          // solver iterations (links and contacts)
-  // runtime tuning (not serialized): how much velocity swing one adaptive
-  // slice may carry. The app lowers it below ENCOUNTER_ANGLE when there is
-  // frame headroom so fast-but-not-extreme curves also get fine slicing.
+  // How much velocity swing one adaptive slice may carry (not serialized).
+  // A field rather than a bare constant so tests can tighten or loosen the
+  // slicing; nothing in the app varies it at runtime, deliberately.
   encounterAngle = ENCOUNTER_ANGLE;
 
   time = 0.0;
@@ -271,6 +280,10 @@ export class World {
   private contactCache: ContactCache = new Map(); // warm-start impulses between substeps
   private rods: DistanceLink[] = [];  // per-step caches, see prepareStep()
   private movers: Body[] = [];
+  // enabled drivers already paired with their (movable) body. Resolved once
+  // per step instead of rebuilding an id->body map inside every force
+  // evaluation - RK4 calls that four times per slice.
+  private driven: Array<[Driver, Body]> = [];
   private contactStatic: ContactStatic = {};
 
   // ------------------------------------------------------------------ forces
@@ -334,6 +347,16 @@ export class World {
       s.cEff = c;
     }
     this.movers = this.bodies.filter((b) => b.invMass !== 0.0);
+    this.driven = [];
+    if (this.drivers.length > 0) {
+      const byId = new Map<number, Body>();
+      for (const b of this.bodies) byId.set(b.id, b);
+      for (const drv of this.drivers) {
+        if (!drv.enabled) continue;
+        const b = byId.get(drv.bodyId);
+        if (b !== undefined && b.invMass !== 0.0) this.driven.push([drv, b]);
+      }
+    }
     this.contactStatic = { noCollide };
   }
 
@@ -409,14 +432,9 @@ export class World {
       if (link instanceof SpringLink) link.applyForces();
     }
 
-    if (this.drivers.length > 0) {
-      const byId = new Map<number, Body>();
-      for (const b of this.bodies) byId.set(b.id, b);
+    if (this.driven.length > 0) {
       const TAU = 2 * Math.PI;
-      for (const drv of this.drivers) {
-        if (!drv.enabled) continue;
-        const b = byId.get(drv.bodyId);
-        if (b === undefined || b.invMass === 0.0) continue;
+      for (const [drv, b] of this.driven) {
         const f = drv.amplitude * Math.sin(TAU * drv.frequency * t + drv.phase);
         b.acc.x += f * Math.cos(drv.angle) * b.invMass;
         b.acc.y += f * Math.sin(drv.angle) * b.invMass;
@@ -701,6 +719,11 @@ export class World {
 
       if (rigid.length > 0) this.solveRodPositions(rigid, invH, iters);
 
+      // `contacts` is a snapshot of the contacts that exist NOW, for the
+      // overlay and the status-bar count - so each substep replaces the
+      // last rather than appending. Accumulating meant a 4-substep step
+      // reported (and drew) every contact four times over.
+      this.contacts.length = 0;
       solveContacts(this.bodies, this.walls, this.contacts, iters,
                     this.contactCache, this.contactStatic);
 
@@ -850,7 +873,7 @@ export class World {
    * Uses the accelerations left by the previous force evaluation, so
    * it costs one O(n) pass and no extra physics.
    */
-  subdivisionNeed(dt: number, maxQ = 16, quality = 1.0): number {
+  subdivisionNeed(dt: number, maxQ = 16): number {
     let q = 1;
     const k = dt * dt * 0.125;
     for (const b of this.bodies) {
@@ -860,12 +883,8 @@ export class World {
       const ax = b.acc.x;
       const ay = b.acc.y;
       const dev = Math.sqrt(ax * ax + ay * ay) * k;
-      // `quality` > 1 tightens the tolerance: with frame headroom to spare
-      // the app asks for subdivision at gentler curvature, which is what
-      // keeps fast (but not extreme) trail arcs smooth
       let tol = b.radius * 0.04;
       if (tol < 0.002) tol = 0.002;
-      tol /= quality;
       if (dev > tol * q * q) { // only beat the current best
         const need = Math.floor(Math.sqrt(dev / tol)) + 1;
         if (need >= maxQ) return maxQ;
@@ -1020,9 +1039,12 @@ export class World {
     const integ = s.integrator ?? "Velocity Verlet";
     w.integrator = (INTEGRATORS as readonly string[]).includes(integ)
       ? (integ as Integrator) : "Velocity Verlet";
-    w.substeps = Math.max(1, Math.min(64, Math.trunc(s.substeps ?? 4)));
-    w.iterations = Math.trunc(s.iterations ?? 8);
-    w.time = s.time ?? 0.0;
+    w.substeps = clampInt(s.substeps, 4, 1, 64);
+    // clamped to the same 1-64 the inspector offers: an out-of-range value
+    // from a hand-edited or corrupted file used to go straight into the
+    // solver loop bounds, where a large one hangs the tab outright
+    w.iterations = clampInt(s.iterations, 8, 1, 64);
+    w.time = Number.isFinite(s.time) ? (s.time as number) : 0.0;
     w.bodies = (data.bodies ?? []).map((d) => Body.fromDict(d));
     w.walls = (data.walls ?? []).map((d) => Wall.fromDict(d));
     const byId = new Map<number, Body>();

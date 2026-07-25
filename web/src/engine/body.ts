@@ -3,6 +3,16 @@ import { Vec2 } from "../core/vec";
 
 export type Color = [number, number, number];
 
+/** A finite number, or `fallback` when the value is missing / not a
+ * finite number. Guards every deserialized field: see Body.fromDict. */
+function num(v: unknown, fallback: number): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
 // Material presets: [restitution, friction]. Restitution combines with min(),
 // friction with sqrt(mu_a * mu_b) at contact time.
 export const MATERIALS: Record<string, [number, number]> = {
@@ -146,19 +156,26 @@ export class Body {
   }
 
   static fromDict(d: BodyDict): Body {
-    const b = new Body(new Vec2(...d.pos), d.radius, d.mass,
+    // Every field is defaulted and finite-checked: scene .json can come
+    // from an import, a hand-edited file or an older/newer version, and a
+    // single missing or non-numeric field used to reach the solver as
+    // undefined -> NaN, which silently froze the whole scene on step 1
+    // with no message the user could act on.
+    const b = new Body(new Vec2(num(d.pos?.[0], 0), num(d.pos?.[1], 0)),
+                       Math.max(1e-4, num(d.radius, 0.15)),
+                       Math.max(0, num(d.mass, 1)),
                        d.color as Color);
-    b.id = d.id;
+    b.id = num(d.id, b.id);
     Body.nextId = Math.max(Body.nextId, b.id + 1);
     b.name = d.name ?? `Body ${b.id}`;
-    b.vel = new Vec2(...d.vel);
-    b.angle = d.angle ?? 0.0;
-    b.omega = d.omega ?? 0.0;
-    b.restitution = d.restitution;
-    b.friction = d.friction;
+    b.vel = new Vec2(num(d.vel?.[0], 0), num(d.vel?.[1], 0));
+    b.angle = num(d.angle, 0);
+    b.omega = num(d.omega, 0);
+    b.restitution = clamp01(num(d.restitution, 0.8));
+    b.friction = Math.max(0, num(d.friction, 0.4));
     const cf = d.const_force ?? [0, 0];
-    b.constForce = new Vec2(cf[0], cf[1]);
-    b.locked = d.locked;
+    b.constForce = new Vec2(num(cf[0], 0), num(cf[1], 0));
+    b.locked = d.locked ?? false;
     b.collides = d.collides ?? true;
     b.noRotation = d.no_rotation ?? false;
     if (b.noRotation) b.omega = 0.0; // a non-rotating body never spins
@@ -210,12 +227,14 @@ export class Wall {
   }
 
   static fromDict(d: WallDict): Wall {
-    const w = new Wall(new Vec2(...d.a), new Vec2(...d.b), d.thickness);
-    w.id = d.id;
+    const w = new Wall(new Vec2(num(d.a?.[0], 0), num(d.a?.[1], 0)),
+                       new Vec2(num(d.b?.[0], 0), num(d.b?.[1], 0)),
+                       Math.max(1e-4, num(d.thickness, 0.08)));
+    w.id = num(d.id, w.id);
     Wall.nextId = Math.max(Wall.nextId, w.id + 1);
     w.name = d.name ?? `Wall ${w.id}`;
-    w.restitution = d.restitution;
-    w.friction = d.friction;
+    w.restitution = clamp01(num(d.restitution, 0.8));
+    w.friction = Math.max(0, num(d.friction, 0.5));
     w.color = (d.color as Color) ?? [150, 155, 165];
     return w;
   }

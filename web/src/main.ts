@@ -143,8 +143,7 @@ document.addEventListener("keydown", (e) => {
       app.stepOnce();
       break;
     default: {
-      if (key in TOOL_KEYS && key !== "d" && key !== "c") {
-        // d/c only reach here when not a tool key; TOOL_KEYS has neither
+      if (key in TOOL_KEYS) { // TOOL_KEYS deliberately contains neither d nor c
         app.controller.setTool(TOOL_KEYS[key]);
       } else if (key === "n") {
         app.view.snap = !app.view.snap;

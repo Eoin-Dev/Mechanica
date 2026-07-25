@@ -42,6 +42,11 @@ export const GRAPH_MAX_POINTS = 1200;
  * at the sampling cadence this is ~10k samples per channel. */
 export const GRAPH_HISTORY_S = 120.0;
 
+/** How far the phase plot may overrun its point cap before compacting.
+ * Unlike TimeSeries it exposes no retention guarantee - it is a shape, not
+ * a time axis - so it can trade a little slack for O(1) amortised adds. */
+const EVICT_BLOCK = 256;
+
 /** The time range a plot draws: `end` is the time at the right edge
  * (null = follow the live edge) and `span` is the visible duration. */
 export interface GraphView {
@@ -123,16 +128,31 @@ export class TimeSeries {
     for (const c of this.channels) {
       this.data.get(c)!.push(values[c] ?? 0.0);
     }
-    // Evict by TIME first: retain the last historyS seconds (the
-    // scroll-back buffer), no more, so an all-day run cannot grow memory
-    // without bound. maxlen stays as a hard safety cap.
-    const cutoff = t - this.historyS;
-    while (this.t.length > this.maxlen ||
-           (this.t.length > 2 && this.t[0] < cutoff)) {
-      this.t.shift();
-      for (const d of this.data.values()) d.shift();
-    }
+    this.evict(t);
     this.rev++;
+  }
+
+  /** Drop samples older than the retention window.
+   *
+   * Retain the last historyS seconds (the scroll-back buffer) and no more,
+   * so an all-day run cannot grow memory without bound; maxlen is a hard
+   * safety cap on top.
+   *
+   * Deliberately EXACT rather than batched: the retained span is a
+   * user-visible guarantee (it is exactly how far back the graph can be
+   * scrolled), so trailing extra samples to make eviction cheaper is not a
+   * free trade. One `splice` per add rather than a `shift` per expired
+   * sample keeps the common case at one array move instead of several, and
+   * makes catching up after a long stall a single operation. */
+  private evict(now: number): void {
+    const cutoff = now - this.historyS;
+    const n = this.t.length;
+    let drop = 0;
+    while (drop < n - 2 && this.t[drop] < cutoff) drop++;
+    if (n - drop > this.maxlen) drop = n - this.maxlen;
+    if (drop <= 0) return;
+    this.t.splice(0, drop);
+    for (const d of this.data.values()) d.splice(0, drop);
   }
 
   /** Toggle a channel's visibility when its legend entry is clicked. */
@@ -353,7 +373,11 @@ export class PhasePlot {
   add(x: number, vx: number, y: number, vy: number): void {
     if (Number.isFinite(x + vx + y + vy)) {
       this.points.push([x, vx, y, vy]);
-      if (this.points.length > this.maxlen) this.points.shift();
+      // batched like TimeSeries.evict: a per-sample shift() is O(n) and
+      // this runs on every graph sample for the whole run
+      if (this.points.length > this.maxlen + EVICT_BLOCK) {
+        this.points.splice(0, this.points.length - this.maxlen);
+      }
       this.rev++;
     }
   }

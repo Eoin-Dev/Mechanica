@@ -74,9 +74,34 @@ function safeName(name: string): string {
   return cleaned || "scene";
 }
 
+/** True if a saved scene already uses this (sanitized) name. Callers ask
+ * before saving so an existing scene is never silently overwritten -
+ * `safeName` strips punctuation, so two different-looking names can also
+ * collide without the user seeing why. */
+export function sceneExists(name: string): boolean {
+  return localStorage.getItem(SCENE_PREFIX + safeName(name)) !== null;
+}
+
+export class SceneSaveError extends Error {}
+
+/** Save (or overwrite) a scene in browser storage.
+ *
+ * Throws SceneSaveError when the browser refuses the write - a full quota
+ * (scenes are the biggest thing this app stores), private-mode storage, or
+ * a blocked origin. It used to throw the raw DOMException straight through
+ * the click handler, which surfaced as nothing at all: the save silently
+ * did not happen and the user was told it had. */
 export function saveScene(world: World, name: string): string {
   const safe = safeName(name);
-  localStorage.setItem(SCENE_PREFIX + safe, snapshot(world));
+  try {
+    localStorage.setItem(SCENE_PREFIX + safe, snapshot(world));
+  } catch (exc) {
+    const full = exc instanceof DOMException &&
+      (exc.name === "QuotaExceededError" || exc.code === 22);
+    throw new SceneSaveError(full
+      ? "Browser storage is full - delete a saved scene and try again"
+      : "This browser refused to save (private mode blocks storage)");
+  }
   return safe;
 }
 
@@ -144,7 +169,10 @@ export function downloadScene(world: World, name: string): void {
   a.href = url;
   a.download = `${safeName(name)}.json`;
   a.click();
-  URL.revokeObjectURL(url);
+  // Revoking synchronously races the browser's own fetch of the blob:
+  // Chrome usually wins, Firefox and Safari can end up saving an empty
+  // file. One turn of the event loop is enough for the download to start.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 /** Prompt for a .json scene file and parse it into a World. */

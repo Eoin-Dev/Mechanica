@@ -225,6 +225,10 @@ function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
                     minX: number, minY: number, maxX: number, maxY: number): void {
   ctx.lineWidth = 1;
   ctx.lineJoin = "round";
+  // one id->body index for the whole pass: world.bodyById is a linear scan,
+  // so looking a colour up per trail was quadratic in the body count
+  const byId = new Map<number, Body>();
+  for (const b of world.bodies) byId.set(b.id, b);
   // count the trails that will actually draw, so the vertex budget is
   // shared between visible trails rather than every recorded one
   let visible = 0;
@@ -243,7 +247,7 @@ function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
     // cull trails whose bounding box lies entirely outside the viewport
     if (trail.maxX < minX || trail.minX > maxX ||
         trail.maxY < minY || trail.minY > maxY) continue;
-    const body = world.bodyById(bid);
+    const body = byId.get(bid);
     const base: Color = body ? body.color : [120, 130, 140];
     // Decimate on the point's SERIAL, not its index in the ring. Serials
     // are fixed for the life of a point, so the same physical points stay
@@ -298,6 +302,11 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   // (The "remove runaway objects" setting is a separate, physical thing:
   // it deletes bodies that have escaped for good - see App.cullEscaped.)
   const margin = 12.0 / cam.zoom;
+  // `selection` is a plain array and every link, wall and body below asks
+  // whether it is in there. As an array scan that is bodies x selection per
+  // frame, which a box-select over a large scene turns quadratic; hashing
+  // it once makes each test constant time.
+  const picked = new Set<Selectable>(selection);
 
   // --- trails ---------------------------------------------------------------
   if (view.trails) drawTrails(ctx, cam, world, trails, minX, minY, maxX, maxY);
@@ -312,7 +321,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     }
     const pa = cam.toScreen(link.a.pos);
     const pb = cam.toScreen(link.b.pos);
-    const selected = selection.includes(link);
+    const selected = picked.has(link);
     const hovered = link === hover;
     if (link instanceof SpringLink) {
       if (link.tensionOnly) {
@@ -351,7 +360,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     const pa = cam.toScreen(wall.a);
     const pb = cam.toScreen(wall.b);
     const wPx = Math.max(2, Math.floor(wall.thickness * cam.zoom));
-    const selected = selection.includes(wall);
+    const selected = picked.has(wall);
     const color = selected ? theme.SELECTION
       : wall === hover ? lighten(wall.color, 30) : wall.color;
     ctx.lineCap = "round"; // capsule: round end caps replace the endpoint discs
@@ -377,7 +386,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     const [sx, sy] = cam.toScreen(body.pos);
     const pr = Math.max(2, body.radius * cam.zoom);
     let color = body.color;
-    if (body === hover && !selection.includes(body)) color = lighten(color, 35);
+    if (body === hover && !picked.has(body)) color = lighten(color, 35);
     fillCircle(ctx, sx, sy, pr, color);
     const edge = scale(color, 0.55);
     ringCircle(ctx, sx, sy, pr, Math.max(1, pr / 9), edge);
@@ -391,7 +400,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
       fillCircle(ctx, sx, sy, Math.max(2, pr / 3), [230, 233, 240]);
       ringCircle(ctx, sx, sy, Math.max(2, pr / 3), 1, [90, 95, 105]);
     }
-    if (selection.includes(body)) {
+    if (picked.has(body)) {
       ringCircle(ctx, sx, sy, pr + 3, 2, theme.SELECTION);
     }
     if (view.labels && pr >= 3) {

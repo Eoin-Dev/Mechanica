@@ -22,7 +22,6 @@ import { Body, Wall } from "../engine/body";
 import { DistanceLink, SpringLink } from "../engine/links";
 import { Selectable, VEL_ARROW_SCALE, drawVelocityHandle, snapStep } from "../render/draw";
 import { isTouch } from "../ui/dom";
-import { css } from "../ui/theme";
 import type { App } from "../app";
 
 export const TOOLS = ["select", "pan", "body", "anchor", "wall",
@@ -198,6 +197,14 @@ export class CanvasController {
 
     for (const { body, offset } of this.dragItems) {
       const t = this.snap(new Vec2(worldP.x + offset.x, worldP.y + offset.y));
+      if (body.locked) {
+        // A locked body or anchor is being repositioned, not thrown: it
+        // never integrates, so a "velocity" written here would just sit in
+        // its state - showing a moving anchor in the inspector, and firing
+        // it off the moment anyone unlocked it.
+        body.pos.setVec(t);
+        continue;
+      }
       // true displacement velocity: exactly how far the body moves this
       // frame, so position and velocity stay consistent for the solver.
       // Capped to tone the energy way down on fast flicks; zero on the
@@ -804,7 +811,9 @@ export class CanvasController {
     for (const body of bodies) {
       const clone = Body.fromDict(body.toDict());
       clone.id = Body.nextId++;
-      clone.name = `Body ${clone.id}`;
+      // anchors are always called "Anchor" - the generic rename would have
+      // produced a thing labelled "Body 12" that is still an anchor
+      if (!clone.isAnchor) clone.name = `Body ${clone.id}`;
       clone.pos = body.pos.add(new Vec2(0.3, -0.3));
       mapping.set(body.id, clone);
       app.world.bodies.push(clone);
@@ -892,7 +901,6 @@ export class CanvasController {
     if (body !== null && !body.locked) {
       drawVelocityHandle(ctx, app.camera, body, app.view);
     }
-    void css; // (theme import used by future overlay styling)
   }
 }
 
