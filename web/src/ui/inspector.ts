@@ -341,7 +341,7 @@ export class Inspector implements Panel {
       "point particle, so friction can hold it in limiting equilibrium on a " +
       "slope (mu >= tan theta) instead of rolling"));
 
-    this.body.append(section("Material"));
+    this.sub("Material");
     this.add(slider("Bounce", () => b.restitution, (v) => { b.restitution = v; },
       0.0, 1.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
         tooltip: "Coefficient of restitution e: fraction of approach speed " +
@@ -352,13 +352,13 @@ export class Inspector implements Panel {
     this.materialButtons([b]);
     this.colourRow([b]);
 
-    this.body.append(section("Constant force"));
+    this.sub("Constant force");
     this.addHalf(
       numEdit("Fx", () => b.constForce.x, (v) => { b.constForce.x = v; }, "N", this.commit),
       numEdit("Fy", () => b.constForce.y, (v) => { b.constForce.y = v; }, "N", this.commit));
 
     const drv = this.app.world.drivers.find((d) => d.bodyId === b.id);
-    this.body.append(section("Driving force"));
+    this.sub("Driving force");
     if (drv === undefined) {
       this.add(button("Add sinusoidal driver", () => {
         app.world.drivers.push(new Driver(b.id));
@@ -391,7 +391,7 @@ export class Inspector implements Panel {
     this.add(checkbox("Collides", () => b.collides, (v) => { b.collides = v; this.commit(); },
       "Disable to let bodies pass through this anchor"));
 
-    this.body.append(section("Material"));
+    this.sub("Material");
     this.add(slider("Bounce", () => b.restitution, (v) => { b.restitution = v; },
       0.0, 1.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
         tooltip: "Coefficient of restitution e for bodies bouncing off this anchor" }));
@@ -434,7 +434,7 @@ export class Inspector implements Panel {
       }, { tooltip: `bounce ${e}, friction ${mu}` });
       grid.append(b.root);
     }
-    this.body.append(grid);
+    this.target.append(grid);
   }
 
   private driverControls(drvs: Driver[]): void {
@@ -606,7 +606,7 @@ export class Inspector implements Panel {
     const app = this.app;
     const ids = new Set(bodies.map((b) => b.id));
     const drvs = app.world.drivers.filter((d) => ids.has(d.bodyId));
-    this.body.append(section(`Driving force (${drvs.length}/${bodies.length} driven)`));
+    this.sub(`Driving force (${drvs.length}/${bodies.length} driven)`);
     const addAll = () => {
       const driven = new Set(app.world.drivers.map((d) => d.bodyId));
       for (const b of bodies) {
@@ -631,7 +631,7 @@ export class Inspector implements Panel {
       app.pushUndo();
       this.markDirty();
     }, { style: "danger", tooltip: "Remove every selected body's driver" }).root);
-    this.body.append(grid);
+    this.target.append(grid);
   }
 
   private deleteObjs(objs: Selectable[], label: string): void {
@@ -798,10 +798,24 @@ export class Inspector implements Panel {
       "Verlet: symplectic, best all-round choice. Euler: fastest, less " +
       "accurate. RK4: highest short-term accuracy for smooth forces."));
     this.add(slider("Substeps", () => world.substeps,
-      (v) => { world.substeps = Math.round(v); }, 1, 64,
+      (v) => { world.substeps = Math.round(v); world.substepsCappedFrom = null; },
+      1, 64,
       { fmt: (v) => v.toFixed(0), step: 1, log: true, onCommit: this.commit,
         tooltip: "Physics substeps per 1/120 s step: more = more accurate " +
                  "but slower. Takes effect immediately." }));
+    // A preset whose substeps were cut to fit the cost ceiling shows a
+    // smaller number than it was authored with, which looks like the scene
+    // simply chose it. Say what happened and that it can be undone - the
+    // note disappears as soon as the slider is touched.
+    const capNote = el("div", { class: "faint settings-note" });
+    this.add({ root: capNote, refresh: () => {
+      const from = world.substepsCappedFrom;
+      const show = from !== null && from > world.substeps;
+      capNote.style.display = show ? "" : "none";
+      const want = `Reduced from ${from} so this scene runs in real time on ` +
+                   "a modest machine. Raise it if yours can afford it.";
+      if (show && capNote.textContent !== want) capNote.textContent = want;
+    } });
     this.add(slider("Iterations", () => world.iterations,
       (v) => { world.iterations = Math.round(v); }, 1, 64,
       { fmt: (v) => v.toFixed(0), step: 1, log: true, onCommit: this.commit,

@@ -261,6 +261,12 @@ export class World {
   // slicing; nothing in the app varies it at runtime, deliberately.
   encounterAngle = ENCOUNTER_ANGLE;
 
+  // transient: set when a preset asked for more substeps than its size
+  // could afford, so the inspector can say so rather than just showing a
+  // smaller number than the scene was authored with. Never serialized -
+  // saving a scene saves the settings it is actually running.
+  substepsCappedFrom: number | null = null;
+
   time = 0.0;
   contacts: Contact[] = [];
   stepCount = 0;
