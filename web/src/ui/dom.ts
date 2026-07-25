@@ -45,6 +45,18 @@ export function isTouch(): boolean {
          window.matchMedia("(pointer: coarse)").matches;
 }
 
+/** The viewer has asked the system for reduced motion.
+ *
+ * Gates DECORATIVE movement only - the easing on the auto-fit camera, the
+ * graph's autoscale, UI fades. The simulation itself keeps moving: it is
+ * the content, not an animation, and freezing it would leave nothing to
+ * look at. Checked live rather than cached so toggling the system setting
+ * takes effect without a reload. */
+export function reducedMotion(): boolean {
+  return typeof window !== "undefined" &&
+         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 /** Collects controls so a panel can refresh them all each frame. */
 export class RefreshGroup {
   private items: Array<{ el: HTMLElement; fn: () => void; visible: boolean }> = [];

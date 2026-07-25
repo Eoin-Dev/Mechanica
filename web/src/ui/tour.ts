@@ -111,6 +111,24 @@ export const STEPS: Step[] = [
                "trails and the live energy and momentum graphs.",
   },
   {
+    // Force fields are the most distinctive thing here and the steepest
+    // cliff: they sit at the bottom of the World tab, so nobody finds them
+    // by accident. Pointing at the panel is enough - the step's job is to
+    // establish that they exist and that there is a guide for them.
+    target: "#inspector, #inspector-handle",
+    title: "Write your own physics",
+    body: "The World tab ends with custom force fields: type a formula for " +
+          "Fx and Fy and it is applied to every body. Write -y*5 for a " +
+          "spring toward the axis, or -0.5*vx for drag. They render as " +
+          "typeset maths as you type, and the Formula guide beside them " +
+          "lists every variable and function, with recipes to start from.",
+    touchBody: "The World tab ends with custom force fields: type a formula " +
+               "for Fx and Fy and it is applied to every body. Write -y*5 " +
+               "for a spring toward the axis, or -0.5*vx for drag. The " +
+               "Formula guide beside them lists every variable and " +
+               "function, with recipes to start from.",
+  },
+  {
     // the two buttons this step is about, not the whole toolbar
     target: "#btn-library, #btn-settings",
     title: "Start from a worked example",

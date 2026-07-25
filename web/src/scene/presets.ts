@@ -95,7 +95,11 @@ function capSolverCost(w: World): World {
     // never below 2: one substep per 1/120 s frame makes stiff springs and
     // stacked contacts visibly mushy, which is past "less accurate" and
     // into "looks broken"
-    w.substeps = Math.max(2, Math.min(w.substeps, affordable));
+    const capped = Math.max(2, Math.min(w.substeps, affordable));
+    // remember what the scene asked for, so the inspector can explain the
+    // number rather than just showing a smaller one
+    w.substepsCappedFrom = capped < w.substeps ? w.substeps : null;
+    w.substeps = capped;
   }
   // Contact-heavy scenes get fewer solver iterations. The contact solver
   // already sheds iterations under load on its own (see solveContacts), so
@@ -1440,7 +1444,7 @@ export const PRESETS: Preset[] = [
     buildSoftWheel, { zoom: 80, centre: [5.0, -1.0], trails: false }),
   new Preset("Jelly smash", "Soft Bodies",
     "A rigid wrecking ball meets a soft jelly block: constraints, " +
-    "contacts and 200-odd springs all at once. The jelly absorbs the " +
+    "contacts and 150-odd springs all at once. The jelly absorbs the " +
     "blow and jiggles it away as heat (spring damping).",
     buildJellySmash, { zoom: 80, centre: [-0.5, 1.0] }),
 

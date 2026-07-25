@@ -13,6 +13,7 @@ import * as snap from "./scene/snapshot";
 import { PRESETS, Preset } from "./scene/presets";
 import { CanvasController } from "./interact/tools";
 import { GRAPH_MAX_POINTS, GRAPH_WINDOW_S, PhasePlot, TimeSeries } from "./ui/plots";
+import { reducedMotion } from "./ui/dom";
 import * as theme from "./ui/theme";
 import { ThemeName, setAccent, setTheme } from "./ui/theme";
 import { css } from "./ui/theme";
@@ -765,6 +766,12 @@ export class App {
       }
     }
 
+    // A camera that glides is decoration on top of the simulation, and
+    // glide is exactly what a viewer asking for reduced motion is asking
+    // not to have. Snapping still tracks the scene perfectly; it just
+    // arrives immediately. The simulation itself is untouched - it is the
+    // content, and freezing it would leave nothing to look at.
+    const instant = reducedMotion();
     if (this.view.autoFit) {
       const target = this.fitTarget();
       if (target !== null) {
@@ -774,9 +781,9 @@ export class App {
         // in on its own
         const desired = target[2] * this.autofitRatio;
         const rate = desired < cam.zoom ? 10.0 : 3.0;
-        const k = Math.min(1.0, dtFrame * rate);
+        const k = instant ? 1.0 : Math.min(1.0, dtFrame * rate);
         cam.zoom *= (desired / cam.zoom) ** k;
-        const blend = Math.min(1.0, dtFrame * 10.0);
+        const blend = instant ? 1.0 : Math.min(1.0, dtFrame * 10.0);
         cam.centre.x += (target[0] - cam.centre.x) * blend;
         cam.centre.y += (target[1] - cam.centre.y) * blend;
         // hard guarantee on top of the smoothing: nothing that exists
@@ -788,7 +795,7 @@ export class App {
         o instanceof Body && Number.isFinite(o.pos.x) && Number.isFinite(o.pos.y));
       if (body !== undefined) {
         const cam = this.camera;
-        const blend = Math.min(1.0, dtFrame * 8.0);
+        const blend = instant ? 1.0 : Math.min(1.0, dtFrame * 8.0);
         cam.centre.x += (body.pos.x - cam.centre.x) * blend;
         cam.centre.y += (body.pos.y - cam.centre.y) * blend;
       }

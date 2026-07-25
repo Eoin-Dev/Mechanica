@@ -422,7 +422,11 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 .type-count {
   font-size: calc(10.5px * var(--fs, 1));
   font-weight: 600;
-  color: var(--bg);
+  /* Fixed dark ink, not var(--bg): the pill's background is one of the
+     five fixed type colours whatever the theme, so ink that followed the
+     theme would be white-on-amber in the light one. All five hues clear
+     4.5:1 against this. */
+  color: rgb(18, 20, 24);
   background: var(--text-dim);
   border-radius: 9px;
   padding: 1px 7px;
@@ -430,18 +434,23 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
   text-align: center;
 }
 /* A colour per type, on the spine and the count pill, so the groups are
-   also told apart at a glance while scrolling - the same cue the canvas
-   already uses (grey anchors, grey walls, coloured bodies). */
-.type-body { border-left-color: var(--accent); }
-.type-body .type-count { background: var(--accent); }
-.type-anchor { border-left-color: rgb(140, 146, 158); }
-.type-anchor .type-count { background: rgb(140, 146, 158); }
-.type-wall { border-left-color: rgb(150, 155, 165); }
-.type-wall .type-count { background: rgb(150, 155, 165); }
-.type-spring { border-left-color: rgb(170, 150, 115); }
-.type-spring .type-count { background: rgb(170, 150, 115); }
-.type-rod { border-left-color: rgb(120, 170, 140); }
-.type-rod .type-count { background: rgb(120, 170, 140); }
+   told apart at a glance while scrolling rather than by reading every
+   heading.
+
+   These are FIXED, never the accent. They are an identity - "walls are the
+   amber one" - and an identity that changes when you pick a different
+   accent is no identity at all: it would also collide with whichever
+   accent you chose, so two groups would read as the same kind of thing.
+   Five well-separated hues, all at similar saturation and lightness so no
+   single group shouts louder than the others, and all legible on both the
+   light and dark panels. */
+.type-body   { --type-hue: rgb(88, 150, 224); }  /* blue    */
+.type-anchor { --type-hue: rgb(150, 128, 220); } /* violet  */
+.type-wall   { --type-hue: rgb(212, 154, 74); }  /* amber   */
+.type-spring { --type-hue: rgb(214, 118, 148); } /* rose    */
+.type-rod    { --type-hue: rgb(78, 178, 150); }  /* teal    */
+.type-group { border-left-color: var(--type-hue, var(--text-faint)); }
+.type-count { background: var(--type-hue, var(--text-dim)); }
 /* the first sub-heading sits right under the card header, so it does not
    need the 14px it uses when following a control */
 .type-group .section:first-of-type { margin-top: 8px; }
@@ -990,4 +999,20 @@ kbd {
    AND tablets), whatever the screen width */
 @media (pointer: coarse) {
   .tool-btn .key-badge { display: none; }
+}
+
+/* ------------------------------------------------- reduced motion */
+/* Decorative movement only. The canvas is deliberately untouched: the
+   simulation is the content of this app, not an animation played over it,
+   and a physics sandbox that refuses to move is not a physics sandbox.
+   What goes is everything the interface does on top of it - fades,
+   flashes, the easing on the auto-fit camera and the graph autoscale (both
+   handled in script, since they are canvas drawing rather than CSS). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

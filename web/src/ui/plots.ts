@@ -1,6 +1,6 @@
 /** Live plots: rolling time-series (energy, momentum) and phase-space plot. */
 import { Color } from "../engine/body";
-import { isTouch } from "./dom";
+import { isTouch, reducedMotion } from "./dom";
 import * as theme from "./theme";
 import { css } from "./theme";
 
@@ -307,7 +307,10 @@ export class TimeSeries {
     // rescales the whole plot every frame, which reads as vibration
     const targetLo = lo;
     const targetHi = hi;
-    if (this.view !== null) {
+    // A viewer who asked for reduced motion gets the axis snapped to its
+    // target instead of creeping toward it. The plotted data still moves -
+    // that is the measurement - but the frame around it stops sliding.
+    if (this.view !== null && !reducedMotion()) {
       let [vlo, vhi] = this.view;
       vlo = lo < vlo ? lo : vlo + (lo - vlo) * 0.04;
       vhi = hi > vhi ? hi : vhi + (hi - vhi) * 0.04;
