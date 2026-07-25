@@ -387,6 +387,65 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 }
 .section:first-child { margin-top: 0; }
 
+/* Object-type groups in a multi-selection.
+   These used to be plain .section headings, identical in size, weight,
+   colour and casing to the attribute headings INSIDE them ("Material",
+   "Constant force", "Align") - so "Bodies (3)" and "Constant force" were
+   the same accent-coloured caps and there was no way to see where one
+   object type's controls ended and the next began. A group is now a card
+   with a heading in a different typographic register entirely: larger,
+   mixed case, plain text colour, with the count in a pill. The accent caps
+   then read unambiguously as sub-headings within the card. */
+.type-group {
+  background: var(--panel-light);
+  border: 1px solid var(--outline);
+  border-left: 3px solid var(--text-faint);
+  border-radius: 8px;
+  padding: 0 10px 10px;
+  margin: 12px 0;
+}
+.type-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 -10px 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--outline);
+}
+.type-name {
+  font-size: calc(13px * var(--fs, 1));
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.type-count {
+  font-size: calc(10.5px * var(--fs, 1));
+  font-weight: 600;
+  color: var(--bg);
+  background: var(--text-dim);
+  border-radius: 9px;
+  padding: 1px 7px;
+  min-width: 20px;
+  text-align: center;
+}
+/* A colour per type, on the spine and the count pill, so the groups are
+   also told apart at a glance while scrolling - the same cue the canvas
+   already uses (grey anchors, grey walls, coloured bodies). */
+.type-body { border-left-color: var(--accent); }
+.type-body .type-count { background: var(--accent); }
+.type-anchor { border-left-color: rgb(140, 146, 158); }
+.type-anchor .type-count { background: rgb(140, 146, 158); }
+.type-wall { border-left-color: rgb(150, 155, 165); }
+.type-wall .type-count { background: rgb(150, 155, 165); }
+.type-spring { border-left-color: rgb(170, 150, 115); }
+.type-spring .type-count { background: rgb(170, 150, 115); }
+.type-rod { border-left-color: rgb(120, 170, 140); }
+.type-rod .type-count { background: rgb(120, 170, 140); }
+/* the first sub-heading sits right under the card header, so it does not
+   need the 14px it uses when following a control */
+.type-group .section:first-of-type { margin-top: 8px; }
+
 .row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
 .row.disabled { opacity: 0.4; }
 .row.disabled input { cursor: default; }
@@ -752,11 +811,12 @@ button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--t
 .settings-note { font-size: calc(11px * var(--fs, 1)); line-height: 1.5; margin: 4px 0 10px; }
 
 /* Body / wall colour picker (Inspector). The native colour input carries a
-   thick platform chrome by default; strip it back to a plain swatch that
-   matches the accent swatches above. */
+   thick platform chrome by default; strip it back to a plain swatch, and
+   pair it with an editable hex field so a known colour can be typed rather
+   than hunted for in the picker. */
 .colour-well {
-  flex: 1;
-  min-width: 0;
+  flex: none;
+  width: 46px;
   height: 24px;
   padding: 0;
   border: 1px solid var(--outline);
@@ -768,28 +828,36 @@ button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--t
 .colour-well::-webkit-color-swatch { border: none; border-radius: 3px; }
 .colour-well::-moz-color-swatch { border: none; border-radius: 3px; }
 .colour-well:hover { border-color: var(--text-faint); }
+.colour-hex {
+  flex: 1;
+  min-width: 0;
+  font-family: Consolas, monospace;
+  text-transform: lowercase;
+}
 /* the palette chips sit under the well, indented to the control column */
-.colour-presets { margin: 4px 0 8px 76px; gap: 6px; }
-.colour-presets button.swatch { width: 18px; height: 18px; }
+.colour-presets { margin: 5px 0 2px 76px; gap: 6px; }
+.colour-presets button.swatch { width: 18px; height: 18px; border-width: 2px; }
+.colour-presets button.swatch.active { border-color: var(--text); }
 .settings-panel .segmented { margin: 4px 0; }
 
 /* ------------------------------------------------------------------ tour */
-/* The spotlight is one element: a transparent hole with an enormous spread
-   shadow, which dims the whole page except the ring's interior in a single
-   paint. pointer-events stay off throughout - the tour explains the UI, it
-   does not need to intercept it. */
+/* The dimming is tiled so several targets can be lit at once (see
+   Tour.paintHoles). Tiles are opaque black and the CONTAINER carries the
+   opacity: translucent tiles would double-darken where they overlap and
+   leave a pale seam where they do not. pointer-events stay off throughout
+   - the tour explains the UI, it does not need to intercept it.
+
+   Nothing here is animated. Moving a full-viewport dim every frame is a
+   full-viewport repaint every frame, and snapping reads better anyway: the
+   spotlight is pointing at a thing, not travelling to it. */
 .tour-root { position: fixed; inset: 0; z-index: 40; pointer-events: none; }
-.tour-spot {
+.tour-scrim { position: fixed; inset: 0; opacity: 0.62; }
+.tour-tile { position: fixed; background: #000; }
+.tour-ring {
   position: fixed;
   border-radius: 8px;
-  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.62);
   outline: 2px solid var(--accent);
   outline-offset: 0;
-  /* Deliberately not animated. Transitioning left/top/width/height moves
-     the whole 9999px shadow every frame, which is a full-viewport repaint
-     per frame for the length of the tween - the one animation in the app
-     guaranteed to stutter. Snapping between steps also reads better: the
-     spotlight is pointing at a thing, not travelling to it. */
 }
 .tour-card {
   position: fixed;

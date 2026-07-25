@@ -201,6 +201,7 @@ export class Inspector implements Panel {
     this.structureKey = this.computeStructureKey();
     this.group.clear();
     this.body.replaceChildren();
+    this.target = this.body;
     for (const [t, b] of this.tabBtns) b.classList.toggle("active", t === this.tab);
     if (this.tab === "Selection") this.buildSelection();
     else if (this.tab === "World") this.buildWorld();
@@ -208,15 +209,42 @@ export class Inspector implements Panel {
     this.group.refreshAll();
   }
 
+  /** Where `add` and friends currently append.
+   *
+   * Normally the panel body; inside a multi-selection it is the card for
+   * the object type being described, so a group's controls are visibly
+   * contained by it rather than running together into the next group.
+   * Assigned by rebuild(), which the constructor calls. */
+  private target!: HTMLElement;
+
   private add(c: { root: HTMLElement; refresh?: () => void }): void {
-    this.body.append(this.group.add(c).root);
+    this.target.append(this.group.add(c).root);
   }
 
   private addHalf(a: { root: HTMLElement; refresh?: () => void },
                   b: { root: HTMLElement; refresh?: () => void }): void {
     this.group.add(a);
     this.group.add(b);
-    this.body.append(halfRow(a.root, b.root));
+    this.target.append(halfRow(a.root, b.root));
+  }
+
+  /** A sub-heading (Material, Constant force) inside whatever is current. */
+  private sub(title: string): void {
+    this.target.append(section(title));
+  }
+
+  /** Open a card for one object type in a multi-selection, and make it the
+   * append target until the next `typeGroup` or `endGroups`. */
+  private typeGroup(title: string, count: number, kind: string): void {
+    const head = el("div", { class: "type-head" },
+      el("span", { class: "type-name", text: title }),
+      el("span", { class: "type-count", text: String(count) }));
+    this.target = el("div", { class: `type-group type-${kind}` }, head);
+    this.body.append(this.target);
+  }
+
+  private endGroups(): void {
+    this.target = this.body;
   }
 
   // -------------------------------------------------------------- selection
@@ -312,7 +340,6 @@ export class Inspector implements Panel {
       "Body can't spin (infinite rotational inertia): it behaves like a " +
       "point particle, so friction can hold it in limiting equilibrium on a " +
       "slope (mu >= tan theta) instead of rolling"));
-    this.colourRow([b]);
 
     this.body.append(section("Material"));
     this.add(slider("Bounce", () => b.restitution, (v) => { b.restitution = v; },
@@ -323,6 +350,7 @@ export class Inspector implements Panel {
       0.0, 10.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
         tooltip: "Coefficient of friction mu (Coulomb model: |F_t| <= mu N)" }));
     this.materialButtons([b]);
+    this.colourRow([b]);
 
     this.body.append(section("Constant force"));
     this.addHalf(
@@ -362,7 +390,6 @@ export class Inspector implements Panel {
       numEdit("y", () => b.pos.y, (v) => { b.pos.y = v; }, "m", this.commit, fmt3dp));
     this.add(checkbox("Collides", () => b.collides, (v) => { b.collides = v; this.commit(); },
       "Disable to let bodies pass through this anchor"));
-    this.colourRow([b]);
 
     this.body.append(section("Material"));
     this.add(slider("Bounce", () => b.restitution, (v) => { b.restitution = v; },
@@ -372,6 +399,7 @@ export class Inspector implements Panel {
       0.0, 10.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
         tooltip: "Coefficient of friction mu at contact with this anchor" }));
     this.materialButtons([b]);
+    this.colourRow([b]);
 
     this.actionButtons();
   }
@@ -441,7 +469,7 @@ export class Inspector implements Panel {
 
     if (bodies.length > 0) {
       const first = bodies[0];
-      this.body.append(section(`Bodies (${bodies.length})`));
+      this.typeGroup("Bodies", bodies.length, "body");
       this.add(slider("Mass", () => first.mass,
         (v) => bodies.forEach((b) => { b.mass = v; }), 0.001, 10000.0,
         { unit: "kg", log: true, onCommit: this.commit }));
@@ -470,7 +498,7 @@ export class Inspector implements Panel {
                  this.commit(); },
         "Stop every selected body from spinning: each behaves like a point " +
         "particle (can rest in limiting equilibrium on a slope)"));
-      this.body.append(section("Constant force"));
+      this.sub("Constant force");
       this.addHalf(
         numEdit("Fx", () => first.constForce.x,
           (v) => bodies.forEach((b) => { b.constForce.x = v; }), "N", this.commit),
@@ -478,7 +506,7 @@ export class Inspector implements Panel {
           (v) => bodies.forEach((b) => { b.constForce.y = v; }), "N", this.commit));
       this.buildMultiDrivers(bodies);
       if (bodies.length >= 2) {
-        this.body.append(section("Align"));
+        this.sub("Align");
         const grid = el("div", { class: "btn-grid-4" });
         const items: Array<[string, string, () => void]> = [
           ["|x", "Align to the same x", () => this.align(bodies, "x")],
@@ -489,13 +517,13 @@ export class Inspector implements Panel {
         for (const [label, tip, fn] of items) {
           grid.append(button(label, fn, { tooltip: tip }).root);
         }
-        this.body.append(grid);
+        this.target.append(grid);
       }
     }
 
     if (anchors.length > 0) {
       const af = anchors[0];
-      this.body.append(section(`Anchors (${anchors.length})`));
+      this.typeGroup("Anchors", anchors.length, "anchor");
       this.add(slider("Radius", () => af.radius,
         (v) => anchors.forEach((a) => { a.radius = v; }), 0.01, 10.0,
         { unit: "m", log: true, onCommit: this.commit,
@@ -517,7 +545,7 @@ export class Inspector implements Panel {
 
     if (walls.length > 0) {
       const wf = walls[0];
-      this.body.append(section(`Walls (${walls.length})`));
+      this.typeGroup("Walls", walls.length, "wall");
       this.add(slider("Thickness", () => wf.thickness,
         (v) => walls.forEach((w) => { w.thickness = v; }), 0.01, 2.0,
         { unit: "m", log: true, fmt: (v) => v.toFixed(2), onCommit: this.commit }));
@@ -532,7 +560,7 @@ export class Inspector implements Panel {
 
     if (springs.length > 0) {
       const sf = springs[0];
-      this.body.append(section(`Springs & strings (${springs.length})`));
+      this.typeGroup("Springs & strings", springs.length, "spring");
       this.add(slider("Stiffness", () => sf.stiffness,
         (v) => springs.forEach((s) => { s.stiffness = v; }), 0.01, 100000.0,
         { unit: "N/m", log: true, onCommit: this.commit,
@@ -543,6 +571,16 @@ export class Inspector implements Panel {
           tooltip: "Damping coefficient c, applied to every selected spring/string" }));
     }
 
+    if (rods.length > 0) {
+      const rf = rods[0];
+      this.typeGroup("Rods", rods.length, "rod");
+      this.add(slider("Length", () => rf.length,
+        (v) => rods.forEach((r) => { r.length = v; }), 0.01, 100.0,
+        { unit: "m", log: true, onCommit: this.commit,
+          tooltip: "Rigid length, applied to every selected rod" }));
+    }
+
+    this.endGroups();
     this.actionButtons();
     // selective deletion: remove just one kind of thing from the selection
     const groups: Array<[Selectable[], string]> = [
@@ -630,6 +668,7 @@ export class Inspector implements Panel {
       numEdit("y2", () => w.b.y, (v) => { w.b.y = v; }, "m", this.commit, fmt3dp));
     this.add(slider("Thickness", () => w.thickness, (v) => { w.thickness = v; },
       0.01, 2.0, { unit: "m", log: true, fmt: (v) => v.toFixed(2), onCommit: this.commit }));
+    this.body.append(section("Material"));
     this.add(slider("Bounce", () => w.restitution, (v) => { w.restitution = v; },
       0.0, 1.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit }));
     this.add(slider("Friction", () => w.friction, (v) => { w.friction = v; },

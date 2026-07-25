@@ -449,35 +449,68 @@ export function colourEdit(label: string, get: () => readonly number[],
                            opts: { presets?: readonly (readonly number[])[];
                                    onCommit?: () => void;
                                    tooltip?: string } = {}): Control {
-  const input = el("input", { type: "color", class: "colour-well" });
+  const input = el("input", { type: "color", class: "colour-well",
+                              title: "Open the colour picker" });
+  // the hex is editable text, so a colour can be typed or pasted exactly -
+  // the native picker alone gives no way to enter a known value
+  const hex = el("input", { class: "colour-hex", type: "text",
+                            spellcheck: "false", maxlength: "7",
+                            title: "Type or paste a hex colour" });
   const row = el("div", { class: "row" },
-                 el("span", { class: "lbl", text: label }), input);
+                 el("span", { class: "lbl", text: label }), input, hex);
   if (opts.tooltip) row.title = opts.tooltip;
-  input.addEventListener("input", () => set(hexToRgb(input.value)));
-  input.addEventListener("change", () => {
-    set(hexToRgb(input.value));
-    opts.onCommit?.();
+
+  const apply = (c: [number, number, number], commit: boolean): void => {
+    set(c);
+    if (commit) opts.onCommit?.();
+    refresh();
+  };
+  // `input` fires continuously while dragging through the colour field, so
+  // the value is applied live; the undo entry waits for `change`, or one
+  // pick would bury the stack under a hundred near-identical states
+  input.addEventListener("input", () => apply(hexToRgb(input.value), false));
+  input.addEventListener("change", () => apply(hexToRgb(input.value), true));
+
+  let typing = false;
+  hex.addEventListener("focus", () => { typing = true; hex.select(); });
+  hex.addEventListener("blur", () => {
+    typing = false;
+    const ok = /^#?[0-9a-f]{6}$/i.test(hex.value.trim());
+    hex.classList.toggle("error", !ok);
+    if (ok) apply(hexToRgb(hex.value), true);
+    else refresh();
+  });
+  hex.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") hex.blur();
+    else if (e.key === "Escape") { refresh(); hex.blur(); }
+    e.stopPropagation();
   });
 
   let chips: HTMLElement | null = null;
+  const chipList: Array<{ el: HTMLElement; hex: string }> = [];
   if (opts.presets && opts.presets.length > 0) {
     chips = el("div", { class: "swatch-row colour-presets" });
     for (const c of opts.presets) {
-      const hex = rgbToHex(c);
-      const b = el("button", { class: "swatch", title: hex });
-      b.append(el("span", { class: "dot", style: `background:${hex}` }));
-      b.addEventListener("click", () => {
-        set(hexToRgb(hex));
-        opts.onCommit?.();
-      });
+      const ph = rgbToHex(c);
+      const b = el("button", { class: "swatch", title: `Use ${ph}` });
+      b.append(el("span", { class: "dot", style: `background:${ph}` }));
+      b.addEventListener("click", () => apply(hexToRgb(ph), true));
       chips.append(b);
+      chipList.push({ el: b, hex: ph });
     }
   }
 
-  const wrap = chips ? el("div", {}, row, chips) : row;
-  const refresh = () => {
-    const hex = rgbToHex(get());
-    if (input.value !== hex) input.value = hex;
+  const wrap = chips ? el("div", { class: "colour-edit" }, row, chips) : row;
+  const refresh = (): void => {
+    const cur = rgbToHex(get());
+    if (input.value !== cur) input.value = cur;
+    if (!typing && hex.value !== cur) {
+      hex.value = cur;
+      hex.classList.remove("error");
+    }
+    // mark the palette entry in use, so the chips read as a choice rather
+    // than as eight buttons that do something unrelated
+    for (const c of chipList) c.el.classList.toggle("active", c.hex === cur);
   };
   refresh();
   return { root: wrap, refresh };

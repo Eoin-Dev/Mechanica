@@ -10,18 +10,30 @@
 // vite/client already types this, and the project keeps its dependency
 // list to vite, vitest, typescript and mathlive.
 import html from "../index.html?raw";
+import panelsSrc from "../src/ui/panels.ts?raw";
+import inspectorSrc from "../src/ui/inspector.ts?raw";
 import { describe, expect, it } from "vitest";
 import { STEPS } from "../src/ui/tour";
 
-const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
+// ids written into the shell, plus the ones the panels assign at build
+// time. Both are scanned from source so renaming either kind is caught -
+// listing the programmatic ones by hand here would defeat the point.
+const ids = new Set([
+  ...[...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]),
+  ...[...(panelsSrc + inspectorSrc).matchAll(/\.id = "([^"]+)"/g)].map((m) => m[1]),
+  ...[...(panelsSrc + inspectorSrc).matchAll(/\bid: "([^"]+)"/g)].map((m) => m[1]),
+]);
 
 describe("guided tour", () => {
   it("every target is an element that exists in the page shell", () => {
-    const targets = STEPS.map((s) => s.target).filter((t): t is string => !!t);
+    // a target may be a selector LIST - the spotlight covers the union of
+    // everything it matches - so each id in it has to resolve
+    const targets = STEPS.flatMap((s) => (s.target ?? "").split(","))
+      .map((t) => t.trim()).filter(Boolean);
     expect(targets.length).toBeGreaterThan(0);
     for (const sel of targets) {
       expect(sel.startsWith("#"), `${sel} should be an id selector`).toBe(true);
-      expect(ids.has(sel.slice(1)), `${sel} is missing from index.html`).toBe(true);
+      expect(ids.has(sel.slice(1)), `${sel} matches nothing`).toBe(true);
     }
   });
 

@@ -90,11 +90,17 @@ export class Toolbar implements Panel {
     root.append(g.add(button("", () => app.toggleAutoFit(),
       { icon: ICONS.autofit, isActive: () => app.view.autoFit,
         tooltip: "Auto-fit camera: continuously keep the whole scene framed (Shift+F)" })).root);
-    root.append(g.add(button("Library", () => toggleOverlay("library"),
-      { icon: ICONS.library, tooltip: "Example simulations and saved scenes (L)" })).root);
-    root.append(g.add(button("", () => toggleOverlay("settings"),
+    // ids so the guided tour can spotlight these two specifically rather
+    // than the whole toolbar strip
+    const libraryBtn = g.add(button("Library", () => toggleOverlay("library"),
+      { icon: ICONS.library, tooltip: "Example simulations and saved scenes (L)" }));
+    libraryBtn.root.id = "btn-library";
+    root.append(libraryBtn.root);
+    const settingsBtn = g.add(button("", () => toggleOverlay("settings"),
       { icon: ICONS.gear,
-        tooltip: "Settings - theme, font, performance, help" })).root);
+        tooltip: "Settings - theme, font, performance, help" }));
+    settingsBtn.root.id = "btn-settings";
+    root.append(settingsBtn.root);
 
     this.fps = el("span", { id: "fps" });
     root.append(this.fps);
@@ -133,6 +139,13 @@ export class Palette implements Panel {
   private group = new RefreshGroup();
 
   constructor(app: App, root: HTMLElement) {
+    // Reaching for a tool means you are done with the thing you just
+    // placed. It stayed selected otherwise, so the inspector went on
+    // editing it - and its selection ring stayed on the canvas - while you
+    // drew something else entirely. Anywhere on the strip counts, not just
+    // the buttons: the gaps between them are part of the same gesture.
+    root.addEventListener("pointerdown", () => app.setSelection([]));
+
     const keyOf: Record<string, string> = {};
     for (const [k, t] of Object.entries(TOOL_KEYS)) keyOf[t] = k.toUpperCase();
     TOOL_GROUPS.forEach((tools, gi) => {
