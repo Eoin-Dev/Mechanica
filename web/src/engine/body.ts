@@ -94,6 +94,13 @@ export class Body {
   // impulses cancel, so it must not be mistaken for a violent close
   // encounter and trigger fine time-slicing forever. Never serialized.
   touching = false;
+  // transient: an endpoint of at least one spring (set per step by
+  // World.prepareStep). The same exclusion as `touching`, for the same
+  // reason: a stiff spring produces an enormous acceleration that is
+  // mostly cancelled by the spring on the other side, and the engine
+  // already clamps every spring so the scene's own substep resolves it
+  // (see World.prepareStep and subdivisionNeed). Never serialized.
+  sprung = false;
   color: Color;
   // scratch state used by the solver
   acc = new Vec2();

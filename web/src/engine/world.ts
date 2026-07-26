@@ -251,6 +251,19 @@ export interface WorldDict {
   drivers: DriverDict[];
 }
 
+// Performance mode's solver ceilings. Deliberately blunt: they are not a
+// tuning of the accuracy/cost curve but a decision to stop paying for
+// accuracy at all, for the scenes where nobody was measuring anything - a
+// soft body being poked, a hundred particles piled on a planet.
+//
+// Measured on Earth & Moon plus 200 loose particles all in mutual contact
+// (415 simultaneous contacts): 15.8 ms of physics per displayed frame at the
+// authored settings, which does not fit in a 60 Hz frame at all, against
+// 1.9 ms here. Symplectic Euler halves the force evaluations on top, and
+// dropping the adaptive machinery removes a multiplier that reached 16x.
+export const PERF_SUBSTEPS = 2;
+export const PERF_ITERATIONS = 4;
+
 export class World {
   bodies: Body[] = [];
   walls: Wall[] = [];
@@ -284,6 +297,33 @@ export class World {
   // smaller number than the scene was authored with. Never serialized -
   // saving a scene saves the settings it is actually running.
   substepsCappedFrom: number | null = null;
+
+  // transient: run the cheap solver (see PERF_SUBSTEPS). A preference of the
+  // browser, not of the scene, so it is NEVER serialized: the scene keeps the
+  // substeps, iterations and integrator it was authored with, and this
+  // overrides them only while stepping. The inspector shows the authored
+  // numbers with a note saying what is actually running - writing the cheap
+  // values into the world would save them into the user's scene file.
+  performance = false;
+
+  /** Substeps this step will actually take. */
+  get effectiveSubsteps(): number {
+    const n = Math.max(1, this.substeps);
+    return this.performance ? Math.min(n, PERF_SUBSTEPS) : n;
+  }
+
+  /** Solver iterations this step will actually use. */
+  get effectiveIterations(): number {
+    return this.performance ? Math.min(this.iterations, PERF_ITERATIONS)
+                            : this.iterations;
+  }
+
+  /** Integrator this step will actually use. Performance mode drops to
+   * Symplectic Euler, which evaluates the forces once per step instead of
+   * twice (Verlet) or four times (RK4). */
+  get effectiveIntegrator(): Integrator {
+    return this.performance ? "Symplectic Euler" : this.integrator;
+  }
 
   time = 0.0;
   contacts: Contact[] = [];
@@ -378,6 +418,14 @@ export class World {
       }
       s.kEff = k;
       s.cEff = c;
+    }
+    // Flag the spring endpoints for subdivisionNeed. Doing it here rather
+    // than in the force loop keeps it out of the per-evaluation path: the
+    // link list cannot change within a step.
+    for (const b of this.bodies) b.sprung = false;
+    for (const s of springs) {
+      s.a.sprung = true;
+      s.b.sprung = true;
     }
     // `invMass` is a getter with three branches and a division, and the
     // force loops want it once per body per EVALUATION - four times a
@@ -927,7 +975,7 @@ export class World {
    * a driver or a force field containing `t` must see each slice's own
    * time rather than the substep's start for all of them. */
   private integrate(h: number, t0: number): void {
-    const name = this.integrator;
+    const name = this.effectiveIntegrator;
     const movers = this.movers;
     if (name === "RK4") {
       this.integrateRk4(h, t0);
@@ -1040,7 +1088,7 @@ export class World {
   // ------------------------------------------------------------------- step
   /** Advance the world by dt seconds using the configured substeps. */
   step(dt: number): void {
-    const n = Math.max(1, this.substeps);
+    const n = this.effectiveSubsteps;
     const h = dt / n;
     const invH = 1.0 / h;
     this.prepareStep(h);
@@ -1051,10 +1099,13 @@ export class World {
       b.prev.y = b.pos.y;
     }
     const rigid = this.rods;
-    const iters = this.iterations;
+    const iters = this.effectiveIterations;
     // N-body scenes get adaptive slice-marching inside each substep so
-    // close encounters can't blow up; everything else is untouched
-    const adaptive = this.mutualGravity && this.G !== 0.0;
+    // close encounters can't blow up; everything else is untouched.
+    // Performance mode gives it up: the slicer is the single largest
+    // multiplier in the engine, and a scene being played with rather than
+    // measured does not need a near-exact flyby.
+    const adaptive = this.mutualGravity && this.G !== 0.0 && !this.performance;
     if (adaptive) {
       // One evaluation costs roughly (bodies + pairs); one slice is four of
       // them. Spending the budget in work rather than in slices lets a
@@ -1233,14 +1284,29 @@ export class World {
    *
    * Uses the accelerations left by the previous force evaluation, so
    * it costs one O(n) pass and no extra physics.
+   *
+   * Bodies held by contacts or by springs are excluded. Both keep a large
+   * acceleration that is immediately cancelled - by the contact impulse on
+   * one side, by the opposing spring on the other - so neither is the
+   * free-flying curvature this criterion is looking for. For springs there
+   * is a second, stronger reason: prepareStep clamps every spring's
+   * effective stiffness so that h*omega <= 1 at the scene's own substep, so
+   * a spring is resolved stably by construction and subdividing further buys
+   * nothing at all.
+   *
+   * Leaving springs in was expensive. The Trampoline's bed particles are
+   * 5.5 cm across (a 2.2 mm tolerance) on springs clamped to k = 100 000
+   * carrying a 64 kg gymnast, which drove this to the maxQ of 16 through
+   * every bounce - a sixteenfold multiplier on the whole scene's physics for
+   * accuracy that the spring clamp had already guaranteed. That is what made
+   * the "physics can't keep up" warning fire on a scene whose actual solver
+   * cost is 215 us a step.
    */
   subdivisionNeed(dt: number, maxQ = 16): number {
     let q = 1;
     const k = dt * dt * 0.125;
     for (const b of this.bodies) {
-      // touching bodies are pinned by contact impulses, not free-flying
-      // through an encounter - their acceleration is not real deviation
-      if (b.invMass === 0.0 || b.touching) continue;
+      if (b.invMass === 0.0 || b.touching || b.sprung) continue;
       const ax = b.acc.x;
       const ay = b.acc.y;
       const dev = Math.sqrt(ax * ax + ay * ay) * k;

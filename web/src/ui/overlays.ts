@@ -434,6 +434,19 @@ export class SettingsPanel {
          "hand.");
 
     group("Accuracy & performance");
+    add(checkbox("Performance mode",
+      () => app.perfMode,
+      (v) => app.setPerfMode(v),
+      "Trade physical accuracy for frame rate across the whole app."));
+    note("Off by default. Simplifies every part of the physics at once - " +
+         "a cheaper integrator, fewer substeps and solver passes, no " +
+         "adaptive time resolution - and draws springs as plain lines " +
+         "without spin markers. Built for scenes you are playing with " +
+         "rather than measuring: soft bodies, and crowds of objects piled " +
+         "together, where it runs 5-8x faster. The energy graph will drift, " +
+         "which is the trade working as intended; turn it off for anything " +
+         "you want numbers from.");
+
     add(checkbox("Adaptive resolution",
       () => app.adaptiveDt,
       (v) => app.setAdaptiveDt(v),
@@ -441,7 +454,8 @@ export class SettingsPanel {
     note("Recommended: Enabled. Keeps trajectories accurate and trails " +
          "smooth where a path curves sharply within one step, such as a " +
          "gravity slingshot. Substeps and iterations are separate, " +
-         "per-scene settings in the Inspector's World tab.");
+         "per-scene settings in the Inspector's World tab. Performance mode " +
+         "overrides this while it is on.");
 
     add(checkbox("Remove runaway objects",
       () => app.settings.cull ?? true,

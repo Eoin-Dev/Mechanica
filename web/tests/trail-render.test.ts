@@ -14,15 +14,19 @@ interface Op { op: string; style?: string; x?: number; y?: number;
 
 /** Stand-in for the DOM Path2D, which Node does not provide.
  *
- * Trails are built into one Path2D per colour band and stroked once each,
- * so that all the trails sharing a colour cost one stroke per band instead
- * of one per band per trail. This records the geometry so the recording
- * context below can replay it into the op stream at stroke time, in the
- * same order the calls were originally made against the context. */
+ * Everything drawn in bulk - trails by colour band, and links, bodies and
+ * vector arrows by style - is built into a Path2D and stroked or filled once
+ * per style rather than once per object. This records the geometry so the
+ * recording context below can replay it into the op stream at stroke time,
+ * in the same order the calls were originally made against the context. */
 class FakePath2D {
   ops: Op[] = [];
   moveTo(x: number, y: number): void { this.ops.push({ op: "moveTo", x, y }); }
   lineTo(x: number, y: number): void { this.ops.push({ op: "lineTo", x, y }); }
+  closePath(): void { this.ops.push({ op: "closePath" }); }
+  arc(cx: number, cy: number, r: number): void {
+    this.ops.push({ op: "arc", cx, cy, x: r, y: r });
+  }
   quadraticCurveTo(cx: number, cy: number, x: number, y: number): void {
     this.ops.push({ op: "quadraticCurveTo", x, y, cx, cy });
   }
@@ -40,8 +44,15 @@ function recCtx(): { ctx: CanvasRenderingContext2D; ops: Op[] } {
       if (path !== undefined) ops.push(...path.ops);
       ops.push({ op: "stroke", style: strokeStyle });
     },
+    fill(path?: FakePath2D) {
+      if (path !== undefined) ops.push(...path.ops);
+      ops.push({ op: "fill" });
+    },
     moveTo(x: number, y: number) { ops.push({ op: "moveTo", x, y }); },
     lineTo(x: number, y: number) { ops.push({ op: "lineTo", x, y }); },
+    arc(cx: number, cy: number, r: number) {
+      ops.push({ op: "arc", cx, cy, x: r, y: r });
+    },
     // Trails are drawn as quadratic curves through midpoints: the endpoint
     // is a midpoint and the CONTROL point is the retained trail sample.
     // Both are recorded - decimation behaviour can only be checked against
@@ -250,13 +261,17 @@ describe("trail curve fidelity", () => {
     drawWorld(ctx, new Camera(800, 600), worldWith(b), view(), [], null,
               new Map([[b.id, t]]), 800, 600);
 
-    // split the op stream into sub-paths, one per stroke
-    const paths: Op[][] = [];
+    // split the op stream into sub-paths, one per stroke, then keep the
+    // trail's. Quadratic curves identify them: trails are the only thing
+    // drawn with them - links are straight, bodies are arcs - and links and
+    // bodies now batch by style, so their geometry shares the stream.
+    const allPaths: Op[][] = [];
     let cur: Op[] = [];
     for (const o of ops) {
-      if (o.op === "stroke") { paths.push(cur); cur = []; }
+      if (o.op === "stroke") { allPaths.push(cur); cur = []; }
       else cur.push(o);
     }
+    const paths = allPaths.filter((p) => p.some((o) => o.op === "quadraticCurveTo"));
     expect(paths.length).toBeGreaterThan(4); // genuinely banded
 
     let joins = 0;
