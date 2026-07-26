@@ -37,9 +37,10 @@ export const TOOL_KEYS: Record<string, Tool> = {
 };
 
 export const TOOL_INFO: Record<Tool, [string, string]> = {
-  select: ["Select (V)", "Click to select, drag to move (drag while playing " +
-           "to throw). Shift-click adds. Drag empty space for a box select. " +
-           "Right-drag a body (or drag the green arrow) to set its velocity."],
+  select: ["Select (V)", "Click to select, drag to move - a body keeps the " +
+           "motion it had, running or not. Shift-click adds. Drag empty " +
+           "space for a box select. Right-drag a body (or drag the green " +
+           "arrow) to set its velocity."],
   pan: ["Pan (H)", "Drag to move the view. Middle drag (or right drag on " +
         "empty space) pans in any tool."],
   body: ["Add body (B)", "Click to place a dynamic body. Edit it in the Inspector."],
@@ -58,7 +59,7 @@ export const TOOL_INFO: Record<Tool, [string, string]> = {
  * and free of the PC-only interactions (keyboard keys, hover, right/middle
  * drag). */
 export const TOOL_INFO_TOUCH: Record<Tool, string> = {
-  select: "Tap to select, drag to move (throw while playing). " +
+  select: "Tap to select, drag to move - a body keeps the motion it had. " +
           "Drag empty space for a box select.",
   pan: "Drag to move the view. Pinch with two fingers to zoom.",
   body: "Tap to place a dynamic body. Edit it in the Inspector.",
@@ -84,21 +85,34 @@ function makeAnchor(b: Body): Body {
   return b;
 }
 
-// How hard user dragging may hit the physics. A grabbed body follows the
-// cursor EXACTLY, and the velocity it reports to the physics is its TRUE
-// per-frame displacement (so the constraint solver, which reads relative
-// velocities, drives linked bodies correctly and a pendulum lunges) - just
-// capped at DRAG_VEL_CAP so a fast flick can't inject a huge amount of
-// energy. Everything link-connected to a grab is additionally speed-clamped
-// each substep at DRAG_CHASE_CAP as a blow-up guard. User interaction is not
-// physical anyway; the caps trade a little high-speed fidelity for the
-// energy staying sane, deliberately toned well down from the raw drag.
+// How hard user dragging may hit the physics.
+//
+// A grabbed body follows the cursor EXACTLY. While it is held it reports its
+// TRUE per-frame displacement as its velocity, because the contact and
+// constraint solvers read relative velocities: without that, a dragged body
+// shoved into a pile would push nothing and a dragged pendulum anchor would
+// not carry its bob. That reported velocity is capped at DRAG_VEL_CAP so a
+// fast flick cannot inject a huge amount of energy, and everything
+// link-connected to a grab is additionally speed-clamped each substep at
+// DRAG_CHASE_CAP as a blow-up guard.
+//
+// The reported velocity is a means to an end and never survives the drag:
+// releasing restores whatever the body had when it was grabbed (see
+// dragVel0). Left-dragging is repositioning, not throwing - you put
+// something where you want it and the motion it already had carries on. It
+// used to release at the cursor's velocity, which meant a drag could not be
+// done without also flinging the thing you were trying to place, and made
+// the "hold it still to pin it" gesture the only way to move anything
+// without changing its motion. Aiming a velocity deliberately is the
+// right-drag / green-arrow gesture, which is untouched.
 const DRAG_VEL_CAP = 14.0;   // m/s - the grabbed body's reported speed
 const DRAG_CHASE_CAP = 20.0; // m/s - per-substep clamp on linked bodies
 
 interface DragItem {
   body: Body;
   offset: Vec2;
+  /** Velocity the body had when the drag activated, restored on release. */
+  vel0: Vec2;
 }
 
 export class CanvasController {
@@ -152,16 +166,32 @@ export class CanvasController {
     return false;
   }
 
-  /** Drop any in-progress drag without a throw (e.g. world replaced). */
-  abortDrag(): void {
+  /** Release every dragged body, restoring the velocity it was grabbed with.
+   *
+   * Shared by a normal release and by abortDrag, because the answer is the
+   * same either way: the drag borrowed the velocity field to talk to the
+   * solver and now gives it back. A body that was never activated was never
+   * held and never had its velocity touched, so restoring is still correct -
+   * vel0 is what it has.
+   */
+  private releaseDragged(): void {
     this.clearChaseCaps();
-    for (const { body } of this.dragItems) body.held = false;
+    for (const { body, vel0 } of this.dragItems) {
+      body.held = false;
+      // a locked body or anchor never had a velocity written (see updateDrag)
+      if (!body.locked) body.vel.setVec(vel0);
+    }
     this.dragItems = [];
     this.dragActive = false;
+    this.dragPrev = null;
+  }
+
+  /** Drop any in-progress drag (e.g. world replaced). */
+  abortDrag(): void {
+    this.releaseDragged();
     this.velDrag = null;
     this.wallDrag = null;
     this.wallGrab = null;
-    this.dragPrev = null;
   }
 
   /** Refresh the drag every frame (pointer-move events stop while the
@@ -169,13 +199,17 @@ export class CanvasController {
    *
    * Grabbed bodies follow the cursor EXACTLY - the position is never
    * limited, so the body is always under the pointer. The velocity each
-   * reports to the physics is its TRUE per-frame displacement (consistent
-   * with the move, so the constraint solver reads correct relative
-   * velocities and links carry momentum - a stopped anchor lets a pendulum
-   * lunge on), only capped at DRAG_VEL_CAP so a fast flick can't inject a
-   * huge amount of energy. Everything link-connected keeps simulating with
-   * real link physics under a per-substep speed clamp, a blow-up guard that
-   * a normal drag never touches. */
+   * reports to the physics while held is its TRUE per-frame displacement
+   * (consistent with the move, so the contact and constraint solvers read
+   * correct relative velocities and links carry momentum - a stopped anchor
+   * lets a pendulum lunge on), capped at DRAG_VEL_CAP so a fast flick can't
+   * inject a huge amount of energy. Everything link-connected keeps
+   * simulating with real link physics under a per-substep speed clamp, a
+   * blow-up guard that a normal drag never touches.
+   *
+   * None of that velocity outlives the drag: release restores what the body
+   * was grabbed with (see releaseDragged), so a drag moves a body without
+   * also throwing it. */
   updateDrag(): void {
     if (this.dragItems.length === 0 || !this.dragActive) return;
     const app = this.app;
@@ -617,9 +651,13 @@ export class CanvasController {
     else if (!app.selection.includes(picked)) app.setSelection([picked]);
     // begin dragging all selected bodies; held bodies act as infinite
     // mass so they stay put while everything else collides with them
+    // vel0 is captured at PRESS, not at activation: the simulation keeps
+    // running between the two, so grabbing a falling ball and restoring the
+    // velocity it had when your finger went down is what "the motion it
+    // already had" means to the person doing it.
     this.dragItems = app.selection
       .filter((o): o is Body => o instanceof Body)
-      .map((b) => ({ body: b, offset: b.pos.sub(worldP) }));
+      .map((b) => ({ body: b, offset: b.pos.sub(worldP), vel0: b.vel.copy() }));
     // bodies are NOT held yet: the drag arms here and only activates
     // once the cursor moves, so an inspect-click leaves the physics alone
     this.dragPress = mouse;
@@ -695,20 +733,16 @@ export class CanvasController {
     const app = this.app;
     if (this.panning) this.panning = false;
     if (this.velDrag !== null || this.wallDrag !== null || this.dragItems.length > 0) {
-      // An inactive (never-moved) press was a pure inspect-click: the
-      // bodies were never held, so there is nothing to undo. An active
-      // drag while playing releases at the capped cursor velocity -
-      // moving cursor = a throw, parked cursor = let go at rest. While
-      // paused it is pure editing and the velocity stays untouched.
-      this.clearChaseCaps();
-      for (const { body } of this.dragItems) body.held = false;
+      // An inactive (never-moved) press was a pure inspect-click: the bodies
+      // were never held, so there is nothing to undo. Either way the release
+      // hands each dragged body back the velocity it was grabbed with, so a
+      // drag repositions without throwing - running or paused, one body or a
+      // whole box selection.
+      this.releaseDragged();
       if (this.dragMoved) app.pushUndo();
       this.velDrag = null;
       this.wallDrag = null;
       this.wallGrab = null;
-      this.dragItems = [];
-      this.dragActive = false;
-      this.dragPrev = null;
     }
     if (this.rubber !== null) {
       const [x0, y0] = this.rubber;

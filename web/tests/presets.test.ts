@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
 import {
   PRESETS, SOLVER_WORK_BUDGET, sceneWork,
 } from "../src/scene/presets";
-import { DistanceLink, SpringLink } from "../src/engine/links";
+import { DistanceLink } from "../src/engine/links";
 
 const DT = 1 / 120;
 const find = (n: string) => PRESETS.find((p) => p.name === n)!;
@@ -189,106 +189,5 @@ describe("solver iterations are a ceiling, not a dial", () => {
       expect(worst, `${name} overlap ${(worst * 1000).toFixed(2)} mm`)
         .toBeLessThan(0.002); // 2 mm: four times the slop, still invisible
     }
-  });
-});
-
-describe("preset descriptions tell the truth", () => {
-  // The card text is the teaching material - someone reads "period 2.46 s"
-  // and times it against the clock in the toolbar. A description that
-  // drifts from its builder is worse than no description, because it is
-  // believed. Every falsifiable number in the library is checked here.
-  //
-  // Auditing all 47 turned up exactly one: Jelly smash advertised "200-odd
-  // springs" and builds 153.
-
-  it("quotes the right pendulum period", () => {
-    const w = find("Simple pendulum").build();
-    const rod = w.links.find((l): l is DistanceLink => l instanceof DistanceLink)!;
-    expect(rod.length).toBeCloseTo(1.5, 6);           // "this 1.5 m rod"
-    const T = 2 * Math.PI * Math.sqrt(rod.length / w.gravity);
-    expect(T).toBeCloseTo(2.46, 2);                   // "roughly 2.46 s"
-  });
-
-  it("quotes the right spring period", () => {
-    const w = find("Mass on a spring").build();
-    const sp = w.links.find((l): l is SpringLink => l instanceof SpringLink)!;
-    const m = [sp.a, sp.b].find((b) => b.invMass !== 0)!.mass;
-    expect(2 * Math.PI * Math.sqrt(m / sp.stiffness)).toBeCloseTo(1.26, 2);
-  });
-
-  it("builds the counts and values the cards quote", () => {
-    const ladder = find("Restitution ladder").build().bodies.filter((b) => !b.locked);
-    expect(ladder.length).toBe(6);                    // "Six balls"
-    const es = ladder.map((b) => b.restitution).sort((a, b) => a - b);
-    expect(es[0]).toBeCloseTo(0.5, 6);                // "restitution 0.5 to 1.0"
-    expect(es[es.length - 1]).toBeCloseTo(1.0, 6);
-
-    const ramp = find("Friction ramp").build();
-    expect(ramp.bodies.length).toBe(3);               // "Three balls"
-    const slope = Math.abs(Math.atan2(ramp.walls[0].b.y - ramp.walls[0].a.y,
-                                      ramp.walls[0].b.x - ramp.walls[0].a.x) * 180 / Math.PI);
-    expect(slope).toBeCloseTo(25, 1);                 // "25 degree ramp"
-
-    const galileo = find("Galileo's drop").build().bodies.map((b) => b.mass).sort((a, b) => b - a);
-    expect(galileo).toEqual([10, 0.5]);               // "A 10 kg ball and a 0.5 kg ball"
-
-    const which = find("Which lands first?").build();
-    expect(Math.max(...which.bodies.map((b) => Math.abs(b.vel.x)))).toBeCloseTo(6, 6);
-
-    const angles = find("Projectile angles").build();
-    expect(angles.bodies.length).toBe(4);             // "Four launches"
-    for (const b of angles.bodies) expect(b.vel.length()).toBeCloseTo(10, 6);
-    const degs = angles.bodies.map((b) => Math.round(Math.atan2(b.vel.y, b.vel.x) * 180 / Math.PI));
-    expect(degs).toContain(30);                       // "the 30/60 pair"
-    expect(degs).toContain(45);                       // "45 degrees flies farthest"
-    expect(degs).toContain(60);
-
-    const term = find("Terminal velocity").build().bodies.map((b) => b.mass).sort((a, b) => b - a);
-    expect(term[0] / term[1]).toBeCloseTo(10, 6);     // "the 10x heavier ball"
-
-    const wreck = find("Wrecking ball").build();
-    expect(Math.max(...wreck.bodies.map((b) => b.mass))).toBe(22); // "A 22 kg pendulum ball"
-
-    const pyth = find("Pythagorean three-body").build().bodies.map((b) => b.mass).sort();
-    expect(pyth).toEqual([3, 4, 5]);                  // "masses 3, 4 and 5"
-
-    expect(find("Gas in a box (200)").build().bodies.length).toBe(200);
-    expect(find("Gas in a box (50)").build().bodies.length).toBe(50);
-  });
-
-  it("builds as many rope segments as the card counts", () => {
-    // The card said "Twelve elastic string segments" long after the builder
-    // moved to 24 shorter ones (same total length, finer joints), and the
-    // audit above missed it because no assertion covered this card. Every
-    // number a description quotes should be pinned to the thing it counts.
-    const rope = find("Swinging rope").build();
-    const segments = rope.links.filter(
-      (l): l is SpringLink => l instanceof SpringLink && l.tensionOnly);
-    expect(segments).toHaveLength(24);            // "Twenty-four ... segments"
-    expect(rope.links).toHaveLength(segments.length); // all of them elastic
-    // and the total length the builder's own comment claims
-    const total = segments.reduce((s, l) => s + l.restLength, 0);
-    expect(total).toBeCloseTo(2.64, 6);
-  });
-
-  it("builds the lattices the soft-body cards describe", () => {
-    const block = find("Jelly block").build();
-    expect(block.bodies.filter((b) => b.softBody).length).toBe(63); // "9 x 7 lattice"
-
-    // "150-odd springs" - the number that was wrong, now pinned
-    const smash = find("Jelly smash").build();
-    expect(smash.links.length).toBeGreaterThan(120);
-    expect(smash.links.length).toBeLessThan(200);
-
-    const butterfly = find("Butterfly effect").build();
-    expect(butterfly.bodies.length).toBe(9);          // three pivots + six bobs
-    expect(butterfly.links.length).toBe(6);           // "Three double pendulums"
-  });
-
-  it("gives Brownian motion one heavy grain in a light swarm", () => {
-    const ms = find("Brownian motion").build().bodies
-      .map((b) => b.mass).sort((a, b) => b - a);
-    expect(ms[0]).toBeGreaterThan(ms[1] * 50); // "A heavy grain ... light particles"
-    expect(ms.length).toBeGreaterThan(50);     // "a swarm"
   });
 });

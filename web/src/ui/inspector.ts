@@ -284,7 +284,12 @@ export class Inspector implements Panel {
       ];
       const nonEmpty = groups.filter(([g]) => g.length > 0);
       if (nonEmpty.length > 0) {
-        this.body.append(section("Delete every ..."));
+        // One heading for both contexts: with nothing selected these buttons
+        // clear the whole scene by type, and inside a multi-selection they
+        // narrow the selection by type. "every" and "only" tried to name
+        // that difference and only made the two panels look unrelated - the
+        // buttons already say what they delete and how many.
+        this.body.append(section("Delete ..."));
         for (const [grp, lbl] of nonEmpty) {
           this.add(button(`All ${lbl} (${grp.length})`,
             () => this.deleteObjs([...grp], lbl),
@@ -596,7 +601,7 @@ export class Inspector implements Panel {
     ];
     const nonEmpty = groups.filter(([g]) => g.length > 0);
     if (nonEmpty.length >= 2) {
-      this.body.append(section("Delete only ..."));
+      this.body.append(section("Delete ..."));
       const grid = el("div", { class: "btn-grid-2" });
       for (const [grp, lbl] of nonEmpty) {
         grid.append(button(`${lbl[0].toUpperCase()}${lbl.slice(1)} (${grp.length})`,

@@ -504,8 +504,27 @@ function solvePosition(manifolds: Manifold[]): void {
  * are pinned. A rotating disc is *supposed* to move along the slope - it rolls -
  * and its contact friction is also unsaturated, so pinning it would wrongly
  * freeze the roll. Non-rotating bodies have no such motion, so anchoring is
- * exactly the point-particle behaviour the user expects. */
+ * exactly the point-particle behaviour the user expects.
+ *
+ * Each fixable body is pinned to the anchor INDEPENDENTLY, which matters as
+ * soon as both ends of a contact are pinnable. The previous version measured
+ * one body's drift and then split a correction between the two in opposite
+ * directions - a relative correction driven by an absolute measurement. On a
+ * level stack the drift is zero and it did nothing; on a slope it drove the
+ * pair apart along the surface every substep. Two blocks resting on a 15
+ * degree ramp at mu = 2 (a friction angle of 63 degrees, so nothing should
+ * move at all) slid 0.28 m apart in the first second - against 3e-4 m with
+ * this function disabled entirely, i.e. the creep-remover was adding 800
+ * times the creep it exists to remove.
+ *
+ * Pinning each body to the anchor is also what the wall case always did, and
+ * it is right here for the same reason: every static contact chain in this
+ * engine terminates at something world-fixed (walls and locked bodies are the
+ * only immovable things, and neither moves), so "this contact is not sliding"
+ * and "neither end of it is drifting" are the same statement.
+ */
 function solveStaticFriction(manifolds: Manifold[]): void {
+  const STILL = 0.02; // m/s: far below anything visible, well above solver noise
   for (const m of manifolds) {
     if (!m.anchored) continue;           // no reference point yet (new contact)
     if (m.pn <= 0.0) continue;           // not pressed together
@@ -514,25 +533,21 @@ function solveStaticFriction(manifolds: Manifold[]): void {
     const b = m.b;
     const aFix = a.invInertia === 0.0 && a.invMass > 0.0;
     const bFix = b !== null && b.invInertia === 0.0 && b.invMass > 0.0;
-    const invSum = (aFix ? a.invMass : 0.0) + (bFix ? b!.invMass : 0.0);
-    if (invSum <= 0.0) continue;
-    // current contact point tracks each fixable body's centre (its arm is
-    // fixed for a non-rotating body); drift is its tangential slip from anchor
+    if (!aFix && !bFix) continue;
     const tx = -m.ny;
     const ty = m.nx;
-    const cx = a.pos.x + m.rax; // material contact point on a, this step
-    const cy = a.pos.y + m.ray;
-    const driftT = (cx - m.ax) * tx + (cy - m.ay) * ty;
-    if (driftT !== 0.0) {
-      const corr = driftT / invSum;
-      if (aFix) {
-        a.pos.x -= corr * a.invMass * tx;
-        a.pos.y -= corr * a.invMass * ty;
-      }
-      if (bFix) {
-        b!.pos.x += corr * b!.invMass * tx;
-        b!.pos.y += corr * b!.invMass * ty;
-      }
+    // Each body carries its own material contact point (the arm is fixed for
+    // a non-rotating body), so each has its own tangential slip from the
+    // shared anchor, and each is pushed straight back along it.
+    if (aFix) {
+      const drift = (a.pos.x + m.rax - m.ax) * tx + (a.pos.y + m.ray - m.ay) * ty;
+      a.pos.x -= drift * tx;
+      a.pos.y -= drift * ty;
+    }
+    if (bFix) {
+      const drift = (b!.pos.x + m.rbx - m.ax) * tx + (b!.pos.y + m.rby - m.ay) * ty;
+      b!.pos.x -= drift * tx;
+      b!.pos.y -= drift * ty;
     }
     // The anchor pins the position, so any residual velocity below the
     // stillness threshold is pure solver noise - it flickers sign each
@@ -540,7 +555,6 @@ function solveStaticFriction(manifolds: Manifold[]): void {
     // equilibrium. Zeroing it cannot change a trajectory the anchor
     // already controls; a real force that saturates friction releases
     // the anchor and restores normal physics untouched.
-    const STILL = 0.02; // m/s: far below anything visible, well above noise
     if (aFix && a.vel.length2() < STILL * STILL) a.vel.set(0.0, 0.0);
     if (bFix && b!.vel.length2() < STILL * STILL) b!.vel.set(0.0, 0.0);
   }
