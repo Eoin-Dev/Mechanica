@@ -822,6 +822,20 @@ export class Inspector implements Panel {
                  "energy out of the whole scene." }));
 
     this.body.append(section("Solver"));
+    // Performance mode overrides all three controls below without writing to
+    // the scene, so the numbers shown are the scene's own and NOT what is
+    // running. Say which is which, or the panel is simply lying.
+    const perfNote = el("div", { class: "faint settings-note" });
+    this.add({ root: perfNote, refresh: () => {
+      const on = app.perfMode;
+      perfNote.style.display = on ? "" : "none";
+      const want = `Performance mode is on, so this scene is running at ` +
+        `${world.effectiveSubsteps} substeps, ${world.effectiveIterations} ` +
+        `iterations and ${world.effectiveIntegrator}, whatever is set below. ` +
+        `The values here are the scene's own and are what gets saved. ` +
+        `Turn it off in Settings.`;
+      if (on && perfNote.textContent !== want) perfNote.textContent = want;
+    } });
     const short: Record<Integrator, string> = {
       "Velocity Verlet": "Verlet", "Symplectic Euler": "Euler", RK4: "RK4",
     };

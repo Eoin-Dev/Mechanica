@@ -216,8 +216,13 @@ export class HintBar implements Panel {
     const q = app.trailQuality;
     const trail = app.view.trails && (q < 0.95 || q > 1.05)
       ? `trail ${q.toFixed(1)}x   ` : "";
+    // Performance mode changes what the numbers beside it MEAN - the drift
+    // readout will wander, and the substeps in the inspector are not what is
+    // running - so it says so rather than leaving that a mystery.
+    const perf = app.perfMode ? "perf   " : "";
     const stats = `${nBodies} bodies   ${nAnchors} anchors   ${nLinks} links   ` +
-                  `${app.world.contacts.length} contacts   ${res}${trail}${drift}`;
+                  `${app.world.contacts.length} contacts   ` +
+                  `${res}${trail}${perf}${drift}`;
     // the cursor position is a hover readout - meaningless on any touch
     // device, and the room is better spent on the counts
     let status = stats;

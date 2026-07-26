@@ -49,10 +49,24 @@ overlayToggles["help"] = () => help.toggle();
 overlayToggles["settings"] = () => settingsPanel.toggle();
 overlayToggles["formula-guide"] = () => formulaGuide.toggle();
 
+// The warning names which half is short of time, because the advice differs:
+// a heavy solver wants fewer substeps or bodies, a heavy renderer wants fewer
+// trails or a smaller window, and telling someone to cut substeps when the
+// solver was never the problem sends them to fix the wrong thing.
 const overloadEl = $("overload-warning");
+const SLOW_TEXT = {
+  physics: "Slow: physics can't keep up — reduce substeps, iterations or bodies",
+  render: "Slow: drawing can't keep up — try fewer trails, a smaller window, " +
+          "or Performance mode in Settings",
+};
+let lastSlow: string | null = null;
 app.panels = [toolbar, palette, inspector, dock, hintbar, {
   refresh() {
-    overloadEl.hidden = !(app.overloaded && app.playing);
+    const why = app.slowReason();
+    if (why === lastSlow) return; // no per-frame DOM writes
+    lastSlow = why;
+    overloadEl.hidden = why === null;
+    if (why !== null) overloadEl.textContent = SLOW_TEXT[why];
   },
 }];
 

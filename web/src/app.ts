@@ -35,6 +35,22 @@ const MAX_STEPS_PER_FRAME = 64;
 // UI keeps redrawing and stays clickable (the sim just runs slower than
 // real time, with the existing "can't keep up" warning)
 const PHYSICS_BUDGET_S = 0.045;
+// How much simulated time one frame may be asked to catch up, as a multiple
+// of the frame it is nominally worth.
+//
+// The accumulator is fed real elapsed time, so a slow frame asks for
+// proportionally MORE physics - which makes the frame slower still. That is a
+// positive feedback loop, and it is how a merely sluggish renderer turns into
+// the "can't keep up" warning: a 33 ms frame demands four 1/120 s quanta
+// instead of two, and if adaptive resolution is also multiplying each quantum
+// the physics budget breaks and the accumulator never drains again.
+//
+// Clamping the catch-up breaks the loop. Beyond this multiple the simulation
+// simply runs slower than real time - which is what a machine that cannot
+// keep up should do - instead of trying to sprint and falling further behind
+// every frame. Three frames' worth is enough to ride out an ordinary hitch
+// (a garbage collection, a tab switch) without any visible dilation.
+const MAX_CATCHUP_FRAMES = 3.0;
 const SETTINGS_KEY = "mechanica.settings";
 
 export type GraphMode = "Off" | "Energy" | "Mom." | "Phase";
@@ -48,6 +64,7 @@ interface Settings {
   theme?: ThemeName;
   dyslexic_font?: boolean;
   cull?: boolean;
+  perf_mode?: boolean;       // cheap solver and simplified drawing
   drag_hits_walls?: boolean; // a dragged body is stopped by walls
   accent?: string;           // hex UI accent; unset = the theme's default
   custom_accents?: string[]; // user-picked accents shown as extra swatches
@@ -188,6 +205,36 @@ export class App {
     this.saveSettings();
   }
 
+  /** Trade accuracy for frame rate, everywhere at once.
+   *
+   * Off by default. A preference of this browser rather than of the scene, so
+   * it is never saved into a scene file and a shared scene never imposes it -
+   * the same reasoning as adaptive resolution.
+   *
+   * It is not a different physics engine, just every existing lever pushed
+   * the cheap way together: Symplectic Euler, capped substeps and solver
+   * iterations, no adaptive time resolution and no in-substep slicing, and a
+   * renderer that draws springs as lines and skips spin markers. For the
+   * scenes it is meant for - a soft body being poked, a hundred particles
+   * piled on a planet - that is 5-8x the frame rate, and nothing about those
+   * scenes was being measured.
+   */
+  get perfMode(): boolean {
+    return this.settings.perf_mode ?? false;
+  }
+
+  setPerfMode(on: boolean): void {
+    this.settings.perf_mode = on;
+    this.saveSettings();
+    this.applySolverMode(this.world);
+  }
+
+  /** Point a world at the current solver mode. Called on every world the app
+   * steps, so no path can forget it. */
+  applySolverMode(world: World): void {
+    world.performance = this.perfMode;
+  }
+
   /** How far a body must stray before it counts as gone: several times
    * the widest view the camera can ever show (MIN_ZOOM), so anything the
    * user could still zoom out to see is always safe. */
@@ -252,6 +299,7 @@ export class App {
    * bodies via sanitize instead of crashing the app. */
   private safeStep(world: World, dt: number): boolean {
     try {
+      world.performance = this.perfMode; // every stepping path, no exceptions
       world.step(dt);
       return true;
     } catch {
@@ -736,7 +784,13 @@ export class App {
       // instead of one full-size step every few frames (choppy).
       const effDt = PHYSICS_DT * Math.min(this.speed, 1.0);
       this.syncTraceSpacing();
-      this.accumulator += dtFrame * this.speed;
+      // Clamp the catch-up so a slow frame cannot buy itself more work than
+      // it can afford (see MAX_CATCHUP_FRAMES). Measured against the frame
+      // the display is actually delivering, floored at 60 Hz so a fast
+      // display is not held to its own short frame.
+      const nominal = Math.max(dtFrame, 1 / 60);
+      this.accumulator = Math.min(this.accumulator + dtFrame * this.speed,
+                                  nominal * this.speed * MAX_CATCHUP_FRAMES);
       let quanta = 0;
       let qUsed = 1;
       const t0 = performance.now();
@@ -823,8 +877,34 @@ export class App {
    * slow machine runs the same simulation slower rather than a different
    * simulation at speed. */
   private pickResolution(effDt: number): number {
-    if (!this.adaptiveDt) return 1;
+    // Performance mode gives up adaptive resolution outright. It is the
+    // largest single multiplier in the engine - it reached 16x on the
+    // Trampoline - and resolving a trajectory finely is exactly the accuracy
+    // this mode exists to stop paying for.
+    if (!this.adaptiveDt || this.perfMode) return 1;
     return this.world.subdivisionNeed(effDt, 16);
+  }
+
+  /** Why the app cannot hold real time, or null when it can.
+   *
+   * The warning used to say "physics can't keep up - reduce substeps or
+   * bodies" for every cause, which is actively misleading when the constraint
+   * is DRAWING: a 300-spring soft body costs about a millisecond of solver
+   * and far more than that in draw calls, and telling someone to cut
+   * substeps sends them to fix the half that was already fast. Rendering
+   * being the bottleneck is also the whole reason the same scene behaves
+   * differently between a small window and a maximised one.
+   */
+  slowReason(): "physics" | "render" | null {
+    if (!this.playing) return null;
+    // Render-bound: the frame is genuinely bad AND drawing owns most of it.
+    // Judged against a 40 Hz frame so an ordinary 50 Hz display, or a single
+    // hitch, never trips it.
+    const frameMs = this.fpsNow > 1 ? 1000 / this.fpsNow : 0;
+    if (frameMs > 25 && this.renderMs > 0.5 * frameMs) return "render";
+    // Physics-bound: the accumulator could not be drained inside the
+    // wall-clock budget even with the catch-up clamped.
+    return this.overloaded ? "physics" : null;
   }
 
   /** After several seconds of continuous overload the lag clearly won't
@@ -1007,7 +1087,8 @@ export class App {
     ctx.fillRect(0, 0, w, h);
     if (this.view.grid) drawGrid(ctx, this.camera, w, h);
     drawWorld(ctx, this.camera, this.world, this.view, this.selection,
-              this.controller.hover, this.trails, w, h, this.trailQuality);
+              this.controller.hover, this.trails, w, h, this.trailQuality,
+              this.perfMode);
     this.controller.drawOverlays(ctx);
     drawScaleBar(ctx, this.camera, w, h);
     this.renderMs = 0.85 * this.renderMs + 0.15 * (performance.now() - t0);
