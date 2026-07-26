@@ -21,6 +21,12 @@
  * than only projecting positions afterwards is what makes pendulums and
  * chains energy-conserving: pure projection would systematically discard
  * the radial velocity gained within each substep and drain energy.
+ *
+ * Performance mode changes one thing about that pipeline and one thing only:
+ * springs leave step 1 and become position constraints solved between steps 2
+ * and 3, because a spring is the one element here whose FORCE treatment
+ * cannot be made unconditionally stable. Everything else it does is a cap on
+ * an existing dial. See engine/perf.ts.
  */
 import { CompiledExpr, ExprError, compileExpr } from "../core/expr";
 import { intIn, numIn, numOr } from "../core/guards";
@@ -28,6 +34,11 @@ import { Vec2 } from "../core/vec";
 import { Body, BodyDict, Wall, WallDict } from "./body";
 import { Contact, ContactCache, ContactStatic, solveContacts } from "./contacts";
 import { DistanceLink, Link, LinkDict, SpringLink, linkFromDict } from "./links";
+import {
+  PERF_ITERATIONS, PERF_MAX_SPEED, PERF_SPRING_PASSES,
+  PERF_SPRUNG_CONTACT_GAIN, PERF_SUBSTEPS, PerfSolver, bleedSprungBodies,
+  clampSpeeds,
+} from "./perf";
 
 export const INTEGRATORS = ["Velocity Verlet", "Symplectic Euler", "RK4"] as const;
 export type Integrator = (typeof INTEGRATORS)[number];
@@ -251,19 +262,6 @@ export interface WorldDict {
   drivers: DriverDict[];
 }
 
-// Performance mode's solver ceilings. Deliberately blunt: they are not a
-// tuning of the accuracy/cost curve but a decision to stop paying for
-// accuracy at all, for the scenes where nobody was measuring anything - a
-// soft body being poked, a hundred particles piled on a planet.
-//
-// Measured on Earth & Moon plus 200 loose particles all in mutual contact
-// (415 simultaneous contacts): 15.8 ms of physics per displayed frame at the
-// authored settings, which does not fit in a 60 Hz frame at all, against
-// 1.9 ms here. Symplectic Euler halves the force evaluations on top, and
-// dropping the adaptive machinery removes a multiplier that reached 16x.
-export const PERF_SUBSTEPS = 2;
-export const PERF_ITERATIONS = 4;
-
 export class World {
   bodies: Body[] = [];
   walls: Wall[] = [];
@@ -298,7 +296,7 @@ export class World {
   // saving a scene saves the settings it is actually running.
   substepsCappedFrom: number | null = null;
 
-  // transient: run the cheap solver (see PERF_SUBSTEPS). A preference of the
+  // transient: run the robust solver (see perf.ts). A preference of the
   // browser, not of the scene, so it is NEVER serialized: the scene keeps the
   // substeps, iterations and integrator it was authored with, and this
   // overrides them only while stepping. The inspector shows the authored
@@ -343,6 +341,8 @@ export class World {
   clampDt = 1.0 / 120.0;
   private contactCache: ContactCache = new Map(); // warm-start impulses between substeps
   private rods: DistanceLink[] = [];  // per-step caches, see prepareStep()
+  private springs: SpringLink[] = [];
+  private perf = new PerfSolver();    // performance mode's spring projection
   private movers: Body[] = [];
   private moverInvMass = new Float64Array(0);
   // Enabled drivers, resolved against their (movable) body and flattened
@@ -384,48 +384,21 @@ export class World {
       }
     }
     this.rods = rods;
-    // Stability clamp: an explicit spring is only stable while h*omega stays
-    // small (omega^2 = k*(1/ma + 1/mb)), and likewise h*c*(1/ma + 1/mb) for
-    // damping. Clamp the *effective* k and c to those limits each substep so
-    // extreme user settings behave like "as stiff as this timestep can
-    // carry" instead of blowing up.
-    // Clamp against a FIXED reference substep, not the one this step
-    // happens to be using.
-    //
-    // The app subdivides its timestep adaptively, and how far it
-    // subdivides depends on measured frame times - i.e. on how busy the
-    // machine is. Clamping against the live h therefore made a clamped
-    // spring's *effective* stiffness and damping vary with performance:
-    // the same scene, reset and replayed, could ring on one run and sit
-    // dead still on the next. Anchoring the limits to the base timestep
-    // makes them a property of the scene alone.
-    //
-    // Taking the larger of the two keeps this conservative: the app only
-    // ever steps finer than the reference (so the reference governs),
-    // while a caller stepping coarser clamps harder still, as stability
-    // at that step size demands.
-    const refH = Math.max(h, this.clampDt / Math.max(1, this.substeps));
-    const refH2 = refH * refH;
-    for (const s of springs) {
-      const wSum = s.a.invMass + s.b.invMass;
-      let k = s.stiffness;
-      let c = s.damping > 0.0 ? s.damping : 0.0;
-      if (wSum > 0.0) {
-        const kLim = 1.0 / (refH2 * wSum); // keeps h*omega <= 1
-        if (k > kLim) k = kLim;
-        const cLim = 0.5 / (refH * wSum);  // no single-step overshoot
-        if (c > cLim) c = cLim;
-      }
-      s.kEff = k;
-      s.cEff = c;
-    }
+    this.springs = springs;
+    this.prepareSprings(h, springs);
     // Flag the spring endpoints for subdivisionNeed. Doing it here rather
     // than in the force loop keeps it out of the per-evaluation path: the
     // link list cannot change within a step.
-    for (const b of this.bodies) b.sprung = false;
+    for (const b of this.bodies) {
+      b.sprung = false;
+      b.contactMassGain = 1.0;
+    }
+    const gain = this.performance ? PERF_SPRUNG_CONTACT_GAIN : 1.0;
     for (const s of springs) {
       s.a.sprung = true;
       s.b.sprung = true;
+      s.a.contactMassGain = gain;
+      s.b.contactMassGain = gain;
     }
     // `invMass` is a getter with three branches and a division, and the
     // force loops want it once per body per EVALUATION - four times a
@@ -474,6 +447,67 @@ export class World {
     this.contactStatic = { noCollide };
   }
 
+  /** Set each spring's effective stiffness and damping for this step.
+   *
+   * Performance mode does not integrate springs at all - they are position
+   * constraints there (see perf.ts) - so there is no explicit stability
+   * limit to clamp against and nothing to clamp. Passing k and c through
+   * untouched is what keeps the stiffness slider meaningful right to its top
+   * instead of saturating at whatever the timestep could carry, and it keeps
+   * potentialEnergy() reporting the spring the user asked for.
+   *
+   * Otherwise the spring IS a force, and an explicit spring is only stable
+   * while h*omega stays small (omega^2 = k*(1/ma + 1/mb)), and likewise
+   * h*c*(1/ma + 1/mb) for damping. Clamp the effective k and c to those
+   * limits so extreme user settings behave like "as stiff as this timestep
+   * can carry" instead of blowing up.
+   *
+   * Note this is a PER-SPRING limit, and it is not sufficient for a node
+   * that several springs meet at: their stiffnesses add, so a soft-body
+   * particle on twelve of them sits well past the margin each one was
+   * clamped to individually. That is the failure performance mode used to
+   * inherit, and why it now takes the branch above rather than a tighter
+   * version of this one.
+   *
+   * Clamp against a FIXED reference substep, not the one this step happens
+   * to be using. The app subdivides its timestep adaptively, and how far it
+   * subdivides depends on measured frame times - i.e. on how busy the
+   * machine is. Clamping against the live h therefore made a clamped
+   * spring's *effective* stiffness and damping vary with performance: the
+   * same scene, reset and replayed, could ring on one run and sit dead still
+   * on the next. Anchoring the limits to the base timestep makes them a
+   * property of the scene alone.
+   *
+   * Taking the larger of the two keeps this conservative: the app only ever
+   * steps finer than the reference (so the reference governs), while a
+   * caller stepping coarser clamps harder still, as stability at that step
+   * size demands.
+   */
+  private prepareSprings(h: number, springs: SpringLink[]): void {
+    if (this.performance) {
+      for (const s of springs) {
+        s.kEff = s.stiffness;
+        s.cEff = s.damping > 0.0 ? s.damping : 0.0;
+      }
+      return;
+    }
+    const refH = Math.max(h, this.clampDt / Math.max(1, this.substeps));
+    const refH2 = refH * refH;
+    for (const s of springs) {
+      const wSum = s.a.invMass + s.b.invMass;
+      let k = s.stiffness;
+      let c = s.damping > 0.0 ? s.damping : 0.0;
+      if (wSum > 0.0) {
+        const kLim = 1.0 / (refH2 * wSum); // keeps h*omega <= 1
+        if (k > kLim) k = kLim;
+        const cLim = 0.5 / (refH * wSum);  // no single-step overshoot
+        if (c > cLim) c = cLim;
+      }
+      s.kEff = k;
+      s.cEff = c;
+    }
+  }
+
   /** Fill body.acc with the total smooth acceleration at the current state. */
   private accumulateForces(t: number): void {
     const g = this.gravity;
@@ -508,8 +542,11 @@ export class World {
 
     if (this.mutualGravity && this.G !== 0.0) this.accumulateGravity();
 
-    for (const link of this.links) {
-      if (link instanceof SpringLink) link.applyForces();
+    // Performance mode's springs are position constraints solved after the
+    // integrator, not forces fed into it - which is the whole reason it can
+    // no longer be exploded by a stiffness setting. See perf.ts.
+    if (!this.performance) {
+      for (const s of this.springs) s.applyForces();
     }
     this.applyDriversAndFields(t);
   }
@@ -1100,6 +1137,9 @@ export class World {
     }
     const rigid = this.rods;
     const iters = this.effectiveIterations;
+    // Performance mode's springs: projected, damped and strain-limited after
+    // the integrator instead of being integrated (see perf.ts).
+    const projected = this.performance ? this.springs : null;
     // N-body scenes get adaptive slice-marching inside each substep so
     // close encounters can't blow up; everything else is untouched.
     // Performance mode gives it up: the slicer is the single largest
@@ -1129,6 +1169,11 @@ export class World {
       if (adaptive) this.integrateAdaptive(h, this.time);
       else this.integrate(h, this.time);
 
+      // Springs first, rods second: a rod is an exact constraint and must
+      // have the final say where an assembly mixes the two.
+      if (projected !== null && projected.length > 0) {
+        this.perf.solve(projected, h, PERF_SPRING_PASSES);
+      }
       if (rigid.length > 0) this.solveRodPositions(rigid, invH, iters);
 
       // `contacts` is a snapshot of the contacts that exist NOW, for the
@@ -1162,6 +1207,16 @@ export class World {
             b.vel.y *= s;
           }
         }
+      }
+
+      // Performance mode's last two guards, applied where they bound
+      // everything the substep did rather than only the springs: a hard
+      // speed ceiling so nothing can walk out to the range sanitize() has
+      // to freeze, and a small dissipation on spring-connected bodies so a
+      // slow accumulation can never become a fast one.
+      if (projected !== null) {
+        clampSpeeds(this.bodies, PERF_MAX_SPEED);
+        if (projected.length > 0) bleedSprungBodies(this.bodies, h);
       }
 
       this.time += h;

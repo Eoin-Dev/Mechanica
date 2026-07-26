@@ -289,6 +289,12 @@ export class SettingsPanel {
     // genuinely better for accuracy or performance, never for a matter of
     // taste, and is written as "Recommended: Enabled." at the front so it
     // can be read without reading the rest.
+    //
+    // Appearance is the deliberate exception: every control in it is a matter
+    // of taste whose effect is visible the instant it is clicked, so they
+    // carry tooltips and no notes. Accent colour keeps its note because it is
+    // the one Appearance setting whose SCOPE is not obvious - people
+    // reasonably expect it to recolour the physics objects, and it does not.
     let current: HTMLElement = body;
     const group = (title: string): void => {
       current = el("div", { class: "settings-group" },
@@ -314,9 +320,6 @@ export class SettingsPanel {
         app.saveSettings();
         app.applyUiSettings();
       }, "Colour theme for the interface and the canvas."));
-    note("Void: near-black, showing motion trails at their brightest. " +
-         "Dark: the default. Light: for bright rooms and projectors. " +
-         "Original: the classic blue-tinted dark palette.");
 
     // accent colour: preset swatch circles + a custom picker. UI chrome
     // and highlights only - physics object colours are never touched.
@@ -410,8 +413,6 @@ export class SettingsPanel {
         app.saveSettings();
         app.applyUiSettings();
       }, "Use the OpenDyslexic typeface for interface text."));
-    note("Weights the bottom of each letter so similar shapes (b/d, p/q) " +
-         "are easier to tell apart. Interface text only, not the canvas.");
 
     label("Font size");
     add(segmented(["90%", "100%", "110%", "120%"],
@@ -421,7 +422,6 @@ export class SettingsPanel {
         app.saveSettings();
         app.applyUiSettings();
       }, "Size of all interface text."));
-    note("Scales every panel, label and button.");
 
     group("Interaction");
     add(checkbox("Dragged objects collide with walls",
@@ -437,15 +437,18 @@ export class SettingsPanel {
     add(checkbox("Performance mode",
       () => app.perfMode,
       (v) => app.setPerfMode(v),
-      "Trade physical accuracy for frame rate across the whole app."));
-    note("Off by default. Simplifies every part of the physics at once - " +
-         "a cheaper integrator, fewer substeps and solver passes, no " +
-         "adaptive time resolution - and draws springs as plain lines " +
-         "without spin markers. Built for scenes you are playing with " +
-         "rather than measuring: soft bodies, and crowds of objects piled " +
-         "together, where it runs 5-8x faster. The energy graph will drift, " +
-         "which is the trade working as intended; turn it off for anything " +
-         "you want numbers from.");
+      "Trade physical accuracy for stability and frame rate across the " +
+      "whole app."));
+    note("Off by default. Built for scenes you are playing with rather than " +
+         "measuring: soft bodies, and crowds of objects piled together. " +
+         "Springs become position constraints instead of forces, so no " +
+         "stiffness or damping setting can make a soft body explode however " +
+         "far you push the sliders, and every speed and stretch is hard " +
+         "capped. It is also cheaper - a simpler integrator, fewer substeps " +
+         "and solver passes, no adaptive time resolution, and springs drawn " +
+         "as plain lines. Soft bodies are squishier and more damped than " +
+         "their settings say and the energy graph will drift; turn it off " +
+         "for anything you want numbers from.");
 
     add(checkbox("Adaptive resolution",
       () => app.adaptiveDt,

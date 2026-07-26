@@ -205,19 +205,24 @@ export class App {
     this.saveSettings();
   }
 
-  /** Trade accuracy for frame rate, everywhere at once.
+  /** Trade accuracy for stability and frame rate, everywhere at once.
    *
    * Off by default. A preference of this browser rather than of the scene, so
    * it is never saved into a scene file and a shared scene never imposes it -
    * the same reasoning as adaptive resolution.
    *
-   * It is not a different physics engine, just every existing lever pushed
-   * the cheap way together: Symplectic Euler, capped substeps and solver
-   * iterations, no adaptive time resolution and no in-substep slicing, and a
-   * renderer that draws springs as lines and skips spin markers. For the
-   * scenes it is meant for - a soft body being poked, a hundred particles
-   * piled on a planet - that is 5-8x the frame rate, and nothing about those
-   * scenes was being measured.
+   * Most of it is the existing levers pushed the cheap way together:
+   * Symplectic Euler, capped substeps and solver iterations, no adaptive time
+   * resolution and no in-substep slicing, and a renderer that draws springs as
+   * lines and skips spin markers.
+   *
+   * Springs are the exception, and they are why this is a genuinely different
+   * solver rather than a cheaper dial setting. Cheap dials made them WORSE:
+   * an explicit spring's stability limit tightens with the square of the
+   * timestep, so halving the substeps was enough to blow up every soft body in
+   * the library. In this mode they are position constraints instead, which
+   * cannot be destabilised by any stiffness, damping or mass ratio at all -
+   * see engine/perf.ts for the whole argument.
    */
   get perfMode(): boolean {
     return this.settings.perf_mode ?? false;

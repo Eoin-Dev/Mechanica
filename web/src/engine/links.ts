@@ -22,8 +22,12 @@
  * slack.
  *
  * The engine clamps each spring's effective k and c per substep to its
- * explicit-integration stability limit (see World.prepareStep), so absurd
- * user settings soften instead of exploding the simulation.
+ * explicit-integration stability limit (see World.prepareSprings), so absurd
+ * user settings soften instead of exploding the simulation. That clamp is
+ * per spring and is therefore not enough on its own for a node where several
+ * springs meet; performance mode drops the force treatment entirely and
+ * projects springs as position constraints instead, which has no stability
+ * limit to respect (see engine/perf.ts).
  */
 import { numIn, numOr } from "../core/guards";
 import { Body } from "./body";

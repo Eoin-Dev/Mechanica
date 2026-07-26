@@ -101,12 +101,27 @@ export class Body {
   // already clamps every spring so the scene's own substep resolves it
   // (see World.prepareStep and subdivisionNeed). Never serialized.
   sprung = false;
+  // transient: how much of its network's inertia this body may present to a
+  // contact, as a multiple of its own mass (set per step by
+  // World.prepareStep). 1 everywhere except performance mode, where a
+  // soft-body particle borrows mass so that something far heavier landing on
+  // it is actually resisted - see the Manifold constructor for why a position
+  // projection needs the loan and the force solver does not. Never
+  // serialized.
+  contactMassGain = 1.0;
   color: Color;
   // scratch state used by the solver
   acc = new Vec2();
   prev = new Vec2();
   corrX = 0.0;
   corrY = 0.0;
+  // Where this body sits in performance mode's packed spring solve, and a
+  // stamp saying which substep put it there. That solve copies its endpoints
+  // into flat arrays and works on those (see PerfSolver), so it needs "is
+  // this body already packed, and at what index" answered a few hundred times
+  // per substep without allocating a set to answer it. Never serialized.
+  perfSlot = 0;
+  perfStamp = 0;
   // acceleration at the previous adaptive slice boundary, and nothing else:
   // the in-substep slicer sizes its slices from how fast the acceleration
   // is CHANGING along the trajectory (see World.maxAccelChangeRate), which
