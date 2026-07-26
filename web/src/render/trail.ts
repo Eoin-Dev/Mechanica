@@ -41,6 +41,60 @@ export class Trail {
   y(k: number): number { return this.xy[(((this.head + k) % this.cap) * 2) + 1]; }
   time(k: number): number { return this.ts[(this.head + k) % this.cap]; }
 
+  /** Write every `stride`-th point (plus both ends) into `outX`/`outY` in
+   * SCREEN space, and return how many were written.
+   *
+   * The renderer does this for every visible trail on every frame, so it
+   * is worth having as one tight loop rather than a call per coordinate:
+   * `x(k)`/`y(k)` each cost a modulo, the transform used to allocate a
+   * two-element array per point, and the caller used to visit every stored
+   * point only to reject most of them. Here the ring index is walked and
+   * wrapped by hand, and only the retained points are touched at all -
+   * which is what stops a 10 000-point trail costing 10 000 iterations to
+   * yield the ninety samples the vertex budget allows.
+   *
+   * The retained set is exactly `{0, count-1} + {k : (k + phase) % stride
+   * == 0}`, phase being `firstSerial % stride`, so that decimation keeps
+   * selecting the same physical points as the ring scrolls.
+   */
+  sampleScreen(stride: number, outX: number[], outY: number[],
+               cx: number, cy: number, zoom: number,
+               ox: number, oy: number): number {
+    const n = this.len;
+    if (n === 0) return 0;
+    const xy = this.xy;
+    const cap = this.cap;
+    const head = this.head;
+    const last = n - 1;
+    let m = 0;
+    // head < cap and k <= cap - 1, so the ring index wraps at most once:
+    // a single compare beats the modulo the accessors above have to do
+    let slot = head;
+    outX[0] = (xy[slot * 2] - cx) * zoom + ox;
+    outY[0] = (cy - xy[slot * 2 + 1]) * zoom + oy;
+    m = 1;
+    if (last > 0) {
+      const phase = this.firstSerial % stride;
+      // smallest k > 0 whose serial lands on the stride
+      let k = (stride - phase) % stride;
+      if (k === 0) k = stride;
+      for (; k < last; k += stride) {
+        slot = head + k;
+        if (slot >= cap) slot -= cap;
+        const i = slot * 2;
+        outX[m] = (xy[i] - cx) * zoom + ox;
+        outY[m] = (cy - xy[i + 1]) * zoom + oy;
+        m++;
+      }
+      slot = head + last;
+      if (slot >= cap) slot -= cap;
+      outX[m] = (xy[slot * 2] - cx) * zoom + ox;
+      outY[m] = (cy - xy[slot * 2 + 1]) * zoom + oy;
+      m++;
+    }
+    return m;
+  }
+
   push(x: number, y: number, t = 0): void {
     const slot = (this.head + this.len) % this.cap;
     const i = slot * 2;

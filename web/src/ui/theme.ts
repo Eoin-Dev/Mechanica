@@ -164,11 +164,36 @@ export function setTheme(name: ThemeName): void {
   document.documentElement.dataset.theme = name;
 }
 
+// Opaque colours memoised by their packed 24-bit value. The renderer asks
+// for the same handful of strings several times per body per frame - fill,
+// edge, ring, marker, label - and building each one from a template
+// literal was a fresh string allocation every time. Scenes use a small
+// palette, so the table stays tiny; it is capped anyway in case a scene
+// generates colours procedurally.
+const CSS_CACHE = new Map<number, string>();
+const CSS_CACHE_MAX = 4096;
+
 /** rgb()/rgba() string for canvas fill/stroke styles. */
 export function css(c: Color, alpha = 1.0): string {
-  return alpha >= 1.0
-    ? `rgb(${c[0]},${c[1]},${c[2]})`
-    : `rgba(${c[0]},${c[1]},${c[2]},${alpha})`;
+  if (alpha < 1.0) return `rgba(${c[0]},${c[1]},${c[2]},${alpha})`;
+  const r = c[0];
+  const g = c[1];
+  const b = c[2];
+  // the packed key is only faithful for whole 0-255 channels; anything
+  // else (a hand-built colour, a fractional blend) is built as before so
+  // two different colours can never share a cache entry
+  if (!((r | 0) === r && (g | 0) === g && (b | 0) === b &&
+        r >= 0 && r < 256 && g >= 0 && g < 256 && b >= 0 && b < 256)) {
+    return `rgb(${r},${g},${b})`;
+  }
+  const key = (r << 16) | (g << 8) | b;
+  let s = CSS_CACHE.get(key);
+  if (s === undefined) {
+    s = `rgb(${c[0]},${c[1]},${c[2]})`;
+    if (CSS_CACHE.size >= CSS_CACHE_MAX) CSS_CACHE.clear();
+    CSS_CACHE.set(key, s);
+  }
+  return s;
 }
 
 export function lighten(c: Color, amount: number): Color {
