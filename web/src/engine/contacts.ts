@@ -252,13 +252,36 @@ class Manifold {
     this.py = py;
     this.pen = pen;
     this.mu = mu;
-    const invMa = a.invMass;
+    let invMa = a.invMass;
     const invIa = a.invInertia;
     let invMb = 0.0;
     let invIb = 0.0;
     if (b !== null) {
       invMb = b.invMass;
       invIb = b.invInertia;
+      // Performance mode only: a soft-body particle presents some of the
+      // inertia of the spring network holding it, up to parity with whatever
+      // hit it (see Body.contactMassGain). Everywhere else both gains are 1
+      // and this is a pair of comparisons that change nothing.
+      //
+      // Without it a 64 kg gymnast landing on a trampoline whose bed
+      // particles weigh 100 g each feels 100 g: the contact impulse is split
+      // by inverse mass, so the gymnast keeps 639/640 of its momentum and
+      // walks straight through the bed. The accurate solver gets away with
+      // treating the particle as 100 g because the bed's spring FORCES
+      // accelerate it to over 100 m/s, so it hammers the gymnast upwards; a
+      // position projection has no such velocity to give, which is the one
+      // thing it cannot substitute for. Lending the particle mass is the
+      // cheapest honest stand-in - and it is arguably the more faithful
+      // reading of the situation anyway, since the particle really is bolted
+      // to a bed that is anchored at both ends.
+      if (invMa > 0.0 && invMb > 0.0) {
+        if (invMa > invMb && a.contactMassGain > 1.0) {
+          invMa = Math.max(invMa / a.contactMassGain, invMb);
+        } else if (invMb > invMa && b.contactMassGain > 1.0) {
+          invMb = Math.max(invMb / b.contactMassGain, invMa);
+        }
+      }
     }
     this.invMa = invMa;
     this.invMb = invMb;

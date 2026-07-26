@@ -831,9 +831,10 @@ export class Inspector implements Panel {
       perfNote.style.display = on ? "" : "none";
       const want = `Performance mode is on, so this scene is running at ` +
         `${world.effectiveSubsteps} substeps, ${world.effectiveIterations} ` +
-        `iterations and ${world.effectiveIntegrator}, whatever is set below. ` +
-        `The values here are the scene's own and are what gets saved. ` +
-        `Turn it off in Settings.`;
+        `iterations and ${world.effectiveIntegrator}, whatever is set below, ` +
+        `and its springs are solved as position constraints rather than as ` +
+        `forces. The values here are the scene's own and are what gets ` +
+        `saved. Turn it off in Settings.`;
       if (on && perfNote.textContent !== want) perfNote.textContent = want;
     } });
     const short: Record<Integrator, string> = {
