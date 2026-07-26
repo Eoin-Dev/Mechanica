@@ -4,7 +4,7 @@ An interactive physics sandbox that runs entirely in the browser: build and
 analyse mechanical systems — orbits, pendulums, oscillators, collisions,
 gases, friction, chaos and soft bodies.
 
-![typescript](https://img.shields.io/badge/TypeScript-strict-blue) ![deps](https://img.shields.io/badge/runtime%20deps-none-green) ![tests](https://img.shields.io/badge/physics%20tests-42-brightgreen)
+![typescript](https://img.shields.io/badge/TypeScript-strict-blue) ![deps](https://img.shields.io/badge/engine%20deps-none-green) ![tests](https://img.shields.io/badge/tests-376-brightgreen)
 
 The app lives in [`web/`](web/). No server, no accounts — everything
 simulates locally in the visitor's browser.
@@ -20,7 +20,7 @@ npm run dev        # dev server, live reload
 ## Test & build
 
 ```
-npm test           # physics verification suite (42 analytic checks)
+npm test           # verification suite (physics, rendering, robustness)
 npm run build      # production build into web/dist/
 ```
 

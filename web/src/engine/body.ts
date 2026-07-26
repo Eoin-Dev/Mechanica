@@ -1,17 +1,10 @@
 /** Physical objects: dynamic circular bodies and static wall segments. */
+import { clamp01, colorOr, numOr as num } from "../core/guards";
 import { Vec2 } from "../core/vec";
 
 export type Color = [number, number, number];
 
-/** A finite number, or `fallback` when the value is missing / not a
- * finite number. Guards every deserialized field: see Body.fromDict. */
-function num(v: unknown, fallback: number): number {
-  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
-}
-
-function clamp01(v: number): number {
-  return v < 0 ? 0 : v > 1 ? 1 : v;
-}
+const WALL_GREY: Color = [150, 155, 165];
 
 // Material presets: [restitution, friction]. Restitution combines with min(),
 // friction with sqrt(mu_a * mu_b) at contact time.
@@ -173,8 +166,8 @@ export class Body {
     // with no message the user could act on.
     const b = new Body(new Vec2(num(d.pos?.[0], 0), num(d.pos?.[1], 0)),
                        Math.max(1e-4, num(d.radius, 0.15)),
-                       Math.max(0, num(d.mass, 1)),
-                       d.color as Color);
+                       Math.max(0, num(d.mass, 1)));
+    if (d.color !== undefined) b.color = colorOr(d.color, b.color);
     b.id = num(d.id, b.id);
     Body.nextId = Math.max(Body.nextId, b.id + 1);
     b.name = d.name ?? `Body ${b.id}`;
@@ -217,7 +210,7 @@ export class Wall {
   thickness: number;
   restitution = 0.8;
   friction = 0.5;
-  color: Color = [150, 155, 165];
+  color: Color = [...WALL_GREY];
 
   constructor(a: Vec2, b: Vec2, thickness = 0.08) {
     this.id = Wall.nextId++;
@@ -245,7 +238,7 @@ export class Wall {
     w.name = d.name ?? `Wall ${w.id}`;
     w.restitution = clamp01(num(d.restitution, 0.8));
     w.friction = Math.max(0, num(d.friction, 0.5));
-    w.color = (d.color as Color) ?? [150, 155, 165];
+    w.color = colorOr(d.color, WALL_GREY);
     return w;
   }
 }

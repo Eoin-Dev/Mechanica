@@ -1,9 +1,11 @@
 # Mechanica — Web
 
 The Mechanica physics lab as a static web app: TypeScript, no framework, no
-runtime dependencies, no server. The physics engine (Velocity Verlet /
-Symplectic Euler / RK4 integrators, two-phase rod constraint solve,
-warm-started sequential impulses, spatial-hash broadphase) is verified by an
+server, and one runtime dependency — MathLive, lazily imported the first time
+a force-field formula row is opened, so it never touches the initial load.
+The engine itself (Velocity Verlet / Symplectic Euler / RK4 integrators,
+two-phase rod constraint solve, warm-started sequential impulses,
+spatial-hash broadphase) has no dependencies at all and is verified by an
 analytic test suite.
 
 > Historical note: this began as a line-faithful port of a Python/pygame
@@ -16,7 +18,7 @@ analytic test suite.
 cd web
 npm install
 npm run dev        # dev server at http://localhost:5173
-npm test           # physics verification suite (42 analytic checks)
+npm test           # verification suite (physics, rendering, robustness)
 npm run build      # production build into dist/
 npm run preview    # serve the production build locally
 ```

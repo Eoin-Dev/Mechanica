@@ -179,6 +179,25 @@ export function sweepClearOfWalls(walls: Wall[], from: { x: number; y: number },
  * static resting friction (see solveStaticFriction). */
 export type ContactCache = Map<string, number[]>;
 
+/** Identity of an unordered body pair, and so of the contact between them.
+ *
+ * Order-INDEPENDENT on purpose. Which of two bodies the narrowphase calls
+ * `a` depends on the order the broadphase happens to visit them, and in the
+ * spatial-hash path that ordering can swap between substeps as bodies move
+ * from one cell to another. A detection-ordered key therefore turned a
+ * persistent resting contact into a fresh one whenever its pair flipped,
+ * throwing away the accumulated impulse the warm start exists to carry.
+ *
+ * Re-keying is safe because both cached scalars are invariant under a flip:
+ * the normal reverses with the pair, so the same non-negative `pn` produces
+ * the same physical push either way, and `pt` reverses along with the
+ * tangent for the same reason. Walls key on their own (negative) id, which
+ * cannot collide with a body id.
+ */
+function pairKey(idA: number, idB: number): string {
+  return idA < idB ? `${idA},${idB}` : `${idB},${idA}`;
+}
+
 /** One contact point with precomputed effective masses and accumulators.
  *
  * The normal (nx, ny) points from body a toward body b; for walls b is null
@@ -279,7 +298,8 @@ class Manifold {
     this.e = e;
     const vn0 = this.normalVelocity();
     this.targetVn = vn0 < -RESTING_SPEED ? -e * vn0 : 0.0;
-    this.key = b !== null ? `${a.id},${b.id}` : `${a.id},0`;
+    // wall manifolds overwrite this with the wall's own key (see wallManifold)
+    this.key = b !== null ? pairKey(a.id, b.id) : "";
     // separation along n measured from current positions, so the position
     // pass can track how much overlap remains as bodies get pushed apart:
     // pen_now = pen + sepBase - ((b - a) . n)
@@ -524,10 +544,6 @@ function solveStaticFriction(manifolds: Manifold[]): void {
     if (aFix && a.vel.length2() < STILL * STILL) a.vel.set(0.0, 0.0);
     if (bFix && b!.vel.length2() < STILL * STILL) b!.vel.set(0.0, 0.0);
   }
-}
-
-function pairKey(idA: number, idB: number): string {
-  return idA < idB ? `${idA},${idB}` : `${idB},${idA}`;
 }
 
 function pairManifold(a: Body, b: Body, out: Manifold[],

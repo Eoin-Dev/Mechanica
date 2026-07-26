@@ -1314,7 +1314,7 @@ export const PRESETS: Preset[] = [
     "the energy graph stay flat while the tip whips around.",
     buildTriplePendulum, { zoom: 110, trails: true, graph: "energy" }),
   new Preset("Swinging rope", "Pendulums",
-    "Twelve elastic string segments approximate a flexible rope: " +
+    "Twenty-four elastic string segments approximate a flexible rope: " +
     "taut ones stretch a hair and pull, slack ones carry nothing, " +
     "so the rope folds and whips like real cord.",
     buildRope, { zoom: 110 }),

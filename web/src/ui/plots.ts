@@ -1,22 +1,22 @@
 /** Live plots: rolling time-series (energy, momentum) and phase-space plot. */
 import { Color } from "../engine/body";
-import { isTouch, reducedMotion } from "./dom";
+import { fmt3g as fmt, isTouch, reducedMotion } from "./dom";
 import * as theme from "./theme";
 import { css } from "./theme";
 
-/** Per-channel line colour. A function (not a module-level array) so a
- * runtime theme change is picked up by the next draw. */
-export function seriesColor(i: number): Color {
-  const extra: Color[] = [[170, 140, 230], [110, 200, 210]];
-  const base = [theme.ACCENT, theme.GOOD, theme.WARN, theme.BAD, ...extra];
-  return base[i % base.length];
-}
+// The two channel colours beyond the theme's semantic four. Module-level
+// because they are constant; the theme colours are read per call so a
+// runtime theme change is picked up by the next draw.
+const EXTRA_SERIES: readonly Color[] = [[170, 140, 230], [110, 200, 210]];
 
-function fmt(v: number): string {
-  if (v === 0) return "0";
-  const abs = Math.abs(v);
-  if (abs >= 1e-4 && abs < 1e6) return String(parseFloat(v.toPrecision(3)));
-  return v.toExponential(2);
+/** Per-channel line colour. */
+export function seriesColor(i: number): Color {
+  const k = i % (4 + EXTRA_SERIES.length);
+  if (k === 0) return theme.ACCENT;
+  if (k === 1) return theme.GOOD;
+  if (k === 2) return theme.WARN;
+  if (k === 3) return theme.BAD;
+  return EXTRA_SERIES[k - 4];
 }
 
 interface LegendHit {

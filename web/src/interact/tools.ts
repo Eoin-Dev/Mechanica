@@ -20,7 +20,8 @@
 import { Vec2 } from "../core/vec";
 import { sweepClearOfWalls } from "../engine/contacts";
 import { Body, Wall } from "../engine/body";
-import { DistanceLink, SpringLink } from "../engine/links";
+import { DistanceLink, Link, SpringLink } from "../engine/links";
+import { Driver } from "../engine/world";
 import { Selectable, VEL_ARROW_SCALE, distToSegment, drawVelocityHandle,
          snapStep } from "../render/draw";
 import { isTouch } from "../ui/dom";
@@ -551,6 +552,12 @@ export class CanvasController {
   private pressSelect(mouse: [number, number], worldP: Vec2): void {
     const app = this.app;
     const shift = this.shiftDown;
+    // Reset once, for every path out of this function. It used to be set
+    // only on the body-drag path, so a wall press inherited the previous
+    // gesture's flag and released as if it had moved - pushing an undo
+    // entry that the stack then discarded as identical, but only after
+    // rebuilding the whole inspector for it.
+    this.dragMoved = false;
 
     // velocity handle of a single selected body? The tip wins over the
     // body even when it lies inside the body's disc, as long as the
@@ -617,7 +624,6 @@ export class CanvasController {
     // once the cursor moves, so an inspect-click leaves the physics alone
     this.dragPress = mouse;
     this.dragActive = false;
-    this.dragMoved = false;
   }
 
   private toggleInSelection(obj: Selectable): void {
@@ -806,36 +812,46 @@ export class CanvasController {
     }
   }
 
-  /** Remove one object (and anything that depended on it).
-   *
-   * `deferPrune` skips the selection/hover/drag reconciliation, which is a
-   * scan of the world per surviving reference. A caller deleting many
-   * objects at once - the runaway cull can bin hundreds in a frame - should
-   * pass it and call `prune()` once at the end instead of paying that scan
-   * per object. */
-  deleteObject(obj: Selectable, deferPrune = false): void {
-    const app = this.app;
-    if (obj instanceof Body) {
-      app.world.removeBody(obj);
-      app.trails.delete(obj.id);
-    } else if (obj instanceof Wall) {
-      app.world.removeWall(obj);
-    } else {
-      app.world.removeLink(obj);
-    }
-    if (!deferPrune) this.pruneDeleted();
+  /** Remove one object, and anything that depended on it (the eraser). */
+  deleteObject(obj: Selectable): void {
+    this.deleteObjects([obj]);
   }
 
-  /** Reconcile selection, hover and any active drag with the world after a
-   * batch of deferred deletions. */
-  prune(): void {
+  /** Remove any number of objects at once, reconciling once at the end.
+   *
+   * Everything that deletes goes through here, because everything that
+   * deletes in bulk needs it to: the runaway cull can bin hundreds inside
+   * a single frame while the simulation runs, Delete acts on a whole box
+   * selection, and the Inspector has "Delete every ..." buttons. One
+   * object at a time each of those is quadratic twice over - once in the
+   * world's own list edits, once in the reconciliation scan - which at a
+   * thousand objects was 50 ms of dropped frame, and at two thousand a
+   * quarter of a second, for an operation that is linear by nature.
+   */
+  deleteObjects(objs: Iterable<Selectable>): void {
+    const app = this.app;
+    const bodies = new Set<Body>();
+    const walls = new Set<Wall>();
+    const links = new Set<Link>();
+    for (const o of objs) {
+      if (o instanceof Body) {
+        bodies.add(o);
+        app.trails.delete(o.id);
+      } else if (o instanceof Wall) {
+        walls.add(o);
+      } else {
+        links.add(o);
+      }
+    }
+    app.world.removeBodies(bodies); // cascades their links and drivers
+    app.world.removeWalls(walls);
+    app.world.removeLinks(links);
     this.pruneDeleted();
   }
 
   deleteSelection(): void {
     if (this.app.selection.length === 0) return;
-    for (const obj of [...this.app.selection]) this.deleteObject(obj, true);
-    this.prune();
+    this.deleteObjects([...this.app.selection]);
     this.app.setSelection([]);
     this.app.pushUndo();
   }
@@ -870,6 +886,18 @@ export class CanvasController {
                                                 link.isRope, link.compliance));
         }
       }
+    }
+    // ...and the sinusoidal drivers of the duplicated bodies. A driver is
+    // as much a property of its body as a link is of its endpoints, so
+    // copying the springs but silently dropping the driver left a
+    // duplicated oscillator sitting dead beside a running one, with
+    // nothing in the inspector to say why.
+    for (const drv of [...app.world.drivers]) {
+      const clone = mapping.get(drv.bodyId);
+      if (clone === undefined) continue;
+      const copy = Driver.fromDict(drv.toDict());
+      copy.bodyId = clone.id;
+      app.world.drivers.push(copy);
     }
     for (const obj of app.selection) {
       if (obj instanceof Wall) {

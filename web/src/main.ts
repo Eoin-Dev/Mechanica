@@ -79,6 +79,15 @@ document.addEventListener("keydown", (e) => {
   if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" ||
       target.tagName === "MATH-FIELD") return;
 
+  // A focused button owns Space and Enter: they are how the browser
+  // activates it. Without this the global handler took Space, played or
+  // paused, and preventDefault'd the activation - so no button in the app
+  // could be pressed from the keyboard at all, which quietly undid the
+  // whole point of freeing Tab. A mouse click still blurs the button (see
+  // the click handler above), so Space keeps working as play/pause for
+  // anyone who is not actually tabbing through the controls.
+  if (target.tagName === "BUTTON" && (e.key === " " || e.key === "Enter")) return;
+
   const key = e.key.toLowerCase();
   if (e.ctrlKey || e.metaKey) {
     if (key === "z") {

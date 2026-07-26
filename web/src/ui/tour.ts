@@ -211,6 +211,15 @@ export class Tour {
   }
 
   private build(): void {
+    // The pools belong to the scrim and root built below, so they start
+    // empty for every run. Carrying them across meant a replay - from
+    // Settings or from Help, the only ways to see the tour twice - reused
+    // tiles and rings that were still parented to the PREVIOUS root, which
+    // finish() had already removed from the document. Nothing was appended
+    // to the new scrim, so the second showing had no dimming and no
+    // highlight ring at all: just a card floating over an undimmed page.
+    this.cells.length = 0;
+    this.rings.length = 0;
     this.scrim = el("div", { class: "tour-scrim" });
     this.card = el("div", { class: "tour-card", role: "dialog",
                             "aria-modal": "true", "aria-label": "Guided tour" });
@@ -421,6 +430,11 @@ export class Tour {
     window.removeEventListener("scroll", this.reflow, true);
     this.root.remove();
     this.root = null;
+    // drop the pooled tiles/rings with the root that owned them, so they
+    // cannot outlive it (build() clears these too - this keeps the removed
+    // subtree collectable in the meantime)
+    this.cells.length = 0;
+    this.rings.length = 0;
     this.app.playing = this.wasPlaying; // leave playback as we found it
     this.app.settings[TOUR_KEY] = true;
     this.app.saveSettings();

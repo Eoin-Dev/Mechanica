@@ -180,6 +180,7 @@ export class HintBar implements Panel {
   private status: HTMLElement;
   private app: App;
   private lastHint = "";
+  private lastStatus = "";
   private lastBarW = 0;
 
   constructor(app: App, hint: HTMLElement, status: HTMLElement) {
@@ -219,13 +220,17 @@ export class HintBar implements Panel {
                   `${app.world.contacts.length} contacts   ${res}${trail}${drift}`;
     // the cursor position is a hover readout - meaningless on any touch
     // device, and the room is better spent on the counts
-    if (isTouch()) {
-      this.status.textContent = stats;
-    } else {
+    let status = stats;
+    if (!isTouch()) {
       const [mx, my] = app.controller.mouse;
       const wp = app.camera.toWorld(mx, my);
-      this.status.textContent =
-        `${wp.x.toFixed(2)}, ${wp.y.toFixed(2)} m   |   ${stats}`;
+      status = `${wp.x.toFixed(2)}, ${wp.y.toFixed(2)} m   |   ${stats}`;
+    }
+    // only touch the DOM when the text actually changed - a paused scene
+    // rewrote this identical string sixty times a second
+    if (status !== this.lastStatus) {
+      this.lastStatus = status;
+      this.status.textContent = status;
     }
     const barW = this.hint.parentElement?.clientWidth ?? 0;
     if (hint !== this.lastHint || barW !== this.lastBarW) {
@@ -381,9 +386,11 @@ export class GraphDock implements Panel {
     this.viewEnd = null;
   }
 
-  private activeSeries() {
-    return { Energy: this.app.energySeries, "Mom.": this.app.momentumSeries }[
-      this.app.graphMode as string];
+  /** The time series the current mode plots, or undefined for Phase/Off. */
+  private activeSeries(): TimeSeries | undefined {
+    if (this.app.graphMode === "Energy") return this.app.energySeries;
+    if (this.app.graphMode === "Mom.") return this.app.momentumSeries;
+    return undefined;
   }
 
   /** Why the plotted conserved quantity may legitimately change. */
@@ -461,9 +468,9 @@ export class GraphDock implements Panel {
     // redraw only when something it depends on changed - between throttled
     // samples and while paused the canvas is already correct. An easing
     // autoscale keeps redrawing static data until the animation settles.
-    const body = app.selection.find((o): o is Body => o instanceof Body);
+    const phaseBody = app.selection.find((o): o is Body => o instanceof Body);
     const rev = series !== undefined ? series.rev
-      : `${app.phasePlot.rev}:${body?.name ?? ""}`;
+      : `${app.phasePlot.rev}:${phaseBody?.name ?? ""}`;
     const sig = `${app.graphMode}:${bw}x${bh}:${rev}:` +
                 `${this.viewEnd ?? "live"}:${this.viewSpan}`;
     if (sig === this.lastDrawSig && !(series?.easing ?? false)) return;
@@ -479,8 +486,7 @@ export class GraphDock implements Panel {
       app.momentumSeries.draw(ctx, w, h,
         "Momentum p (kg m/s) and angular momentum L", graphView);
     } else if (app.graphMode === "Phase") {
-      const body = app.selection.find((o): o is Body => o instanceof Body);
-      const name = body ? body.name : "select a body";
+      const name = phaseBody ? phaseBody.name : "select a body";
       // the body name once, centred above both plots (not repeated in each)
       ctx.font = "600 12px system-ui, sans-serif";
       ctx.fillStyle = css(theme.TEXT_DIM);

@@ -15,8 +15,7 @@ import { CanvasController } from "./interact/tools";
 import { GRAPH_MAX_POINTS, GRAPH_WINDOW_S, PhasePlot, TimeSeries } from "./ui/plots";
 import { reducedMotion } from "./ui/dom";
 import * as theme from "./ui/theme";
-import { ThemeName, setAccent, setTheme } from "./ui/theme";
-import { css } from "./ui/theme";
+import { ThemeName, css, setAccent, setTheme } from "./ui/theme";
 
 export const PHYSICS_DT = 1.0 / 120.0;
 
@@ -210,10 +209,9 @@ export class App {
     if (!this.cullEnabled) return;
     const gone = escapedBodies(this.world, this.cullLimit());
     if (gone.length === 0) return;
-    // a debris storm can bin hundreds at once: reconcile the selection and
-    // any drag once at the end rather than per body
-    for (const b of gone) this.controller.deleteObject(b, true);
-    this.controller.prune();
+    // a debris storm can bin hundreds at once, on a frame that is also
+    // running the simulation: one batched edit and one reconciliation
+    this.controller.deleteObjects(gone);
     this.culledTotal += gone.length;
     // one throttled note rather than a stream of them
     const nowS = performance.now() / 1000;
@@ -262,9 +260,22 @@ export class App {
     }
   }
 
+  /** Path spacing (world units) for the sub-step trail samples the adaptive
+   * integrator captures, or 0 when trails are off. Half a pixel at the
+   * current zoom, matching what recordTrails asks of the bodies. */
+  private syncTraceSpacing(): void {
+    this.world.traceSpacing = this.view.trails ? 0.5 / this.camera.zoom : 0.0;
+  }
+
   stepOnce(): void {
     this.ensureInitial();
     this.playing = false;
+    // Frame-stepping is what you do to study a close encounter, so it needs
+    // the same in-slice path capture as playing does; this used to be set
+    // only on the playing path, so single-stepping through an encounter
+    // drew the trail as a step-to-step corner (or, in a scene that had
+    // never been played, not at all).
+    this.syncTraceSpacing();
     // One 60 Hz frame, run through the SAME path as play: same quantum
     // count, same adaptive subdivision. Stepping used to take two flat
     // PHYSICS_DT steps, so frame-stepping through a close encounter - the
@@ -724,7 +735,7 @@ export class App {
       // fresh state every frame (glassy smooth, and *more* accurate)
       // instead of one full-size step every few frames (choppy).
       const effDt = PHYSICS_DT * Math.min(this.speed, 1.0);
-      this.world.traceSpacing = this.view.trails ? 0.5 / this.camera.zoom : 0.0;
+      this.syncTraceSpacing();
       this.accumulator += dtFrame * this.speed;
       let quanta = 0;
       let qUsed = 1;
