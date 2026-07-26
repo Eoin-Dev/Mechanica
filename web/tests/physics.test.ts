@@ -463,31 +463,54 @@ describe("soft bodies", () => {
       (ln) => Math.abs(ln.a.pos.distTo(ln.b.pos) - ln.restLength) / ln.restLength));
   };
 
-  // Swept, not sampled. This assertion used to whip at exactly 9 m/s and
-  // require a 25% strain, which the engine met at 9.0 and missed at 8.0,
-  // 8.5, 8.75, 9.25, 9.75 and 10.0: past roughly 7 m/s the whip is chaotic,
-  // a shear spring can end up latched through its neighbours, and the
-  // settled strain scatters between 2% and 92% on speeds a quarter of a
-  // metre per second apart. The test therefore certified "recovers cleanly"
-  // on the strength of one lucky draw, and any bit-level change to the
-  // contact solve flipped it - which is exactly what it did.
+  /** Lattice cells whose signed area has flipped: the block is folded
+   * through itself there. The Jelly block is a 9-wide, 7-tall grid built
+   * row-major, so the particle order recovers its topology. */
+  function invertedCells(w: World): number {
+    const cols = 9;
+    const rows = 7;
+    const parts = w.bodies.filter((b) => b.softBody);
+    let n = 0;
+    for (let j = 0; j + 1 < rows; j++) {
+      for (let i = 0; i + 1 < cols; i++) {
+        const quad = [parts[j * cols + i], parts[j * cols + i + 1],
+                      parts[(j + 1) * cols + i + 1], parts[(j + 1) * cols + i]];
+        let area = 0;
+        for (let k = 0; k < 4; k++) {
+          const u = quad[k].pos;
+          const v = quad[(k + 1) % 4].pos;
+          area += u.x * v.y - v.x * u.y;
+        }
+        if (area <= 0) n++; // the lattice is built counter-clockwise
+      }
+    }
+    return n;
+  }
+
+  // Swept, not sampled, and over the whole range the drag clamp allows.
   //
-  // 1-6 m/s is the range where recovery is a real property rather than a
-  // coin toss, so that is what is checked, at every speed in it.
-  it.each([1, 2, 3, 4, 5, 6])(
+  // This assertion used to whip at exactly 9 m/s and require 25% strain,
+  // which the engine met at 9.0 and missed at 8.0, 8.5, 8.75, 9.25, 9.75 and
+  // 10.0 - so it certified "recovers cleanly" on one lucky draw, and any
+  // bit-level change to the contact solve flipped it.
+  //
+  // The cause was that a lattice of pure distance springs has no idea which
+  // way round it is: a cell turned inside-out satisfies all of its springs
+  // exactly as well as the correct cell, so a fold is a second stable state.
+  // At 9 m/s three of the 48 cells stayed inverted forever, at 12 m/s five.
+  // Second-neighbour bend springs span the fold and make the flat state the
+  // only stable one (see softGrid), so recovery is now a real property at
+  // every speed rather than a coin toss below 7.
+  it.each([1, 2, 4, 6, 8, 10, 12, 15, 20, 30])(
     "a %d m/s jelly drag jiggles and springs back to shape", (speed) => {
       const { w } = whipJelly(speed);
       expect(worstStrain(w)).toBeLessThan(0.10);
+      expect(invertedCells(w)).toBe(0);
     });
 
-  it("a whip too fast to recover from still relaxes to a bounded shape", () => {
-    // Past the coherent range the lattice may stay deformed - the app hints
-    // to right-drag for exactly this reason. What must still hold is that no
-    // spring runs away: the structure is scrambled, never unbounded.
-    for (const speed of [8, 9, 10]) {
-      const { w } = whipJelly(speed);
-      expect(worstStrain(w), `${speed} m/s`).toBeLessThan(1.0);
-    }
+  it("starts from a lattice that is not already folded", () => {
+    // the inversion count means nothing unless zero is the ground truth
+    expect(invertedCells(preset("Jelly block"))).toBe(0);
   });
 
   it("pushing a held body into a resting one stays gentle", () => {

@@ -534,7 +534,7 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
     ["F1", "This help"],
   ], "pc"],
   ["Mouse & touch", [
-    ["Drag a body", "Move it (throw it while playing)"],
+    ["Drag a body", "Move it; it keeps the motion it had"],
     ["Hold a body still", "Pin it while everything collides with it"],
     ["Drag the green arrow", "Set a body's velocity exactly"],
     ["Right-drag a body", "Aim its velocity vector", "pc"],
@@ -551,8 +551,10 @@ const GETTING_STARTED: Array<[string, string, string]> = [
    "47 worked examples across eight topics, each with a note on what it " +
    "shows. Loading one is the fastest way to see what this can do."],
   ["2", "Run it, then interfere",
-   "Play, then drag something mid-flight. Nothing is on rails: throw a " +
-   "planet out of its orbit, catch a pendulum at the top of its swing."],
+   "Play, then drag something mid-flight. Nothing is on rails: lift a " +
+   "planet out of its orbit, catch a pendulum at the top of its swing. A " +
+   "dragged body keeps the motion it had, so moving something never throws " +
+   "it - the green arrow is there when you do want to set a velocity."],
   ["3", "Build something",
    "Place two bodies and connect them. Clicking empty space with a rod, " +
    "string or spring creates the anchor or body you need, so a pendulum " +

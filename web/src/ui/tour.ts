@@ -70,14 +70,14 @@ export const STEPS: Step[] = [
   {
     target: "#canvas-wrap",
     title: "Reach in while it runs",
-    body: "Drag a body with it running and you throw it; hold it still and " +
-          "it stays pinned under your cursor while everything else piles " +
-          "into it. Drag the green arrow on a selected body to set its " +
-          "velocity exactly.",
-    touchBody: "Drag a body with it running and you throw it; hold it still " +
-               "and it stays pinned under your finger while everything else " +
-               "piles into it. Drag the green arrow on a selected body to " +
-               "set its velocity exactly.",
+    body: "Drag a body while it runs and you move it without throwing it - " +
+          "it resumes the motion it already had. Hold it still and it stays " +
+          "pinned under your cursor while everything else piles into it. " +
+          "Drag the green arrow on a selected body to set its velocity.",
+    touchBody: "Drag a body while it runs and you move it without throwing " +
+               "it - it resumes the motion it already had. Hold it still and " +
+               "it stays pinned while everything else piles into it. Drag " +
+               "the green arrow on a selected body to set its velocity.",
   },
   {
     target: "#palette",

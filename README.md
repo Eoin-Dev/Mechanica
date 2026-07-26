@@ -4,7 +4,7 @@ An interactive physics sandbox that runs entirely in the browser: build and
 analyse mechanical systems — orbits, pendulums, oscillators, collisions,
 gases, friction, chaos and soft bodies.
 
-![typescript](https://img.shields.io/badge/TypeScript-strict-blue) ![deps](https://img.shields.io/badge/engine%20deps-none-green) ![tests](https://img.shields.io/badge/tests-376-brightgreen)
+![typescript](https://img.shields.io/badge/TypeScript-strict-blue) ![deps](https://img.shields.io/badge/engine%20deps-none-green) ![tests](https://img.shields.io/badge/tests-563-brightgreen)
 
 The app lives in [`web/`](web/). No server, no accounts — everything
 simulates locally in the visitor's browser.
@@ -72,9 +72,11 @@ Details and alternative hosts in [web/README.md](web/README.md).
 | Ctrl+S | Save the scene |
 | Scroll / right-drag | Zoom at cursor / pan |
 
-Drag a body while the simulation is running to throw it; hold it still and
-it stays pinned under the cursor while everything else collides with it.
-Drag the green arrow tip of a selected body to set its velocity exactly.
+Drag a body while the simulation is running and it follows the cursor exactly,
+then resumes the motion it already had — moving something never throws it.
+Hold it still and it stays pinned under the cursor while everything else
+collides with it. Drag the green arrow tip of a selected body (or right-drag
+it) to set its velocity exactly.
 
 ## Units
 

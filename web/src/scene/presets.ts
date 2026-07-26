@@ -878,7 +878,8 @@ function buildTerminalVelocity(): World {
 // --------------------------------------------------------------- soft bodies
 // Soft bodies are lattices of evenly spaced particles joined by damped
 // springs: a structural mesh carries the shape, shear/diagonal springs stop
-// it collapsing. Directly linked particles never collide with each other
+// it collapsing, and second-neighbour bend springs stop it folding through
+// itself (see softGrid). Directly linked particles never collide with each other
 // (the engine excludes linked pairs; their springs govern the separation),
 // but everything else does - so a lattice can squash yet never tangle
 // through itself.
@@ -887,7 +888,34 @@ function softSpring(w: World, a: Body, b: Body, k: number, damp: number): void {
   w.links.push(new SpringLink(a, b, a.pos.distTo(b.pos), k, damp));
 }
 
-/** Rectangular particle lattice with structural + crossed shear springs. */
+/** Rectangular particle lattice with structural, shear and bend springs.
+ *
+ * The bend springs (each particle to the one two places along, in both axes)
+ * are what stop the lattice folding through itself. A network of pure
+ * distance springs has no idea which way round it is - a cell turned
+ * inside-out satisfies every one of its springs exactly as well as the
+ * correct cell does, so an inverted fold is a second stable state and the
+ * block simply stays in it. Whipping the Jelly block by one particle used to
+ * leave 3 of its 48 cells permanently inverted at 9 m/s and 5 at 12 m/s,
+ * which is what "does not recover above about 7 m/s" actually was.
+ *
+ * A second-neighbour spring spans the fold, so closing one shortens it and
+ * it pushes back: the flat state becomes the only stable one. It is the same
+ * trick the Trampoline already used along its bed, generalised to both axes,
+ * and it needs no new engine concept - just more of the springs the solver
+ * already handles. Bend stiffness is a fraction of structural so the block
+ * still squashes and jiggles; it resists inversion, not deformation (the
+ * Jelly block still reaches 19% strain landing on the floor).
+ *
+ * The cost is about half again as many springs - the Jelly block goes from
+ * 206 to 300, and from 154 to 199 us per step, which leaves it in the same
+ * neighbourhood as the 200-particle gas the library already ships. That puts
+ * it on the cost ceiling's 2-substep floor, which is the trade taken
+ * knowingly: a scene that is a little coarser in time but cannot end up
+ * inside-out is the better teaching object.
+ */
+const BEND_FRACTION = 0.25;
+
 function softGrid(w: World, x0: number, y0: number, cols: number, rows: number,
                   spacing: number, massTotal: number, k: number, damp: number,
                   color: Color, e = 0.2, mu = 0.5,
@@ -913,6 +941,13 @@ function softGrid(w: World, x0: number, y0: number, cols: number, rows: number,
         softSpring(w, grid[j][i], grid[j + 1][i + 1], k, damp);
         softSpring(w, grid[j][i + 1], grid[j + 1][i], k, damp);
       }
+    }
+  }
+  const kBend = k * BEND_FRACTION;
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      if (i + 2 < cols) softSpring(w, grid[j][i], grid[j][i + 2], kBend, damp);
+      if (j + 2 < rows) softSpring(w, grid[j][i], grid[j + 2][i], kBend, damp);
     }
   }
   return grid;
@@ -1423,7 +1458,7 @@ export const PRESETS: Preset[] = [
     buildChainBridge, { zoom: 110 }),
 
   new Preset("Jelly block", "Soft Bodies",
-    "A 9 x 7 lattice of particles joined by structural and shear " +
+    "A 9 x 7 lattice of particles joined by structural, shear and bend " +
     "springs - a jelly cube. Drop it, watch it splat, wobble and " +
     "settle. Grab and throw it with the mouse!",
     buildJellyBlock, { zoom: 95, centre: [0, 1.4] }),
@@ -1444,7 +1479,7 @@ export const PRESETS: Preset[] = [
     buildSoftWheel, { zoom: 80, centre: [5.0, -1.0], trails: false }),
   new Preset("Jelly smash", "Soft Bodies",
     "A rigid wrecking ball meets a soft jelly block: constraints, " +
-    "contacts and 150-odd springs all at once. The jelly absorbs the " +
+    "contacts and 200-odd springs all at once. The jelly absorbs the " +
     "blow and jiggles it away as heat (spring damping).",
     buildJellySmash, { zoom: 80, centre: [-0.5, 1.0] }),
 

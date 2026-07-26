@@ -247,7 +247,16 @@ input[type="text"], input[type="number"] {
   -webkit-user-select: text;
   user-select: text;
 }
-input:focus { outline: none; border-color: var(--accent); }
+/* A focused text field tints its border - a cue that reads well while
+   typing, where a ring around the box would fight the caret. Scoped to
+   :not(:focus-visible) so it never suppresses the keyboard ring below:
+   `input:focus` outranks a bare `:focus-visible` on specificity, so the
+   unscoped version silently removed the outline from every input in the
+   app. Buttons kept their ring (nothing competes for them), which is why
+   checkboxes and sliders in particular ended up with no keyboard cue at
+   all while the rest of the panel looked fine. */
+input:focus { border-color: var(--accent); }
+input:focus:not(:focus-visible) { outline: none; }
 
 /* Keyboard focus ring. There was none at all, so with Tab freed up there
    was still no way to see where you were - :focus-visible means it appears
@@ -259,6 +268,17 @@ input:focus { outline: none; border-color: var(--accent); }
   outline-offset: 2px;
   border-radius: var(--radius);
 }
+/* Small controls sit tight against their labels and neighbours, so the ring
+   hugs them instead of overlapping what is next to it. */
+label.checkbox input:focus-visible,
+.colour-well:focus-visible,
+button.swatch:focus-visible,
+button.swatch-add:focus-visible {
+  outline-offset: 1px;
+}
+/* A range input has no border of its own, so the ring goes round the track
+   with enough room to clear the thumb at either end. */
+input[type="range"]:focus-visible { outline-offset: 3px; }
 .overlay-panel:focus-visible, .overlay-panel:focus { outline: none; }
 input.error { border-color: var(--bad); }
 
@@ -287,7 +307,10 @@ input.error { border-color: var(--bad); }
   --contains-highlight-background-color: transparent;
   --placeholder-color: var(--text-faint);
 }
-.math-edit math-field:focus-within { outline: none; border-color: var(--accent); }
+/* border tint while editing, ring only for keyboard focus - scoped the same
+   way as the plain inputs so it cannot swallow the :focus-visible outline */
+.math-edit math-field:focus-within { border-color: var(--accent); }
+.math-edit math-field:focus-within:not(:focus-visible) { outline: none; }
 .math-edit math-field.error { border-color: var(--bad); }
 math-field::part(menu-toggle) { display: none; }
 

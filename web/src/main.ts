@@ -2,12 +2,11 @@
  * shortcuts and toasts, and starts the main loop. */
 import "./style.css";
 import { App, PRESETS } from "./app";
-import { GraphMode } from "./app";
-import { TOOL_KEYS } from "./interact/tools";
 import { Inspector } from "./ui/inspector";
 import { FormulaGuide } from "./ui/guide";
 import { Help, Library, SettingsPanel } from "./ui/overlays";
 import { GraphDock, HintBar, Palette, Toolbar, overlayToggles } from "./ui/panels";
+import { handleShortcut } from "./ui/shortcuts";
 import { Tour } from "./ui/tour";
 
 const $ = (id: string): HTMLElement => document.getElementById(id)!;
@@ -73,135 +72,17 @@ document.addEventListener("click", (e) => {
 });
 
 // --------------------------------------------------------------- keyboard
+// The map itself lives in ui/shortcuts.ts so it can be tested without
+// standing up the whole app against a real DOM.
 document.addEventListener("keydown", (e) => {
-  // let form fields keep their keys (widgets stopPropagation, but be safe)
-  const target = e.target as HTMLElement;
-  if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" ||
-      target.tagName === "MATH-FIELD") return;
-
-  // A focused button owns Space and Enter: they are how the browser
-  // activates it. Without this the global handler took Space, played or
-  // paused, and preventDefault'd the activation - so no button in the app
-  // could be pressed from the keyboard at all, which quietly undid the
-  // whole point of freeing Tab. A mouse click still blurs the button (see
-  // the click handler above), so Space keeps working as play/pause for
-  // anyone who is not actually tabbing through the controls.
-  if (target.tagName === "BUTTON" && (e.key === " " || e.key === "Enter")) return;
-
-  const key = e.key.toLowerCase();
-  if (e.ctrlKey || e.metaKey) {
-    if (key === "z") {
-      e.shiftKey ? app.redo() : app.undo();
-    } else if (key === "y") {
-      app.redo();
-    } else if (key === "d") {
-      app.controller.duplicateSelection();
-    } else if (key === "r") {
-      app.resetSim();
-    } else if (key === "c") {
-      app.copyProps();
-    } else if (key === "v") {
-      app.pasteProps();
-    } else if (key === "s") {
-      app.quickSave();
-    } else {
-      return;
-    }
-    e.preventDefault();
-    return;
-  }
-
-  // the tour owns the keyboard while it is up (it handles Esc and the
-  // arrows itself, in the capture phase); nothing else should also fire
-  if (tour.visible) return;
-
-  // overlays swallow everything except their own close keys
-  if (library.visible || help.visible || settingsPanel.visible ||
-      formulaGuide.visible) {
-    if (e.key === "Escape" || key === "l" || e.key === "F1") {
-      library.close();
-      help.close();
-      settingsPanel.close();
-      formulaGuide.close();
-      e.preventDefault();
-    }
-    return;
-  }
-
-  switch (e.key) {
-    case " ":
-      app.togglePlay();
-      break;
-    case ".":
-      app.stepOnce();
-      break;
-    case ",":
-      app.stepBack();
-      break;
-    case "Delete":
-    case "Backspace":
-      app.controller.deleteSelection();
-      break;
-    case "Escape":
-      // cancel an in-progress link/wall first, then clear the selection
-      if (!app.controller.cancelPending()) app.setSelection([]);
-      break;
-    // NOT Tab. Binding Tab here (and preventing its default) meant focus
-    // could never leave the document body, so nothing in the app was
-    // reachable by keyboard at all - no tool button, no checkbox, no
-    // slider. Backslash is unclaimed and adjacent to the same hand.
-    case "\\":
-      inspector.toggleCollapsed();
-      break;
-    case "F1":
-      help.toggle();
-      break;
-    case "ArrowLeft":
-      app.stepBack();
-      break;
-    case "ArrowRight":
-      app.stepOnce();
-      break;
-    default: {
-      if (key in TOOL_KEYS) { // TOOL_KEYS deliberately contains neither d nor c
-        app.controller.setTool(TOOL_KEYS[key]);
-      } else if (key === "n") {
-        app.view.snap = !app.view.snap;
-        app.toast(`Snap to grid ${app.view.snap ? "on" : "off"}`);
-      } else if (key === "t") {
-        app.setTrails(!app.view.trails);
-      } else if (key === "g") {
-        app.view.spatialGrid = !app.view.spatialGrid;
-      } else if (key === "f") {
-        if (e.shiftKey) app.toggleAutoFit();
-        else app.zoomToFit();
-      } else if (key === "d") {
-        app.view.velVectors = !app.view.velVectors;
-        app.toast(`Velocity vectors ${app.view.velVectors ? "on" : "off"}`);
-      } else if (key === "k") {
-        app.toggleLockSelection();
-      } else if (key === "1") {
-        app.toggleGraph("Energy" as GraphMode);
-      } else if (key === "2") {
-        app.toggleGraph("Mom." as GraphMode);
-      } else if (key === "3") {
-        app.toggleGraph("Phase" as GraphMode);
-      } else if (key === "-") {
-        app.bumpSpeed(0.5);
-      } else if (key === "=" || key === "+") {
-        app.bumpSpeed(2.0);
-      } else if (key === "0") {
-        app.resetSpeed();
-      } else if (key === "c") {
-        app.toggleFollow();
-      } else if (key === "l") {
-        library.toggle();
-      } else {
-        return;
-      }
-    }
-  }
-  e.preventDefault();
+  handleShortcut(e, {
+    app,
+    tour,
+    overlays: [library, help, settingsPanel, formulaGuide],
+    toggleLibrary: () => library.toggle(),
+    toggleHelp: () => help.toggle(),
+    toggleInspector: () => inspector.toggleCollapsed(),
+  });
 });
 
 // ---------------------------------------------------------------- resizing
