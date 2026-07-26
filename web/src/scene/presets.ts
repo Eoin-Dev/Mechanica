@@ -1098,8 +1098,11 @@ function buildTrampoline(): World {
   // positions (rest lengths untouched). A small dedicated relaxation loop is
   // used instead of World.step so preset construction stays instant; it
   // applies exactly the engine's per-substep-clamped spring force model
-  // (see World.prepareStep), so a force balance here is a true fixed point
-  // of the runtime simulation - the bed loads perfectly still.
+  // (see World.prepareSprings), so a force balance here is a true fixed point
+  // of the runtime simulation - the bed loads perfectly still. Performance
+  // mode does not use that model at all, so the bed is NOT at a fixed point
+  // there and settles a little on load; that is the mode's trade, not a bug
+  // in this relaxation.
   //
   // That fixed point depends on the substep size, because the engine clamps
   // spring stiffness against it. The cost ceiling is therefore applied here

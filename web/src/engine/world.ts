@@ -36,8 +36,7 @@ import { Contact, ContactCache, ContactStatic, solveContacts } from "./contacts"
 import { DistanceLink, Link, LinkDict, SpringLink, linkFromDict } from "./links";
 import {
   PERF_ITERATIONS, PERF_MAX_SPEED, PERF_SPRING_PASSES,
-  PERF_SPRUNG_CONTACT_GAIN, PERF_SUBSTEPS, PerfSolver, bleedSprungBodies,
-  clampSpeeds,
+  PERF_SPRUNG_CONTACT_GAIN, PERF_SUBSTEPS, PerfSolver, clampSpeeds,
 } from "./perf";
 
 export const INTEGRATORS = ["Velocity Verlet", "Symplectic Euler", "RK4"] as const;
@@ -335,7 +334,7 @@ export class World {
   traceSpacing = 0.0; // 0 = tracing off
   private traceLast = new Map<number, [number, number]>();
   // Base timestep the spring/damper stability clamps are measured
-  // against (see prepareStep). Must match the app's PHYSICS_DT: it is
+  // against (see prepareSprings). Must match the app's PHYSICS_DT: it is
   // what makes a clamped spring behave identically however finely the
   // scheduler subdivides a frame.
   clampDt = 1.0 / 120.0;
@@ -1209,15 +1208,10 @@ export class World {
         }
       }
 
-      // Performance mode's last two guards, applied where they bound
-      // everything the substep did rather than only the springs: a hard
-      // speed ceiling so nothing can walk out to the range sanitize() has
-      // to freeze, and a small dissipation on spring-connected bodies so a
-      // slow accumulation can never become a fast one.
-      if (projected !== null) {
-        clampSpeeds(this.bodies, PERF_MAX_SPEED);
-        if (projected.length > 0) bleedSprungBodies(this.bodies, h);
-      }
+      // Performance mode's last guard, applied where it bounds everything the
+      // substep did rather than only the springs: a hard speed ceiling, so
+      // nothing can walk out to the range sanitize() has to freeze.
+      if (projected !== null) clampSpeeds(this.bodies, PERF_MAX_SPEED);
 
       this.time += h;
     }

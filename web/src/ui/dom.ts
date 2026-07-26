@@ -79,7 +79,28 @@ export class RefreshGroup {
     this.io = new IntersectionObserver((entries) => {
       for (const e of entries) {
         const item = this.byEl.get(e.target);
-        if (item) item.visible = e.isIntersecting;
+        if (item === undefined) continue;
+        // "Not intersecting" covers two situations that could not be more
+        // different, and only one of them is what this culling is for.
+        //
+        // A control SCROLLED out of the panel has a box, somewhere outside
+        // the root, and skipping its refresh is free performance. A control
+        // that is HIDDEN has no box at all, and the observer reports it as a
+        // zero rect. Culling that one is a trap with teeth: a control that
+        // decides its own visibility hides itself inside its own refresh, so
+        // culling it at that moment means the refresh never runs again and it
+        // can never come back.
+        //
+        // Three controls in the Inspector were stuck exactly there - the
+        // performance-mode banner, the capped-substeps note and the
+        // long-trail warning - each appearing only when a rebuild (a tab
+        // switch, a selection change) happened to catch it at a moment it
+        // should already be visible. Collapsing the whole panel does the same
+        // thing to every control in it, but that case rights itself: the
+        // boxes come back on expand and the observer says so. A self-hiding
+        // control has nothing to give it a box back.
+        const r = e.boundingClientRect;
+        item.visible = e.isIntersecting || (r.width === 0 && r.height === 0);
       }
     }, { root: scrollRoot, rootMargin: "80px" });
   }
@@ -271,6 +292,11 @@ export function slider(label: string, get: () => number,
     if (val.value !== s) val.value = s; // avoid per-frame DOM writes
   };
   input.addEventListener("input", () => {
+    // A disabled control must not write, whatever route the event arrived by.
+    // The browser blocks pointer and keyboard interaction with a disabled
+    // input but not a programmatic dispatch, and for a control the app has
+    // deliberately taken away, ignoring the event is the only safe reading.
+    if (input.disabled) return;
     dragging = true;
     const v = toValue(Number(input.value));
     set(v);
@@ -290,6 +316,13 @@ export function slider(label: string, get: () => number,
   });
   val.addEventListener("blur", () => {
     editing = false;
+    // Disabling a focused field makes the browser blur it, so this handler is
+    // how a control that has just been taken away would commit the half-typed
+    // value it was taken away with. Drop it and re-sync instead.
+    if (val.disabled) {
+      refresh();
+      return;
+    }
     const raw = parseFloat(val.value);
     if (Number.isFinite(raw)) {
       let v = Math.max(min, Math.min(max, raw));
@@ -309,13 +342,23 @@ export function slider(label: string, get: () => number,
   });
 
   const refresh = () => {
-    if (dragging || editing) return;
+    // The enabled/disabled state is settled first and unconditionally, ahead
+    // of the drag guard below. It is the one thing that must not wait for an
+    // interaction to finish: a control disabled while a drag is in flight
+    // would otherwise stay live until the drag ended, and a drag that never
+    // delivers its `change` (pointer released off-window, cancelled touch)
+    // would leave it live indefinitely.
     const dis = opts.disabled?.() ?? false;
     if (input.disabled !== dis) {
       input.disabled = dis;
       val.disabled = dis;
       row.classList.toggle("disabled", dis);
+      if (dis) {
+        dragging = false;
+        editing = false;
+      }
     }
+    if (dragging || editing) return;
     const v = get();
     const pos = String(toPos(v));
     if (input.value !== pos) input.value = pos;
@@ -393,8 +436,12 @@ export function checkbox(label: string, get: () => boolean,
 }
 
 // ---------------------------------------------------------------- segmented
+/** Radio strip. `disabled` greys the whole strip and makes it inert, matching
+ * what slider() does with the same option - a browser ignores clicks on a
+ * disabled button, so the handler needs no guard of its own. */
 export function segmented(options: string[], get: () => string,
-                          set: (v: string) => void, tooltip = ""): Control {
+                          set: (v: string) => void, tooltip = "",
+                          disabled?: () => boolean): Control {
   const wrap = el("div", { class: "segmented" });
   if (tooltip) wrap.title = tooltip;
   const btns = options.map((opt) => {
@@ -407,8 +454,13 @@ export function segmented(options: string[], get: () => string,
     return b;
   });
   const refresh = () => {
+    const dis = disabled?.() ?? false;
+    wrap.classList.toggle("disabled", dis);
     const cur = get();
-    btns.forEach((b, i) => b.classList.toggle("active", options[i] === cur));
+    btns.forEach((b, i) => {
+      b.classList.toggle("active", options[i] === cur);
+      if (b.disabled !== dis) b.disabled = dis;
+    });
   };
   refresh();
   return { root: wrap, refresh };

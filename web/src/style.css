@@ -13,6 +13,10 @@
   --text-faint: rgb(105, 111, 122);
   --good: rgb(120, 190, 120);
   --warn: rgb(230, 200, 90);
+  /* --warn at low alpha, for banner fills. Set alongside --warn by
+     theme.setTheme; these are the fallbacks used before a theme is applied. */
+  --warn-soft: rgba(230, 200, 90, 0.13);
+  --warn-edge: rgba(230, 200, 90, 0.4);
   --bad: rgb(230, 110, 110);
   --selection: rgb(110, 180, 240);
   --radius: 6px;
@@ -373,6 +377,10 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 .segmented button { border: none; border-radius: 0; flex: 1; background: transparent; padding: 5px 8px; }
 .segmented button + button { border-left: 1px solid var(--outline); }
 .segmented button.active { background: var(--accent-dark); color: var(--text); }
+/* Dim the strip as a whole, matching .row.disabled, rather than letting each
+   button's own :disabled opacity stack into near-invisibility. */
+.segmented.disabled { opacity: 0.4; }
+.segmented.disabled button:disabled { opacity: 1; cursor: default; }
 
 /* ------------------------------------------------------------ inspector */
 .tabs { display: flex; flex: none; align-items: stretch; border-bottom: 1px solid var(--outline); }
@@ -487,6 +495,58 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 .row input.val:hover { border-color: var(--outline); }
 .row input.val:focus { border-color: var(--accent); background: var(--bg); }
 .row input.val.error { border-color: var(--bad); }
+/* "Performance mode is on" banner above the disabled Solver controls.
+   Warning-coloured rather than accent-coloured on purpose: the accent means
+   "active/yours" and the user can change it to anything, so this must not
+   depend on it. The filled pill, tinted block and left bar carry the signal
+   between them, so it survives an accent in the same hue family and reads
+   without relying on colour at all. */
+.perf-banner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 6px 0 10px;
+  padding: 8px 10px;
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-edge);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius);
+}
+.perf-badge {
+  align-self: stretch;
+  background: var(--warn);
+  /* the pill is a solid block of the warning colour, so its text has to be
+     dark whatever the theme - --bg is light in the light theme */
+  color: rgb(24, 22, 10);
+  font-size: calc(10px * var(--fs, 1));
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.perf-banner-text {
+  color: var(--text-dim);
+  font-size: calc(11px * var(--fs, 1));
+  line-height: 1.45;
+}
+button.perf-banner-btn {
+  align-self: stretch;
+  justify-content: center;
+  border-color: var(--warn-edge);
+  font-weight: 600;
+  /* Label left at --text rather than --warn. The warning colour is dark
+     yellow in the light theme (185,145,15), which against a white panel is
+     2.95:1 - below AA for body text. The pill above already carries the hue;
+     the button only needs to belong to the banner, which the tinted border
+     and hover do without putting text at that contrast. */
+}
+button.perf-banner-btn:hover:not(:disabled) {
+  background: var(--warn-soft);
+  border-color: var(--warn);
+}
+
 .field-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
 .field-actions button { flex: none; }
 .row-half { display: flex; gap: 6px; margin: 4px 0; }
