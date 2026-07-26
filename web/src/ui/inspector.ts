@@ -646,7 +646,10 @@ export class Inspector implements Panel {
   }
 
   private deleteObjs(objs: Selectable[], label: string): void {
-    for (const o of objs) this.app.controller.deleteObject(o);
+    // These buttons are the bulk path by definition ("Delete every body
+    // (500)"), so they take the batched route rather than paying the
+    // per-object world edit and reconciliation scan.
+    this.app.controller.deleteObjects(objs);
     this.app.pushUndo();
     this.app.toast(`Deleted ${objs.length} ${label} - Ctrl+Z restores them`);
     this.markDirty();
@@ -659,7 +662,12 @@ export class Inspector implements Panel {
   }
 
   private distribute(bodies: Body[], axis: "x" | "y"): void {
-    if (bodies.length < 3) return;
+    // Two bodies are already evenly spaced, so there is nothing to do - but
+    // silently doing nothing reads as a broken button. Say so instead.
+    if (bodies.length < 3) {
+      this.app.toast("Select three or more bodies to space them evenly");
+      return;
+    }
     const ordered = [...bodies].sort((a, b) => a.pos[axis] - b.pos[axis]);
     const lo = ordered[0].pos[axis];
     const hi = ordered[ordered.length - 1].pos[axis];
@@ -851,7 +859,7 @@ export class Inspector implements Panel {
     // carry it along.
 
     this.body.append(section("Custom force fields"));
-    [...world.fields].forEach((field, fieldIndex) => {
+    world.fields.forEach((field, fieldIndex) => {
       // enabled toggle + editable name on one row (the name is saved with
       // the scene, so it survives save/export like everything else)
       const nameRow = el("div", { class: "row" });

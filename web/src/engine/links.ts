@@ -25,6 +25,7 @@
  * explicit-integration stability limit (see World.prepareStep), so absurd
  * user settings soften instead of exploding the simulation.
  */
+import { numIn, numOr } from "../core/guards";
 import { Body } from "./body";
 
 export interface RodDict {
@@ -158,19 +159,37 @@ export class SpringLink {
 
 export type Link = DistanceLink | SpringLink;
 
+/** Build a link from a scene file.
+ *
+ * Every number is guarded to the range the Inspector's own sliders offer.
+ * A rod whose `length` arrived as NaN - one absent or mistyped field in a
+ * hand-edited scene - put a NaN straight into the constraint solve, which
+ * spread to every connected body within a step and froze the whole scene
+ * on load. Bodies and walls have been guarded like this since the port;
+ * links were the gap.
+ *
+ * A missing length falls back to the bodies' current separation, which is
+ * what the constructors do for a link created interactively.
+ */
 export function linkFromDict(d: LinkDict, bodiesById: Map<number, Body>): Link {
   const a = bodiesById.get(d.a)!;
   const b = bodiesById.get(d.b)!;
+  const natural = a.pos.distTo(b.pos);
   let link: Link;
   if (d.type === "spring") {
-    link = new SpringLink(a, b, d.rest_length, d.stiffness, d.damping,
+    link = new SpringLink(a, b,
+                          numIn(d.rest_length, natural, 0.0, 1e6),
+                          numIn(d.stiffness, 20.0, 0.0, 1e9),
+                          numIn(d.damping, 0.0, 0.0, 1e9),
                           d.tension_only ?? false);
-    link.id = d.id;
+    link.id = numOr(d.id, link.id);
     SpringLink.nextId = Math.max(SpringLink.nextId, link.id + 1);
   } else {
-    link = new DistanceLink(a, b, d.length, d.is_rope ?? false,
-                            d.compliance ?? 0.0);
-    link.id = d.id;
+    link = new DistanceLink(a, b,
+                            numIn(d.length, natural, 0.0, 1e6),
+                            d.is_rope ?? false,
+                            numIn(d.compliance, 0.0, 0.0, 1e9));
+    link.id = numOr(d.id, link.id);
     DistanceLink.nextId = Math.max(DistanceLink.nextId, link.id + 1);
   }
   return link;

@@ -457,14 +457,37 @@ describe("soft bodies", () => {
     expect(maxSpeed).toBeLessThanOrEqual(20.0 + 1e-6);
   });
 
-  it("a normal-speed jelly drag jiggles and springs back to shape", () => {
-    // At speeds the chase clamp can follow, the lattice deforms then
-    // recovers cleanly once released - real link physics, no scramble.
-    const { w } = whipJelly(9.0);
+  const worstStrain = (w: World): number => {
     const springs = w.links.filter((ln): ln is SpringLink => ln instanceof SpringLink);
-    const worst = Math.max(...springs.map(
+    return Math.max(...springs.map(
       (ln) => Math.abs(ln.a.pos.distTo(ln.b.pos) - ln.restLength) / ln.restLength));
-    expect(worst).toBeLessThan(0.25);
+  };
+
+  // Swept, not sampled. This assertion used to whip at exactly 9 m/s and
+  // require a 25% strain, which the engine met at 9.0 and missed at 8.0,
+  // 8.5, 8.75, 9.25, 9.75 and 10.0: past roughly 7 m/s the whip is chaotic,
+  // a shear spring can end up latched through its neighbours, and the
+  // settled strain scatters between 2% and 92% on speeds a quarter of a
+  // metre per second apart. The test therefore certified "recovers cleanly"
+  // on the strength of one lucky draw, and any bit-level change to the
+  // contact solve flipped it - which is exactly what it did.
+  //
+  // 1-6 m/s is the range where recovery is a real property rather than a
+  // coin toss, so that is what is checked, at every speed in it.
+  it.each([1, 2, 3, 4, 5, 6])(
+    "a %d m/s jelly drag jiggles and springs back to shape", (speed) => {
+      const { w } = whipJelly(speed);
+      expect(worstStrain(w)).toBeLessThan(0.10);
+    });
+
+  it("a whip too fast to recover from still relaxes to a bounded shape", () => {
+    // Past the coherent range the lattice may stay deformed - the app hints
+    // to right-drag for exactly this reason. What must still hold is that no
+    // spring runs away: the structure is scrambled, never unbounded.
+    for (const speed of [8, 9, 10]) {
+      const { w } = whipJelly(speed);
+      expect(worstStrain(w), `${speed} m/s`).toBeLessThan(1.0);
+    }
   });
 
   it("pushing a held body into a resting one stays gentle", () => {

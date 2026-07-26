@@ -23,6 +23,7 @@
  * the radial velocity gained within each substep and drain energy.
  */
 import { CompiledExpr, ExprError, compileExpr } from "../core/expr";
+import { intIn, numIn, numOr } from "../core/guards";
 import { Vec2 } from "../core/vec";
 import { Body, BodyDict, Wall, WallDict } from "./body";
 import { Contact, ContactCache, ContactStatic, solveContacts } from "./contacts";
@@ -170,7 +171,13 @@ export class ForceField {
   }
 
   static fromDict(d: FieldDict): ForceField {
-    const f = new ForceField(d.name, d.fx, d.fy);
+    // The sources must be strings before they reach the compiler: it
+    // trims them, so a number or a null where a formula was expected threw
+    // a TypeError rather than an ExprError, which compile() deliberately
+    // re-throws - taking the whole scene load down with it.
+    const str = (v: unknown, fallback: string): string =>
+      typeof v === "string" ? v : fallback;
+    const f = new ForceField(str(d.name, "Field"), str(d.fx, "0"), str(d.fy, "0"));
     f.enabled = d.enabled ?? true;
     return f;
   }
@@ -212,7 +219,11 @@ export class Driver {
   }
 
   static fromDict(d: DriverDict): Driver {
-    const drv = new Driver(d.body_id, d.amplitude, d.frequency, d.phase, d.angle);
+    const drv = new Driver(numOr(d.body_id, -1),
+                           numIn(d.amplitude, 5.0, -1e9, 1e9),
+                           numIn(d.frequency, 1.0, 0.0, 1e6),
+                           numIn(d.phase, 0.0, -1e6, 1e6),
+                           numIn(d.angle, 0.0, -1e6, 1e6));
     drv.enabled = d.enabled ?? true;
     return drv;
   }
@@ -238,13 +249,6 @@ export interface WorldDict {
   links: LinkDict[];
   fields: FieldDict[];
   drivers: DriverDict[];
-}
-
-/** An integer in [lo, hi], or `fallback` when the value is absent or not
- * a finite number. Used on every deserialized solver setting. */
-function clampInt(v: unknown, fallback: number, lo: number, hi: number): number {
-  const n = typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : fallback;
-  return n < lo ? lo : n > hi ? hi : n;
 }
 
 export class World {
@@ -1344,10 +1348,29 @@ export class World {
   }
 
   removeBody(body: Body): void {
-    const i = this.bodies.indexOf(body);
-    if (i >= 0) this.bodies.splice(i, 1);
-    this.links = this.links.filter((ln) => ln.a !== body && ln.b !== body);
-    this.drivers = this.drivers.filter((d) => d.bodyId !== body.id);
+    this.removeBodies(new Set([body]));
+  }
+
+  /** Remove every body in `gone`, and with them the links they anchor and
+   * the drivers that address them.
+   *
+   * One pass over each list, whatever the size of `gone`. Removing bodies
+   * one at a time is O(k*n) in the splices alone and rebuilds the whole
+   * link array per body, which the two callers that delete in bulk - the
+   * runaway cull, which can bin hundreds inside a single frame while the
+   * simulation runs, and the Inspector's bulk-delete buttons - both pay in
+   * full. `indexOf` on top of that made it the dominant cost of a debris
+   * storm rather than a rounding error on it.
+   */
+  removeBodies(gone: ReadonlySet<Body>): void {
+    if (gone.size === 0) return;
+    this.bodies = this.bodies.filter((b) => !gone.has(b));
+    this.links = this.links.filter((ln) => !gone.has(ln.a) && !gone.has(ln.b));
+    if (this.drivers.length > 0) {
+      const ids = new Set<number>();
+      for (const b of gone) ids.add(b.id);
+      this.drivers = this.drivers.filter((d) => !ids.has(d.bodyId));
+    }
   }
 
   removeWall(wall: Wall): void {
@@ -1355,9 +1378,19 @@ export class World {
     if (i >= 0) this.walls.splice(i, 1);
   }
 
+  removeWalls(gone: ReadonlySet<Wall>): void {
+    if (gone.size === 0) return;
+    this.walls = this.walls.filter((w) => !gone.has(w));
+  }
+
   removeLink(link: Link): void {
     const i = this.links.indexOf(link);
     if (i >= 0) this.links.splice(i, 1);
+  }
+
+  removeLinks(gone: ReadonlySet<Link>): void {
+    if (gone.size === 0) return;
+    this.links = this.links.filter((ln) => !gone.has(ln));
   }
 
   // ----------------------------------------------------------- serialization
@@ -1384,23 +1417,28 @@ export class World {
   static fromDict(data: Partial<WorldDict>): World {
     const w = new World();
     const s = data.settings ?? ({} as Partial<WorldDict["settings"]>);
-    w.gravity = s.gravity ?? 9.81;
+    // Every setting is guarded, not just the two loop bounds. `?? default`
+    // only catches a missing field: a NaN gravity or a `"G": "abc"` from a
+    // hand-edited file passed straight into the force loop, where one
+    // non-finite acceleration reaches every body within a step. The scene
+    // then froze on load and blamed the user's own forces for it.
+    w.gravity = numIn(s.gravity, 9.81, -1e6, 1e6);
     w.mutualGravity = s.mutual_gravity ?? false;
     w.pointGravity = s.point_gravity ?? false;
-    w.G = s.G ?? 1.0;
-    w.softening = s.softening ?? 0.01;
-    w.dragLinear = s.drag_linear ?? 0.0;
-    w.dragQuadratic = s.drag_quadratic ?? 0.0;
-    w.globalDamping = s.global_damping ?? 0.0;
+    w.G = numIn(s.G, 1.0, -1e12, 1e12);
+    w.softening = numIn(s.softening, 0.01, 0.0, 1e6);
+    w.dragLinear = numIn(s.drag_linear, 0.0, 0.0, 1e9);
+    w.dragQuadratic = numIn(s.drag_quadratic, 0.0, 0.0, 1e9);
+    w.globalDamping = numIn(s.global_damping, 0.0, 0.0, 1e9);
     const integ = s.integrator ?? "Velocity Verlet";
     w.integrator = (INTEGRATORS as readonly string[]).includes(integ)
       ? (integ as Integrator) : "Velocity Verlet";
-    w.substeps = clampInt(s.substeps, 4, 1, 64);
     // clamped to the same 1-64 the inspector offers: an out-of-range value
     // from a hand-edited or corrupted file used to go straight into the
     // solver loop bounds, where a large one hangs the tab outright
-    w.iterations = clampInt(s.iterations, 8, 1, 64);
-    w.time = Number.isFinite(s.time) ? (s.time as number) : 0.0;
+    w.substeps = intIn(s.substeps, 4, 1, 64);
+    w.iterations = intIn(s.iterations, 8, 1, 64);
+    w.time = numOr(s.time, 0.0);
     w.bodies = (data.bodies ?? []).map((d) => Body.fromDict(d));
     w.walls = (data.walls ?? []).map((d) => Wall.fromDict(d));
     const byId = new Map<number, Body>();

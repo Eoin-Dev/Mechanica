@@ -58,19 +58,33 @@ export class Camera {
 
   /** A round world length (1/2/5 * 10^k m) that spans 60-160 px. */
   niceScaleLength(): [number, string] {
-    const target = 100.0 / this.zoom;
-    let best = 1.0;
-    for (let exp = -4; exp < 6; exp++) {
-      for (const mant of [1.0, 2.0, 5.0]) {
-        const candidate = mant * 10.0 ** exp;
-        if (Math.abs(candidate - target) < Math.abs(best - target)) {
-          best = candidate;
-        }
-      }
-    }
+    const best = niceNumber(100.0 / this.zoom);
     const label = best >= 0.01 ? `${formatG(best)} m` : `${formatG(best * 1000)} mm`;
     return [best, label];
   }
+}
+
+/** The 1/2/5 * 10^k value nearest `target`.
+ *
+ * Shared by the scale bar and the background grid, which both want a round
+ * number near a pixel size and had grown their own copy of this search.
+ * The exponent range spans everything either can ask for: the camera's own
+ * zoom limits bound the target to about [0.02, 25] metres.
+ */
+export function niceNumber(target: number): number {
+  let best = 1.0;
+  let err = Infinity;
+  for (let exp = -5; exp < 7; exp++) {
+    for (const mant of [1.0, 2.0, 5.0]) {
+      const c = mant * 10 ** exp;
+      const e = Math.abs(c - target);
+      if (e < err) {
+        best = c;
+        err = e;
+      }
+    }
+  }
+  return best;
 }
 
 /** Python's %g-style compact number formatting. */

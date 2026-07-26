@@ -451,8 +451,10 @@ export function uploadScene(): Promise<{ world: World; name: string } | null> {
         resolve(null);
       }
     };
-    // cancelling the picker fires no event; resolve on focus return as a
-    // best effort so callers are not left hanging forever
+    // Cancelling the picker fires no `change`, only `cancel`. Every current
+    // browser sends it; on one that does not, the promise simply never
+    // settles and the caller's toast never fires - which is the quiet
+    // failure, not a hang: nothing is awaiting it but the toast.
     input.oncancel = () => resolve(null);
     input.click();
   });

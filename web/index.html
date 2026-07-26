@@ -14,9 +14,12 @@
       <nav id="palette"></nav>
       <div id="centre">
         <div id="canvas-wrap">
-          <canvas id="canvas"></canvas>
-          <div id="toasts"></div>
-          <div id="overload-warning" hidden>Slow: physics can't keep up — reduce substeps or bodies</div>
+          <canvas id="canvas" aria-label="Simulation view. Objects are edited in the Inspector panel."></canvas>
+          <!-- toasts are the app's only channel for transient feedback (reset,
+               save, cull and overload notices), so they have to reach a screen
+               reader too; polite, because none of them interrupts a task -->
+          <div id="toasts" role="status" aria-live="polite"></div>
+          <div id="overload-warning" role="status" hidden>Slow: physics can't keep up — reduce substeps or bodies</div>
         </div>
         <div id="dock-splitter" hidden></div>
         <div id="dock" hidden></div>

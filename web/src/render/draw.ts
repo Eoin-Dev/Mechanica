@@ -1,11 +1,11 @@
 /** Canvas rendering: grid, bodies, walls, links and analysis overlays. */
 import { Vec2 } from "../core/vec";
 import { Body, Color, Wall } from "../engine/body";
-import { DistanceLink, Link, SpringLink } from "../engine/links";
+import { Link, SpringLink } from "../engine/links";
 import { World } from "../engine/world";
 import * as theme from "../ui/theme";
 import { css, lighten, scale } from "../ui/theme";
-import { Camera } from "./camera";
+import { Camera, niceNumber } from "./camera";
 import { Trail } from "./trail";
 
 // world metres of arrow length per unit of the quantity, at vector scale 1
@@ -33,22 +33,9 @@ export class ViewSettings {
   autoFit = false; // camera continuously frames the whole scene
 }
 
-/** Grid spacing in metres: 1/2/5*10^k such that spacing is 25-70 px. */
+/** Grid spacing in metres: the nearest 1/2/5*10^k to ~45 px on screen. */
 function niceSpacing(zoom: number): number {
-  const target = 45.0 / zoom;
-  let best = 1.0;
-  let err = Infinity;
-  for (let exp = -5; exp < 7; exp++) {
-    for (const mant of [1.0, 2.0, 5.0]) {
-      const c = mant * 10 ** exp;
-      const e = Math.abs(c - target);
-      if (e < err) {
-        best = c;
-        err = e;
-      }
-    }
-  }
-  return best;
+  return niceNumber(45.0 / zoom);
 }
 
 export function snapStep(zoom: number): number {
@@ -613,36 +600,26 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   }
 }
 
-export interface HandleRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-/** Draggable arrow-tip handle used to set a body's velocity directly. */
+/** Draggable arrow-tip handle used to set a body's velocity directly.
+ *
+ * The hit test lives in the interaction layer (see pressSelect), which
+ * derives the tip from the same arrow scale rather than from a rectangle
+ * returned here - so this only draws.
+ */
 export function drawVelocityHandle(ctx: CanvasRenderingContext2D, cam: Camera,
-                                   body: Body, view: ViewSettings): HandleRect {
+                                   body: Body, view: ViewSettings): void {
   const s = VEL_ARROW_SCALE * view.vectorScale;
   const tipWorld = new Vec2(body.pos.x + body.vel.x * s, body.pos.y + body.vel.y * s);
   const start = cam.toScreen(body.pos);
   const tip = cam.toScreen(tipWorld);
   drawArrow(ctx, start, tip, theme.VEL_COLOR, 2);
-  const handle: HandleRect = { x: tip[0] - 6, y: tip[1] - 6, w: 12, h: 12 };
+  ctx.beginPath();
+  ctx.roundRect(tip[0] - 6, tip[1] - 6, 12, 12, 3);
   ctx.fillStyle = css(theme.VEL_COLOR);
-  roundRect(ctx, handle.x, handle.y, handle.w, handle.h, 3);
   ctx.fill();
   ctx.strokeStyle = css([20, 40, 20]);
   ctx.lineWidth = 1;
-  roundRect(ctx, handle.x, handle.y, handle.w, handle.h, 3);
   ctx.stroke();
-  return handle;
-}
-
-function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number,
-                   w: number, h: number, r: number): void {
-  ctx.beginPath();
-  ctx.roundRect(x, y, w, h, r);
 }
 
 export function drawScaleBar(ctx: CanvasRenderingContext2D, cam: Camera,
@@ -683,5 +660,3 @@ export function distToSegment(p: Vec2, a: Vec2, b: Vec2): number {
   const dy = p.y - (a.y + sy * t);
   return Math.sqrt(dx * dx + dy * dy);
 }
-
-export { DistanceLink };

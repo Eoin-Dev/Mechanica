@@ -256,6 +256,21 @@ describe("preset descriptions tell the truth", () => {
     expect(find("Gas in a box (50)").build().bodies.length).toBe(50);
   });
 
+  it("builds as many rope segments as the card counts", () => {
+    // The card said "Twelve elastic string segments" long after the builder
+    // moved to 24 shorter ones (same total length, finer joints), and the
+    // audit above missed it because no assertion covered this card. Every
+    // number a description quotes should be pinned to the thing it counts.
+    const rope = find("Swinging rope").build();
+    const segments = rope.links.filter(
+      (l): l is SpringLink => l instanceof SpringLink && l.tensionOnly);
+    expect(segments).toHaveLength(24);            // "Twenty-four ... segments"
+    expect(rope.links).toHaveLength(segments.length); // all of them elastic
+    // and the total length the builder's own comment claims
+    const total = segments.reduce((s, l) => s + l.restLength, 0);
+    expect(total).toBeCloseTo(2.64, 6);
+  });
+
   it("builds the lattices the soft-body cards describe", () => {
     const block = find("Jelly block").build();
     expect(block.bodies.filter((b) => b.softBody).length).toBe(63); // "9 x 7 lattice"

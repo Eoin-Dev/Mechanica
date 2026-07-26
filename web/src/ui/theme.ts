@@ -107,11 +107,6 @@ export function parseHex(hex: string): Color | null {
   return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 }
 
-export function toHex(c: Color): string {
-  const h = (v: number) => v.toString(16).padStart(2, "0");
-  return `#${h(c[0])}${h(c[1])}${h(c[2])}`;
-}
-
 /** The accent a theme ships with (for the "theme default" swatch). */
 export function defaultAccent(name: ThemeName): Color {
   return PALETTES[name].ACCENT;
@@ -203,11 +198,4 @@ export function lighten(c: Color, amount: number): Color {
 
 export function scale(c: Color, f: number): Color {
   return [Math.floor(c[0] * f), Math.floor(c[1] * f), Math.floor(c[2] * f)];
-}
-
-/** Blend from BG toward `c` by fraction f (used for fading trails). */
-export function towardBg(c: Color, f: number): Color {
-  return [Math.floor(BG[0] + (c[0] - BG[0]) * f),
-          Math.floor(BG[1] + (c[1] - BG[1]) * f),
-          Math.floor(BG[2] + (c[2] - BG[2]) * f)];
 }

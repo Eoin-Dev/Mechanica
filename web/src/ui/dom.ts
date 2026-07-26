@@ -29,33 +29,40 @@ export interface Control {
   refresh?: () => void;
 }
 
-/** Phone-sized viewport (matches the CSS mobile breakpoint). Checked live
- * so rotation and window resizing are picked up. Gates LAYOUT choices
- * (the inspector drawer, toolbar trims). */
-export function isPhone(): boolean {
-  return typeof window !== "undefined" &&
-         window.matchMedia("(max-width: 760px)").matches;
+/** A media query kept as one live MediaQueryList.
+ *
+ * The predicates below are polled every frame (the hint bar and the tool
+ * hint both ask isTouch, the camera easing asks reducedMotion), and
+ * `matchMedia()` builds a fresh MediaQueryList each call - measured at
+ * 1.5 us against 105 ns for reading `.matches` off a kept one. The object
+ * stays live, so this caches the query, never the answer: rotating a
+ * phone or toggling the system setting is still picked up immediately,
+ * with no reload. */
+function media(query: string): () => boolean {
+  let mql: MediaQueryList | null = null;
+  return () => {
+    if (typeof window === "undefined") return false; // node (tests)
+    if (mql === null) mql = window.matchMedia(query);
+    return mql.matches;
+  };
 }
+
+/** Phone-sized viewport (matches the CSS mobile breakpoint). Gates LAYOUT
+ * choices (the inspector drawer, toolbar trims). */
+export const isPhone = media("(max-width: 760px)");
 
 /** Touch-first device (phones AND tablets - no hover, no mouse buttons,
  * usually no keyboard). Gates WORDING and content: touch hints, no
  * keyboard/mouse references, no cursor readouts. */
-export function isTouch(): boolean {
-  return typeof window !== "undefined" &&
-         window.matchMedia("(pointer: coarse)").matches;
-}
+export const isTouch = media("(pointer: coarse)");
 
 /** The viewer has asked the system for reduced motion.
  *
  * Gates DECORATIVE movement only - the easing on the auto-fit camera, the
  * graph's autoscale, UI fades. The simulation itself keeps moving: it is
  * the content, not an animation, and freezing it would leave nothing to
- * look at. Checked live rather than cached so toggling the system setting
- * takes effect without a reload. */
-export function reducedMotion(): boolean {
-  return typeof window !== "undefined" &&
-         window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
+ * look at. */
+export const reducedMotion = media("(prefers-reduced-motion: reduce)");
 
 /** Collects controls so a panel can refresh them all each frame. */
 export class RefreshGroup {
@@ -290,7 +297,9 @@ export function slider(label: string, get: () => number,
       set(v);
       opts.onCommit?.();
     }
-    val.classList.remove("error");
+    // unparseable input needs no error state: refresh() below rewrites the
+    // field with the value that is actually in effect, which is the clearer
+    // answer to "that is not a number"
     refresh(); // reformat readout and re-sync the slider knob
   });
   val.addEventListener("keydown", (e) => {
