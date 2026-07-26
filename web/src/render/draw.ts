@@ -199,10 +199,16 @@ const STRING_TAUT: Color = [170, 150, 115];
 const STRING_SLACK: Color = [140, 125, 100];
 const STRING_HOVER: Color = [215, 190, 150];
 
-// Total gradient strokes to spend across all trails per frame. A single
-// trail fades over up to MAX_BANDS colour bands; when many trails are on
-// screen the band count is shared out so the frame cost stays bounded.
-const TRAIL_STROKE_BUDGET = 900;
+// Total gradient strokes to spend across all trails per frame.
+//
+// A stroke() costs about 8 us however little geometry is in it, so what
+// bounds the trail cost is the NUMBER of strokes, not the number of
+// points. Every trail of the same colour shares its band styles, so all
+// of them are stroked together (see drawTrails): the count is
+// colours x bands rather than trails x bands, and 141 trails in two
+// colours cost 48 strokes instead of 846. The budget is small because it
+// is now a real stroke count rather than an optimistic one.
+const TRAIL_STROKE_BUDGET = 120;
 const MAX_BANDS = 24;
 // Vertex budget shared across all trails on screen, with a generous
 // per-trail ceiling: a lone trail can spend a lot (long orbit paths stay
@@ -221,6 +227,7 @@ const MAX_TRAIL_VERTS = 4000;
  * went. Only near-reversals qualify; a well-sampled curve never turns this
  * hard between adjacent samples. cos(80 degrees). */
 const CORNER_COS = 0.1736;
+const CORNER_COS2 = CORNER_COS * CORNER_COS;
 
 // Screen-space scratch for the decimated points of one trail. Reused
 // across trails and frames: this runs for every visible trail every frame,
@@ -260,59 +267,69 @@ function fadedRgb(base: Color, f: number): string {
  *    drawn as a corner instead of being rounded off, so a bounce stays a
  *    bounce.
  */
-function strokeTrail(ctx: CanvasRenderingContext2D, m: number,
-                     base: Color, bands: number): void {
+function appendTrail(paths: Path2D[], m: number, bands: number): void {
   if (m < 2) return;
   if (m === 2) {
-    ctx.strokeStyle = fadedRgb(base, 0.5);
-    ctx.beginPath();
-    ctx.moveTo(SX[0], SY[0]);
-    ctx.lineTo(SX[1], SY[1]);
-    ctx.stroke();
+    // a two-point trail is one edge: put it in the middle band so its
+    // shade matches where the fade would have placed it
+    const p = paths[bands >> 1];
+    p.moveTo(SX[0], SY[0]);
+    p.lineTo(SX[1], SY[1]);
     return;
   }
   const edges = m - 1;
   let band = 0;
   let boundary = Math.ceil(edges / bands);
-  ctx.strokeStyle = fadedRgb(base, 0);
-  ctx.beginPath();
-  ctx.moveTo(SX[0], SY[0]);
+  let path = paths[0];
+  path.moveTo(SX[0], SY[0]);
   let curX = SX[0];
   let curY = SY[0];
   for (let i = 1; i <= m - 2; i++) {
-    // turn at this vertex, from the unit incoming and outgoing directions
+    // Turn at this vertex, from the incoming and outgoing directions.
+    // Tested on squared lengths: cos(theta) < CORNER_COS is equivalent to
+    // dot^2 < CORNER_COS^2 |a|^2 |b|^2 once both sides are non-negative,
+    // and a negative dot is past 90 degrees so it is sharp outright. That
+    // is the same predicate without two square roots per vertex, and there
+    // are tens of thousands of vertices in a frame of a trail-heavy scene.
     const ax = SX[i] - SX[i - 1];
     const ay = SY[i] - SY[i - 1];
     const bx = SX[i + 1] - SX[i];
     const by = SY[i + 1] - SY[i];
-    const la = Math.sqrt(ax * ax + ay * ay);
-    const lb = Math.sqrt(bx * bx + by * by);
-    const sharp = la > 1e-9 && lb > 1e-9 &&
-                  (ax * bx + ay * by) / (la * lb) < CORNER_COS;
+    const la2 = ax * ax + ay * ay;
+    const lb2 = bx * bx + by * by;
+    const dot = ax * bx + ay * by;
+    const sharp = la2 > 1e-18 && lb2 > 1e-18 &&
+                  (dot < 0.0 || dot * dot < CORNER_COS2 * la2 * lb2);
     if (sharp) {
-      ctx.lineTo(SX[i], SY[i]); // into the corner, and back out next pass
+      path.lineTo(SX[i], SY[i]); // into the corner, and back out next pass
       curX = SX[i];
       curY = SY[i];
     } else {
       const mx = (SX[i] + SX[i + 1]) * 0.5;
       const my = (SY[i] + SY[i + 1]) * 0.5;
-      ctx.quadraticCurveTo(SX[i], SY[i], mx, my);
+      path.quadraticCurveTo(SX[i], SY[i], mx, my);
       curX = mx;
       curY = my;
     }
     if (i >= boundary && band < bands - 1) {
       // split on the curve: the next band resumes from exactly here
-      ctx.stroke();
       band++;
       boundary = Math.ceil(((band + 1) * edges) / bands);
-      ctx.strokeStyle = fadedRgb(base, i / edges);
-      ctx.beginPath();
-      ctx.moveTo(curX, curY);
+      path = paths[band];
+      path.moveTo(curX, curY);
     }
   }
-  ctx.lineTo(SX[m - 1], SY[m - 1]);
-  ctx.stroke();
+  path.lineTo(SX[m - 1], SY[m - 1]);
 }
+
+/** Visible trails sharing one base colour, and the band paths they build.
+ * Reused between frames: the arrays are cleared, never reallocated. */
+interface ColourGroup {
+  base: Color;
+  trails: Trail[];
+  paths: Path2D[];
+}
+const TRAIL_GROUPS = new Map<number, ColourGroup>();
 
 function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
                     trails: Map<number, Trail>, quality: number,
@@ -323,57 +340,80 @@ function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
   // so looking a colour up per trail was quadratic in the body count
   const byId = new Map<number, Body>();
   for (const b of world.bodies) byId.set(b.id, b);
-  // count the trails that will actually draw, so the vertex budget is
-  // shared between visible trails rather than every recorded one
+
+  // Bin the visible trails by colour. Every trail in a bin shares the same
+  // band styles, so the whole bin can be stroked band by band - which is
+  // what turns the cost from (trails x bands) strokes into
+  // (colours x bands). A stroke costs the same whether it carries one
+  // trail's geometry or a hundred's.
+  for (const g of TRAIL_GROUPS.values()) g.trails.length = 0;
   let visible = 0;
-  for (const trail of trails.values()) {
-    if (trail.count >= 2 && trail.maxX >= minX && trail.minX <= maxX &&
-        trail.maxY >= minY && trail.minY <= maxY) visible++;
-  }
-  if (visible === 0) return;
-  const bands = Math.max(1, Math.min(MAX_BANDS,
-    Math.floor(TRAIL_STROKE_BUDGET / visible)));
-  // spare frame time buys detail: see App.trailQuality for why measuring
-  // frame time is legitimate here when it is not for the physics step
-  const vertsPerTrail = Math.max(64, Math.min(
-    Math.floor(MAX_TRAIL_VERTS * quality),
-    Math.floor((TRAIL_VERT_BUDGET * quality) / visible)));
   for (const [bid, trail] of trails) {
-    const n = trail.count;
-    if (n < 2) continue;
+    if (trail.count < 2) continue;
     // cull trails whose bounding box lies entirely outside the viewport
     if (trail.maxX < minX || trail.minX > maxX ||
         trail.maxY < minY || trail.minY > maxY) continue;
     const body = byId.get(bid);
     const base: Color = body ? body.color : [120, 130, 140];
-    // Decimate on the point's SERIAL, not its index in the ring. Serials
-    // are fixed for the life of a point, so the same physical points stay
-    // selected as the trail scrolls; keying on the index re-picks a
-    // different subset every frame, which makes the drawn path shimmer
-    // and warp in place (very visible on long, fast, chaotic orbits).
-    //
-    // The stride is rounded UP to a power of two so the retained set is
-    // nested: when the trail grows past a threshold, or the adaptive
-    // budget moves, the stride doubles or halves and the kept points are a
-    // subset or superset of what they were. An arbitrary stride reshuffles
-    // the whole selection instead, which reads as the line twitching.
-    const want = Math.max(1, n / vertsPerTrail);
-    let stride = 1;
-    while (stride < want) stride *= 2;
-    const phase = trail.firstSerial % stride;
-    const last = n - 1;
-
-    // gather the retained points in screen space; the ends are always kept
-    // so the trail spans its true extent whatever the stride
-    let m = 0;
-    for (let k = 0; k <= last; k++) {
-      if (k !== 0 && k !== last && (k + phase) % stride !== 0) continue;
-      const [sx, sy] = cam.toScreenXY(trail.x(k), trail.y(k));
-      SX[m] = sx;
-      SY[m] = sy;
-      m++;
+    const key = (base[0] << 16) | (base[1] << 8) | base[2];
+    let group = TRAIL_GROUPS.get(key);
+    if (group === undefined) {
+      group = { base, trails: [], paths: [] };
+      TRAIL_GROUPS.set(key, group);
     }
-    strokeTrail(ctx, m, base, bands);
+    group.base = base;
+    group.trails.push(trail);
+    visible++;
+  }
+  if (visible === 0) return;
+  let groups = 0;
+  for (const g of TRAIL_GROUPS.values()) if (g.trails.length > 0) groups++;
+
+  const bands = Math.max(1, Math.min(MAX_BANDS,
+    Math.floor(TRAIL_STROKE_BUDGET / groups)));
+  // spare frame time buys detail: see App.trailQuality for why measuring
+  // frame time is legitimate here when it is not for the physics step
+  const vertsPerTrail = Math.max(64, Math.min(
+    Math.floor(MAX_TRAIL_VERTS * quality),
+    Math.floor((TRAIL_VERT_BUDGET * quality) / visible)));
+  const cx = cam.centre.x;
+  const cy = cam.centre.y;
+  const zoom = cam.zoom;
+  const ox = cam.screenW * 0.5;
+  const oy = cam.screenH * 0.5;
+
+  for (const group of TRAIL_GROUPS.values()) {
+    if (group.trails.length === 0) continue;
+    const paths = group.paths;
+    paths.length = 0;
+    for (let b = 0; b < bands; b++) paths.push(new Path2D());
+    for (const trail of group.trails) {
+      // Decimate on the point's SERIAL, not its index in the ring. Serials
+      // are fixed for the life of a point, so the same physical points
+      // stay selected as the trail scrolls; keying on the index re-picks a
+      // different subset every frame, which makes the drawn path shimmer
+      // and warp in place (very visible on long, fast, chaotic orbits).
+      //
+      // The stride is rounded UP to a power of two so the retained set is
+      // nested: when the trail grows past a threshold, or the adaptive
+      // budget moves, the stride doubles or halves and the kept points are
+      // a subset or superset of what they were. An arbitrary stride
+      // reshuffles the whole selection instead, which reads as the line
+      // twitching.
+      const want = Math.max(1, trail.count / vertsPerTrail);
+      let stride = 1;
+      while (stride < want) stride *= 2;
+      appendTrail(paths,
+                  trail.sampleScreen(stride, SX, SY, cx, cy, zoom, ox, oy),
+                  bands);
+    }
+    const base = group.base;
+    const last = bands > 1 ? bands - 1 : 1;
+    for (let b = 0; b < bands; b++) {
+      ctx.strokeStyle = fadedRgb(base, b / last);
+      ctx.stroke(paths[b]);
+    }
+    paths.length = 0; // release the frame's paths, keep the group
   }
   ctx.lineJoin = "miter";
 }

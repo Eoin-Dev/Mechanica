@@ -247,19 +247,6 @@ function clampInt(v: unknown, fallback: number, lo: number, hi: number): number 
   return n < lo ? lo : n > hi ? hi : n;
 }
 
-interface RodRow {
-  ln: DistanceLink;
-  a: Body;
-  b: Body;
-  wa: number;
-  wb: number;
-  wSum: number;
-  nx: number;
-  ny: number;
-  d: number;
-  mu: number;
-}
-
 export class World {
   bodies: Body[] = [];
   walls: Wall[] = [];
@@ -313,10 +300,15 @@ export class World {
   private contactCache: ContactCache = new Map(); // warm-start impulses between substeps
   private rods: DistanceLink[] = [];  // per-step caches, see prepareStep()
   private movers: Body[] = [];
-  // enabled drivers already paired with their (movable) body. Resolved once
-  // per step instead of rebuilding an id->body map inside every force
-  // evaluation - RK4 calls that four times per slice.
-  private driven: Array<[Driver, Body]> = [];
+  private moverInvMass = new Float64Array(0);
+  // Enabled drivers, resolved against their (movable) body and flattened
+  // once per step: the id->body lookup, the inverse mass and the direction's
+  // sine and cosine are all fixed for the step, and a force evaluation
+  // happens up to four times per slice.
+  private driven: Array<{
+    body: Body; amplitude: number; frequency: number; phase: number;
+    ax: number; ay: number; // unit direction already divided by mass
+  }> = [];
   private contactStatic: ContactStatic = {};
   // slices the current step may still spend (see SLICE_WORK_BUDGET)
   private sliceBudget = 0;
@@ -383,7 +375,19 @@ export class World {
       s.kEff = k;
       s.cEff = c;
     }
-    this.movers = this.bodies.filter((b) => b.invMass !== 0.0);
+    // `invMass` is a getter with three branches and a division, and the
+    // force loops want it once per body per EVALUATION - four times a
+    // slice under RK4. It cannot change within a step (mass, locked and
+    // held are all edited between frames), so it is read once here and
+    // the loops index this array alongside `movers`.
+    const movers = this.bodies.filter((b) => b.invMass !== 0.0);
+    this.movers = movers;
+    if (this.moverInvMass.length < movers.length) {
+      this.moverInvMass = new Float64Array(Math.max(16, movers.length * 2));
+    }
+    for (let i = 0; i < movers.length; i++) {
+      this.moverInvMass[i] = movers[i].invMass;
+    }
     // The trace anchors are keyed by body id and ids are never reused, so
     // without pruning the map keeps an entry for every body that has ever
     // been culled, erased or duplicated - a slow leak in a debris-heavy
@@ -396,14 +400,23 @@ export class World {
         if (!live.has(id)) this.traceLast.delete(id);
       }
     }
-    this.driven = [];
+    this.driven.length = 0;
     if (this.drivers.length > 0) {
       const byId = new Map<number, Body>();
       for (const b of this.bodies) byId.set(b.id, b);
       for (const drv of this.drivers) {
         if (!drv.enabled) continue;
         const b = byId.get(drv.bodyId);
-        if (b !== undefined && b.invMass !== 0.0) this.driven.push([drv, b]);
+        if (b === undefined) continue;
+        const invM = b.invMass;
+        if (invM === 0.0) continue;
+        // the direction is fixed for the step, so its sine and cosine are
+        // taken once here rather than on every force evaluation
+        this.driven.push({
+          body: b, amplitude: drv.amplitude, frequency: drv.frequency,
+          phase: drv.phase,
+          ax: Math.cos(drv.angle) * invM, ay: Math.sin(drv.angle) * invM,
+        });
       }
     }
     this.contactStatic = { noCollide };
@@ -414,23 +427,31 @@ export class World {
     const g = this.gravity;
     const c1 = this.dragLinear;
     const c2 = this.dragQuadratic;
+    const movers = this.movers;
+    const invMass = this.moverInvMass;
+    // Immovable bodies contribute nothing and are simply cleared; the
+    // movers below assign outright, so zeroing them here is redundant but
+    // costs two stores against a getter call it avoids.
     for (const b of this.bodies) {
-      if (b.invMass === 0.0) {
-        b.acc.set(0.0, 0.0);
-        continue;
-      }
-      const invM = b.invMass;
+      b.acc.x = 0.0;
+      b.acc.y = 0.0;
+    }
+    const drag = c1 !== 0.0 || c2 !== 0.0;
+    for (let i = 0; i < movers.length; i++) {
+      const b = movers[i];
+      const invM = invMass[i];
       let ax = b.constForce.x * invM;
       let ay = b.constForce.y * invM - g;
-      if (c1 !== 0.0 || c2 !== 0.0) {
+      if (drag) {
         const vx = b.vel.x;
         const vy = b.vel.y;
         const speed = Math.sqrt(vx * vx + vy * vy);
-        const drag = (c1 + c2 * speed) * invM;
-        ax -= drag * vx;
-        ay -= drag * vy;
+        const d = (c1 + c2 * speed) * invM;
+        ax -= d * vx;
+        ay -= d * vy;
       }
-      b.acc.set(ax, ay);
+      b.acc.x = ax;
+      b.acc.y = ay;
     }
 
     if (this.mutualGravity && this.G !== 0.0) this.accumulateGravity();
@@ -588,27 +609,57 @@ export class World {
   private applyDriversAndFields(t: number): void {
     if (this.driven.length > 0) {
       const TAU = 2 * Math.PI;
-      for (const [drv, b] of this.driven) {
-        const f = drv.amplitude * Math.sin(TAU * drv.frequency * t + drv.phase);
-        b.acc.x += f * Math.cos(drv.angle) * b.invMass;
-        b.acc.y += f * Math.sin(drv.angle) * b.invMass;
+      for (const d of this.driven) {
+        // amplitude/direction/inverse mass are all resolved in prepareStep:
+        // only the phase actually varies with t, and the two trig calls for
+        // the direction used to be redone on every force evaluation
+        const f = d.amplitude * Math.sin(TAU * d.frequency * t + d.phase);
+        const b = d.body;
+        b.acc.x += f * d.ax;
+        b.acc.y += f * d.ay;
       }
     }
 
+    if (this.fields.length > 0) this.applyFields(t);
+    this.solveRodForces();
+  }
+
+  // One environment record, refilled per body rather than rebuilt. It is
+  // handed to the compiled expression tree, which only ever reads it.
+  private fieldEnv = { x: 0, y: 0, vx: 0, vy: 0, t: 0, m: 0, r: 0 };
+
+  /** User force fields: F(x, y, vx, vy, t, m, r) newtons on every body.
+   *
+   * The most expensive per-body work in the engine when a scene has one
+   * (three quarters of the Cyclone preset's step), so the loop around the
+   * compiled expressions is kept as bare as it can be: movers only, the
+   * inverse mass read from the per-step table rather than through the
+   * getter three times, and a single environment record refilled in place
+   * instead of an object literal allocated per body per field per
+   * evaluation. */
+  private applyFields(t: number): void {
+    const movers = this.movers;
+    const invMass = this.moverInvMass;
+    const env = this.fieldEnv;
+    env.t = t;
     for (const field of this.fields) {
       if (!field.enabled || field.fx === null || field.fy === null) continue;
       const fx = field.fx;
       const fy = field.fy;
-      for (const b of this.bodies) {
-        if (b.invMass === 0.0) continue;
-        const env = {
-          x: b.pos.x, y: b.pos.y, vx: b.vel.x, vy: b.vel.y,
-          t, m: b.mass,
-          r: Math.sqrt(b.pos.x * b.pos.x + b.pos.y * b.pos.y),
-        };
+      for (let i = 0; i < movers.length; i++) {
+        const b = movers[i];
+        const px = b.pos.x;
+        const py = b.pos.y;
+        env.x = px;
+        env.y = py;
+        env.vx = b.vel.x;
+        env.vy = b.vel.y;
+        env.m = b.mass;
+        env.r = Math.sqrt(px * px + py * py);
+        const invM = invMass[i];
         try {
-          const ax = fx(env) * b.invMass;
-          const ay = fy(env) * b.invMass;
+          const ax = fx(env) * invM;
+          const ay = fy(env) * invM;
           // singular samples (e.g. 1/r at the origin) are skipped, matching
           // the desktop engine's per-body and vectorized treatments
           if (Number.isFinite(ax) && Number.isFinite(ay)) {
@@ -620,8 +671,6 @@ export class World {
         }
       }
     }
-
-    this.solveRodForces();
   }
 
   /** Add the analytic rod/rope constraint forces to the accelerations.
@@ -631,9 +680,30 @@ export class World {
    * tension as the initial guess) makes a few passes sufficient even for
    * long chains; the XPBD position pass mops up the O(h^2) residual.
    */
+  // Rod solve rows, in parallel flat arrays reused between calls. A force
+  // evaluation happens up to four times per slice and this used to build a
+  // fresh array of row objects on each one, which in a chain scene is tens
+  // of thousands of short-lived objects a second for a solve whose actual
+  // arithmetic is a handful of multiplies per rod.
+  private rodLink: DistanceLink[] = [];
+  private rodA: Body[] = [];
+  private rodB: Body[] = [];
+  private rodNum = new Float64Array(0); // wa, wb, wSum, nx, ny, d, mu
+  private static ROD_W = 7;
+
   private solveRodForces(): void {
-    const rows: RodRow[] = [];
-    for (const ln of this.rods) {
+    const links = this.rods;
+    if (links.length === 0) return;
+    const W = World.ROD_W;
+    if (this.rodNum.length < links.length * W) {
+      this.rodNum = new Float64Array(Math.max(16, links.length * 2) * W);
+    }
+    const num = this.rodNum;
+    const rodLink = this.rodLink;
+    const rodA = this.rodA;
+    const rodB = this.rodB;
+    let n = 0;
+    for (const ln of links) {
       const a = ln.a;
       const b = ln.b;
       const wa = a.invMass;
@@ -659,22 +729,40 @@ export class World {
         b.acc.x -= mu * wb * nx;
         b.acc.y -= mu * wb * ny;
       }
-      rows.push({ ln, a, b, wa, wb, wSum, nx, ny, d, mu });
+      rodLink[n] = ln;
+      rodA[n] = a;
+      rodB[n] = b;
+      const o = n * W;
+      num[o] = wa;
+      num[o + 1] = wb;
+      num[o + 2] = wSum;
+      num[o + 3] = nx;
+      num[o + 4] = ny;
+      num[o + 5] = d;
+      num[o + 6] = mu;
+      n++;
     }
-    if (rows.length === 0) return;
+    if (n === 0) return;
     for (let pass = 0; pass < ROD_FORCE_PASSES; pass++) {
       let worst = 0.0;
-      for (const row of rows) {
-        const { ln, a, b, wa, wb, wSum, nx, ny, d } = row;
+      for (let i = 0; i < n; i++) {
+        const o = i * W;
+        const a = rodA[i];
+        const b = rodB[i];
+        const wa = num[o];
+        const wb = num[o + 1];
+        const nx = num[o + 3];
+        const ny = num[o + 4];
         const rvx = b.vel.x - a.vel.x;
         const rvy = b.vel.y - a.vel.y;
         const vn = rvx * nx + rvy * ny;
         const vt2 = rvx * rvx + rvy * rvy - vn * vn;
         const an = (b.acc.x - a.acc.x) * nx + (b.acc.y - a.acc.y) * ny;
-        let newMu = row.mu + (an + vt2 / d) / wSum;
-        if (ln.isRope && newMu < 0.0) newMu = 0.0;
-        const dmu = newMu - row.mu;
-        row.mu = newMu;
+        const mu = num[o + 6];
+        let newMu = mu + (an + vt2 / num[o + 5]) / num[o + 2];
+        if (rodLink[i].isRope && newMu < 0.0) newMu = 0.0;
+        const dmu = newMu - mu;
+        num[o + 6] = newMu;
         if (dmu !== 0.0) {
           a.acc.x += dmu * wa * nx;
           a.acc.y += dmu * wa * ny;
@@ -686,7 +774,10 @@ export class World {
       }
       if (worst < 1e-9) break;
     }
-    for (const row of rows) row.ln.mu = row.mu;
+    for (let i = 0; i < n; i++) rodLink[i].mu = num[i * W + 6];
+    // deliberately NOT truncated: emptying and regrowing these every call
+    // makes V8 reallocate the backing store each time, which cost more
+    // than the row objects they replaced. `n` alone bounds what is live.
   }
 
   // -------------------------------------------------------------- integrators

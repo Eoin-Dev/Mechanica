@@ -37,23 +37,6 @@ const MAX_STEPS_PER_FRAME = 64;
 // real time, with the existing "can't keep up" warning)
 const PHYSICS_BUDGET_S = 0.045;
 const SETTINGS_KEY = "mechanica.settings";
-// Total size of the rewind history, in JSON characters (~2 bytes each in a
-// JS string). 24M chars is roughly 48 MB - generous for a rewind buffer,
-// and small enough that a heavy scene can't quietly consume the heap.
-const HISTORY_BUDGET_CHARS = 24_000_000;
-// Snapshot characters a single displayed frame may spend on rewind.
-//
-// Each captured frame is a full JSON serialization of the world, and on a
-// dense scene that costs about as much as the physics step it is recording
-// (measured: 0.53 ms and 69 kB of garbage per frame for the 200-particle
-// gas, against 0.56 ms of physics) - a lot to spend on a convenience
-// feature, and megabytes a second of pressure on the collector. Above this
-// size the buffer captures every Nth frame instead, so small scenes keep
-// exact frame-by-frame rewind and large ones trade granularity for frame
-// time. Derived from the scene's own size rather than from measured
-// timings, so it never varies with how busy the machine is.
-const HISTORY_TARGET_CHARS = 12_000;
-const HISTORY_MAX_STRIDE = 16;
 
 export type GraphMode = "Off" | "Energy" | "Mom." | "Phase";
 
@@ -130,7 +113,7 @@ export class App {
 
   settings: Settings = {};
   private autofitRatio = 1.0; // user zoom-out factor while auto-fitting
-  private history: string[] = []; // per-frame rewind states (rolling)
+  private history = new snap.RewindBuffer(); // per-frame rewind (rolling)
   private overloadSince: number | null = null;
   private overloadHintAt = 0.0;
   private divergeCooldown = 0.0;
@@ -295,27 +278,21 @@ export class App {
         this.recordTrails();
       }
     }
-    // stepping frame by frame must be exactly reversible, so this frame is
-    // always captured whatever stride a heavy scene is using
-    this.afterPhysics(true);
+    this.afterPhysics();
   }
 
   /** Rewind the simulation by one displayed frame (,). */
   stepBack(): void {
     this.playing = false;
-    let state: string | null = null;
-    if (this.history.length >= 2) {
-      this.historyBytes -= this.history.pop()!.length; // the frame we are on
-      state = this.history[this.history.length - 1];   // the one before it
-    } else if (this.initialSnapshot !== null) {
+    let world = this.history.back();
+    if (world === null) {
+      if (this.initialSnapshot === null) return;
       this.clearHistory();
-      state = this.initialSnapshot;
+      world = snap.restore(this.initialSnapshot);
     }
-    if (state === null) return;
     this.frameSeq++; // the world is about to be swapped: drop cached energy
     const selIds = new Set(this.selection
       .filter((o): o is Body => o instanceof Body).map((o) => o.id));
-    const world = snap.restore(state);
     this.world = world;
     this.controller.hover = null;
     this.controller.abortDrag();
@@ -941,55 +918,18 @@ export class App {
 
   private trailLive = new Set<number>();
 
-  private afterPhysics(exact = false): void {
+  private afterPhysics(): void {
     // the world just moved, so anything cached against the old state is
     // stale - including a single-step (`.`) outside the animation frame
     this.frameSeq++;
     this.sweepTrails();
     // rolling per-frame history so the user can step backwards (,)
-    this.pushHistory(exact);
+    this.history.push(this.world);
     this.recordGraphSample();
   }
 
-  /** Push a rewind state, bounding the history by BYTES rather than by
-   * frame count, and its per-frame COST by capture stride.
-   *
-   * Every entry is a full JSON snapshot of the world, so 600 of them costs
-   * whatever the scene costs times 600: a few hundred kB for a pendulum,
-   * but hundreds of megabytes for a thousand-particle lattice, which is
-   * enough to stall the tab on garbage collection alone. Big scenes keep
-   * fewer frames of rewind instead of eating the heap.
-   *
-   * Making one is also not free: on the densest scenes in the library it
-   * doubled the cost of a frame's physics all by itself. So above
-   * HISTORY_TARGET_CHARS the buffer captures every Nth frame, which costs
-   * those scenes rewind granularity (a step back moves a few frames rather
-   * than one) and buys back the frame time. `force` overrides it for the
-   * single-frame step, where the whole point is to land on an exact frame.
-   */
-  private pushHistory(force = false): void {
-    if (!force && this.historySkip > 0) {
-      this.historySkip--;
-      return;
-    }
-    const state = snap.snapshot(this.world);
-    this.historySkip = Math.max(0, Math.min(HISTORY_MAX_STRIDE,
-      Math.round(state.length / HISTORY_TARGET_CHARS)) - 1);
-    this.history.push(state);
-    this.historyBytes += state.length;
-    while (this.history.length > 600 ||
-           (this.history.length > 2 && this.historyBytes > HISTORY_BUDGET_CHARS)) {
-      this.historyBytes -= this.history.shift()!.length;
-    }
-  }
-
-  private historyBytes = 0;
-  private historySkip = 0;
-
   private clearHistory(): void {
-    this.history.length = 0;
-    this.historyBytes = 0;
-    this.historySkip = 0;
+    this.history.clear();
   }
 
   private lastGraphSampleT = -Infinity;

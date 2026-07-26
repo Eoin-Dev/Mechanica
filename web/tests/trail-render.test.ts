@@ -12,6 +12,23 @@ import { Trail } from "../src/render/trail";
 interface Op { op: string; style?: string; x?: number; y?: number;
                cx?: number; cy?: number; }
 
+/** Stand-in for the DOM Path2D, which Node does not provide.
+ *
+ * Trails are built into one Path2D per colour band and stroked once each,
+ * so that all the trails sharing a colour cost one stroke per band instead
+ * of one per band per trail. This records the geometry so the recording
+ * context below can replay it into the op stream at stroke time, in the
+ * same order the calls were originally made against the context. */
+class FakePath2D {
+  ops: Op[] = [];
+  moveTo(x: number, y: number): void { this.ops.push({ op: "moveTo", x, y }); }
+  lineTo(x: number, y: number): void { this.ops.push({ op: "lineTo", x, y }); }
+  quadraticCurveTo(cx: number, cy: number, x: number, y: number): void {
+    this.ops.push({ op: "quadraticCurveTo", x, y, cx, cy });
+  }
+}
+(globalThis as unknown as { Path2D: unknown }).Path2D = FakePath2D;
+
 /** A 2D-context that records the drawing calls we care about and no-ops the
  * rest, so drawWorld runs unmodified. */
 function recCtx(): { ctx: CanvasRenderingContext2D; ops: Op[] } {
@@ -19,7 +36,10 @@ function recCtx(): { ctx: CanvasRenderingContext2D; ops: Op[] } {
   let strokeStyle = "";
   const base: Record<string, unknown> = {
     beginPath() {},
-    stroke() { ops.push({ op: "stroke", style: strokeStyle }); },
+    stroke(path?: FakePath2D) {
+      if (path !== undefined) ops.push(...path.ops);
+      ops.push({ op: "stroke", style: strokeStyle });
+    },
     moveTo(x: number, y: number) { ops.push({ op: "moveTo", x, y }); },
     lineTo(x: number, y: number) { ops.push({ op: "lineTo", x, y }); },
     // Trails are drawn as quadratic curves through midpoints: the endpoint
@@ -98,8 +118,13 @@ describe("trail rendering", () => {
     expect(verts.length).toBeGreaterThan(0); // the visible one still drew
   });
 
-  it("shares the stroke budget: many trails use fewer bands each", () => {
-    const oneCount = (numTrails: number): number => {
+  it("bounds the total stroke count however many trails there are", () => {
+    // A stroke costs roughly the same whatever geometry it carries, so the
+    // frame cost is set by the NUMBER of strokes. Trails sharing a colour
+    // are stroked together, one stroke per band for the whole set, so the
+    // count tracks the number of distinct colours - not the number of
+    // trails. 300 trails must not cost 300 times what one does.
+    const drawN = (numTrails: number): { strokes: number; verts: number } => {
       const trails = new Map<number, Trail>();
       const world = new World();
       for (let n = 0; n < numTrails; n++) {
@@ -111,12 +136,19 @@ describe("trail rendering", () => {
       }
       const { ctx, ops } = recCtx();
       drawWorld(ctx, new Camera(800, 600), world, view(), [], null, trails, 800, 600);
-      return trailStrokes(ops).length / numTrails; // bands per trail
+      return {
+        strokes: trailStrokes(ops).length,
+        verts: ops.filter((o) => o.op === "quadraticCurveTo").length,
+      };
     };
-    const few = oneCount(1);
-    const many = oneCount(300);
-    expect(few).toBeGreaterThan(many);  // adaptive: fewer bands under load
-    expect(many).toBeGreaterThanOrEqual(1); // but never zero
+    const one = drawN(1);
+    const many = drawN(300);
+    expect(one.strokes).toBeGreaterThan(1);         // it really is banded
+    // 300x the trails for well under 30x the strokes (the palette gives
+    // them ten distinct colours, so ten groups rather than three hundred)
+    expect(many.strokes).toBeLessThan(one.strokes * 30);
+    // and every one of them still drew
+    expect(many.verts).toBeGreaterThan(one.verts * 50);
   });
 
   it("decimates very long trails to a bounded vertex count", () => {

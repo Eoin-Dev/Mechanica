@@ -570,19 +570,128 @@ function placed(b: Body): boolean {
   return Number.isFinite(b.pos.x) && Number.isFinite(b.pos.y);
 }
 
-// forward half-neighbourhood: every unordered cell pair visited once
-const CELL_OFFSETS: ReadonlyArray<readonly [number, number]> =
-  [[1, 0], [1, 1], [0, 1], [-1, 1]];
+// forward half-neighbourhood: every unordered cell pair visited once.
+// Flat pairs rather than nested arrays so the scan below indexes numbers
+// instead of destructuring a tuple per cell per offset.
+const OFF_X = [1, 1, 0, -1];
+const OFF_Y = [0, 1, 1, 1];
 
-/** One occupied hash cell. Holding the coordinates next to the bodies
- * costs one small object per cell and saves a whole parallel Map (plus a
- * tuple per cell) that existed only so the neighbour scan could recover
- * them from the key. */
-interface Cell {
-  gx: number;
-  gy: number;
-  bodies: Body[];
+/** Uniform spatial hash over the small bodies, in flat integer arrays.
+ *
+ * Replaces a `Map` keyed by `"gx,gy"` strings. That map was the single
+ * most expensive thing in the densest scenes: the 200-particle gas built
+ * 200 key strings and then did ~750 string-hashed lookups (four
+ * neighbours per occupied cell) at roughly 120 ns each, which came to
+ * 0.12 ms per substep to discover 182 candidate pairs and two actual
+ * contacts. Integer hashing with open addressing does the same work
+ * without allocating anything at all, and every buffer here is reused
+ * between calls.
+ *
+ * Cell coordinates are kept as float64 rather than int32 so the identity
+ * check is exact even for the enormous indices a tiny body's cell size can
+ * produce (a 0.1 mm body at the edge of the world is cell 5e9, well past
+ * int32). The hash itself may wrap - it only has to spread, not identify.
+ *
+ * Bodies are grouped by a counting sort, which keeps each cell's members
+ * and the cells themselves in first-seen order, exactly as the map's
+ * insertion order did: the narrowphase visits identical pairs in an
+ * identical sequence, so the solver sees no change at all.
+ */
+class SpatialHash {
+  cells = 0;
+  cellGx = new Float64Array(0);
+  cellGy = new Float64Array(0);
+  cellStart = new Int32Array(0); // first slot of the cell's run in `items`
+  cellEnd = new Int32Array(0);   // one past its last slot
+  items = new Int32Array(0);     // body indices, grouped by cell
+  private table = new Int32Array(0); // hash slot -> cell index, -1 empty
+  private mask = 0;
+  private bodyCell = new Int32Array(0);
+
+  private ensure(n: number): void {
+    if (this.bodyCell.length >= n && this.mask + 1 >= 2 * n) return;
+    const cap = Math.max(32, 1 << (32 - Math.clz32(Math.max(1, n) - 1)));
+    this.bodyCell = new Int32Array(cap);
+    this.items = new Int32Array(cap);
+    this.cellGx = new Float64Array(cap);
+    this.cellGy = new Float64Array(cap);
+    this.cellStart = new Int32Array(cap);
+    this.cellEnd = new Int32Array(cap);
+    const slots = cap * 4; // load factor 0.25: probes stay very short
+    this.table = new Int32Array(slots);
+    this.mask = slots - 1;
+  }
+
+  /** Cell index holding (gx, gy), or -1. */
+  find(gx: number, gy: number): number {
+    let h = (Math.imul(gx | 0, 73856093) ^ Math.imul(gy | 0, 19349663)) & this.mask;
+    const table = this.table;
+    for (;;) {
+      const c = table[h];
+      if (c === -1) return -1;
+      if (this.cellGx[c] === gx && this.cellGy[c] === gy) return c;
+      h = (h + 1) & this.mask;
+    }
+  }
+
+  /** Bin `small` (skipping non-finite positions) into cells of `1/invCell`. */
+  build(small: Body[], invCell: number): void {
+    const n = small.length;
+    this.ensure(n);
+    const table = this.table;
+    table.fill(-1);
+    const bodyCell = this.bodyCell;
+    const cellGx = this.cellGx;
+    const cellGy = this.cellGy;
+    const cellEnd = this.cellEnd;
+    let cells = 0;
+    for (let i = 0; i < n; i++) {
+      const b = small[i];
+      const px = b.pos.x;
+      const py = b.pos.y;
+      if (!Number.isFinite(px) || !Number.isFinite(py)) {
+        bodyCell[i] = -1;
+        continue;
+      }
+      const gx = Math.floor(px * invCell);
+      const gy = Math.floor(py * invCell);
+      let h = (Math.imul(gx | 0, 73856093) ^ Math.imul(gy | 0, 19349663)) & this.mask;
+      let c = table[h];
+      while (c !== -1 && (cellGx[c] !== gx || cellGy[c] !== gy)) {
+        h = (h + 1) & this.mask;
+        c = table[h];
+      }
+      if (c === -1) {
+        c = cells++;
+        table[h] = c;
+        cellGx[c] = gx;
+        cellGy[c] = gy;
+        cellEnd[c] = 0;
+      }
+      bodyCell[i] = c;
+      cellEnd[c]++;
+    }
+    this.cells = cells;
+    // prefix sum into run starts, then place each body in original order
+    const cellStart = this.cellStart;
+    let at = 0;
+    for (let c = 0; c < cells; c++) {
+      cellStart[c] = at;
+      at += cellEnd[c];
+      cellEnd[c] = cellStart[c]; // reuse as the fill cursor
+    }
+    const items = this.items;
+    for (let i = 0; i < n; i++) {
+      const c = bodyCell[i];
+      if (c >= 0) items[cellEnd[c]++] = i;
+    }
+  }
 }
+
+// One hash reused for the whole session. Contact detection is never
+// re-entered (no workers, no recursion), so a module-level instance is
+// safe and keeps every buffer warm across frames.
+const GRID = new SpatialHash();
 
 function detectBodies(bodies: Body[], out: Manifold[],
                       staticState: ContactStatic): void {
@@ -638,35 +747,28 @@ function detectBodies(bodies: Body[], out: Manifold[],
   }
 
   if (small.length < 2 || cell <= 1e-9) return;
-  const invCell = 1.0 / cell;
-  const grid = new Map<string, Cell>();
-  const cells: Cell[] = [];
-  for (const b of small) {
-    if (!placed(b)) continue;
-    const gx = Math.floor(b.pos.x * invCell);
-    const gy = Math.floor(b.pos.y * invCell);
-    const key = `${gx},${gy}`;
-    const found = grid.get(key);
-    if (found === undefined) {
-      const made: Cell = { gx, gy, bodies: [b] };
-      grid.set(key, made);
-      cells.push(made);
-    } else {
-      found.bodies.push(b);
+  GRID.build(small, 1.0 / cell);
+  const { cells, cellGx, cellGy, cellStart, cellEnd, items } = GRID;
+  for (let c = 0; c < cells; c++) {
+    const lo = cellStart[c];
+    const hi = cellEnd[c];
+    for (let i = lo; i < hi; i++) {
+      const a = small[items[i]];
+      for (let j = i + 1; j < hi; j++) {
+        pairManifold(a, small[items[j]], out, excl);
+      }
     }
-  }
-  for (const c of cells) {
-    const bucket = c.bodies;
-    const ln = bucket.length;
-    for (let i = 0; i < ln; i++) {
-      const a = bucket[i];
-      for (let j = i + 1; j < ln; j++) pairManifold(a, bucket[j], out, excl);
-    }
-    for (const [ox, oy] of CELL_OFFSETS) {
-      const other = grid.get(`${c.gx + ox},${c.gy + oy}`);
-      if (other !== undefined) {
-        for (const a of bucket) {
-          for (const b of other.bodies) pairManifold(a, b, out, excl);
+    const gx = cellGx[c];
+    const gy = cellGy[c];
+    for (let o = 0; o < 4; o++) {
+      const other = GRID.find(gx + OFF_X[o], gy + OFF_Y[o]);
+      if (other < 0) continue;
+      const olo = cellStart[other];
+      const ohi = cellEnd[other];
+      for (let i = lo; i < hi; i++) {
+        const a = small[items[i]];
+        for (let j = olo; j < ohi; j++) {
+          pairManifold(a, small[items[j]], out, excl);
         }
       }
     }
