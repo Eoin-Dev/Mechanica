@@ -20,6 +20,32 @@ import { overlayToggles } from "./panels";
 const TABS = ["Selection", "World", "View"] as const;
 type Tab = (typeof TABS)[number];
 
+/** The "performance mode is on" banner above the Solver controls: why they
+ * are greyed out, and the single click that gives them back. Present only
+ * while the mode is on.
+ *
+ * Deliberately not accent-coloured. The accent is the app's "this is
+ * yours/this is active" colour and it is user-configurable, so a banner
+ * wearing it would read as one more highlighted control rather than as the
+ * app telling you it has taken the controls away. It uses the semantic
+ * warning colour instead - the same one the "can't keep up" notice uses - and
+ * leans on a filled pill, a tinted block and a left bar so the signal survives
+ * whatever accent the user has picked, colourblindness included.
+ */
+function perfModeBanner(app: App): { root: HTMLElement; refresh: () => void } {
+  const off = button("Turn off performance mode", () => app.setPerfMode(false),
+    { tooltip: "Switch performance mode off, restoring this scene's own " +
+               "solver settings and full accuracy." });
+  off.root.classList.add("perf-banner-btn");
+  const root = el("div", { class: "perf-banner" },
+    el("span", { class: "perf-badge", text: "Performance mode is on" }),
+    el("span", { class: "perf-banner-text",
+                 text: "The solver settings below are disabled and are not " +
+                       "what is running." }),
+    off.root);
+  return { root, refresh: () => { root.hidden = !app.perfMode; } };
+}
+
 export class Inspector implements Panel {
   private app: App;
   private root: HTMLElement;
@@ -823,20 +849,13 @@ export class Inspector implements Panel {
 
     this.body.append(section("Solver"));
     // Performance mode overrides all three controls below without writing to
-    // the scene, so the numbers shown are the scene's own and NOT what is
-    // running. Say which is which, or the panel is simply lying.
-    const perfNote = el("div", { class: "faint settings-note" });
-    this.add({ root: perfNote, refresh: () => {
-      const on = app.perfMode;
-      perfNote.style.display = on ? "" : "none";
-      const want = `Performance mode is on, so this scene is running at ` +
-        `${world.effectiveSubsteps} substeps, ${world.effectiveIterations} ` +
-        `iterations and ${world.effectiveIntegrator}, whatever is set below, ` +
-        `and its springs are solved as position constraints rather than as ` +
-        `forces. The values here are the scene's own and are what gets ` +
-        `saved. Turn it off in Settings.`;
-      if (on && perfNote.textContent !== want) perfNote.textContent = want;
-    } });
+    // the scene. Leaving them live while they are being ignored is the one
+    // thing this panel must not do, so they are disabled outright and the
+    // banner says why and offers the way out in one click. The VALUES stay
+    // the scene's own throughout - they are what a save writes, and they are
+    // exactly what comes back the moment the mode is switched off.
+    this.add(perfModeBanner(app));
+    const perfOn = (): boolean => app.perfMode;
     const short: Record<Integrator, string> = {
       "Velocity Verlet": "Verlet", "Symplectic Euler": "Euler", RK4: "RK4",
     };
@@ -847,21 +866,26 @@ export class Inspector implements Panel {
       "Numerical method used to advance the simulation. Verlet: best " +
       "all-round, excellent long-term energy behaviour. Euler: fastest, " +
       "least accurate. RK4: most accurate over short spans, drifts on long " +
-      "orbits."));
+      "orbits.", perfOn));
     this.add(slider("Substeps", () => world.substeps,
       (v) => { world.substeps = Math.round(v); world.substepsCappedFrom = null; },
       1, 64,
       { fmt: (v) => v.toFixed(0), step: 1, log: true, onCommit: this.commit,
+        disabled: perfOn,
         tooltip: "Physics substeps per 1/120 s step. Higher is more " +
                  "accurate and slower." }));
     // A preset whose substeps were cut to fit the cost ceiling shows a
     // smaller number than it was authored with, which looks like the scene
     // simply chose it. Say what happened and that it can be undone - the
     // note disappears as soon as the slider is touched.
+    //
+    // Not while performance mode is on: the banner has already said that
+    // nothing here is in effect, and a second note explaining a number that
+    // is not being used only competes with it.
     const capNote = el("div", { class: "faint settings-note" });
     this.add({ root: capNote, refresh: () => {
       const from = world.substepsCappedFrom;
-      const show = from !== null && from > world.substeps;
+      const show = from !== null && from > world.substeps && !app.perfMode;
       capNote.style.display = show ? "" : "none";
       const want = `Reduced from ${from} so this scene runs in real time ` +
                    "on a modest machine. Raise it if yours can afford it.";
@@ -870,6 +894,7 @@ export class Inspector implements Panel {
     this.add(slider("Iterations", () => world.iterations,
       (v) => { world.iterations = Math.round(v); }, 1, 64,
       { fmt: (v) => v.toFixed(0), step: 1, log: true, onCommit: this.commit,
+        disabled: perfOn,
         tooltip: "Solver passes per substep for links and contacts. Higher " +
                  "is more stable in stacks and chains." }));
     // Adaptive resolution lives in Settings, not here: substeps and

@@ -33,27 +33,32 @@
  *     monotone across the whole slider: soft springs barely correct, stiff
  *     ones correct almost fully, and the two ends saturate instead of
  *     diverging.
- *   - Damping is applied as a bounded velocity projection - remove at most
- *     100% of a pair's relative axial velocity - so it can never reverse a
- *     velocity, which is exactly how explicit damping blows up.
+ *   - Damping is applied as a bounded velocity projection - it removes a
+ *     capped FRACTION of a pair's relative axial velocity (see
+ *     PERF_MAX_DAMP_FRACTION) rather than a force proportional to it - so it
+ *     can never reverse a velocity, which is exactly how explicit damping
+ *     blows up.
  *
  * On top of that sit three cheap guards that make "never catastrophically
  * explodes" a property of the code rather than a hope, and which also cover
  * the parts of the pipeline this module does not own (contacts, force fields,
  * the N-body encounters the mode declines to slice):
  *
+ *   - a bound on how far one projection may move a body, so it cannot
+ *     teleport anything through something it should have hit;
  *   - a hard strain limit, so a lattice physically cannot come apart;
  *   - a speed ceiling, so no body can reach the range where positions stop
- *     being representable;
- *   - a small dissipation applied only to spring-connected bodies, so any
- *     residual energy the projections inject bleeds away instead of
- *     accumulating - and soft bodies settle, which is what "smooth and
- *     consistent" looks like.
+ *     being representable.
  *
- * Everything here is deliberately non-physical. A jelly is squishier than its
- * stiffness says, a trampoline dissipates more than it should, and the energy
- * graph is not worth reading. That is the trade this mode exists to make; the
- * accurate path is one checkbox away and untouched.
+ * What is NOT here is any blanket dissipation - see the note where it used to
+ * be. Everything in this file is deliberately non-physical, but it still has
+ * to earn its inaccuracy in stability, and that did not.
+ *
+ * A jelly is squishier than its stiffness says, a trampoline dissipates more
+ * than it should, and the energy graph is not worth reading here: a projected
+ * spring holds a deformation without having done the work to store it, so its
+ * reported potential energy is fiction. That is the trade this mode exists to
+ * make; the accurate path is one checkbox away and untouched.
  */
 import { Body } from "./body";
 import { SpringLink } from "./links";
@@ -151,14 +156,24 @@ export const PERF_MAX_DAMP_FRACTION = 0.5;
 // without pretending the bed is a solid floor.
 export const PERF_SPRUNG_CONTACT_GAIN = 64.0;
 
-// Velocity decay (1/s) applied ONLY to spring-connected bodies. Gentle
-// enough to be invisible on a bouncing jelly - the soft-body presets already
-// carry spring damping an order of magnitude stronger - and it is the reason
-// no slow accumulation of projection energy can turn into a fast one. It is
-// restricted to sprung bodies so that orbits, pendulums and projectiles,
-// which have nothing to do with the failure this mode is being hardened
-// against, keep the trajectories they would have had.
-export const PERF_SPRUNG_DAMPING = 0.5;
+// There is deliberately no blanket dissipation on spring-connected bodies
+// here. An earlier version bled 0.5/s out of them, on the theory that it
+// would stop any energy the projections inject from accumulating. Measured,
+// it prevented nothing and cost a great deal:
+//
+//   - every spring preset in the library survives 60 s at the top of both
+//     sliders without it, and nothing gains speed over that run;
+//   - it halved the Driven resonance preset's amplitude (0.20 m against the
+//     accurate solver's 0.50 m; 0.40 m without it) and roughly doubled the
+//     energy loss on every oscillator scene - Spring pendulum went from -50%
+//     to -14%, Coupled oscillators from -98% to -75%;
+//   - it gave any sprung body a terminal velocity of g/0.5 = 19.6 m/s, so a
+//     soft body that fell off the scene sank at a visibly wrong constant
+//     speed instead of accelerating.
+//
+// Accuracy is this mode's to spend, but only on stability it actually buys.
+// If a real accumulation ever turns up, the fix is to find what injects the
+// energy, not to drag everything.
 
 /** How far the projection may move this body within one substep. */
 function moveAllowance(b: Body): number {
@@ -353,8 +368,13 @@ export class PerfSolver {
         const B = ib[i];
         const dx = px[B] - px[A];
         const dy = py[B] - py[A];
+        // Written as a positive test so a non-finite endpoint fails it too:
+        // NaN > x is false, so a body whose position has already diverged is
+        // skipped here rather than spreading its NaN along every spring it
+        // touches before sanitize() gets to freeze it at the end of the step.
+        // The old form, d2 < 1e-24, let NaN straight through.
         const d2 = dx * dx + dy * dy;
-        if (d2 < 1e-24) continue; // coincident: no direction to correct along
+        if (!(d2 > 1e-24)) continue; // coincident, or not a number
         const dist = Math.sqrt(d2);
         const c = dist - row[o + 1];
         if (c <= 0.0 && row[o + 6] !== 0.0) continue; // slack string
@@ -431,7 +451,7 @@ export class PerfSolver {
       const dx = px[B] - px[A];
       const dy = py[B] - py[A];
       const d2 = dx * dx + dy * dy;
-      if (d2 < 1e-24) continue;
+      if (!(d2 > 1e-24)) continue; // coincident, or not a number
       const dist = Math.sqrt(d2);
       if (row[o + 6] !== 0.0 && dist <= row[o + 1]) continue; // slack: no damping
       const nx = dx / dist;
@@ -481,7 +501,7 @@ export class PerfSolver {
       const dx = px[B] - px[A];
       const dy = py[B] - py[A];
       const d2 = dx * dx + dy * dy;
-      if (d2 < 1e-24) continue;
+      if (!(d2 > 1e-24)) continue; // coincident, or not a number
       const dist = Math.sqrt(d2);
       let target = 0.0;
       let worsening = 0.0; // sign of relative normal velocity that worsens it
@@ -550,17 +570,5 @@ export function clampSpeeds(bodies: Body[], cap: number): void {
     const wCap = b.radius > 1e-6 ? cap / b.radius : cap * 1e6;
     if (b.omega > wCap) b.omega = wCap;
     else if (b.omega < -wCap) b.omega = -wCap;
-  }
-}
-
-/** Bleed a little energy out of spring-connected bodies each substep. */
-export function bleedSprungBodies(bodies: Body[], h: number): void {
-  const decay = 1.0 - PERF_SPRUNG_DAMPING * h;
-  if (decay >= 1.0 || decay < 0.0) return;
-  for (const b of bodies) {
-    if (!b.sprung) continue;
-    b.vel.x *= decay;
-    b.vel.y *= decay;
-    b.omega *= decay;
   }
 }

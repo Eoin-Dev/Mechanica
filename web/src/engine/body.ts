@@ -99,7 +99,7 @@ export class Body {
   // reason: a stiff spring produces an enormous acceleration that is
   // mostly cancelled by the spring on the other side, and the engine
   // already clamps every spring so the scene's own substep resolves it
-  // (see World.prepareStep and subdivisionNeed). Never serialized.
+  // (see World.prepareSprings and subdivisionNeed). Never serialized.
   sprung = false;
   // transient: how much of its network's inertia this body may present to a
   // contact, as a multiple of its own mass (set per step by

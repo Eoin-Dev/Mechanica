@@ -17,12 +17,14 @@
 import { describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body, Wall } from "../src/engine/body";
-import { SpringLink } from "../src/engine/links";
+import { DistanceLink, SpringLink } from "../src/engine/links";
 import {
-  PERF_ITERATIONS, PERF_MAX_SPEED, PERF_MAX_STRETCH, PERF_SUBSTEPS,
+  PERF_ITERATIONS, PERF_MAX_SPEED, PERF_MAX_STRETCH,
+  PERF_SPRUNG_CONTACT_GAIN, PERF_SUBSTEPS,
 } from "../src/engine/perf";
 import { PRESETS } from "../src/scene/presets";
 import { World, WorldDict } from "../src/engine/world";
+import css from "../src/style.css?raw";
 
 const DT = 1 / 120;
 
@@ -509,5 +511,265 @@ describe("the projection is a spring, not a rod", () => {
       hi = Math.max(hi, w.bodies[1].pos.y);
     }
     expect(hi - lo).toBeGreaterThan(0.05); // it is visibly bouncing
+  });
+});
+
+// ------------------------------------------------------------ containment
+describe("nothing else can knock the mode over", () => {
+  /** Every body finite, nothing frozen. */
+  function intact(w: World, why: string): void {
+    expect(w.diverged, why).toEqual([]);
+    for (const b of w.bodies) {
+      expect(Number.isFinite(b.pos.x + b.pos.y + b.vel.x + b.vel.y), why)
+        .toBe(true);
+    }
+  }
+
+  it("survives the mode being switched on and off mid-run", () => {
+    // Springs change from integrated forces to projected constraints the
+    // instant this flips, so every preset that has one gets flipped
+    // repeatedly while it is under load.
+    for (const [name, build] of springPresets()) {
+      const w = build();
+      for (let i = 0; i < 1800; i++) {
+        if (i % 37 === 0) w.performance = !w.performance;
+        w.step(DT);
+      }
+      intact(w, name);
+    }
+  });
+
+  it("survives a soft body being dragged around by one particle", () => {
+    // Dragging is how anyone actually interacts with a soft body, and it is
+    // not physical motion at all: the held particle becomes infinite mass and
+    // is teleported under the cursor, which lands squarely on the projection.
+    const w = PRESETS.find((p) => p.name === "Jelly block")!.build();
+    w.performance = true;
+    const soft = w.bodies.filter((b) => b.softBody);
+    const grabbed = soft[10];
+    for (let i = 0; i < 900; i++) {
+      grabbed.held = true;
+      grabbed.pos.set(Math.sin(i * 0.3) * 2.5, 2.0 + Math.cos(i * 0.21) * 1.5);
+      grabbed.vel.set(Math.cos(i * 0.3) * 60, -Math.sin(i * 0.21) * 45);
+      for (const b of soft) b.speedCap = 30; // what the drag controller sets
+      w.step(DT);
+    }
+    intact(w, "dragged lattice");
+  });
+
+  it("keeps one diverged body's damage to itself", () => {
+    // A body can go non-finite from something this module does not own - an
+    // extreme custom field, a singular contact - and a spring network is
+    // exactly what spreads it. The projection's distance tests are written so
+    // a NaN endpoint fails them, skipping the constraint rather than writing
+    // NaN into its partner. Without that, one corrupt body took ten of twelve
+    // down with it inside a single step and sanitize() froze the lot.
+    const w = new World();
+    w.substeps = 8;
+    const chain: Body[] = [];
+    for (let i = 0; i < 12; i++) {
+      const b = new Body(new Vec2(i * 0.2, 1), 0.07, 0.1);
+      b.collides = false;
+      w.bodies.push(b);
+      chain.push(b);
+    }
+    for (let i = 0; i + 1 < chain.length; i++) {
+      w.links.push(new SpringLink(chain[i], chain[i + 1], 0.2, 50000, 5));
+    }
+    w.performance = true;
+    for (let i = 0; i < 60; i++) w.step(DT);
+    chain[6].pos.set(NaN, NaN);
+    w.step(DT);
+    expect(w.diverged.length).toBe(1);
+  });
+
+  it("takes the degenerate links a scene file can carry", () => {
+    // All of these are reachable from a hand-edited or generated .json:
+    // linkFromDict guards the numbers into range, but it cannot rule out a
+    // spring of zero natural length or one whose ends are the same body.
+    const cases: Array<[string, () => World]> = [
+      ["self-loop", () => {
+        const w = new World();
+        const a = new Body(new Vec2(0, 1), 0.1, 1);
+        w.bodies.push(a);
+        w.links.push(new SpringLink(a, a, 0.5, 1000, 5));
+        return w;
+      }],
+      ["zero natural length", () => {
+        const w = new World();
+        const a = new Body(new Vec2(0, 1), 0.1, 1);
+        const b = new Body(new Vec2(0.5, 1), 0.1, 1);
+        w.bodies.push(a, b);
+        w.links.push(new SpringLink(a, b, 0, 5000, 2));
+        return w;
+      }],
+      ["coincident ends", () => {
+        const w = new World();
+        const a = new Body(new Vec2(0, 1), 0.1, 1);
+        const b = new Body(new Vec2(0, 1), 0.1, 1);
+        a.collides = b.collides = false;
+        w.bodies.push(a, b);
+        w.links.push(new SpringLink(a, b, 1, 5000, 2));
+        return w;
+      }],
+      ["both ends locked", () => {
+        const w = new World();
+        const a = new Body(new Vec2(0, 1), 0.1, 1);
+        const b = new Body(new Vec2(1, 1), 0.1, 1);
+        a.locked = b.locked = true;
+        w.bodies.push(a, b);
+        w.links.push(new SpringLink(a, b, 0.2, 90000, 400));
+        return w;
+      }],
+      ["massless end", () => {
+        const w = new World();
+        const a = new Body(new Vec2(0, 1), 0.1, 0);
+        const b = new Body(new Vec2(1, 1), 0.1, 1);
+        w.bodies.push(a, b);
+        w.links.push(new SpringLink(a, b, 0.2, 90000, 400));
+        return w;
+      }],
+      ["a spring and a rod on one pair", () => {
+        const w = new World();
+        const a = new Body(new Vec2(0, 2), 0.1, 1);
+        a.locked = true;
+        const b = new Body(new Vec2(0, 1), 0.1, 1);
+        w.bodies.push(a, b);
+        w.links.push(new SpringLink(a, b, 0.5, 100000, 10));
+        w.links.push(new DistanceLink(a, b, 1.0));
+        return w;
+      }],
+      ["tension-only past every slider", () => {
+        const w = new World();
+        const a = new Body(new Vec2(0, 3), 0.05, 1);
+        a.isAnchor = true;
+        a.locked = true;
+        const b = new Body(new Vec2(0, 1), 0.2, 20);
+        w.bodies.push(a, b);
+        w.links.push(new SpringLink(a, b, 0.5, 1e9, 1e9, true));
+        return w;
+      }],
+    ];
+    for (const [name, build] of cases) {
+      const w = build();
+      w.performance = true;
+      for (let i = 0; i < 600; i++) w.step(DT);
+      intact(w, name);
+    }
+  });
+
+  it("survives bodies and links appearing and vanishing under it", () => {
+    // The solver caches its rows per step and indexes bodies by a slot it
+    // stamps onto them, so a scene whose shape changes between steps is the
+    // case that would catch a stale index.
+    const w = new World();
+    w.substeps = 4;
+    w.performance = true;
+    w.walls.push(new Wall(new Vec2(-5, 0), new Vec2(5, 0), 0.2));
+    let seed = 7;
+    const rnd = (): number =>
+      (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    for (let i = 0; i < 1500; i++) {
+      if (rnd() < 0.25) {
+        const b = new Body(new Vec2(rnd() * 6 - 3, 1 + rnd() * 2), 0.08, 0.2);
+        w.bodies.push(b);
+        const others = w.bodies.filter((o) => o !== b);
+        if (others.length > 0 && rnd() < 0.8) {
+          w.links.push(new SpringLink(
+            b, others[Math.floor(rnd() * others.length)], null, 100000, 50));
+        }
+      }
+      if (rnd() < 0.2 && w.bodies.length > 3) {
+        w.removeBody(w.bodies[Math.floor(rnd() * w.bodies.length)]);
+      }
+      if (rnd() < 0.1 && w.links.length > 0) {
+        w.removeLink(w.links[Math.floor(rnd() * w.links.length)]);
+      }
+      w.step(DT);
+      intact(w, `churn step ${i}`);
+    }
+  });
+
+  it("borrows contact mass for sprung bodies only, and only in this mode", () => {
+    const build = (withSpring: boolean): World => {
+      const w = new World();
+      w.substeps = 4;
+      const a = new Body(new Vec2(0, 1), 0.1, 1);
+      const b = new Body(new Vec2(0.4, 1), 0.1, 1);
+      const loose = new Body(new Vec2(2, 1), 0.1, 1);
+      w.bodies.push(a, b, loose);
+      if (withSpring) w.links.push(new SpringLink(a, b, 0.4, 500, 1));
+      return w;
+    };
+    // off: nothing borrows anything, whatever the scene contains
+    for (const withSpring of [false, true]) {
+      const w = build(withSpring);
+      w.step(DT);
+      for (const b of w.bodies) expect(b.contactMassGain).toBe(1.0);
+    }
+    // on, but no springs: still nothing
+    const bare = build(false);
+    bare.performance = true;
+    bare.step(DT);
+    for (const b of bare.bodies) expect(b.contactMassGain).toBe(1.0);
+    // on, with a spring: its two ends, and not the body beside them
+    const sprung = build(true);
+    sprung.performance = true;
+    sprung.step(DT);
+    expect(sprung.bodies[0].contactMassGain).toBe(PERF_SPRUNG_CONTACT_GAIN);
+    expect(sprung.bodies[1].contactMassGain).toBe(PERF_SPRUNG_CONTACT_GAIN);
+    expect(sprung.bodies[2].contactMassGain).toBe(1.0);
+    // and it is handed straight back when the mode goes off
+    sprung.performance = false;
+    sprung.step(DT);
+    for (const b of sprung.bodies) expect(b.contactMassGain).toBe(1.0);
+  });
+
+  it("leaves none of its own state in a saved scene", () => {
+    const w = PRESETS.find((p) => p.name === "Jelly block")!.build();
+    w.performance = true;
+    for (let i = 0; i < 200; i++) w.step(DT);
+    const dict = JSON.stringify(w.toDict());
+    for (const leak of ["perfSlot", "perfStamp", "contactMassGain",
+                        "performance", "sprung"]) {
+      expect(dict, leak).not.toContain(leak);
+    }
+  });
+});
+
+// ------------------------------------------------------------------ the UI
+/** The declaration block for an exact selector, comments stripped. */
+function ruleBody(selector: string): string {
+  const clean = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const m of clean.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (m[1].split(",").map((s) => s.trim()).includes(selector)) return m[2];
+  }
+  return "";
+}
+
+describe("the mode says so without borrowing the accent colour", () => {
+  // There is no DOM in these tests, so the banner's behaviour is verified in
+  // the browser; what is pinned here is the decision that let it be legible
+  // in the first place. The accent means "active, and yours" and the user can
+  // set it to any hue, including one in the same family as this banner - so a
+  // banner built out of it would read as one more highlighted control rather
+  // than as the app saying it has taken the controls away.
+  it("draws the banner from the warning colour only", () => {
+    for (const sel of [".perf-banner", ".perf-badge", ".perf-banner-text",
+                       "button.perf-banner-btn"]) {
+      const body = ruleBody(sel);
+      expect(body, `${sel} is missing`).not.toBe("");
+      expect(body, `${sel} uses the accent`).not.toMatch(/var\(--accent/);
+    }
+    expect(ruleBody(".perf-banner")).toMatch(/var\(--warn/);
+    expect(ruleBody(".perf-badge")).toMatch(/var\(--warn/);
+  });
+
+  it("greys a disabled segmented strip", () => {
+    // slider() has always had a `disabled` option; segmented gained one so
+    // the integrator picker could be switched off with the two sliders beside
+    // it. The class it toggles has to be styled, or that control would look
+    // live while being inert - which is worse than leaving it editable.
+    expect(ruleBody(".segmented.disabled")).toMatch(/opacity/);
   });
 });

@@ -437,18 +437,10 @@ export class SettingsPanel {
     add(checkbox("Performance mode",
       () => app.perfMode,
       (v) => app.setPerfMode(v),
-      "Trade physical accuracy for stability and frame rate across the " +
-      "whole app."));
-    note("Off by default. Built for scenes you are playing with rather than " +
-         "measuring: soft bodies, and crowds of objects piled together. " +
-         "Springs become position constraints instead of forces, so no " +
-         "stiffness or damping setting can make a soft body explode however " +
-         "far you push the sliders, and every speed and stretch is hard " +
-         "capped. It is also cheaper - a simpler integrator, fewer substeps " +
-         "and solver passes, no adaptive time resolution, and springs drawn " +
-         "as plain lines. Soft bodies are squishier and more damped than " +
-         "their settings say and the energy graph will drift; turn it off " +
-         "for anything you want numbers from.");
+      "Trade physical accuracy for frame rate across the whole app."));
+    note("Off by default. Sacrifices physical accuracy heavily for speed, " +
+         "and overrides the scene's own solver settings. Don't use it to " +
+         "model anything accurately or to read numbers off.");
 
     add(checkbox("Adaptive resolution",
       () => app.adaptiveDt,

@@ -156,6 +156,11 @@ export function setTheme(name: ThemeName): void {
   set("--text-dim", TEXT_DIM); set("--text-faint", TEXT_FAINT);
   set("--good", GOOD); set("--warn", WARN); set("--bad", BAD);
   set("--selection", SELECTION);
+  // Translucent shades of the warning colour, for the "a mode is overriding
+  // your settings" banner. Alpha rather than a pre-mixed opaque colour so the
+  // banner sits correctly on whichever panel shade is behind it.
+  s.setProperty("--warn-soft", `rgba(${WARN[0]}, ${WARN[1]}, ${WARN[2]}, 0.13)`);
+  s.setProperty("--warn-edge", `rgba(${WARN[0]}, ${WARN[1]}, ${WARN[2]}, 0.4)`);
   document.documentElement.dataset.theme = name;
 }
 
