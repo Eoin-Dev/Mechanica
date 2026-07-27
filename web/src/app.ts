@@ -13,7 +13,8 @@ import * as snap from "./scene/snapshot";
 import { PRESETS, Preset } from "./scene/presets";
 import { CanvasController } from "./interact/tools";
 import { GRAPH_MAX_POINTS, GRAPH_WINDOW_S, PhasePlot, TimeSeries } from "./ui/plots";
-import { reducedMotion } from "./ui/dom";
+import { DOCK_H_MAX, DOCK_H_MIN, INSPECTOR_W_MAX, INSPECTOR_W_MIN,
+         reducedMotion } from "./ui/dom";
 import * as theme from "./ui/theme";
 import { THEME_NAMES, ThemeName, css, setAccent, setTheme } from "./ui/theme";
 
@@ -113,13 +114,15 @@ export function sanitizeSettings(raw: unknown): Settings {
   for (const k of BOOL_SETTINGS) {
     if (Object.hasOwn(r, k) && typeof r[k] === "boolean") s[k] = r[k];
   }
-  // Pane sizes are clamped to what the splitters themselves allow, so a
-  // stale value from a much larger window cannot hide the canvas.
+  // Pane sizes are clamped to exactly what the splitters themselves allow
+  // (the same constants they enforce), so a stale value from a much larger
+  // window - or one the splitter could never have produced - cannot hide
+  // the canvas or be honoured on load and then snap back on first drag.
   if (typeof r.inspector_w === "number" && Number.isFinite(r.inspector_w)) {
-    s.inspector_w = Math.min(1200, Math.max(240, r.inspector_w));
+    s.inspector_w = Math.min(INSPECTOR_W_MAX, Math.max(INSPECTOR_W_MIN, r.inspector_w));
   }
   if (typeof r.dock_h === "number" && Number.isFinite(r.dock_h)) {
-    s.dock_h = Math.min(1200, Math.max(80, r.dock_h));
+    s.dock_h = Math.min(DOCK_H_MAX, Math.max(DOCK_H_MIN, r.dock_h));
   }
   if (typeof r.theme === "string" && (THEME_NAMES as string[]).includes(r.theme)) {
     s.theme = r.theme as ThemeName;
@@ -449,26 +452,45 @@ export class App {
     this.toast("Reset to the initial state");
   }
 
-  /** Re-simulate from the start state up to `text` seconds.
+  /** Simulate the scene to `text` seconds.
    *
-   * The jump is synchronous - there is no partial world to show and nothing
-   * useful to draw halfway - so the only question is how long the tab may
-   * be unresponsive for. A step-count cap alone does not answer it: 20 000
-   * steps is 2.6 s of frozen tab on the Trampoline and 6.4 s on the Jelly
-   * block on a desktop, and several times that on a phone, which is long
-   * enough for the browser to offer to kill the page. So the work is
-   * bounded in WALL-CLOCK time as well, and whatever time it actually
-   * reached is reported rather than implied - landing short and saying so
-   * beats freezing for half a minute to land exactly.
+   * Two things decide how this behaves, and they interact:
+   *
+   * WHERE IT STARTS. A target ahead of the clock is reached by continuing
+   * from the CURRENT state; only a target behind it has to go back to the
+   * start snapshot and re-simulate, because the solver cannot run
+   * backwards. The result is identical either way - the step sequence is
+   * the same fixed PHYSICS_DT either way, so 0->10 then 10->20 lands
+   * exactly where 0->20 does - but continuing does not redo work already
+   * done, and, crucially, it is what makes an interrupted jump RESUMABLE.
+   *
+   * Restarting from t = 0 every time was the old behaviour and it hid a
+   * trap: a target too far to reach in one go left the clock wherever the
+   * budget ran out, and asking again re-ran the same bounded work from the
+   * same start and stopped at the same place. The jump appeared to do
+   * nothing at all from the second attempt onward, however many times it
+   * was asked.
+   *
+   * HOW LONG IT MAY RUN. The jump is synchronous - there is no partial
+   * world to show and nothing useful to draw halfway - so the tab is
+   * unresponsive throughout. A step cap alone does not bound that: 20 000
+   * steps is 2.6 s frozen on the Trampoline and 6.4 s on the Jelly block on
+   * a desktop, and several times that on a phone, which is long enough for
+   * the browser to offer to kill the page. So the work is bounded in
+   * WALL-CLOCK time too, and falling short is reported rather than implied,
+   * with the fact that asking again continues.
    */
   commitTimeJump(text: string): boolean {
     const target = parseFloat(text);
     if (!Number.isFinite(target) || target < 0) return false;
     this.ensureInitial();
-    const world = snap.restore(this.initialSnapshot!);
+    // Work on a copy either way, so a blow-up part-way through cannot leave
+    // the live scene half-stepped.
+    const forward = target >= this.world.time;
+    const world = snap.restore(forward ? snap.snapshot(this.world)
+                                       : this.initialSnapshot!);
     const steps = Math.round((target - world.time) / PHYSICS_DT);
-    if (steps < 0) return false;
-    const budgetMs = 1500;
+    if (steps <= 0) return true;
     const t0 = performance.now();
     let ran = 0;
     let blewUp = false;
@@ -479,7 +501,8 @@ export class App {
       }
       // the clock is only read every 64th step: at ~0.1 ms a step that is
       // a check every 6 ms, far finer than the budget, for no measurable cost
-      if ((ran & 63) === 63 && performance.now() - t0 > budgetMs) {
+      if ((ran & 63) === 63 &&
+          performance.now() - t0 > App.TIME_JUMP_BUDGET_MS) {
         ran++;
         break;
       }
@@ -489,11 +512,19 @@ export class App {
     if (blewUp) {
       this.toast(`Stopped at ${world.time.toFixed(2)} s - the scene blew up`);
     } else if (ran < steps) {
-      this.toast(`Reached ${world.time.toFixed(2)} s - that is as far as this ` +
-                 "scene can be re-simulated at once");
+      // "enter it again", not "press Enter again": the box refreshes to the
+      // time actually reached, so the target has to be typed afresh
+      this.toast(`Reached ${world.time.toFixed(2)} s of ${target.toFixed(2)} s ` +
+                 "- enter that time again to carry on from here");
     }
     return true;
   }
+
+  /** Wall-clock ceiling on one time jump. The tab is frozen for this long,
+   * so it trades responsiveness against how far a single press gets: an
+   * interrupted jump now resumes, so the ceiling costs presses rather than
+   * reach. */
+  private static TIME_JUMP_BUDGET_MS = 3000;
 
   /** Hard ceiling on a time jump's steps, on top of the wall-clock budget:
    * a cheap scene must not be able to buy an unbounded jump either. */

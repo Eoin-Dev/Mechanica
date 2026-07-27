@@ -10,12 +10,38 @@ import { DistanceLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
 import { Selectable } from "../render/draw";
 import { isMathRenderable } from "../core/mathfmt";
-import { RefreshGroup, button, checkbox, colourEdit, el, fmt3dp, halfRow,
-         isPhone, isTouch, numEdit, section, segmented, slider,
+import { INSPECTOR_W_MAX, INSPECTOR_W_MIN, PHONE_QUERY, RefreshGroup, button,
+         checkbox, colourEdit, el, fmt3dp, halfRow, isPhone, isTouch, numEdit,
+         onMediaChange, section, segmented, slider, splitterDrag,
          textEdit } from "./dom";
 import { ICONS } from "./icons";
 import { mathEdit } from "./mathedit";
 import { overlayToggles } from "./panels";
+
+/** A saved width, held to the same bounds the splitter enforces. */
+function clampInspectorW(w: number): number {
+  return Math.max(INSPECTOR_W_MIN, Math.min(INSPECTOR_W_MAX, w));
+}
+
+/** One selected object's identity, for the key that decides whether the
+ * panel needs rebuilding.
+ *
+ * Ids restart at 1 for each kind, so body 3 and wall 3 must not produce the
+ * same entry - the kind has to be part of it. That used to come from
+ * `constructor.name`, which worked only by luck: the production build
+ * minifies class names, so the key was built from whatever one-character
+ * name the bundler happened to assign. It stays consistent within a build,
+ * which is why nothing broke, but it is the bundler deciding a correctness
+ * property rather than us - and it fails silently, as a panel that does not
+ * rebuild when the selection changes, if two classes ever land on the same
+ * name. An explicit tag costs nothing and cannot be minified away.
+ */
+function selectionKey(o: Selectable): string {
+  const kind = o instanceof Body ? "b"
+    : o instanceof Wall ? "w"
+      : o instanceof SpringLink ? "s" : "r";
+  return `${kind}${o.id}`;
+}
 
 const TABS = ["Selection", "World", "View"] as const;
 type Tab = (typeof TABS)[number];
@@ -104,20 +130,13 @@ export class Inspector implements Panel {
 
     // width splitter (persisted)
     const saved = app.settings.inspector_w;
-    if (typeof saved === "number") root.style.width = `${Math.max(240, saved)}px`;
-    let dragging = false;
-    splitter.addEventListener("pointerdown", (e) => {
-      dragging = true;
-      splitter.setPointerCapture(e.pointerId);
-    });
-    splitter.addEventListener("pointermove", (e) => {
-      if (!dragging) return;
-      const w = Math.max(240, Math.min(620, window.innerWidth - e.clientX));
+    if (typeof saved === "number") root.style.width = `${clampInspectorW(saved)}px`;
+    splitterDrag(splitter, (e) => {
+      const w = Math.max(INSPECTOR_W_MIN,
+                         Math.min(INSPECTOR_W_MAX, window.innerWidth - e.clientX));
       root.style.width = `${w}px`;
       app.resizeCanvas();
-    });
-    splitter.addEventListener("pointerup", () => {
-      dragging = false;
+    }, () => {
       app.settings.inspector_w = root.clientWidth;
       app.saveSettings();
     });
@@ -146,8 +165,7 @@ export class Inspector implements Panel {
       wasPhone = !wasPhone;
       this.applyCollapsed();
     };
-    window.matchMedia("(max-width: 760px)")
-      .addEventListener("change", onViewportChange);
+    onMediaChange(PHONE_QUERY, onViewportChange);
     window.addEventListener("resize", onViewportChange);
 
     this.rebuild();
@@ -166,7 +184,7 @@ export class Inspector implements Panel {
       // let .collapsed / the drawer CSS set the width
       this.root.style.removeProperty("width");
     } else if (typeof this.app.settings.inspector_w === "number") {
-      this.root.style.width = `${Math.max(240, this.app.settings.inspector_w)}px`;
+      this.root.style.width = `${clampInspectorW(this.app.settings.inspector_w)}px`;
     }
     this.handle.hidden = !phone || !this.collapsed;
     this.app.resizeCanvas();
@@ -199,7 +217,7 @@ export class Inspector implements Panel {
       return this.tab;
     }
     const sel = app.selection;
-    const ids = sel.map((o) => `${o.constructor.name}${(o as { id: number }).id}`).join(",");
+    const ids = sel.map(selectionKey).join(",");
     const drivers = app.world.drivers.map((d) => d.bodyId).join(",");
     return `sel:${ids}:${drivers}`;
   }

@@ -29,7 +29,13 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - name: Run physics verification suite
-        run: npm test
+        run: npm test -- --reporter=default --reporter=json --outputFile=test-results.json
+      # The README badge states a lower bound rather than an exact count, so
+      # it needs no commit when a test is added - but it does need something
+      # to notice if the suite ever shrinks past what it claims. The exact
+      # figure only exists here, in the run that just produced it.
+      - name: Check the README test-count claim
+        run: node scripts/check-test-count.mjs
       - name: Build
         run: npm run build
       - uses: actions/upload-pages-artifact@v3

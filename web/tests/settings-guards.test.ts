@@ -22,6 +22,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { sanitizeSettings } from "../src/app";
+import { DOCK_H_MAX, DOCK_H_MIN, INSPECTOR_W_MAX,
+         INSPECTOR_W_MIN } from "../src/ui/dom";
 import { THEME_NAMES, setTheme } from "../src/ui/theme";
 
 describe("sanitizeSettings", () => {
@@ -93,12 +95,17 @@ describe("sanitizeSettings", () => {
     expect(sanitizeSettings({ font_scale: "big" }).font_scale).toBeUndefined();
   });
 
-  it("clamps pane sizes so a stale one cannot hide the canvas", () => {
-    expect(sanitizeSettings({ inspector_w: 1e9 }).inspector_w).toBe(1200);
-    expect(sanitizeSettings({ inspector_w: -5 }).inspector_w).toBe(240);
-    expect(sanitizeSettings({ dock_h: 1e9 }).dock_h).toBe(1200);
-    expect(sanitizeSettings({ dock_h: 0 }).dock_h).toBe(80);
+  it("clamps pane sizes to exactly what the splitters allow", () => {
+    // the constants themselves, not copies of their values: the guard, the
+    // splitter that enforces them and the load-time re-apply all have to
+    // agree, and a stored width the splitter could never have produced was
+    // previously honoured on load and only snapped back on the first drag
+    expect(sanitizeSettings({ inspector_w: 1e9 }).inspector_w).toBe(INSPECTOR_W_MAX);
+    expect(sanitizeSettings({ inspector_w: -5 }).inspector_w).toBe(INSPECTOR_W_MIN);
+    expect(sanitizeSettings({ dock_h: 1e9 }).dock_h).toBe(DOCK_H_MAX);
+    expect(sanitizeSettings({ dock_h: 0 }).dock_h).toBe(DOCK_H_MIN);
     expect(sanitizeSettings({ inspector_w: "wide" }).inspector_w).toBeUndefined();
+    expect(sanitizeSettings({ dock_h: NaN }).dock_h).toBeUndefined();
   });
 
   it("takes booleans only, so a truthy string cannot flip a mode on", () => {
