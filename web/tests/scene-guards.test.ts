@@ -13,6 +13,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { colorOr, intIn, numIn, numOr } from "../src/core/guards";
+import { Vec2 } from "../src/core/vec";
 import { Body, Wall } from "../src/engine/body";
 import { DistanceLink, SpringLink } from "../src/engine/links";
 import { World, WorldDict } from "../src/engine/world";
@@ -203,5 +204,88 @@ describe("colours", () => {
   it("a valid colour is preserved exactly", () => {
     const b = Body.fromDict({ id: 1, pos: [0, 0], color: [12, 34, 56] } as never);
     expect(b.color).toEqual([12, 34, 56]);
+  });
+});
+
+/** The SHAPE of a scene file, not just the range of its numbers.
+ *
+ * Every field was guarded; the containers holding them were not. A `bodies`
+ * that arrived as a string threw "(data.bodies ?? []).map is not a function"
+ * straight out of the loader - past both call sites that stand ready to
+ * report a bad file - and surfaced as a card that did nothing when clicked.
+ */
+describe("a malformed scene never throws out of the loader", () => {
+  it("survives a null, a scalar and a list that is not a list", () => {
+    for (const bad of [null, undefined, 42, "scene", [], true,
+                       { bodies: "oops" }, { bodies: {} }, { walls: 7 },
+                       { links: {} }, { fields: "x" }, { drivers: 1 },
+                       { settings: "nope" }, { settings: null }]) {
+      const w = World.fromDict(bad as never);
+      expect(w.bodies).toEqual([]);
+      expect(() => steps(w, 5)).not.toThrow();
+    }
+  });
+
+  it("skips entries that are not objects rather than failing the whole load", () => {
+    const w = World.fromDict({
+      bodies: [null, "x", 5, { id: 1, pos: [0, 0] }, undefined],
+    } as never);
+    expect(w.bodies).toHaveLength(1);
+    expect(allFinite(steps(w))).toBe(true);
+  });
+});
+
+/** Ids are the scene's only cross-references: links, drivers, motion trails
+ * and the contact solver's warm-start cache all address bodies by id. */
+describe("object ids from a file cannot poison the id counter", () => {
+  it("an id past the safe-integer range is refused, so new bodies stay distinct", () => {
+    // 1e308 + 1 === 1e308 in float, so Body.nextId could never advance past
+    // it again: EVERY body created afterwards shared one id, silently
+    // merging their trails, their drivers and their contacts.
+    const w = World.fromDict({ bodies: [{ id: 1e308, pos: [0, 0] }] } as never);
+    expect(Number.isSafeInteger(w.bodies[0].id)).toBe(true);
+    const a = new Body(new Vec2());
+    const b = new Body(new Vec2());
+    expect(a.id).not.toBe(b.id);
+    expect(Number.isSafeInteger(Body.nextId)).toBe(true);
+  });
+
+  it("a negative id is refused", () => {
+    // The contact cache keys a body-wall pair as `id,-wallId`; a negative
+    // body id makes that indistinguishable from a body-body pair, so one
+    // contact's accumulated impulse could be warm-started onto another.
+    const w = World.fromDict({ bodies: [{ id: -5, pos: [0, 0] }] } as never);
+    expect(w.bodies[0].id).toBeGreaterThanOrEqual(0);
+  });
+
+  it("a fractional id is refused and a plain one is kept exactly", () => {
+    expect(Body.fromDict({ id: 2.5, pos: [0, 0] } as never).id).not.toBe(2.5);
+    expect(Body.fromDict({ id: 77, pos: [0, 0] } as never).id).toBe(77);
+  });
+
+  it("a link to a body that does not exist, or to itself, is dropped", () => {
+    const w = World.fromDict({
+      bodies: [{ id: 1, pos: [0, 0] }, { id: 2, pos: [1, 0] }],
+      links: [{ type: "rod", a: 1, b: 99 }, { type: "rod", a: 1, b: 1 },
+              { type: "rod", a: 1, b: 2 }],
+    } as never);
+    expect(w.links).toHaveLength(1);
+    expect(allFinite(steps(w))).toBe(true);
+  });
+});
+
+describe("names from a file are strings", () => {
+  it("a numeric or missing name becomes a usable one", () => {
+    // the name reaches the structural digest (which reads .length), the
+    // inspector, the diverged-body toast and the download filename
+    expect(typeof Body.fromDict({ id: 1, name: 42 } as never).name).toBe("string");
+    expect(typeof Body.fromDict({ id: 1, name: null } as never).name).toBe("string");
+    expect(typeof Wall.fromDict({ name: {} } as never).name).toBe("string");
+    expect(Body.fromDict({ id: 1, name: "Bob" } as never).name).toBe("Bob");
+  });
+
+  it("an unbounded name cannot be used to fill the storage quota", () => {
+    const b = Body.fromDict({ id: 1, name: "x".repeat(50_000) } as never);
+    expect(b.name.length).toBeLessThanOrEqual(200);
   });
 });

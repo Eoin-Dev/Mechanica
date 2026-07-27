@@ -73,6 +73,24 @@ const PALETTES: Record<ThemeName, Palette> = {
   original: ORIGINAL, dark: DARK, void: VOID, light: LIGHT,
 };
 
+export const THEME_NAMES = Object.keys(PALETTES) as ThemeName[];
+
+/** The theme this name refers to, or the default when it names none.
+ *
+ * The name arrives from persisted settings, so it can be anything a past or
+ * future build of the app wrote there - and an unknown one used to index
+ * PALETTES to `undefined` and throw on the first field read. That happens
+ * inside the App constructor, before anything is on screen and on EVERY
+ * reload, so a single stale value left the app a permanently blank page
+ * with no route back except clearing browser storage by hand. */
+export function asThemeName(name: unknown): ThemeName {
+  // hasOwn, not `in`: `in` walks the prototype chain, so "toString" and
+  // "constructor" would both pass as theme names and index PALETTES to a
+  // function, whose .BG is undefined - the very crash this guards against.
+  return typeof name === "string" && Object.hasOwn(PALETTES, name)
+    ? (name as ThemeName) : "dark";
+}
+
 // live bindings, swapped by setTheme; defaults match the "original"
 // palette so nothing changes until the app applies a theme
 export let BG = ORIGINAL.BG;
@@ -109,7 +127,7 @@ export function parseHex(hex: string): Color | null {
 
 /** The accent a theme ships with (for the "theme default" swatch). */
 export function defaultAccent(name: ThemeName): Color {
-  return PALETTES[name].ACCENT;
+  return PALETTES[asThemeName(name)].ACCENT;
 }
 
 // user accent override (settings): null = the theme's own accent
@@ -124,7 +142,8 @@ export function setAccent(hex: string | null): void {
 }
 
 /** Swap the active palette and mirror it into the DOM's CSS variables. */
-export function setTheme(name: ThemeName): void {
+export function setTheme(requested: ThemeName): void {
+  const name = asThemeName(requested);
   const p = PALETTES[name];
   themeName = name;
   BG = p.BG; PANEL = p.PANEL; PANEL_LIGHT = p.PANEL_LIGHT;

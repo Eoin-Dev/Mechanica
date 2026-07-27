@@ -29,7 +29,7 @@
  * an existing dial. See engine/perf.ts.
  */
 import { CompiledExpr, ExprError, compileExpr } from "../core/expr";
-import { intIn, numIn, numOr } from "../core/guards";
+import { arrayOr, idOr, intIn, numIn, strOr } from "../core/guards";
 import { Vec2 } from "../core/vec";
 import { Body, BodyDict, Wall, WallDict } from "./body";
 import { Contact, ContactCache, ContactStatic, solveContacts } from "./contacts";
@@ -180,14 +180,20 @@ export class ForceField {
     return { name: this.name, fx: this.fxSrc, fy: this.fySrc, enabled: this.enabled };
   }
 
-  static fromDict(d: FieldDict): ForceField {
+  static fromDict(d: Partial<FieldDict>): ForceField {
     // The sources must be strings before they reach the compiler: it
     // trims them, so a number or a null where a formula was expected threw
     // a TypeError rather than an ExprError, which compile() deliberately
     // re-throws - taking the whole scene load down with it.
-    const str = (v: unknown, fallback: string): string =>
-      typeof v === "string" ? v : fallback;
-    const f = new ForceField(str(d.name, "Field"), str(d.fx, "0"), str(d.fy, "0"));
+    //
+    // Deliberately NOT length-capped, unlike the display name. Truncating a
+    // formula that still parses would silently change the physics, which is
+    // worse than any length: an over-long or pathological source is already
+    // handled where it belongs, by the parser, which reports it as an
+    // ExprError and leaves the field disabled with its message showing.
+    const f = new ForceField(strOr(d.name, "Field", 80),
+                             strOr(d.fx, "0", Infinity),
+                             strOr(d.fy, "0", Infinity));
     f.enabled = d.enabled ?? true;
     return f;
   }
@@ -229,7 +235,9 @@ export class Driver {
   }
 
   static fromDict(d: DriverDict): Driver {
-    const drv = new Driver(numOr(d.body_id, -1),
+    // -1 matches no body, so a driver naming one that is missing or
+    // malformed is simply inert (prepareStep drops it)
+    const drv = new Driver(idOr(d.body_id, -1),
                            numIn(d.amplitude, 5.0, -1e9, 1e9),
                            numIn(d.frequency, 1.0, 0.0, 1e6),
                            numIn(d.phase, 0.0, -1e6, 1e6),
@@ -1529,9 +1537,22 @@ export class World {
     };
   }
 
-  static fromDict(data: Partial<WorldDict>): World {
+  /** Rebuild a world from parsed scene JSON.
+   *
+   * Total by construction: it returns a world for ANY input, including
+   * `null`, a bare number, or a dict whose `bodies` is a string. Every
+   * field was already range-guarded, but the SHAPE was not - and
+   * `(data.bodies ?? []).map is not a function` escaped the loader as a
+   * TypeError, past the two call sites that stand ready to report a bad
+   * file, into a click handler where it surfaced as nothing happening.
+   */
+  static fromDict(data: Partial<WorldDict> | null | undefined): World {
     const w = new World();
-    const s = data.settings ?? ({} as Partial<WorldDict["settings"]>);
+    const d: Partial<WorldDict> =
+      typeof data === "object" && data !== null ? data : {};
+    const raw = d.settings;
+    const s: Partial<WorldDict["settings"]> =
+      typeof raw === "object" && raw !== null ? raw : {};
     // Every setting is guarded, not just the two loop bounds. `?? default`
     // only catches a missing field: a NaN gravity or a `"G": "abc"` from a
     // hand-edited file passed straight into the force loop, where one
@@ -1553,16 +1574,25 @@ export class World {
     // solver loop bounds, where a large one hangs the tab outright
     w.substeps = intIn(s.substeps, 4, 1, 64);
     w.iterations = intIn(s.iterations, 8, 1, 64);
-    w.time = numOr(s.time, 0.0);
-    w.bodies = (data.bodies ?? []).map((d) => Body.fromDict(d));
-    w.walls = (data.walls ?? []).map((d) => Wall.fromDict(d));
+    w.time = numIn(s.time, 0.0, -1e12, 1e12);
+    const entry = (v: unknown): boolean => typeof v === "object" && v !== null;
+    w.bodies = arrayOr<BodyDict>(d.bodies).filter(entry).map((b) => Body.fromDict(b));
+    w.walls = arrayOr<WallDict>(d.walls).filter(entry).map((x) => Wall.fromDict(x));
     const byId = new Map<number, Body>();
     for (const b of w.bodies) byId.set(b.id, b);
-    w.links = (data.links ?? [])
-      .filter((d) => byId.has(d.a) && byId.has(d.b))
-      .map((d) => linkFromDict(d, byId));
-    w.fields = (data.fields ?? []).map((d) => ForceField.fromDict(d));
-    w.drivers = (data.drivers ?? []).map((d) => Driver.fromDict(d));
+    w.links = arrayOr<LinkDict>(d.links)
+      .filter(entry)
+      // `a !== b` rejects a link from a body to itself. Every solver stage
+      // already skips one (its length is zero, so the direction is
+      // undefined), but it would still be drawn, selectable, and would flag
+      // its own endpoint as sprung - excluding that body from the adaptive
+      // subdivision test for the rest of the session.
+      .filter((ln) => ln.a !== ln.b && byId.has(ln.a) && byId.has(ln.b))
+      .map((ln) => linkFromDict(ln, byId));
+    w.fields = arrayOr<FieldDict>(d.fields).filter(entry)
+      .map((f) => ForceField.fromDict(f));
+    w.drivers = arrayOr<DriverDict>(d.drivers).filter(entry)
+      .map((x) => Driver.fromDict(x));
     return w;
   }
 }

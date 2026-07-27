@@ -369,9 +369,22 @@ export function listScenes(): string[] {
   return names.sort();
 }
 
+/** A saved scene, or null when there is none by that name OR the stored
+ * text is not usable JSON.
+ *
+ * `World.fromDict` tolerates any SHAPE, but `JSON.parse` still rejects
+ * damaged text - a write truncated by a full quota, or an entry edited by
+ * hand through devtools. That threw straight out of the card's click
+ * handler, so the "Could not load" toast sitting right below this call
+ * could never fire and the card simply did nothing when clicked. */
 export function loadScene(name: string): World | null {
   const snap = localStorage.getItem(SCENE_PREFIX + name);
-  return snap === null ? null : restore(snap);
+  if (snap === null) return null;
+  try {
+    return restore(snap);
+  } catch {
+    return null;
+  }
 }
 
 export function deleteScene(name: string): void {
