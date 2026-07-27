@@ -14,5 +14,12 @@ export default defineConfig({
     // `:focus-visible`, so any `outline: none` carrying more specificity
     // deletes it silently, and that has happened once already.
     css: true,
+    // This is a verification suite, not a unit-test suite: several cases
+    // integrate every preset in the library for ten simulated seconds, which
+    // is seconds of real work by design rather than a hang. The default 5 s
+    // is below what the slowest of them legitimately needs (~8.3 s), so it
+    // was one machine's bad day away from a spurious CI failure - and became
+    // a real one the moment the runner started enforcing it.
+    testTimeout: 30_000,
   },
 });

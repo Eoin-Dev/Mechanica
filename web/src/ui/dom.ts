@@ -41,15 +41,39 @@ export interface Control {
 function media(query: string): () => boolean {
   let mql: MediaQueryList | null = null;
   return () => {
-    if (typeof window === "undefined") return false; // node (tests)
+    // Test what is actually about to be CALLED, not merely that a window
+    // object exists. The guard was meant to let this run outside a browser
+    // and checked the wrong thing: any host with a window but no
+    // matchMedia - jsdom, an old webview - threw a TypeError out of the
+    // first predicate, which happens inside the Inspector's constructor and
+    // so took the whole app down rather than degrading.
+    if (typeof window === "undefined" ||
+        typeof window.matchMedia !== "function") return false;
     if (mql === null) mql = window.matchMedia(query);
     return mql.matches;
   };
 }
 
+/** Subscribe to a media query starting or stopping matching.
+ *
+ * Exists so nothing has to reach for `matchMedia` itself. The Inspector did,
+ * unguarded, right next to its use of the guarded predicates below - so a
+ * host with a window but no matchMedia still threw out of its constructor
+ * even after `media()` learned to cope. One capability, one place that
+ * checks for it. */
+export function onMediaChange(query: string, fn: () => void): void {
+  if (typeof window === "undefined" ||
+      typeof window.matchMedia !== "function") return;
+  window.matchMedia(query).addEventListener("change", fn);
+}
+
+/** The CSS mobile breakpoint, shared by the predicate below and by anything
+ * subscribing to it, so the two cannot drift apart. */
+export const PHONE_QUERY = "(max-width: 760px)";
+
 /** Phone-sized viewport (matches the CSS mobile breakpoint). Gates LAYOUT
  * choices (the inspector drawer, toolbar trims). */
-export const isPhone = media("(max-width: 760px)");
+export const isPhone = media(PHONE_QUERY);
 
 /** Touch-first device (phones AND tablets - no hover, no mouse buttons,
  * usually no keyboard). Gates WORDING and content: touch hints, no
@@ -128,6 +152,64 @@ export class RefreshGroup {
     this.items = [];
     this.byEl.clear();
   }
+}
+
+// ------------------------------------------------------------------ splitter
+/** Bounds of the resizable panes.
+ *
+ * Exported because THREE places need to agree on them and previously did
+ * not: the splitter that enforces them while dragging, the code that
+ * re-applies a saved size on load, and the settings guard that decides
+ * which saved sizes are usable at all. A stored width the splitter could
+ * never have produced would otherwise be honoured on load and only snap
+ * back the next time the splitter was touched. */
+export const INSPECTOR_W_MIN = 240;
+export const INSPECTOR_W_MAX = 620;
+export const DOCK_H_MIN = 110;
+export const DOCK_H_MAX = 1200;
+
+/** Wire a splitter element as a drag-to-resize handle.
+ *
+ * `onMove` applies the new size, `onCommit` persists it once the gesture
+ * ends. Shared by the Inspector's width splitter and the graph dock's
+ * height splitter, which had grown identical copies of this - and the same
+ * two gaps in both:
+ *
+ *   - A cancelled drag (a system gesture on touch, a pointer lost to a
+ *     window switch) fires `pointercancel`, never `pointerup`, so the
+ *     "dragging" flag stayed true. From then on merely HOVERING over the
+ *     splitter went on resizing the panel with no button held. The graph
+ *     canvas in the same file already handled pointercancel, so the two
+ *     halves of one panel disagreed about the same gesture.
+ *   - `setPointerCapture` throws if the pointer is already gone by the time
+ *     the handler runs; uncaught, that aborted the gesture's setup and left
+ *     the flag set with no capture to release.
+ */
+export function splitterDrag(splitter: HTMLElement,
+                             onMove: (e: PointerEvent) => void,
+                             onCommit: () => void): void {
+  let dragging = false;
+  const end = (): void => {
+    if (!dragging) return;
+    dragging = false;
+    onCommit();
+  };
+  splitter.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    try {
+      splitter.setPointerCapture(e.pointerId);
+    } catch {
+      // pointer already released: the drag just won't track off-element
+    }
+  });
+  splitter.addEventListener("pointermove", (e) => {
+    if (dragging) onMove(e);
+  });
+  splitter.addEventListener("pointerup", end);
+  splitter.addEventListener("pointercancel", end);
+  // fires after pointerup too, but `end` is idempotent; it is here for the
+  // case where capture is lost without either of the events above
+  splitter.addEventListener("lostpointercapture", end);
 }
 
 // --------------------------------------------------------------- modal a11y

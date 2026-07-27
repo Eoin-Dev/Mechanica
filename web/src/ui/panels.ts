@@ -3,7 +3,8 @@ import { App, GraphMode, Panel } from "../app";
 import { Body } from "../engine/body";
 import { SpringLink } from "../engine/links";
 import { TOOL_INFO, TOOL_KEYS, Tool } from "../interact/tools";
-import { RefreshGroup, button, el, isTouch, segmented, slider } from "./dom";
+import { DOCK_H_MAX, DOCK_H_MIN, RefreshGroup, button, el, isTouch, segmented,
+         slider, splitterDrag } from "./dom";
 import { ICONS } from "./icons";
 import { GRAPH_HISTORY_S, GRAPH_WINDOW_S, TimeSeries } from "./plots";
 import * as theme from "./theme";
@@ -295,22 +296,17 @@ export class GraphDock implements Panel {
 
     // resizable via the splitter above the dock
     const saved = app.settings.dock_h;
-    if (typeof saved === "number") root.style.height = `${Math.max(110, saved)}px`;
-    let dragging = false;
-    splitter.addEventListener("pointerdown", (e) => {
-      dragging = true;
-      splitter.setPointerCapture(e.pointerId);
-    });
-    splitter.addEventListener("pointermove", (e) => {
-      if (!dragging) return;
+    if (typeof saved === "number") {
+      root.style.height =
+        `${Math.max(DOCK_H_MIN, Math.min(DOCK_H_MAX, saved))}px`;
+    }
+    splitterDrag(splitter, (e) => {
       const main = root.parentElement!;
-      const h = Math.max(110, Math.min(main.clientHeight - 160,
+      const h = Math.max(DOCK_H_MIN, Math.min(main.clientHeight - 160,
         main.getBoundingClientRect().bottom - e.clientY));
       root.style.height = `${h}px`;
       app.resizeCanvas();
-    });
-    splitter.addEventListener("pointerup", () => {
-      dragging = false;
+    }, () => {
       app.settings.dock_h = root.clientHeight;
       app.saveSettings();
     });

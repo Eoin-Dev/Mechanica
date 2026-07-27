@@ -4,7 +4,7 @@ An interactive physics sandbox that runs entirely in the browser: build and
 analyse mechanical systems — orbits, pendulums, oscillators, collisions,
 gases, friction, chaos and soft bodies.
 
-![typescript](https://img.shields.io/badge/TypeScript-strict-blue) ![deps](https://img.shields.io/badge/engine%20deps-none-green) ![tests](https://img.shields.io/badge/tests-624-brightgreen)
+![typescript](https://img.shields.io/badge/TypeScript-strict-blue) ![deps](https://img.shields.io/badge/engine%20deps-none-green) ![tests](https://img.shields.io/badge/tests-600%2B%20passing-brightgreen)
 
 The app lives in [`web/`](web/). No server, no accounts — everything
 simulates locally in the visitor's browser.
@@ -23,6 +23,14 @@ npm run dev        # dev server, live reload
 npm test           # verification suite (physics, rendering, robustness)
 npm run build      # production build into web/dist/
 ```
+
+The badge states a lower bound rather than an exact figure on purpose: an
+exact count in a README is a claim about the present that nothing keeps
+true, and this one had silently drifted 50 behind. CI enforces the bound
+(`scripts/check-test-count.mjs`), so it fails if the suite ever shrinks past
+it — and stays correct without a commit every time a test is added. Exact
+counts belong in commit messages, where they are a record of a moment and
+remain true (see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ## Deploy
 
