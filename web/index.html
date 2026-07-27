@@ -19,7 +19,10 @@
                save, cull and overload notices), so they have to reach a screen
                reader too; polite, because none of them interrupts a task -->
           <div id="toasts" role="status" aria-live="polite"></div>
-          <div id="overload-warning" role="status" hidden>Slow: physics can't keep up — reduce substeps or bodies</div>
+          <!-- text is written by main.ts, which picks between the physics-
+               bound and render-bound wording; a copy here could only ever
+               drift out of step with it (it already had) -->
+          <div id="overload-warning" role="status" hidden></div>
         </div>
         <div id="dock-splitter" hidden></div>
         <div id="dock" hidden></div>

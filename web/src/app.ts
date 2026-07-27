@@ -15,7 +15,7 @@ import { CanvasController } from "./interact/tools";
 import { GRAPH_MAX_POINTS, GRAPH_WINDOW_S, PhasePlot, TimeSeries } from "./ui/plots";
 import { reducedMotion } from "./ui/dom";
 import * as theme from "./ui/theme";
-import { ThemeName, css, setAccent, setTheme } from "./ui/theme";
+import { THEME_NAMES, ThemeName, css, setAccent, setTheme } from "./ui/theme";
 
 export const PHYSICS_DT = 1.0 / 120.0;
 
@@ -55,7 +55,7 @@ const SETTINGS_KEY = "mechanica.settings";
 
 export type GraphMode = "Off" | "Energy" | "Mom." | "Phase";
 
-interface Settings {
+export interface Settings {
   adaptive_dt?: boolean;
   inspector_visible?: boolean;
   inspector_w?: number;
@@ -69,6 +69,72 @@ interface Settings {
   accent?: string;           // hex UI accent; unset = the theme's default
   custom_accents?: string[]; // user-picked accents shown as extra swatches
   font_scale?: number;       // UI font-size multiplier (0.9 - 1.2)
+}
+
+/** Every boolean preference, so loadSettings can validate them in one pass
+ * and a new one cannot be added to `Settings` and forgotten here. */
+const BOOL_SETTINGS = [
+  "adaptive_dt", "inspector_visible", "tour_done", "dyslexic_font",
+  "cull", "perf_mode", "drag_hits_walls",
+] as const satisfies ReadonlyArray<keyof Settings>;
+
+/** A "#rrggbb" colour, the only shape the accent settings may hold. Values
+ * from storage are interpolated straight into an inline `background:` on
+ * the swatches, so nothing else may reach them. */
+function isHex(v: unknown): v is string {
+  return typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v);
+}
+
+/** Keep only the persisted preferences this build can actually use.
+ *
+ * Scene files have been guarded field by field since the port; settings
+ * were not, and they are the more dangerous of the two. A scene is loaded
+ * on demand and a bad one can be abandoned, whereas settings are read in
+ * the App constructor on EVERY load - so one unusable value is not a bad
+ * session but a permanently blank page, with no route back from inside the
+ * app. Two fields could do it outright: a `theme` this build does not have
+ * threw on the first palette read, and a `custom_accents` that was not an
+ * array threw when the settings panel iterated it. Neither needs an
+ * attacker - renaming a theme in a future version is enough.
+ *
+ * Anything unrecognised is DROPPED rather than repaired, so the field falls
+ * back to its default exactly as if it had never been written. A pure
+ * function of the parsed JSON, so it can be tested without standing up an
+ * App (which needs a canvas, a document and a storage backend).
+ */
+export function sanitizeSettings(raw: unknown): Settings {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
+  const r = raw as Record<string, unknown>;
+  const s: Settings = {};
+  // hasOwn rather than a bare read: `raw` always comes from JSON.parse in
+  // the app (which makes "__proto__" an ordinary own key rather than the
+  // setter, so it cannot pollute), but a caller handing over an object
+  // literal should not be able to smuggle a mode in through the prototype.
+  for (const k of BOOL_SETTINGS) {
+    if (Object.hasOwn(r, k) && typeof r[k] === "boolean") s[k] = r[k];
+  }
+  // Pane sizes are clamped to what the splitters themselves allow, so a
+  // stale value from a much larger window cannot hide the canvas.
+  if (typeof r.inspector_w === "number" && Number.isFinite(r.inspector_w)) {
+    s.inspector_w = Math.min(1200, Math.max(240, r.inspector_w));
+  }
+  if (typeof r.dock_h === "number" && Number.isFinite(r.dock_h)) {
+    s.dock_h = Math.min(1200, Math.max(80, r.dock_h));
+  }
+  if (typeof r.theme === "string" && (THEME_NAMES as string[]).includes(r.theme)) {
+    s.theme = r.theme as ThemeName;
+  }
+  // The font scale multiplies every size in the stylesheet, so an
+  // out-of-range one is not a cosmetic problem: it makes the app unreadable
+  // AND persists, so reloading cannot undo it.
+  if (typeof r.font_scale === "number" && Number.isFinite(r.font_scale)) {
+    s.font_scale = Math.min(1.2, Math.max(0.9, r.font_scale));
+  }
+  if (isHex(r.accent)) s.accent = r.accent;
+  if (Array.isArray(r.custom_accents)) {
+    s.custom_accents = r.custom_accents.filter(isHex).slice(0, 6);
+  }
+  return s;
 }
 
 /** Panels register here; the app pokes them once per frame. */
@@ -160,9 +226,9 @@ export class App {
   // --------------------------------------------------------------- settings
   private loadSettings(): Settings {
     try {
-      return JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}") as Settings;
+      return sanitizeSettings(JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}"));
     } catch {
-      return {};
+      return {}; // unparseable JSON: start from defaults
     }
   }
 
@@ -383,24 +449,55 @@ export class App {
     this.toast("Reset to the initial state");
   }
 
+  /** Re-simulate from the start state up to `text` seconds.
+   *
+   * The jump is synchronous - there is no partial world to show and nothing
+   * useful to draw halfway - so the only question is how long the tab may
+   * be unresponsive for. A step-count cap alone does not answer it: 20 000
+   * steps is 2.6 s of frozen tab on the Trampoline and 6.4 s on the Jelly
+   * block on a desktop, and several times that on a phone, which is long
+   * enough for the browser to offer to kill the page. So the work is
+   * bounded in WALL-CLOCK time as well, and whatever time it actually
+   * reached is reported rather than implied - landing short and saying so
+   * beats freezing for half a minute to land exactly.
+   */
   commitTimeJump(text: string): boolean {
     const target = parseFloat(text);
     if (!Number.isFinite(target) || target < 0) return false;
     this.ensureInitial();
     const world = snap.restore(this.initialSnapshot!);
-    let steps = Math.round((target - world.time) / PHYSICS_DT);
+    const steps = Math.round((target - world.time) / PHYSICS_DT);
     if (steps < 0) return false;
-    if (steps > 20000) {
-      steps = 20000;
-      this.toast(`Time jump capped at ${(world.time + steps * PHYSICS_DT).toFixed(0)} s`);
-    }
-    for (let i = 0; i < steps; i++) {
-      if (!this.safeStep(world, PHYSICS_DT)) break;
+    const budgetMs = 1500;
+    const t0 = performance.now();
+    let ran = 0;
+    let blewUp = false;
+    for (; ran < steps && ran < App.TIME_JUMP_MAX_STEPS; ran++) {
+      if (!this.safeStep(world, PHYSICS_DT)) {
+        blewUp = true;
+        break;
+      }
+      // the clock is only read every 64th step: at ~0.1 ms a step that is
+      // a check every 6 ms, far finer than the budget, for no measurable cost
+      if ((ran & 63) === 63 && performance.now() - t0 > budgetMs) {
+        ran++;
+        break;
+      }
     }
     this.replaceWorld(world, true);
     this.playing = false;
+    if (blewUp) {
+      this.toast(`Stopped at ${world.time.toFixed(2)} s - the scene blew up`);
+    } else if (ran < steps) {
+      this.toast(`Reached ${world.time.toFixed(2)} s - that is as far as this ` +
+                 "scene can be re-simulated at once");
+    }
     return true;
   }
+
+  /** Hard ceiling on a time jump's steps, on top of the wall-clock budget:
+   * a cheap scene must not be able to buy an unbounded jump either. */
+  private static TIME_JUMP_MAX_STEPS = 20000;
 
   replaceWorld(world: World, keepInitial = false): void {
     this.world = world;

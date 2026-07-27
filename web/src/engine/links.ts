@@ -29,7 +29,7 @@
  * projects springs as position constraints instead, which has no stability
  * limit to respect (see engine/perf.ts).
  */
-import { numIn, numOr } from "../core/guards";
+import { idOr, numIn } from "../core/guards";
 import { Body } from "./body";
 
 export interface RodDict {
@@ -135,6 +135,21 @@ export class SpringLink {
       const vrel = (b.vel.x - a.vel.x) * nx + (b.vel.y - a.vel.y) * ny;
       f += this.cEff * vrel;
     }
+    // A string pulls or it does nothing - it can never push, and the
+    // slackness test above is not enough to guarantee that once a damper is
+    // involved. While the ends APPROACH, vrel is negative, so a barely
+    // stretched string has a damping term that outweighs its tension and
+    // flips the total force: with the string tool's own defaults (k = 1000,
+    // c = 2) anything stretched by less than 2 mm at 1 m/s of closing speed
+    // pushed its ends apart instead of pulling them together - and a
+    // swinging string crosses that boundary on every cycle. This is the
+    // same one-sidedness DistanceLink already enforces on the rigid rope by
+    // clamping its multiplier at zero.
+    //
+    // Tested on the total rather than inside the damping branch, so it also
+    // covers a negative stiffness (which no slider offers, but which the
+    // clamp in prepareSprings only bounds from above).
+    if (this.tensionOnly && f < 0.0) return;
     // positive f pulls the ends together
     a.acc.x += f * nx * a.invMass;
     a.acc.y += f * ny * a.invMass;
@@ -186,14 +201,14 @@ export function linkFromDict(d: LinkDict, bodiesById: Map<number, Body>): Link {
                           numIn(d.stiffness, 20.0, 0.0, 1e9),
                           numIn(d.damping, 0.0, 0.0, 1e9),
                           d.tension_only ?? false);
-    link.id = numOr(d.id, link.id);
+    link.id = idOr(d.id, link.id);
     SpringLink.nextId = Math.max(SpringLink.nextId, link.id + 1);
   } else {
     link = new DistanceLink(a, b,
                             numIn(d.length, natural, 0.0, 1e6),
                             d.is_rope ?? false,
                             numIn(d.compliance, 0.0, 0.0, 1e9));
-    link.id = numOr(d.id, link.id);
+    link.id = idOr(d.id, link.id);
     DistanceLink.nextId = Math.max(DistanceLink.nextId, link.id + 1);
   }
   return link;

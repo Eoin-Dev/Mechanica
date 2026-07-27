@@ -1,5 +1,5 @@
 /** Physical objects: dynamic circular bodies and static wall segments. */
-import { clamp01, colorOr, numOr as num } from "../core/guards";
+import { clamp01, colorOr, idOr, numOr as num, strOr } from "../core/guards";
 import { Vec2 } from "../core/vec";
 
 export type Color = [number, number, number];
@@ -190,9 +190,9 @@ export class Body {
                        Math.max(1e-4, num(d.radius, 0.15)),
                        Math.max(0, num(d.mass, 1)));
     if (d.color !== undefined) b.color = colorOr(d.color, b.color);
-    b.id = num(d.id, b.id);
+    b.id = idOr(d.id, b.id);
     Body.nextId = Math.max(Body.nextId, b.id + 1);
-    b.name = d.name ?? `Body ${b.id}`;
+    b.name = strOr(d.name, `Body ${b.id}`);
     b.vel = new Vec2(num(d.vel?.[0], 0), num(d.vel?.[1], 0));
     b.angle = num(d.angle, 0);
     b.omega = num(d.omega, 0);
@@ -255,9 +255,9 @@ export class Wall {
     const w = new Wall(new Vec2(num(d.a?.[0], 0), num(d.a?.[1], 0)),
                        new Vec2(num(d.b?.[0], 0), num(d.b?.[1], 0)),
                        Math.max(1e-4, num(d.thickness, 0.08)));
-    w.id = num(d.id, w.id);
+    w.id = idOr(d.id, w.id);
     Wall.nextId = Math.max(Wall.nextId, w.id + 1);
-    w.name = d.name ?? `Wall ${w.id}`;
+    w.name = strOr(d.name, `Wall ${w.id}`);
     w.restitution = clamp01(num(d.restitution, 0.8));
     w.friction = Math.max(0, num(d.friction, 0.5));
     w.color = colorOr(d.color, WALL_GREY);
