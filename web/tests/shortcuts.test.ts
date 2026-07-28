@@ -286,3 +286,58 @@ describe("modal precedence", () => {
     expect(log.calls).toEqual([]);
   });
 });
+
+/** A keydown whose target is not an element must not disable the keyboard.
+ *
+ * `ownsKey` asks the target whether it owns the key, and did so by calling
+ * `getAttribute` on it directly. Real keydowns always carry an element (the
+ * focused one, or the body), but a keydown dispatched on `document` itself -
+ * automation, a browser extension, a refactor that listens somewhere else -
+ * carries the Document, which has no `getAttribute`. That threw INSIDE the
+ * listener, where the browser swallows the exception, so the key was dropped:
+ * every shortcut in the app dead, silently, with nothing in the console, for
+ * as long as events kept arriving that way.
+ */
+describe("an unusual event target", () => {
+  /** A keydown carrying `target` verbatim, bypassing `press`'s element stub. */
+  function pressAt(target: unknown, key = "b"): boolean {
+    const e = {
+      key, ctrlKey: false, metaKey: false, shiftKey: false, target,
+      preventDefault() {}, stopPropagation() {},
+    } as unknown as KeyboardEvent;
+    return handleShortcut(e, host);
+  }
+
+  it("is handled rather than throwing, whatever shape the target has", () => {
+    for (const target of [null, undefined, {}, { tagName: "BODY" },
+                          { nodeType: 9 }, { tagName: undefined }]) {
+      expect(() => pressAt(target)).not.toThrow();
+    }
+  });
+
+  it("still routes the key when the target cannot own it", () => {
+    expect(pressAt({ nodeType: 9 }, "b")).toBe(true);
+    expect(log.calls).toContain("setTool(body)");
+  });
+
+  it("still routes the key for a target with no properties at all", () => {
+    expect(pressAt({}, "w")).toBe(true);
+    expect(log.calls).toContain("setTool(wall)");
+  });
+
+  it("still lets a real button keep its Space", () => {
+    expect(pressAt({ tagName: "BUTTON", getAttribute: () => null }, " ")).toBe(false);
+    expect(log.calls).toEqual([]);
+  });
+
+  it("still lets an ARIA button keep its Space", () => {
+    const aria = { tagName: "DIV", getAttribute: (n: string) => (n === "role" ? "button" : null) };
+    expect(pressAt(aria, " ")).toBe(false);
+    expect(log.calls).toEqual([]);
+  });
+
+  it("still lets a text field keep every key", () => {
+    expect(pressAt({ tagName: "INPUT" }, "b")).toBe(false);
+    expect(log.calls).toEqual([]);
+  });
+});

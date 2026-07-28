@@ -304,9 +304,22 @@ export function button(label: string, onClick: () => void,
   if (opts.class) b.classList.add(...opts.class.split(" "));
   if (opts.tooltip) b.title = opts.tooltip;
   b.addEventListener("click", onClick);
+  // A button that reports an active state is a TOGGLE, and its state was
+  // carried by a CSS class alone - visible to a viewer, invisible to
+  // assistive tech. That covers every tool in the palette and the auto-fit
+  // and play buttons: a screen-reader user could not tell which tool was
+  // selected, only that there were nine buttons.
+  if (opts.isActive) b.setAttribute("aria-pressed", String(opts.isActive()));
   const refresh = (opts.isActive || opts.isEnabled)
     ? () => {
-        if (opts.isActive) b.classList.toggle("active", opts.isActive());
+        if (opts.isActive) {
+          const on = opts.isActive();
+          b.classList.toggle("active", on);
+          const s = String(on);
+          if (b.getAttribute("aria-pressed") !== s) {
+            b.setAttribute("aria-pressed", s); // guarded: this runs per frame
+          }
+        }
         if (opts.isEnabled) b.disabled = !opts.isEnabled();
       }
     : undefined;
@@ -344,9 +357,15 @@ export function slider(label: string, get: () => number,
                        set: (v: number) => void, min: number, max: number,
                        opts: SliderOpts = {}): Control {
   const fmt = opts.fmt ?? fmt3g;
-  const input = el("input", { type: "range", min: "0", max: String(RESOLUTION) });
+  // aria-label, because the visible caption is a sibling <span>, not a
+  // <label for>: nothing associates the two, so assistive tech announced
+  // every slider in the app as an unnamed one. The Inspector is built almost
+  // entirely out of these, so that was most of the app's controls.
+  const input = el("input", { type: "range", min: "0", max: String(RESOLUTION),
+                              "aria-label": label });
   // The value readout doubles as a text field: click it to type an exact value.
   const val = el("input", { class: "val", type: "text", inputmode: "decimal",
+                            "aria-label": `${label} (type an exact value)`,
                             title: "Click to type an exact value" });
   const row = el("div", { class: "row" },
                  el("span", { class: "lbl", text: label }), input, val);
@@ -372,6 +391,14 @@ export function slider(label: string, get: () => number,
     if (editing) return; // don't clobber what the user is typing
     const s = opts.unit ? `${fmt(v)} ${opts.unit}` : fmt(v);
     if (val.value !== s) val.value = s; // avoid per-frame DOM writes
+    // The range input's own value is a POSITION on a 0..RESOLUTION track,
+    // which is what assistive tech reads out unless told otherwise - so a
+    // mass of 3.2 kg was announced as "1400". aria-valuetext replaces that
+    // with the quantity the user is actually setting, units and all. Guarded
+    // like the write above so it is not a DOM write every frame.
+    if (input.getAttribute("aria-valuetext") !== s) {
+      input.setAttribute("aria-valuetext", s);
+    }
   };
   input.addEventListener("input", () => {
     // A disabled control must not write, whatever route the event arrived by.
@@ -456,7 +483,10 @@ export function numEdit(label: string, get: () => number,
                         set: (v: number) => void, unit = "",
                         onCommit?: () => void,
                         fmt: (v: number) => string = fmt3g): Control {
-  const input = el("input", { type: "text", inputmode: "decimal" });
+  // same reasoning as slider(): the caption beside it is a plain <span>, so
+  // without this the field has no name for assistive tech at all
+  const input = el("input", { type: "text", inputmode: "decimal",
+                              "aria-label": unit ? `${label} (${unit})` : label });
   const wrap = el("div", { class: "num-row" },
                   el("span", { class: "lbl", text: label }), input,
                   unit ? el("span", { class: "unit", text: unit }) : null);
@@ -524,8 +554,14 @@ export function checkbox(label: string, get: () => boolean,
 export function segmented(options: string[], get: () => string,
                           set: (v: string) => void, tooltip = "",
                           disabled?: () => boolean): Control {
-  const wrap = el("div", { class: "segmented" });
-  if (tooltip) wrap.title = tooltip;
+  // role=group so the strip reads as one control rather than as loose
+  // buttons; the chosen option was marked with a CSS class only, so which
+  // one was selected did not reach assistive tech at all
+  const wrap = el("div", { class: "segmented", role: "group" });
+  if (tooltip) {
+    wrap.title = tooltip;
+    wrap.setAttribute("aria-label", tooltip);
+  }
   const btns = options.map((opt) => {
     const b = el("button", { text: opt });
     b.addEventListener("click", () => {
@@ -540,7 +576,10 @@ export function segmented(options: string[], get: () => string,
     wrap.classList.toggle("disabled", dis);
     const cur = get();
     btns.forEach((b, i) => {
-      b.classList.toggle("active", options[i] === cur);
+      const on = options[i] === cur;
+      b.classList.toggle("active", on);
+      const s = String(on);
+      if (b.getAttribute("aria-pressed") !== s) b.setAttribute("aria-pressed", s);
       if (b.disabled !== dis) b.disabled = dis;
     });
   };
@@ -551,8 +590,12 @@ export function segmented(options: string[], get: () => string,
 // ----------------------------------------------------------------- textEdit
 /** Free-text field (names, formulas). commit returns false to flag an error. */
 export function textEdit(get: () => string, commit: (s: string) => boolean,
-                         placeholder = ""): Control {
+                         placeholder = "", label = ""): Control {
+  // `label` names the field for assistive tech. A placeholder is not a
+  // name - it disappears the moment anything is typed - and the object-name
+  // field had neither, so it announced as an unlabelled text box.
   const input = el("input", { type: "text", placeholder });
+  if (label) input.setAttribute("aria-label", label);
   let focused = false;
   input.addEventListener("focus", () => {
     focused = true;

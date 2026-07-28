@@ -28,10 +28,24 @@ export interface ShortcutHost {
   toggleInspector(): void;
 }
 
-/** Elements that own the keys they are given and must not be shadowed. */
-function ownsKey(target: HTMLElement | null, key: string): boolean {
-  if (target === null) return false;
-  const tag = target.tagName;
+/** Elements that own the keys they are given and must not be shadowed.
+ *
+ * `target` is whatever the event carried, which is NOT guaranteed to be an
+ * element: a keydown dispatched on `document` itself (automation, an
+ * extension, a future refactor that listens somewhere else) hands over the
+ * Document, which has no `getAttribute`. Calling it there threw inside the
+ * listener - where the browser swallows the exception - so the shortcut was
+ * dropped, every shortcut, silently, with nothing in the console. Optional
+ * calls make an unusual target simply "not an element that owns keys",
+ * which is the right answer for one. */
+function ownsKey(target: EventTarget | null | undefined, key: string): boolean {
+  // `!target` rather than `=== null`: an event object built by hand (a test,
+  // a polyfill, a synthetic dispatch) can carry `undefined` just as easily
+  // as `null`, and only one of those was being caught.
+  if (!target) return false;
+  const el = target as { tagName?: string;
+                         getAttribute?: (name: string) => string | null };
+  const tag = el.tagName;
   // text entry of every kind keeps all of its keys
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "MATH-FIELD" ||
       tag === "SELECT") {
@@ -44,7 +58,7 @@ function ownsKey(target: HTMLElement | null, key: string): boolean {
   // freeing Tab. A mouse click still blurs the button (see main.ts), so Space
   // keeps working as play/pause for anyone who is not tabbing through the
   // controls.
-  if ((tag === "BUTTON" || target.getAttribute("role") === "button") &&
+  if ((tag === "BUTTON" || el.getAttribute?.("role") === "button") &&
       (key === " " || key === "Enter")) {
     return true;
   }
@@ -55,8 +69,7 @@ function ownsKey(target: HTMLElement | null, key: string): boolean {
  * already had preventDefault called on the event in that case). */
 export function handleShortcut(e: KeyboardEvent, host: ShortcutHost): boolean {
   const { app } = host;
-  const target = e.target as HTMLElement | null;
-  if (ownsKey(target, e.key)) return false;
+  if (ownsKey(e.target, e.key)) return false;
 
   const key = e.key.toLowerCase();
   if (e.ctrlKey || e.metaKey) {
