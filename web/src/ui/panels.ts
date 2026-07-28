@@ -24,7 +24,10 @@ export class Toolbar implements Panel {
     this.app = app;
     const g = this.group;
 
-    root.append(el("span", { class: "brand", text: "Mechanica" }));
+    // the app's title: a heading for assistive tech (the page had h2s but no
+    // h1 at all), styled by .brand exactly as before
+    root.append(el("span", { class: "brand", text: "Mechanica",
+                             role: "heading", "aria-level": "1" }));
 
     const play = g.add(button("", () => app.togglePlay(),
       { icon: ICONS.play, style: "primary",

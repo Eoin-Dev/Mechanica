@@ -356,7 +356,7 @@ export class Inspector implements Panel {
       obj.name = s.trim() || obj.name;
       this.commit();
       return true;
-    }, "name"));
+    }, "name", "Name"));
   }
 
   private buildSingleBody(b: Body): void {
@@ -933,7 +933,7 @@ export class Inspector implements Panel {
         field.name = s.trim() || field.name;
         this.commit();
         return true;
-      }, "Field name"));
+      }, "Field name", "Force field name"));
       nameEd.root.style.flex = "1";
       nameRow.append(chk.root, nameEd.root);
       this.body.append(nameRow);
@@ -957,8 +957,10 @@ export class Inspector implements Panel {
         const useMath = renderable && !this.preferTextFormula.has(prefKey);
         const edit = this.group.add(useMath
           ? mathEdit(() => field[attr], commitSrc,
-                     "Type math: ^ makes a power, / a fraction, sqrt a root")
-          : textEdit(() => field[attr], commitSrc, "e.g. -0.5*vx or -x*10"));
+                     "Type math: ^ makes a power, / a fraction, sqrt a root",
+                     `${attr === "fxSrc" ? "Fx" : "Fy"} formula`)
+          : textEdit(() => field[attr], commitSrc, "e.g. -0.5*vx or -x*10",
+                       `${attr === "fxSrc" ? "Fx" : "Fy"} formula`));
         const toggle = this.group.add(button("", () => {
           // leaving math prefers text, and vice versa
           if (useMath) this.preferTextFormula.add(prefKey);

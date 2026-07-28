@@ -58,13 +58,16 @@ const SHORTCUTS: Record<string, string> = {
 /** Typeset math field over source-text state; commit returns false to flag
  * an error (same contract as textEdit). */
 export function mathEdit(get: () => string, commit: (s: string) => boolean,
-                         tooltip = ""): Control {
+                         tooltip = "", label = ""): Control {
   const wrap = el("div", { class: "math-edit" });
   const errText = el("div", { class: "error-text" });
   errText.hidden = true;
 
-  // Fully working stand-in until MathLive arrives (first open only).
-  const interim = textEdit(get, commit, "");
+  // Fully working stand-in until MathLive arrives (first open only). It is
+  // a real, focusable field, so it needs its own accessible name - without
+  // one the two formula inputs announced as unlabelled text boxes for as
+  // long as the lazy chunk took to arrive, and forever if it never did.
+  const interim = textEdit(get, commit, "", label);
   wrap.append(interim.root);
   let refreshActive: () => void = () => interim.refresh?.();
 
@@ -76,6 +79,7 @@ export function mathEdit(get: () => string, commit: (s: string) => boolean,
     }
     const mf = new m.MathfieldElement();
     if (tooltip) mf.title = tooltip;
+    if (label) mf.setAttribute("aria-label", label);
 
     let focused = false;
     let errored = false;           // conversion failed; keep user content

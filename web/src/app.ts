@@ -428,7 +428,9 @@ export class App {
       .filter((o): o is Body => o instanceof Body).map((o) => o.id));
     this.world = world;
     this.controller.hover = null;
-    this.controller.abortDrag();
+    // a rewind swaps the world just as much as a load does, so the same
+    // in-progress gestures have to go with it (see resetInteraction)
+    this.controller.resetInteraction();
     this.setSelection(world.bodies.filter((b) => selIds.has(b.id)));
     // trim graphs back to the rewound time instead of wiping them
     this.energySeries.truncate(world.time);
@@ -538,7 +540,10 @@ export class App {
     this.softBodyHintArmed = false;
     this.setSelection([]);
     this.controller.hover = null;
-    this.controller.abortDrag();
+    // resetInteraction, not abortDrag: a half-made link holds a BODY from
+    // the world being replaced, so finishing it afterwards wired the new
+    // world to an object that is not in it (see resetInteraction).
+    this.controller.resetInteraction();
     this.trails.clear();
     this.energySeries.clear();
     this.momentumSeries.clear();

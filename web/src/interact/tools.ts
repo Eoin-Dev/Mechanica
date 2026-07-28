@@ -381,15 +381,26 @@ export class CanvasController {
   }
 
   // ------------------------------------------------------------------ events
-  /** Drop every in-progress gesture (drag, pan, rubber band, pinch).
-   * Called when the browser interrupts us mid-gesture: fullscreen
-   * toggles, window blur, pointer cancellation. */
+  /** Drop every in-progress gesture: drag, pan, rubber band, pinch, and the
+   * two multi-click gestures (a half-drawn wall, a half-made link).
+   *
+   * `linkFirst` was the one thing this did not clear, while `wallStart`
+   * beside it was - and a link's first endpoint is a BODY REFERENCE, which
+   * makes it the one that outlives a world. Pick the rod tool, click one
+   * body, then load a scene or press undo, then click again: the second
+   * click completed the link against a body from the world before, so the
+   * new world got a link with an endpoint that is not in it. It drew as a
+   * line to a phantom point and the rod solver pulled a real body toward
+   * nothing. Saving and reloading silently dropped the link, which made it
+   * look like a rendering glitch rather than a live constraint.
+   */
   resetInteraction(): void {
     this.abortDrag();
     this.pointers.clear();
     this.pinchDist = 0;
     this.rubber = null;
     this.wallStart = null;
+    this.linkFirst = null;
     this.panning = false;
   }
 
@@ -833,12 +844,31 @@ export class CanvasController {
   }
 
   // ---------------------------------------------------------------- deletion
-  /** Drop selection/hover entries that no longer exist in the world.
+  /** Drop every reference this controller holds to an object the world no
+   * longer contains.
    *
-   * Deleting a body cascade-deletes every link attached to it, so
-   * removing just the object that was asked for left the inspector
-   * editing ghosts - a selected spring whose endpoint was erased stayed
-   * "selected" although it no longer existed. */
+   * Deleting a body cascade-deletes every link attached to it, so removing
+   * just the object that was asked for left the inspector editing ghosts -
+   * a selected spring whose endpoint was erased stayed "selected" although
+   * it no longer existed.
+   *
+   * The controller keeps FIVE such references, and only three were being
+   * cleaned. The two that were not are both live gestures:
+   *
+   *   - `linkFirst` is the first endpoint of a half-made link. Erase that
+   *     body (or box-select and delete, or undo it away) and the next click
+   *     completed the link against it anyway, putting a link into the world
+   *     with an endpoint that is not in it: drawn as a line to a phantom
+   *     point, and fed to the rod solver, which then pulled a real body
+   *     toward nothing. Saving and reloading dropped the link silently,
+   *     which disguised a live constraint as a rendering glitch.
+   *   - `velDrag` / `wallDrag` are the objects being aimed or reshaped, and
+   *     kept receiving edits after deletion - edits that then pushed an
+   *     undo entry for a change to something that does not exist.
+   *
+   * Found by the random operation fuzzer, not by inspection: both need a
+   * delete to land in the middle of a multi-step gesture.
+   */
   private pruneDeleted(): void {
     const app = this.app;
     const w = app.world;
@@ -848,6 +878,12 @@ export class CanvasController {
           : w.links.includes(o);
     if (this.hover !== null && !alive(this.hover)) this.hover = null;
     if (this.dragItems.some(({ body }) => !alive(body))) this.abortDrag();
+    if (this.linkFirst !== null && !alive(this.linkFirst)) this.linkFirst = null;
+    if (this.velDrag !== null && !alive(this.velDrag)) this.velDrag = null;
+    if (this.wallDrag !== null && !alive(this.wallDrag[0])) {
+      this.wallDrag = null;
+      this.wallGrab = null;
+    }
     if (app.selection.some((o) => !alive(o))) {
       app.setSelection(app.selection.filter(alive));
     }
