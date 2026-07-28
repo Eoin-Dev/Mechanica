@@ -152,10 +152,21 @@ export class Body {
     return 0.5 * this.mass * this.radius * this.radius;
   }
 
+  /** 1/I, or 0 for anything that must not spin.
+   *
+   * Derived from `inertia` rather than restating the formula. The two used
+   * to be written out independently - I = mr^2/2 here, 1/I = 2/(mr^2)
+   * there - which made them free to disagree, and only one of them drives
+   * the simulation. The solver reads invInertia; `inertia` is read only by
+   * the energy and angular-momentum readouts. So a wrong `inertia` would
+   * not change how anything MOVES, it would quietly misreport the energy of
+   * everything that spins, which is the kind of error a physics sandbox
+   * exists to not make. (Found by mutating the formula: the whole suite
+   * still passed.) */
   get invInertia(): number {
     if (this.locked || this.held || this.noRotation ||
         this.mass <= 0.0 || this.radius <= 0.0) return 0.0;
-    return 2.0 / (this.mass * this.radius * this.radius);
+    return 1.0 / this.inertia;
   }
 
   kineticEnergy(): number {

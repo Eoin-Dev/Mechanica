@@ -74,21 +74,44 @@ describe("App construction", () => {
 });
 
 describe("time jump", () => {
-  it("resumes from where it stopped instead of restarting", () => {
-    // The bug: a target too far to reach in one budget left the clock where
-    // the budget ran out, and asking AGAIN re-ran the same bounded work from
-    // the same start snapshot and stopped at the same place. From the second
-    // attempt onward the box appeared to do nothing at all.
+  it("continues from the CURRENT state, not the start snapshot", () => {
+    // The root of the bug, stated without reference to any budget: a
+    // forward jump must carry the world it is looking at forward. Proven by
+    // making the live world differ from the initial snapshot in a way a
+    // restart would erase - nothing pushes the body sideways, so x survives
+    // a continuation and is lost by a restart.
     const app = makeApp();
-    app.loadPreset(PRESETS.find((p) => p.name === "Jelly block")!, false);
-    const seen: number[] = [app.world.time];
-    for (let i = 0; i < 3; i++) {
-      app.commitTimeJump("500");
-      seen.push(app.world.time);
-    }
-    for (let i = 1; i < seen.length; i++) {
-      expect(seen[i]).toBeGreaterThan(seen[i - 1]);
-    }
+    const b = new Body(new Vec2(0, 0), 0.2, 1);
+    app.world.bodies.push(b);
+    app.ensureInitial();
+    b.pos.set(5, 0);
+    app.commitTimeJump("1");
+    expect(app.world.time).toBeCloseTo(1, 6);
+    expect(app.world.bodies[0].pos.x).toBeCloseTo(5, 6);
+  });
+
+  it("resumes an interrupted jump, one bounded chunk at a time", () => {
+    // A target beyond what one press can cover used to leave the clock
+    // where the work ran out and then, on every later press, re-run the
+    // same bounded work from the same start and stop in the same place: the
+    // box did nothing at all from the second attempt onward.
+    //
+    // Sized against the STEP cap rather than the wall-clock budget, which
+    // makes the amount of progress per press exact. An earlier version of
+    // this test used a heavy scene and so measured whichever run the
+    // machine happened to give the most time to - it passed and failed on
+    // the same code depending on load, which is worse than no test.
+    const perPress = 20000 * PHYSICS_DT; // TIME_JUMP_MAX_STEPS
+    const app = makeApp();
+    app.world.bodies.push(new Body(new Vec2(0, 0), 0.2, 1)); // cheap to step
+    app.ensureInitial();
+
+    app.commitTimeJump("400");
+    expect(app.world.time).toBeCloseTo(perPress, 6);
+    app.commitTimeJump("400");
+    expect(app.world.time).toBeCloseTo(2 * perPress, 6);
+    app.commitTimeJump("400");
+    expect(app.world.time).toBeCloseTo(400, 6); // the last press arrives
   });
 
   it("reaches a target it can afford, exactly", () => {
@@ -253,5 +276,96 @@ describe("energy bookkeeping", () => {
     const app = makeApp();
     app.stepOnce();
     expect(app.world.time).toBeCloseTo(2 * PHYSICS_DT, 9);
+  });
+});
+
+describe("graph recording", () => {
+  /** A scene with motion in both axes and genuine spin, so every channel of
+   * every series has a non-zero value to record. */
+  function movingScene(app: App): void {
+    const a = new Body(new Vec2(-1, 2), 0.2, 1);
+    a.vel.set(1.3, 0.7);
+    a.omega = 4;
+    const b = new Body(new Vec2(1.5, -0.5), 0.25, 3);
+    b.vel.set(-0.4, 1.1);
+    b.omega = -2;
+    app.world.bodies.push(a, b);
+    app.ensureInitial();
+  }
+
+  it("fills every channel the series declares", () => {
+    // The App hands each series a plain object keyed by channel NAME, and
+    // TimeSeries silently substitutes 0 for any key it does not find. So a
+    // renamed channel on either side does not fail - it plots a flat zero
+    // line forever, which reads as a physics result rather than a wiring
+    // mistake. Nothing connected the two lists before this.
+    const app = makeApp();
+    movingScene(app);
+    app.setGraphMode("Energy");
+    for (let i = 0; i < 40; i++) app.stepOnce();
+
+    for (const series of [app.energySeries, app.momentumSeries]) {
+      expect(series.count).toBeGreaterThan(0);
+      for (const channel of series.channels) {
+        const vals = series.values(channel);
+        expect(vals.length, channel).toBe(series.count);
+        expect(vals.every((v) => Number.isFinite(v)), channel).toBe(true);
+        // every channel of this scene is genuinely non-zero, so an all-zero
+        // column means the name did not match, not that the physics is flat
+        expect(vals.some((v) => v !== 0), `channel '${channel}' is all zero`)
+          .toBe(true);
+      }
+    }
+  });
+
+  it("records energy that matches the world's own accounting", () => {
+    const app = makeApp();
+    movingScene(app);
+    app.setGraphMode("Energy");
+    for (let i = 0; i < 10; i++) app.stepOnce();
+    const e = app.world.energy();
+    const ke = app.energySeries.values("KE").at(-1)!;
+    const total = app.energySeries.values("Total").at(-1)!;
+    expect(ke).toBeCloseTo(e.ke, 9);
+    expect(total).toBeCloseTo(e.total, 9);
+  });
+
+  it("records momentum that matches the world's own accounting", () => {
+    const app = makeApp();
+    movingScene(app);
+    app.setGraphMode("Mom.");
+    for (let i = 0; i < 10; i++) app.stepOnce();
+    const p = app.world.momentum();
+    expect(app.momentumSeries.values("px").at(-1)!).toBeCloseTo(p.x, 9);
+    expect(app.momentumSeries.values("py").at(-1)!).toBeCloseTo(p.y, 9);
+    expect(app.momentumSeries.values("L").at(-1)!)
+      .toBeCloseTo(app.world.angularMomentum(), 9);
+  });
+
+  it("keeps sampling after a rewind instead of going quiet", () => {
+    // the sampler throttles on simulated time, so a backward jump must not
+    // leave it waiting for a clock that has gone away
+    const app = makeApp();
+    movingScene(app);
+    app.setGraphMode("Energy");
+    for (let i = 0; i < 30; i++) app.stepOnce();
+    const before = app.energySeries.count;
+    app.stepBack();
+    app.stepBack();
+    for (let i = 0; i < 10; i++) app.stepOnce();
+    expect(app.energySeries.count).toBeGreaterThan(0);
+    expect(Number.isFinite(app.energySeries.lastT)).toBe(true);
+    expect(before).toBeGreaterThan(0);
+  });
+
+  it("clears the graphs when the world is replaced", () => {
+    const app = makeApp();
+    movingScene(app);
+    app.setGraphMode("Energy");
+    for (let i = 0; i < 20; i++) app.stepOnce();
+    expect(app.energySeries.count).toBeGreaterThan(1);
+    app.loadPreset(PRESETS[0], false);
+    // a fresh world seeds one sample; it must not carry the old world's
+    expect(app.energySeries.lastT).toBeLessThanOrEqual(app.world.time + 1e-9);
   });
 });

@@ -17,6 +17,7 @@
  * Touch: one finger drives the active tool exactly like the mouse; two
  * fingers pinch-zoom and pan (something the desktop app never had).
  */
+import { nameTable } from "../core/expr";
 import { Vec2 } from "../core/vec";
 import { sweepClearOfWalls } from "../engine/contacts";
 import { Body, Wall } from "../engine/body";
@@ -31,10 +32,16 @@ export const TOOLS = ["select", "pan", "body", "anchor", "wall",
                       "rod", "rope", "spring", "eraser"] as const;
 export type Tool = (typeof TOOLS)[number];
 
-export const TOOL_KEYS: Record<string, Tool> = {
+// nameTable: this is indexed by a live keystroke (`e.key.toLowerCase()` in
+// ui/shortcuts.ts), and on a plain object literal `"constructor" in TOOL_KEYS`
+// is true - so a synthetic key event naming a prototype member would have set
+// the current tool to a host function. No physical keyboard produces such a
+// key, but the table costs nothing to close and the same shape has already
+// been a real bug twice in this codebase (see nameTable in core/expr.ts).
+export const TOOL_KEYS: Record<string, Tool> = nameTable<Tool>({
   v: "select", h: "pan", b: "body", a: "anchor", w: "wall",
   r: "rod", e: "rope", s: "spring", x: "eraser",
-};
+});
 
 export const TOOL_INFO: Record<Tool, [string, string]> = {
   select: ["Select (V)", "Click to select, drag to move - a body keeps the " +
