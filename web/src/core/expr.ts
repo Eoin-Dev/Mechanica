@@ -33,16 +33,40 @@ export class ExprError extends Error {}
 
 type Fn = (env: Env) => number;
 
-const VAR_GETTERS: Record<string, Fn> = {
+/** A name table with NO prototype.
+ *
+ * How this compiler decides whether a user-typed identifier is known is
+ * `name in TABLE` / `TABLE[name]` - and on an ordinary object literal both
+ * of those answer yes for every member of `Object.prototype`. So `x` was a
+ * variable and so, silently, were `constructor`, `toString`, `valueOf` and
+ * `hasOwnProperty`.
+ *
+ * The damage was not arbitrary code - nothing here calls what it finds with
+ * attacker-controlled arguments - but it was real: `constructor` compiled
+ * without complaint into `Object`, so the "formula" evaluated to the
+ * environment object, and the engine's finite check quietly discarded every
+ * force it produced. The user saw a field the app had accepted doing
+ * absolutely nothing. Others surfaced internal JavaScript ("fn is not a
+ * function") instead of this language's own "unknown name" message.
+ *
+ * Cutting the prototype off fixes it at the source, for the ten lookup
+ * sites across this file and mathfmt.ts at once, and for any added later -
+ * which per-site `Object.hasOwn` calls would not.
+ */
+export function nameTable<T>(entries: Record<string, T>): Record<string, T> {
+  return Object.assign(Object.create(null) as Record<string, T>, entries);
+}
+
+const VAR_GETTERS: Record<string, Fn> = nameTable<Fn>({
   x: (e) => e.x, y: (e) => e.y, vx: (e) => e.vx, vy: (e) => e.vy,
   t: (e) => e.t, m: (e) => e.m, r: (e) => e.r,
-};
+});
 
 export const VAR_NAMES: ReadonlySet<string> = new Set(Object.keys(VAR_GETTERS));
 
-export const CONSTS: Record<string, number> = {
+export const CONSTS: Record<string, number> = nameTable<number>({
   pi: Math.PI, e: Math.E, tau: 2 * Math.PI, g: 9.81,
-};
+});
 
 function reduceMin(...a: number[]): number {
   let out = a[0];
@@ -55,7 +79,7 @@ function reduceMax(...a: number[]): number {
   return out;
 }
 
-export const FUNCS: Record<string, { fn: (...a: number[]) => number; arity: number | "var" }> = {
+export const FUNCS: Record<string, { fn: (...a: number[]) => number; arity: number | "var" }> = nameTable({
   sin: { fn: Math.sin, arity: 1 }, cos: { fn: Math.cos, arity: 1 },
   tan: { fn: Math.tan, arity: 1 }, asin: { fn: Math.asin, arity: 1 },
   acos: { fn: Math.acos, arity: 1 }, atan: { fn: Math.atan, arity: 1 },
@@ -65,7 +89,7 @@ export const FUNCS: Record<string, { fn: (...a: number[]) => number; arity: numb
   min: { fn: reduceMin, arity: "var" }, max: { fn: reduceMax, arity: "var" },
   sign: { fn: Math.sign, arity: 1 }, floor: { fn: Math.floor, arity: 1 },
   ceil: { fn: Math.ceil, arity: 1 }, hypot: { fn: Math.hypot, arity: 2 },
-};
+});
 
 /** Validate a call's argument count, throwing the same message everywhere
  * a call can be built (the text parser and the math-editor converter). */

@@ -18,7 +18,7 @@
  * never touch precision: numbers are re-emitted from the parsed double.
  */
 import { CONSTS, ExprError, ExprNode, FUNCS, VAR_NAMES, checkArity,
-         parseSource } from "./expr";
+         nameTable, parseSource } from "./expr";
 
 // ------------------------------------------------------- renderable subset
 /** True if `source` parses and uses only constructs the typeset editor can
@@ -119,7 +119,11 @@ function latexNode(node: ExprNode): string {
       if (node.name === "vx") return "v_{x}";
       if (node.name === "vy") return "v_{y}";
       return node.name;
-    case "const": return CONST_LATEX[node.name];
+    // `?? node.name` so a constant added to the compiler but not to the
+    // table above typesets as its own name rather than as the literal
+    // word "undefined". FUNC_LATEX has always had this fallback; the
+    // constants map was the one lookup here with no floor under it.
+    case "const": return CONST_LATEX[node.name] ?? node.name;
     case "neg": return `-${emitLatex(node.operand, 7)}`;
     case "call": {
       if (node.name === "sqrt") return `\\sqrt{${emitLatex(node.args[0], 0)}}`;
@@ -249,14 +253,17 @@ type LTok =
 const SKIP_CMDS = new Set([",", ";", "!", ":", " ", "enspace", "quad", "qquad",
                            "mspace", "hspace", "space", "displaystyle"]);
 // commands that read as a function head
-const CMD_FUNCS: Record<string, string> = {
+// nameTable, not a bare literal: these are looked up with `name in ...`
+// against user-supplied LaTeX, and an ordinary object answers yes for every
+// member of Object.prototype (see the note on nameTable in expr.ts).
+const CMD_FUNCS: Record<string, string> = nameTable<string>({
   sin: "sin", cos: "cos", tan: "tan",
   arcsin: "asin", arccos: "acos", arctan: "atan",
   ln: "log", log: "log", exp: "exp", min: "min", max: "max",
-};
-const CMD_CONSTS: Record<string, string> = {
+});
+const CMD_CONSTS: Record<string, string> = nameTable<string>({
   pi: "pi", tau: "tau", exponentialE: "e",
-};
+});
 
 function lexLatex(latex: string): LTok[] {
   const toks: LTok[] = [];

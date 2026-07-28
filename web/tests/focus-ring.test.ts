@@ -18,6 +18,7 @@
  */
 import { describe, expect, it } from "vitest";
 import css from "../src/style.css?raw";
+import { PHONE_QUERY } from "../src/ui/dom";
 
 /** Declaration blocks that turn the outline off, with their selectors. */
 function outlineSuppressors(): Array<{ selector: string; body: string }> {
@@ -81,5 +82,42 @@ describe("focus ring cascade", () => {
                        'input[type="range"]:focus-visible']) {
       expect(css).toContain(sel);
     }
+  });
+});
+
+/** The mobile breakpoint is declared in two languages and must agree.
+ *
+ * `PHONE_QUERY` in ui/dom.ts decides BEHAVIOUR - whether the Inspector
+ * becomes a slide-over drawer and whether the toolbar trims itself - while
+ * the stylesheet decides what that state LOOKS like. They are the same
+ * threshold written twice, in two files, with nothing connecting them.
+ *
+ * Changing one alone opens a band of viewport widths where the app is in
+ * drawer mode but is not styled as a drawer (or the reverse): the panel
+ * would be positioned as a fixed overlay with no width rule, or laid out
+ * inline while the code believes it is hidden. It fails silently, only
+ * between two specific widths, which is exactly the kind of thing nobody
+ * finds by clicking around on a desktop.
+ */
+describe("the mobile breakpoint", () => {
+  it("is the same width in the stylesheet as in the code", () => {
+    const inCode = /\(max-width:\s*(\d+)px\)/.exec(PHONE_QUERY);
+    expect(inCode, "PHONE_QUERY should be a max-width query").not.toBeNull();
+    const px = inCode![1];
+    const clean = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const queries = [...clean.matchAll(/@media\s*\(max-width:\s*(\d+)px\)/g)]
+      .map((m) => m[1]);
+    expect(queries, `no @media (max-width: ${px}px) block in style.css`)
+      .toContain(px);
+  });
+
+  it("styles the inspector as a drawer inside that block", () => {
+    const clean = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const px = /\(max-width:\s*(\d+)px\)/.exec(PHONE_QUERY)![1];
+    const at = clean.indexOf(`@media (max-width: ${px}px)`);
+    expect(at).toBeGreaterThanOrEqual(0);
+    // the drawer rules live in that block; take a generous slice of it
+    const block = clean.slice(at, at + 2000);
+    expect(block).toMatch(/#inspector/);
   });
 });
