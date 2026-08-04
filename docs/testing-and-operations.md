@@ -42,8 +42,8 @@ change:
 4. Verify any affected interaction/render behavior manually in `npm run dev`
    when a headless test cannot exercise real pointer, focus, sizing, or Canvas
    behavior.
-5. Check links in `README.md`, `web/README.md`, `CONTRIBUTING.md`, `AGENTS.md`,
-   and `docs/*.md` when documentation paths change.
+5. Check links in `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, and `docs/*.md`
+   when documentation paths change.
 6. Update the current-behavior handbook page in the same change whenever its
    explanation, schema, workflow, invariant, or command would otherwise be
    stale.
@@ -112,11 +112,11 @@ with the behavior it protects rather than an exact assertion count.
 
 | Test file | Protected behavior |
 | --- | --- |
-| [`scene-guards.test.ts`](../web/tests/scene-guards.test.ts) | Numeric/colour/name/ID guards, settings and link ranges, malformed container shapes, field/driver defaults, missing/self link rejection, and stepping after damaged input. |
+| [`scene-guards.test.ts`](../web/tests/scene-guards.test.ts) | Numeric/boolean/colour/name/ID guards, duplicate object-ID repair within each identity namespace, anchor normalization, settings and link ranges, malformed container shapes, field/driver defaults, missing/self link rejection, and stepping after damaged input. |
 | [`robustness.test.ts`](../web/tests/robustness.test.ts) | Scene deserialization defaults, divergence reporting, object colours, closest-point geometry, and kinematic dragged-body wall sweeping. |
-| [`scene-storage.test.ts`](../web/tests/scene-storage.test.ts) | Unicode name normalization, sanitized-key collisions, save/load/list, quota reporting, metadata, damaged payload handling, rename semantics, and deletion. |
+| [`scene-storage.test.ts`](../web/tests/scene-storage.test.ts) | Unicode name normalization, sanitized-key collisions, save/load/list, quota reporting, metadata, damaged payload handling, rollback/error semantics for scene mutations, rename behavior, orphan metadata, and deletion. |
 | [`settings-guards.test.ts`](../web/tests/settings-guards.test.ts) | `sanitizeSettings` type filtering, enum/hex validation, collection limits, and layout/font clamping. |
-| [`rewind.test.ts`](../web/tests/rewind.test.ts) | Structural keyframes versus dynamic deltas, exact reconstruction, bounded heavy-scene history, changing structures, and frame-back behavior. |
+| [`rewind.test.ts`](../web/tests/rewind.test.ts) | Digest-prefiltered structural keyframes versus exactly verified dynamic deltas, forced digest collisions, exact reconstruction, bounded heavy-scene history, changing structures, and frame-back behavior. |
 | [`app-lifecycle.test.ts`](../web/tests/app-lifecycle.test.ts) | App construction, bounded/resumable time jumps, playback/history/reset, speed behavior, settings persistence, energy cache/baseline, and graph sampling. |
 
 ### Expressions and math editing

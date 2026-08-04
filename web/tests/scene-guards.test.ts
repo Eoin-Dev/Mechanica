@@ -12,7 +12,7 @@
  * simulation survives, not merely that a field holds a plausible number.
  */
 import { describe, expect, it } from "vitest";
-import { colorOr, intIn, numIn, numOr } from "../src/core/guards";
+import { boolOr, colorOr, intIn, numIn, numOr } from "../src/core/guards";
 import { Vec2 } from "../src/core/vec";
 import { Body, Wall } from "../src/engine/body";
 import { DistanceLink, SpringLink } from "../src/engine/links";
@@ -55,6 +55,15 @@ describe("guard primitives", () => {
     expect(intIn(3.9, 1, 1, 64)).toBe(3);
     expect(intIn(1e9, 4, 1, 64)).toBe(64);
     expect(intIn(NaN, 4, 1, 64)).toBe(4);
+  });
+
+  it("boolOr accepts only actual booleans", () => {
+    expect(boolOr(true, false)).toBe(true);
+    expect(boolOr(false, true)).toBe(false);
+    for (const bad of ["true", "false", 0, 1, null, undefined, {}, []]) {
+      expect(boolOr(bad, false)).toBe(false);
+      expect(boolOr(bad, true)).toBe(true);
+    }
   });
 
   it("colorOr rejects anything that is not three whole channels", () => {
@@ -115,6 +124,29 @@ describe("world settings", () => {
     expect(w.iterations).toBe(12);
     expect(w.time).toBe(4.25);
   });
+
+  it("defaults malformed booleans instead of using their truthiness", () => {
+    const w = scene({
+      settings: { mutual_gravity: "false", point_gravity: 1 },
+      bodies: [{ id: 1, pos: [0, 0], locked: "false", collides: 0,
+                 no_rotation: "true", is_anchor: "true" }],
+    } as never);
+    expect(w.mutualGravity).toBe(false);
+    expect(w.pointGravity).toBe(false);
+    expect(w.bodies[0].locked).toBe(false);
+    expect(w.bodies[0].collides).toBe(true);
+    expect(w.bodies[0].noRotation).toBe(false);
+    expect(w.bodies[0].isAnchor).toBe(false);
+  });
+
+  it("enforces the locked-anchor invariant when loading", () => {
+    const w = scene({
+      bodies: [{ id: 1, pos: [0, 0], locked: false, is_anchor: true }],
+    } as never);
+    expect(w.bodies[0].isAnchor).toBe(true);
+    expect(w.bodies[0].locked).toBe(true);
+    expect(w.bodies[0].name).toBe("Anchor");
+  });
 });
 
 describe("links", () => {
@@ -162,6 +194,17 @@ describe("links", () => {
       .toEqual([1.25, 42.5, 3.5, true]);
     expect([rod.length, rod.isRope, rod.compliance]).toEqual([1.75, true, 1e-4]);
   });
+
+  it("defaults malformed one-sided flags instead of using their truthiness", () => {
+    const w = scene({
+      links: [
+        { type: "spring", a: 1, b: 2, tension_only: "false" },
+        { type: "rod", a: 1, b: 2, is_rope: 1 },
+      ],
+    } as never);
+    expect((w.links[0] as SpringLink).tensionOnly).toBe(false);
+    expect((w.links[1] as DistanceLink).isRope).toBe(false);
+  });
 });
 
 describe("fields and drivers", () => {
@@ -182,6 +225,15 @@ describe("fields and drivers", () => {
     steps(w);
     expect(w.diverged).toEqual([]);
     expect(allFinite(w)).toBe(true);
+  });
+
+  it("defaults malformed enabled flags instead of using their truthiness", () => {
+    const w = scene({
+      fields: [{ name: "field", fx: "0", fy: "0", enabled: "false" }],
+      drivers: [{ body_id: 1, enabled: 0 }],
+    } as never);
+    expect(w.fields[0].enabled).toBe(true);
+    expect(w.drivers[0].enabled).toBe(true);
   });
 });
 
@@ -271,6 +323,43 @@ describe("object ids from a file cannot poison the id counter", () => {
     } as never);
     expect(w.links).toHaveLength(1);
     expect(allFinite(steps(w))).toBe(true);
+  });
+
+  it("remaps duplicate object ids without changing body references", () => {
+    const w = World.fromDict({
+      bodies: [
+        { id: 7, name: "first", pos: [0, 0] },
+        { id: 7, name: "duplicate", pos: [0.5, 0] },
+        { id: 8, name: "target", pos: [1, 0] },
+      ],
+      walls: [
+        { id: 3, a: [-1, -1], b: [1, -1] },
+        { id: 3, a: [-1, 1], b: [1, 1] },
+      ],
+      links: [
+        { type: "rod", id: 5, a: 7, b: 8 },
+        { type: "rod", id: 5, a: 7, b: 8 },
+        { type: "spring", id: 5, a: 7, b: 8 },
+      ],
+      drivers: [{ body_id: 7, amplitude: 1 }],
+    } as never);
+
+    expect(new Set(w.bodies.map((b) => b.id)).size).toBe(w.bodies.length);
+    expect(new Set(w.walls.map((wall) => wall.id)).size).toBe(w.walls.length);
+    const rods = w.links.filter((link) => link instanceof DistanceLink);
+    const springs = w.links.filter((link) => link instanceof SpringLink);
+    expect(new Set(rods.map((link) => link.id)).size).toBe(rods.length);
+    // Link kinds have distinct identity namespaces and counters.
+    expect(springs[0].id).toBe(5);
+    expect(w.bodyById(7)?.name).toBe("first");
+    expect(w.links.every((link) => link.a.name === "first" &&
+                                      link.b.name === "target")).toBe(true);
+    expect(w.drivers[0].bodyId).toBe(7);
+
+    const nextBody = new Body(new Vec2());
+    const nextWall = new Wall(new Vec2(), new Vec2(1, 0));
+    expect(w.bodies.some((body) => body.id === nextBody.id)).toBe(false);
+    expect(w.walls.some((wall) => wall.id === nextWall.id)).toBe(false);
   });
 });
 

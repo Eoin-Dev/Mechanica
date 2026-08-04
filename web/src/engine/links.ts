@@ -29,7 +29,7 @@
  * projects springs as position constraints instead, which has no stability
  * limit to respect (see engine/perf.ts).
  */
-import { idOr, numIn } from "../core/guards";
+import { boolOr, idOr, numIn } from "../core/guards";
 import { Body } from "./body";
 
 export interface RodDict {
@@ -200,13 +200,13 @@ export function linkFromDict(d: LinkDict, bodiesById: Map<number, Body>): Link {
                           numIn(d.rest_length, natural, 0.0, 1e6),
                           numIn(d.stiffness, 20.0, 0.0, 1e9),
                           numIn(d.damping, 0.0, 0.0, 1e9),
-                          d.tension_only ?? false);
+                          boolOr(d.tension_only, false));
     link.id = idOr(d.id, link.id);
     SpringLink.nextId = Math.max(SpringLink.nextId, link.id + 1);
   } else {
     link = new DistanceLink(a, b,
                             numIn(d.length, natural, 0.0, 1e6),
-                            d.is_rope ?? false,
+                            boolOr(d.is_rope, false),
                             numIn(d.compliance, 0.0, 0.0, 1e9));
     link.id = idOr(d.id, link.id);
     DistanceLink.nextId = Math.max(DistanceLink.nextId, link.id + 1);

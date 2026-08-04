@@ -5,8 +5,10 @@ These instructions apply to the entire repository.
 ## Keep implementation documentation current
 
 The authoritative implementation handbook begins at
-[`docs/README.md`](docs/README.md). Before completing any change, compare the
-resulting code and configuration with the relevant handbook pages.
+[`docs/README.md`](docs/README.md). At the start of every code or configuration
+task, read the index and the handbook pages assigned to the affected area; do
+not rely on a remembered description. Before completing the task, compare the
+resulting code and configuration with those pages again.
 
 Update documentation in the same change whenever runtime behavior,
 architecture, interfaces, persisted data, user workflows, invariants, build,

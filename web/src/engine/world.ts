@@ -29,7 +29,7 @@
  * an existing dial. See engine/perf.ts.
  */
 import { CompiledExpr, ExprError, compileExpr } from "../core/expr";
-import { arrayOr, idOr, intIn, numIn, strOr } from "../core/guards";
+import { arrayOr, boolOr, idOr, intIn, numIn, strOr } from "../core/guards";
 import { Vec2 } from "../core/vec";
 import { Body, BodyDict, Wall, WallDict } from "./body";
 import { Contact, ContactCache, ContactStatic, solveContacts } from "./contacts";
@@ -194,7 +194,7 @@ export class ForceField {
     const f = new ForceField(strOr(d.name, "Field", 80),
                              strOr(d.fx, "0", Infinity),
                              strOr(d.fy, "0", Infinity));
-    f.enabled = d.enabled ?? true;
+    f.enabled = boolOr(d.enabled, true);
     return f;
   }
 }
@@ -242,7 +242,7 @@ export class Driver {
                            numIn(d.frequency, 1.0, 0.0, 1e6),
                            numIn(d.phase, 0.0, -1e6, 1e6),
                            numIn(d.angle, 0.0, -1e6, 1e6));
-    drv.enabled = d.enabled ?? true;
+    drv.enabled = boolOr(d.enabled, true);
     return drv;
   }
 }
@@ -1559,8 +1559,8 @@ export class World {
     // non-finite acceleration reaches every body within a step. The scene
     // then froze on load and blamed the user's own forces for it.
     w.gravity = numIn(s.gravity, 9.81, -1e6, 1e6);
-    w.mutualGravity = s.mutual_gravity ?? false;
-    w.pointGravity = s.point_gravity ?? false;
+    w.mutualGravity = boolOr(s.mutual_gravity, false);
+    w.pointGravity = boolOr(s.point_gravity, false);
     w.G = numIn(s.G, 1.0, -1e12, 1e12);
     w.softening = numIn(s.softening, 0.01, 0.0, 1e6);
     w.dragLinear = numIn(s.drag_linear, 0.0, 0.0, 1e9);
@@ -1576,8 +1576,42 @@ export class World {
     w.iterations = intIn(s.iterations, 8, 1, 64);
     w.time = numIn(s.time, 0.0, -1e12, 1e12);
     const entry = (v: unknown): boolean => typeof v === "object" && v !== null;
-    w.bodies = arrayOr<BodyDict>(d.bodies).filter(entry).map((b) => Body.fromDict(b));
-    w.walls = arrayOr<WallDict>(d.walls).filter(entry).map((x) => Wall.fromDict(x));
+
+    // Object ids are runtime map/cache keys, not merely labels. Keep the
+    // first occurrence of an imported id so links and drivers have one
+    // deterministic target, then give later duplicates fresh ids. All
+    // constructors have already advanced their counters past accepted file
+    // ids before this runs, so a replacement cannot collide with an entry
+    // that appears later in the same document.
+    const uniqueIds = <T extends { id: number }>(
+      items: T[], allocate: () => number,
+      onRemap: ((item: T, index: number) => void) | null = null,
+    ): void => {
+      const used = new Set<number>();
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (used.has(item.id)) {
+          do item.id = allocate(); while (used.has(item.id));
+          onRemap?.(item, i);
+        }
+        used.add(item.id);
+      }
+    };
+
+    const bodyDocs = arrayOr<BodyDict>(d.bodies).filter(entry);
+    w.bodies = bodyDocs.map((body) => Body.fromDict(body));
+    uniqueIds(w.bodies, () => Body.nextId++, (body, i) => {
+      if (!body.isAnchor && typeof bodyDocs[i].name !== "string") {
+        body.name = `Body ${body.id}`;
+      }
+    });
+
+    const wallDocs = arrayOr<WallDict>(d.walls).filter(entry);
+    w.walls = wallDocs.map((wall) => Wall.fromDict(wall));
+    uniqueIds(w.walls, () => Wall.nextId++, (wall, i) => {
+      if (typeof wallDocs[i].name !== "string") wall.name = `Wall ${wall.id}`;
+    });
+
     const byId = new Map<number, Body>();
     for (const b of w.bodies) byId.set(b.id, b);
     w.links = arrayOr<LinkDict>(d.links)
@@ -1589,6 +1623,13 @@ export class World {
       // subdivision test for the rest of the session.
       .filter((ln) => ln.a !== ln.b && byId.has(ln.a) && byId.has(ln.b))
       .map((ln) => linkFromDict(ln, byId));
+    // Rods and springs have separate id counters and their identity keys
+    // include the kind, so the same number may legitimately occur once in
+    // each class. Duplicates within a class are ambiguous and are remapped.
+    uniqueIds(w.links.filter((link): link is DistanceLink => link instanceof DistanceLink),
+              () => DistanceLink.nextId++);
+    uniqueIds(w.links.filter((link): link is SpringLink => link instanceof SpringLink),
+              () => SpringLink.nextId++);
     w.fields = arrayOr<FieldDict>(d.fields).filter(entry)
       .map((f) => ForceField.fromDict(f));
     w.drivers = arrayOr<DriverDict>(d.drivers).filter(entry)

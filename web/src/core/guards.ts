@@ -33,6 +33,14 @@ export function intIn(v: unknown, fallback: number, lo: number, hi: number): num
   return n < lo ? lo : n > hi ? hi : n;
 }
 
+/** A boolean, or `fallback` when the value has any other runtime type.
+ * Strings and numbers are deliberately not coerced: `"false"` and `0`
+ * commonly appear in hand-edited JSON, but JavaScript truthiness would give
+ * them the opposite or an implicit meaning rather than rejecting bad input. */
+export function boolOr(v: unknown, fallback: boolean): boolean {
+  return typeof v === "boolean" ? v : fallback;
+}
+
 export function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }

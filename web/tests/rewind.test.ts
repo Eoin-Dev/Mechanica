@@ -138,6 +138,20 @@ describe("rewind buffer", () => {
     }
   });
 
+  it("verifies structure exactly even when the fast digest collides", () => {
+    const w = scene();
+    const buf = new RewindBuffer(() => 12345);
+    buf.push(w);
+    w.bodies[0].mass = 42;
+    buf.push(w);
+    w.bodies[0].pos.x += 3;
+    buf.push(w);
+
+    const edited = buf.back();
+    expect(edited).not.toBeNull();
+    expect(edited!.bodies[0].mass).toBe(42);
+  });
+
   it("clear() empties it", () => {
     const w = scene();
     const buf = new RewindBuffer();

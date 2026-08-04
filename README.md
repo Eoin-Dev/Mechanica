@@ -24,20 +24,17 @@ npm test           # verification suite (physics, rendering, robustness)
 npm run build      # production build into web/dist/
 ```
 
-The badge states a lower bound rather than an exact figure on purpose: an
-exact count in a README is a claim about the present that nothing keeps
-true, and this one had silently drifted 50 behind. CI enforces the bound
-(`scripts/check-test-count.mjs`), so it fails if the suite ever shrinks past
-it — and stays correct without a commit every time a test is added. Exact
-counts belong in commit messages, where they are a record of a moment and
-remain true (see [CONTRIBUTING.md](CONTRIBUTING.md)).
+The test badge is a lower bound enforced in CI by
+`web/scripts/check-test-count.mjs`. Exact results belong in individual test
+runs and completion reports rather than durable overview text.
 
 ## Deploy
 
 Pushing to `main` automatically tests, builds and publishes the site via
 GitHub Pages ([.github/workflows/deploy.yml](.github/workflows/deploy.yml)).
 One-time setup: repo **Settings → Pages → Source → "GitHub Actions"**.
-Details and alternative hosts in [web/README.md](web/README.md).
+The complete build, CI, Pages, and alternative-host instructions are in
+[Testing and operations](docs/testing-and-operations.md).
 
 ## What's inside
 
@@ -45,21 +42,9 @@ Details and alternative hosts in [web/README.md](web/README.md).
   static capsule walls, rigid rods / one-sided ropes / damped springs,
   N-body gravity with softening, linear + quadratic drag, sinusoidal
   drivers and sandboxed user force fields.
-  - Integrators: Velocity Verlet (default, symplectic), Symplectic Euler, RK4.
-  - Rods and ropes are solved in two phases: the analytic constraint force
-    (tension) is computed at the acceleration level with warm-started
-    Gauss-Seidel *before* integrating, then an XPBD position pass removes the
-    tiny residual drift. This keeps pendulums and chains energy-conserving
-    (a double pendulum drifts well under 0.1% per minute).
-  - Contacts: spatial-hash broadphase, then iterated sequential impulses with
-    accumulated-impulse clamping and warm starting (the Box2D scheme),
-    restitution as a pre-solve velocity bias, Coulomb friction applied at the
-    contact point (so rolling emerges from torque), and split-impulse
-    positional correction that cannot inject energy. Stacks come to rest.
-  - Any body whose state blows up numerically is frozen and reported instead
-    of crashing the app.
-- **Library** — dozens of ready-made, annotated simulations across eight categories
-  (press `L`), plus saved scenes with rename/describe/export/import.
+- **Library** — dozens of ready-made, annotated simulations across eight
+  categories (press `L`), plus saved scenes with rename, description, export,
+  and import.
 - **Analysis** — live energy / momentum / phase-space plots, velocity /
   acceleration / force vector overlays, motion trails, centre of mass,
   contact normals, an energy-drift readout in the status bar.
@@ -80,6 +65,10 @@ Behavior, architecture, interface, schema, workflow, build, and deployment
 changes must update the relevant handbook page in the same change. The handbook
 describes how the code works now; it is not a changelog. See
 [CONTRIBUTING.md](CONTRIBUTING.md) for the maintenance policy.
+
+Repository documentation is intentionally centralized here, in the
+contributor/agent instruction files, and in `docs/`; subsystem folders do not
+carry duplicate README files.
 
 ## Controls (press F1 in-app for the full list)
 

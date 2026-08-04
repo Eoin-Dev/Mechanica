@@ -38,6 +38,20 @@ Suggested reading paths:
 - Release or validation work: [testing and
   operations](testing-and-operations.md).
 
+Documentation has four deliberate entry points rather than subsystem-level
+README files:
+
+- the root [`README.md`](../README.md) is the user-facing overview and quick
+  start;
+- [`CONTRIBUTING.md`](../CONTRIBUTING.md) defines contribution and commit
+  conventions;
+- [`AGENTS.md`](../AGENTS.md) gives coding agents repository-wide rules; and
+- this directory owns detailed implementation and operational behavior.
+
+Put new detail in the handbook page that owns the subject. Add another page
+only when the material has a distinct maintenance owner and would make an
+existing page materially harder to navigate.
+
 ## Repository at a glance
 
 Mechanica is a static, client-only application:

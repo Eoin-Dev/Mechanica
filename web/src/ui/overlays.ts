@@ -135,11 +135,11 @@ export class Library {
       // Names are sanitized before use, so "Run #1" and "Run 1" land on the
       // same key: without this the second save replaced the first with no
       // warning and no way back.
-      if (snap.sceneExists(name) &&
-          !confirm(`A saved scene called '${name}' already exists. Replace it?`)) {
-        return;
-      }
       try {
+        if (snap.sceneExists(name) &&
+            !confirm(`A saved scene called '${name}' already exists. Replace it?`)) {
+          return;
+        }
         const saved = snap.saveScene(app.world, name);
         app.toast(`Saved scene '${saved}'`);
         this.render();
@@ -165,7 +165,16 @@ export class Library {
                   "version." }).root);
     this.content.append(actions);
 
-    const names = snap.listScenes();
+    let names: string[];
+    try {
+      names = snap.listScenes();
+    } catch (exc) {
+      this.content.append(actions, el("div", { class: "faint",
+        style: "margin-top:14px",
+        text: exc instanceof snap.SceneSaveError ? exc.message
+                                                 : "Saved scenes are unavailable" }));
+      return;
+    }
     if (names.length === 0) {
       this.content.append(el("div", { class: "faint",
         style: "margin-top:14px",
@@ -200,16 +209,26 @@ export class Library {
       bar.append(mkBtn(ICONS.rename, "Rename", () => {
         const newName = prompt("Rename scene:", name);
         if (!newName || newName === name) return;
-        const saved = snap.renameScene(name, newName);
-        if (saved === null) app.toast("A scene with that name already exists");
-        else app.toast(`Renamed to '${saved}'`);
-        this.render();
+        try {
+          const saved = snap.renameScene(name, newName);
+          if (saved === null) app.toast("A scene with that name already exists");
+          else app.toast(`Renamed to '${saved}'`);
+          this.render();
+        } catch (exc) {
+          app.toast(exc instanceof snap.SceneSaveError ? exc.message
+                                                       : "Could not rename the scene");
+        }
       }));
       bar.append(mkBtn(ICONS.describe, desc ? "Edit description" : "Add description", () => {
         const text = prompt("Description (empty to remove):", desc);
         if (text === null) return;
-        snap.setSceneDescription(name, text);
-        this.render();
+        try {
+          snap.setSceneDescription(name, text);
+          this.render();
+        } catch (exc) {
+          app.toast(exc instanceof snap.SceneSaveError ? exc.message
+                                                       : "Could not update the description");
+        }
       }));
       bar.append(mkBtn(ICONS.download, "Download as a .json file", () => {
         const world = snap.loadScene(name);
@@ -217,8 +236,13 @@ export class Library {
       }));
       bar.append(mkBtn(ICONS.trash, "Delete this saved scene", () => {
         if (!confirm(`Delete saved scene '${name}'?`)) return;
-        snap.deleteScene(name);
-        this.render();
+        try {
+          snap.deleteScene(name);
+          this.render();
+        } catch (exc) {
+          app.toast(exc instanceof snap.SceneSaveError ? exc.message
+                                                       : "Could not delete the scene");
+        }
       }, true));
       card.append(bar);
 
