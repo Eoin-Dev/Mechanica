@@ -43,12 +43,19 @@ A custom domain can be pointed at any of these from the host's dashboard.
 
 ## Architecture
 
+For the complete implementation reference, start with the repository
+[codebase handbook](../docs/README.md). It documents the runtime and state
+flows, solver pipeline, UI and interaction behavior, scene/schema and formula
+contracts, every source module, tests, and operations. Keep the affected page
+current whenever implementation behavior changes; the handbook describes the
+present code rather than change history.
+
 - `src/core/` — vector maths and the force-field expression compiler
   (a real tokenizer/recursive-descent parser producing a closure tree —
   no `eval`, works under any Content-Security-Policy).
 - `src/engine/` — bodies, walls, links, contacts, and the world stepper.
   Pure TypeScript, fully headless (the test suite runs it under Node).
-- `src/scene/` — the 47 built-in presets, scene serialization, undo/redo,
+- `src/scene/` — the built-in presets, scene serialization, undo/redo,
   localStorage saves and `.json` import/export.
 - `src/render/` — camera and Canvas-2D scene rendering.
 - `src/interact/` — canvas tools: select/drag/throw, wall drawing, link

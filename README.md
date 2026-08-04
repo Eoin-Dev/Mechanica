@@ -58,7 +58,7 @@ Details and alternative hosts in [web/README.md](web/README.md).
     positional correction that cannot inject energy. Stacks come to rest.
   - Any body whose state blows up numerically is frozen and reported instead
     of crashing the app.
-- **Library** — 47 ready-made, annotated simulations across eight categories
+- **Library** — dozens of ready-made, annotated simulations across eight categories
   (press `L`), plus saved scenes with rename/describe/export/import.
 - **Analysis** — live energy / momentum / phase-space plots, velocity /
   acceleration / force vector overlays, motion trails, centre of mass,
@@ -67,6 +67,19 @@ Details and alternative hosts in [web/README.md](web/README.md).
   type-filtered box select with bulk editing, grid snapping, property
   copy/paste, alignment tools, scene save/load (JSON).
 - **Touch** — one finger drives the active tool; two fingers pinch-zoom and pan.
+
+## Codebase documentation
+
+The [codebase handbook](docs/README.md) is the detailed, current-state
+implementation reference for maintainers and coding agents. It covers the
+runtime architecture, physics solvers, interaction and rendering, UI,
+persistence and scene JSON, the force-field language, every source module, the
+verification suite, and deployment.
+
+Behavior, architecture, interface, schema, workflow, build, and deployment
+changes must update the relevant handbook page in the same change. The handbook
+describes how the code works now; it is not a changelog. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the maintenance policy.
 
 ## Controls (press F1 in-app for the full list)
 
