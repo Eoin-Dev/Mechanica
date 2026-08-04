@@ -1,4 +1,35 @@
-# Commit message style
+# Contributing
+
+## Documentation maintenance
+
+The detailed implementation reference begins at
+[`docs/README.md`](docs/README.md). Any change to runtime behavior,
+architecture, interfaces, persisted data, user workflows, invariants, build,
+testing, or deployment behavior must update the relevant handbook page in the
+same change.
+
+The handbook describes how the current code works, not the history of how it
+arrived there:
+
+- Rewrite or remove stale text; do not append “this was changed” notes.
+- Describe additions and replacements directly in their current form.
+- Bug fixes do not need documentation changes when they only restore behavior
+  the handbook already describes correctly. They do need an update when the
+  fix changes documented behavior or invalidates an explanation, interface,
+  invariant, schema, or workflow.
+- Git history and commit messages record change history. Do not turn the
+  handbook into a changelog.
+- Avoid exact totals that naturally drift unless an automated check enforces
+  the claim.
+
+The documentation ownership table in
+[`docs/source-reference.md`](docs/source-reference.md#documentation-ownership)
+maps source areas to pages. Before submitting a change, verify affected links,
+identifiers, defaults, schemas, commands, and diagrams against the resulting
+source, then run the complete tests and production build described in
+[`docs/testing-and-operations.md`](docs/testing-and-operations.md).
+
+## Commit message style
 
 This project's commit messages follow one convention, pulled from the
 repo's own history rather than invented in the abstract. The goal: a
