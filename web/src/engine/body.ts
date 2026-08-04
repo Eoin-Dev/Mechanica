@@ -1,5 +1,5 @@
 /** Physical objects: dynamic circular bodies and static wall segments. */
-import { clamp01, colorOr, idOr, numOr as num, strOr } from "../core/guards";
+import { boolOr, clamp01, colorOr, idOr, numOr as num, strOr } from "../core/guards";
 import { Vec2 } from "../core/vec";
 
 export type Color = [number, number, number];
@@ -211,12 +211,15 @@ export class Body {
     b.friction = Math.max(0, num(d.friction, 0.4));
     const cf = d.const_force ?? [0, 0];
     b.constForce = new Vec2(num(cf[0], 0), num(cf[1], 0));
-    b.locked = d.locked ?? false;
-    b.collides = d.collides ?? true;
-    b.noRotation = d.no_rotation ?? false;
+    b.locked = boolOr(d.locked, false);
+    b.collides = boolOr(d.collides, true);
+    b.noRotation = boolOr(d.no_rotation, false);
     if (b.noRotation) b.omega = 0.0; // a non-rotating body never spins
-    b.isAnchor = d.is_anchor ?? false;
-    if (b.isAnchor) b.name = "Anchor";
+    b.isAnchor = boolOr(d.is_anchor, false);
+    if (b.isAnchor) {
+      b.locked = true;
+      b.name = "Anchor";
+    }
     return b;
   }
 }

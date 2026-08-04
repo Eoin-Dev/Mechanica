@@ -290,8 +290,9 @@ The typeset editor is only a view over the same source string; details are in
   Descriptions use a separate metadata namespace so the portable scene payload
   remains compatible.
 - Loading parses JSON and passes every supported collection through
-  `World.fromDict`, which applies defaults/ranges and reconstructs link object
-  references from body IDs.
+  `World.fromDict`, which applies type/default/range guards, remaps later
+  duplicate body and wall IDs, and reconstructs link object references from
+  the first body carrying each imported ID.
 - Export creates a formatted JSON blob and clicks a temporary download anchor.
 - Import reads one selected JSON file, restores a world, then routes through
   the application replacement and framing paths.
@@ -317,7 +318,8 @@ that tradeoff on another user.
 - Divergence notifications are throttled, and only a few names are included.
 - Runaway culling is optional, uses a scene-fixed reference rather than camera
   position, and removes only far, outward-moving bodies.
-- Storage failures on the primary save paths become user-facing toasts.
+- Saved-scene mutation failures become typed errors and user-facing toasts;
+  multi-key rename/delete operations attempt to restore their prior keys.
 - MathLive failure leaves the plain text formula editor and source rendering
   usable.
 - Resize observers keep canvas backing dimensions aligned with CSS size and

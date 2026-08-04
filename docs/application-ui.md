@@ -365,7 +365,9 @@ comes from the internal constant `ICONS` table, not user input.
 
 - **Library:** category-filtered built-in presets and locally saved scenes.
   Scene cards support load, rename, description, download, and delete; the
-  action buttons stop propagation so they do not also load the card.
+  action buttons stop propagation so they do not also load the card. Save,
+  rename, description, and delete storage failures are caught and shown as
+  toasts; a failed action does not trigger a success re-render.
 - **Settings:** appearance, theme/accent/font, accessibility, interaction,
   adaptive resolution, performance mode, culling, help, and tour access.
 - **Help:** getting-started steps and device-appropriate shortcut reference.

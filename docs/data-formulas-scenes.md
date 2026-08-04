@@ -47,8 +47,8 @@ case field names shared with the earlier desktop application.
 | JSON field | Runtime property | Default and accepted value |
 | --- | --- | --- |
 | `gravity` | `World.gravity` | `9.81`, finite, clamped to `[-1e6, 1e6]`. Positive acts downward. |
-| `mutual_gravity` | `mutualGravity` | `false`; enables all-pairs gravity. |
-| `point_gravity` | `pointGravity` | `false`; absent in older scenes, meaning solid-disc interior behavior. |
+| `mutual_gravity` | `mutualGravity` | Boolean, default `false`; enables all-pairs gravity. Non-booleans use the default. |
+| `point_gravity` | `pointGravity` | Boolean, default `false`; selects solid-disc interior behavior when false. Non-booleans use the default. |
 | `G` | `G` | `1`, finite, clamped to `[-1e12, 1e12]`. |
 | `softening` | `softening` | `0.01`, finite, clamped to `[0, 1e6]`. |
 | `drag_linear` | `dragLinear` | `0`, finite, clamped to `[0, 1e9]`. |
@@ -68,7 +68,7 @@ Each `bodies` entry maps to `BodyDict`:
 
 | Field | Meaning and load behavior |
 | --- | --- |
-| `id` | Non-negative integer at most `2^40`; otherwise the constructor's fresh ID is retained. The body counter advances beyond every accepted ID. |
+| `id` | Non-negative integer at most `2^40`; otherwise the constructor's fresh ID is retained. The body counter advances beyond every accepted ID. If an imported body repeats an earlier body ID, the first body keeps it and the later body receives a fresh ID. |
 | `name` | String, limited to 200 characters; otherwise `Body <id>`. Anchors are renamed `Anchor`. |
 | `pos` | Two finite numbers `[x, y]`; invalid/missing components become zero. |
 | `vel` | Two finite numbers `[vx, vy]`; invalid/missing components become zero. |
@@ -79,10 +79,10 @@ Each `bodies` entry maps to `BodyDict`:
 | `restitution` | Finite and clamped to `0..1`, default `0.8`. |
 | `friction` | Finite and at least zero, default `0.4`. |
 | `const_force` | Two finite force components in newtons, default `[0, 0]`. |
-| `locked` | Expected boolean, default `false`; locked bodies have zero inverse mass/inertia. |
-| `collides` | Expected boolean, default `true`. |
-| `no_rotation` | Optional expected boolean, default `false`. |
-| `is_anchor` | Optional expected boolean, default `false`; anchors are locked by normal construction and excluded from mutual gravity. |
+| `locked` | Boolean, default `false`; locked bodies have zero inverse mass/inertia. Other runtime types use the default. |
+| `collides` | Boolean, default `true`; other runtime types use the default. |
+| `no_rotation` | Optional boolean, default `false`; other runtime types use the default. |
+| `is_anchor` | Optional boolean, default `false`; other runtime types use the default. A true value forces `locked` true and the name `Anchor`. |
 | `color` | At least three numeric channels. Channels are rounded/clamped to `0..255`; malformed colours use the generated palette colour. |
 
 The loader constructs each body before applying the stored identity and
@@ -101,7 +101,7 @@ Each `walls` entry maps to `WallDict`:
 
 | Field | Meaning and load behavior |
 | --- | --- |
-| `id` | Guarded and counter-advancing like body IDs. |
+| `id` | Guarded and counter-advancing like body IDs. The first occurrence of an imported wall ID keeps it; later duplicates receive fresh IDs. |
 | `name` | String limited to 200 characters; otherwise `Wall <id>`. |
 | `a`, `b` | Finite endpoint coordinate pairs; invalid components become zero. |
 | `thickness` | Finite and at least `1e-4`, default `0.08`. |
@@ -133,9 +133,9 @@ Links use a tagged union and refer to bodies by ID.
 | --- | --- |
 | `a`, `b` | Endpoint body IDs. A link is skipped if either endpoint is absent or both IDs are the same. |
 | `length` | Natural/fixed distance, finite and clamped to `0..1e6`; missing/invalid uses current endpoint separation. |
-| `is_rope` | Expected boolean. False is a bilateral rod; true is a tension-only maximum-distance constraint. |
+| `is_rope` | Boolean, default false. False is a bilateral rod; true is a tension-only maximum-distance constraint. Other runtime types use the default. |
 | `compliance` | XPBD compliance, finite and clamped to `0..1e9`, default zero. |
-| `id` | Guarded ID; advances the `DistanceLink` counter. |
+| `id` | Guarded ID; advances the `DistanceLink` counter. The first rod/rope with an imported ID keeps it and later duplicates in this link class receive fresh IDs. |
 
 Per-substep position `lambda` and warm-start force multiplier `mu` are not
 serialized.
@@ -160,8 +160,8 @@ serialized.
 | `rest_length` | Finite `0..1e6`; invalid uses endpoint separation. |
 | `stiffness` | Authored N/m, finite `0..1e9`, default `20`. |
 | `damping` | Authored axial Ns/m, finite `0..1e9`, default zero. |
-| `tension_only` | Expected boolean. True gives elastic-string behavior. |
-| `id`, `a`, `b` | Same identity/reference rules as rods, using the spring counter. |
+| `tension_only` | Boolean, default false. True gives elastic-string behavior; other runtime types use the default. |
+| `id`, `a`, `b` | Same identity/reference rules as rods, using the separate spring counter. A rod and spring may share the same numeric ID because link identity includes its class; duplicates within the spring class are remapped. |
 
 Effective stability-clamped `kEff` and `cEff` are recalculated and are not
 serialized.
@@ -182,7 +182,7 @@ serialized.
 - `name` is a string limited to 80 characters, default `Field`.
 - `fx`/`fy` are expression source strings. They are not truncated because
   truncation could produce a different valid formula.
-- `enabled` is expected boolean and defaults true.
+- `enabled` is boolean and defaults true; other runtime types use the default.
 - Load constructs a field and compiles both sources. A parse/compile error
   stores an error and leaves compiled functions null, so the field is inert
   while its source remains editable.
@@ -208,7 +208,7 @@ serialized.
 | `frequency` | Hz, finite `[0, 1e6]`, default `1`. |
 | `phase` | Radians, finite `[-1e6, 1e6]`, default zero. |
 | `angle` | Force direction radians, finite `[-1e6, 1e6]`, default zero. |
-| `enabled` | Expected boolean, default true. |
+| `enabled` | Boolean, default true; other runtime types use the default. |
 
 Drivers whose body is missing or immovable are ignored during step
 preparation. Deleting a body deletes its drivers; duplicating selected bodies
@@ -221,13 +221,21 @@ top-level shape:
 
 1. A non-object top level becomes an empty partial object.
 2. A non-object settings value becomes an empty settings object.
-3. Each scalar setting is defaulted/range-checked and the integrator is checked
-   against the supported list.
+3. Each scalar setting is type-checked and defaulted/range-checked; booleans
+   are never inferred through JavaScript truthiness, and the integrator is
+   checked against the supported list.
 4. Each collection must be an array; entries that are not objects are skipped.
-5. Bodies and walls are reconstructed independently.
-6. A body-ID map is built, then valid link records are resolved to direct
-   endpoint object references.
-7. Fields and drivers are reconstructed.
+5. Bodies and walls are reconstructed independently. Within each collection,
+   the first occurrence of an accepted ID retains it and later duplicates are
+   assigned fresh IDs.
+6. A body-ID map is built after de-duplication, then valid link records are
+   resolved to direct endpoint object references. Ambiguous references to a
+   repeated imported body ID therefore resolve deterministically to the first
+   body that carried it; drivers retain the same target ID.
+7. Links are separated by class; duplicate IDs within the rod/rope class or
+   within the spring class are remapped. Rod and spring counters are separate,
+   so the same numeric ID may occur once in each class.
+8. Fields and drivers are reconstructed.
 
 `restore(text)` still begins with `JSON.parse`, so syntactically damaged JSON
 throws there. `loadScene()` and `uploadScene()` catch that parse failure and
@@ -265,11 +273,13 @@ when a continuous interaction commits.
 Only six numbers per body normally change during play: x/y position, x/y
 velocity, angle, and spin. The clock adds one more number to a dynamic frame.
 
-`structuralDigest()` folds every other serialized world value into a digest:
-world settings except time, body identity/properties, walls, link topology and
-properties, fields, and drivers. When the digest differs, rewind stores a full
-snapshot keyframe. Otherwise it stores a `Float64Array` dynamic delta against
-the latest keyframe.
+`structuralDigest()` folds every other serialized world value into a fast
+32-bit digest: world settings except time, body identity/properties, walls,
+link topology and properties, fields, and drivers. A differing digest requires
+a full snapshot keyframe. A matching digest is not treated as proof of
+equality: the same shared structural traversal compares every value with the
+captured keyframe structure. Only an exact match permits a `Float64Array`
+dynamic delta against the latest keyframe.
 
 Trimming removes oldest frames until the frame/byte budgets are respected and
 reclaims a keyframe once no surviving frame references it. `back()` removes the
@@ -324,8 +334,20 @@ sanitized key so differently punctuated inputs cannot silently collide.
 quota or blocked-storage failure becomes `SceneSaveError` with a user-facing
 message. `listScenes()` scans only the scene prefix and sorts names.
 `loadScene()` returns null for a missing or syntactically damaged entry without
-deleting it. Delete removes payload and metadata. Rename sanitizes the target,
-refuses an existing target, copies payload/metadata, then removes the old keys.
+deleting it.
+
+Storage access needed to check or enumerate saved scenes also translates a
+browser rejection into `SceneSaveError`. The library keeps its save action
+available but replaces the scene list with an unavailable message. A rejected
+payload read is treated like an unusable scene and returns null.
+
+Delete, rename, and description updates also translate rejected storage
+operations into `SceneSaveError`. Multi-key operations capture their prior
+values and attempt rollback before throwing. Rename performs all
+quota-consuming destination writes before removing the source, clears orphaned
+destination metadata when the source has no description, and restores the old
+keys if any step fails. The library catches these typed failures and reports
+their message without re-rendering a partially successful action.
 
 Descriptions are trimmed. An empty description removes metadata; invalid
 metadata JSON reads as an empty description.

@@ -44,94 +44,118 @@ function mixString(h: number, s: string): number {
   return h | 0;
 }
 
-/** Hash of everything a world serializes EXCEPT the per-body dynamic state
- * and the clock.
- *
- * The rewind buffer stores a full snapshot only when this changes, and a
- * flat array of the dynamic numbers otherwise. That is exact rather than
- * approximate: if the digest is unchanged, every field the delta does not
- * carry is by construction the same as in the keyframe it is applied to.
- *
- * It is worth the pass because the alternative is not "no work" but
- * `JSON.stringify`, which has to render three thousand doubles as
- * shortest-round-trip text at a couple of hundred nanoseconds each. Hashing
- * the same values costs single-digit nanoseconds apiece.
- */
-export function structuralDigest(world: World): number {
-  let h = 0x9e3779b9;
-  h = mixNumber(h, world.gravity);
-  h = mixNumber(h, world.mutualGravity ? 1 : 0);
-  h = mixNumber(h, world.pointGravity ? 1 : 0);
-  h = mixNumber(h, world.G);
-  h = mixNumber(h, world.softening);
-  h = mixNumber(h, world.dragLinear);
-  h = mixNumber(h, world.dragQuadratic);
-  h = mixNumber(h, world.globalDamping);
-  h = mixString(h, world.integrator);
-  h = mixNumber(h, world.substeps);
-  h = mixNumber(h, world.iterations);
-  h = mixNumber(h, world.bodies.length);
+type StructuralValue = number | string;
+
+/** Visit every serialized value that a compact rewind frame does not carry.
+ * The digest, exact keyframe comparison, and captured structural state all
+ * share this traversal so none of them can silently omit a field. */
+function visitStructuralValues(world: World,
+                               visit: (value: StructuralValue) => boolean): boolean {
+  if (!visit(world.gravity)) return false;
+  if (!visit(world.mutualGravity ? 1 : 0)) return false;
+  if (!visit(world.pointGravity ? 1 : 0)) return false;
+  if (!visit(world.G)) return false;
+  if (!visit(world.softening)) return false;
+  if (!visit(world.dragLinear)) return false;
+  if (!visit(world.dragQuadratic)) return false;
+  if (!visit(world.globalDamping)) return false;
+  if (!visit(world.integrator)) return false;
+  if (!visit(world.substeps)) return false;
+  if (!visit(world.iterations)) return false;
+  if (!visit(world.bodies.length)) return false;
   for (const b of world.bodies) {
-    h = mixNumber(h, b.id);
-    h = mixString(h, b.name);
-    h = mixNumber(h, b.mass);
-    h = mixNumber(h, b.radius);
-    h = mixNumber(h, b.restitution);
-    h = mixNumber(h, b.friction);
-    h = mixNumber(h, b.constForce.x);
-    h = mixNumber(h, b.constForce.y);
-    h = mixNumber(h, (b.locked ? 1 : 0) | (b.collides ? 2 : 0) |
-                     (b.noRotation ? 4 : 0) | (b.isAnchor ? 8 : 0));
-    h = mixNumber(h, b.color[0] * 65536 + b.color[1] * 256 + b.color[2]);
+    if (!visit(b.id)) return false;
+    if (!visit(b.name)) return false;
+    if (!visit(b.mass)) return false;
+    if (!visit(b.radius)) return false;
+    if (!visit(b.restitution)) return false;
+    if (!visit(b.friction)) return false;
+    if (!visit(b.constForce.x)) return false;
+    if (!visit(b.constForce.y)) return false;
+    if (!visit((b.locked ? 1 : 0) | (b.collides ? 2 : 0) |
+               (b.noRotation ? 4 : 0) | (b.isAnchor ? 8 : 0))) return false;
+    if (!visit(b.color[0])) return false;
+    if (!visit(b.color[1])) return false;
+    if (!visit(b.color[2])) return false;
   }
-  h = mixNumber(h, world.walls.length);
+  if (!visit(world.walls.length)) return false;
   for (const w of world.walls) {
-    h = mixNumber(h, w.id);
-    h = mixString(h, w.name);
-    h = mixNumber(h, w.a.x);
-    h = mixNumber(h, w.a.y);
-    h = mixNumber(h, w.b.x);
-    h = mixNumber(h, w.b.y);
-    h = mixNumber(h, w.thickness);
-    h = mixNumber(h, w.restitution);
-    h = mixNumber(h, w.friction);
-    h = mixNumber(h, w.color[0] * 65536 + w.color[1] * 256 + w.color[2]);
+    if (!visit(w.id)) return false;
+    if (!visit(w.name)) return false;
+    if (!visit(w.a.x)) return false;
+    if (!visit(w.a.y)) return false;
+    if (!visit(w.b.x)) return false;
+    if (!visit(w.b.y)) return false;
+    if (!visit(w.thickness)) return false;
+    if (!visit(w.restitution)) return false;
+    if (!visit(w.friction)) return false;
+    if (!visit(w.color[0])) return false;
+    if (!visit(w.color[1])) return false;
+    if (!visit(w.color[2])) return false;
   }
-  h = mixNumber(h, world.links.length);
+  if (!visit(world.links.length)) return false;
   for (const ln of world.links) {
-    h = mixNumber(h, ln.id);
-    h = mixNumber(h, ln.a.id);
-    h = mixNumber(h, ln.b.id);
+    if (!visit(ln.id)) return false;
+    if (!visit(ln.a.id)) return false;
+    if (!visit(ln.b.id)) return false;
     if ("stiffness" in ln) {
-      h = mixNumber(h, 1);
-      h = mixNumber(h, ln.restLength);
-      h = mixNumber(h, ln.stiffness);
-      h = mixNumber(h, ln.damping);
-      h = mixNumber(h, ln.tensionOnly ? 1 : 0);
+      if (!visit(1)) return false;
+      if (!visit(ln.restLength)) return false;
+      if (!visit(ln.stiffness)) return false;
+      if (!visit(ln.damping)) return false;
+      if (!visit(ln.tensionOnly ? 1 : 0)) return false;
     } else {
-      h = mixNumber(h, 2);
-      h = mixNumber(h, ln.length);
-      h = mixNumber(h, ln.isRope ? 1 : 0);
-      h = mixNumber(h, ln.compliance);
+      if (!visit(2)) return false;
+      if (!visit(ln.length)) return false;
+      if (!visit(ln.isRope ? 1 : 0)) return false;
+      if (!visit(ln.compliance)) return false;
     }
   }
-  h = mixNumber(h, world.fields.length);
+  if (!visit(world.fields.length)) return false;
   for (const f of world.fields) {
-    h = mixString(h, f.name);
-    h = mixString(h, f.fxSrc);
-    h = mixString(h, f.fySrc);
-    h = mixNumber(h, f.enabled ? 1 : 0);
+    if (!visit(f.name)) return false;
+    if (!visit(f.fxSrc)) return false;
+    if (!visit(f.fySrc)) return false;
+    if (!visit(f.enabled ? 1 : 0)) return false;
   }
-  h = mixNumber(h, world.drivers.length);
+  if (!visit(world.drivers.length)) return false;
   for (const d of world.drivers) {
-    h = mixNumber(h, d.bodyId);
-    h = mixNumber(h, d.amplitude);
-    h = mixNumber(h, d.frequency);
-    h = mixNumber(h, d.phase);
-    h = mixNumber(h, d.angle);
-    h = mixNumber(h, d.enabled ? 1 : 0);
+    if (!visit(d.bodyId)) return false;
+    if (!visit(d.amplitude)) return false;
+    if (!visit(d.frequency)) return false;
+    if (!visit(d.phase)) return false;
+    if (!visit(d.angle)) return false;
+    if (!visit(d.enabled ? 1 : 0)) return false;
   }
+  return true;
+}
+
+/** Fast, non-authoritative hash of structural state. Rewind uses it to skip
+ * an exact comparison when structures obviously differ; matching hashes are
+ * always confirmed value-for-value before a dynamic delta is stored. */
+export function structuralDigest(world: World): number {
+  let h = 0x9e3779b9;
+  visitStructuralValues(world, (value) => {
+    h = typeof value === "number" ? mixNumber(h, value) : mixString(h, value);
+    return true;
+  });
   return h;
+}
+
+function captureStructure(world: World): StructuralValue[] {
+  const values: StructuralValue[] = [];
+  visitStructuralValues(world, (value) => { values.push(value); return true; });
+  return values;
+}
+
+function structureMatches(world: World, expected: readonly StructuralValue[]): boolean {
+  let i = 0;
+  const complete = visitStructuralValues(world, (value) => {
+    if (i >= expected.length || value !== expected[i]) return false;
+    i++;
+    return true;
+  });
+  return complete && i === expected.length;
 }
 
 interface Frame {
@@ -149,10 +173,10 @@ interface Frame {
  *
  * Only six numbers per body actually change as the simulation runs, so a
  * frame normally stores just those, as a flat Float64Array, against the
- * last full snapshot. A new snapshot is taken only when the structural
- * digest changes - a body added or deleted, a property edited, a wall
- * moved - which makes the delta exact rather than approximate: any field
- * a delta does not carry provably still holds the keyframe's value.
+ * last full snapshot. A new snapshot is taken when the structural digest
+ * differs or an exact value comparison rejects a matching digest. A compact
+ * delta is therefore stored only when every omitted value still equals its
+ * keyframe value.
  *
  * The buffer is bounded in bytes rather than frames, since one scene's
  * frame can cost a thousand times another's.
@@ -167,7 +191,10 @@ export class RewindBuffer {
   private keyBase = 0;      // index of keys[0] in the original numbering
   private digest = 0;
   private haveDigest = false;
+  private structure: StructuralValue[] = [];
   private bytes = 0;
+
+  constructor(private readonly digestWorld: (world: World) => number = structuralDigest) {}
 
   get length(): number { return this.frames.length; }
 
@@ -176,17 +203,21 @@ export class RewindBuffer {
     this.keys.length = 0;
     this.keyBase = 0;
     this.haveDigest = false;
+    this.structure.length = 0;
     this.bytes = 0;
   }
 
   push(world: World): void {
-    const digest = structuralDigest(world);
-    if (!this.haveDigest || digest !== this.digest || this.keys.length === 0) {
+    const digest = this.digestWorld(world);
+    const sameStructure = this.haveDigest && digest === this.digest &&
+      structureMatches(world, this.structure);
+    if (!sameStructure || this.keys.length === 0) {
       const state = snapshot(world);
       this.keys.push(state);
       this.bytes += state.length * 2;
       this.digest = digest;
       this.haveDigest = true;
+      this.structure = captureStructure(world);
       this.frames.push({ key: this.keyBase + this.keys.length - 1, dyn: null });
     } else {
       const dyn = new Float64Array(world.bodies.length * DYN_STRIDE + 1);
@@ -231,9 +262,9 @@ export class RewindBuffer {
     const frame = this.frames[i];
     const world = restore(this.keys[frame.key - this.keyBase]);
     const dyn = frame.dyn;
-    // The digest guarantees the body list matches its keyframe, so this
-    // only ever fails if that invariant is broken; fall back to the
-    // keyframe rather than reading past the end of the array.
+    // Exact structural comparison guarantees the body list matches its
+    // keyframe. Keep the length guard as a final corruption boundary rather
+    // than reading past the end of a damaged array.
     if (dyn !== null && dyn.length === world.bodies.length * DYN_STRIDE + 1) {
       let k = 0;
       for (const b of world.bodies) {
@@ -332,10 +363,37 @@ function safeName(name: string): string {
  * `safeName` strips punctuation, so two different-looking names can also
  * collide without the user seeing why. */
 export function sceneExists(name: string): boolean {
-  return localStorage.getItem(SCENE_PREFIX + safeName(name)) !== null;
+  try {
+    return localStorage.getItem(SCENE_PREFIX + safeName(name)) !== null;
+  } catch (exc) {
+    throw storageError(exc, "read");
+  }
 }
 
 export class SceneSaveError extends Error {}
+
+function storageError(exc: unknown, action: string): SceneSaveError {
+  const full = exc instanceof DOMException &&
+    (exc.name === "QuotaExceededError" || exc.code === 22);
+  return new SceneSaveError(full
+    ? "Browser storage is full - delete a saved scene and try again"
+    : `This browser refused to ${action} the scene`);
+}
+
+/** Restore a small set of local-storage keys after a multi-key operation
+ * fails. Cleanup is deliberately best-effort because the same browser policy
+ * that rejected the original operation may reject rollback too. Writes are
+ * ordered so ordinary quota failures occur before source data is removed. */
+function restoreKeys(entries: ReadonlyArray<readonly [string, string | null]>): void {
+  for (const [key, value] of entries) {
+    try {
+      if (value === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, value);
+    } catch {
+      // The original SceneSaveError remains the useful failure for the UI.
+    }
+  }
+}
 
 /** Save (or overwrite) a scene in browser storage.
  *
@@ -349,24 +407,24 @@ export function saveScene(world: World, name: string): string {
   try {
     localStorage.setItem(SCENE_PREFIX + safe, snapshot(world));
   } catch (exc) {
-    const full = exc instanceof DOMException &&
-      (exc.name === "QuotaExceededError" || exc.code === 22);
-    throw new SceneSaveError(full
-      ? "Browser storage is full - delete a saved scene and try again"
-      : "This browser refused to save (private mode blocks storage)");
+    throw storageError(exc, "save");
   }
   return safe;
 }
 
 export function listScenes(): string[] {
-  const names: string[] = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key !== null && key.startsWith(SCENE_PREFIX)) {
-      names.push(key.slice(SCENE_PREFIX.length));
+  try {
+    const names: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key !== null && key.startsWith(SCENE_PREFIX)) {
+        names.push(key.slice(SCENE_PREFIX.length));
+      }
     }
+    return names.sort();
+  } catch (exc) {
+    throw storageError(exc, "read");
   }
-  return names.sort();
 }
 
 /** A saved scene, or null when there is none by that name OR the stored
@@ -378,9 +436,9 @@ export function listScenes(): string[] {
  * handler, so the "Could not load" toast sitting right below this call
  * could never fire and the card simply did nothing when clicked. */
 export function loadScene(name: string): World | null {
-  const snap = localStorage.getItem(SCENE_PREFIX + name);
-  if (snap === null) return null;
   try {
+    const snap = localStorage.getItem(SCENE_PREFIX + name);
+    if (snap === null) return null;
     return restore(snap);
   } catch {
     return null;
@@ -388,8 +446,23 @@ export function loadScene(name: string): World | null {
 }
 
 export function deleteScene(name: string): void {
-  localStorage.removeItem(SCENE_PREFIX + name);
-  localStorage.removeItem(META_PREFIX + name);
+  const payloadKey = SCENE_PREFIX + name;
+  const metaKey = META_PREFIX + name;
+  let payload: string | null;
+  let meta: string | null;
+  try {
+    payload = localStorage.getItem(payloadKey);
+    meta = localStorage.getItem(metaKey);
+  } catch (exc) {
+    throw storageError(exc, "delete");
+  }
+  try {
+    localStorage.removeItem(payloadKey);
+    localStorage.removeItem(metaKey);
+  } catch (exc) {
+    restoreKeys([[payloadKey, payload], [metaKey, meta]]);
+    throw storageError(exc, "delete");
+  }
 }
 
 /** Rename a saved scene (metadata moves with it). Returns the safe name,
@@ -397,13 +470,38 @@ export function deleteScene(name: string): void {
 export function renameScene(oldName: string, newName: string): string | null {
   const safe = safeName(newName);
   if (safe === oldName) return safe;
-  if (localStorage.getItem(SCENE_PREFIX + safe) !== null) return null;
-  const payload = localStorage.getItem(SCENE_PREFIX + oldName);
+  const oldPayloadKey = SCENE_PREFIX + oldName;
+  const oldMetaKey = META_PREFIX + oldName;
+  const newPayloadKey = SCENE_PREFIX + safe;
+  const newMetaKey = META_PREFIX + safe;
+  let payload: string | null;
+  let meta: string | null;
+  let previousTargetMeta: string | null;
+  try {
+    if (localStorage.getItem(newPayloadKey) !== null) return null;
+    payload = localStorage.getItem(oldPayloadKey);
+    meta = localStorage.getItem(oldMetaKey);
+    previousTargetMeta = localStorage.getItem(newMetaKey);
+  } catch (exc) {
+    throw storageError(exc, "rename");
+  }
   if (payload === null) return null;
-  localStorage.setItem(SCENE_PREFIX + safe, payload);
-  const meta = localStorage.getItem(META_PREFIX + oldName);
-  if (meta !== null) localStorage.setItem(META_PREFIX + safe, meta);
-  deleteScene(oldName);
+  try {
+    // Finish every potentially quota-consuming write before deleting the
+    // source. An unreferenced metadata key at the destination must not leak
+    // into a renamed scene that has no description.
+    localStorage.setItem(newPayloadKey, payload);
+    if (meta === null) localStorage.removeItem(newMetaKey);
+    else localStorage.setItem(newMetaKey, meta);
+    localStorage.removeItem(oldPayloadKey);
+    localStorage.removeItem(oldMetaKey);
+  } catch (exc) {
+    // Remove the copies first so restoring the source has the same quota
+    // footprint as it did before the operation began.
+    restoreKeys([[newPayloadKey, null], [newMetaKey, previousTargetMeta],
+                 [oldPayloadKey, payload], [oldMetaKey, meta]]);
+    throw storageError(exc, "rename");
+  }
   return safe;
 }
 
@@ -417,11 +515,23 @@ export function sceneDescription(name: string): string {
 }
 
 export function setSceneDescription(name: string, description: string): void {
-  if (description.trim() === "") {
-    localStorage.removeItem(META_PREFIX + name);
-  } else {
-    localStorage.setItem(META_PREFIX + name,
-                         JSON.stringify({ description: description.trim() }));
+  const key = META_PREFIX + name;
+  let previous: string | null;
+  try {
+    previous = localStorage.getItem(key);
+  } catch (exc) {
+    throw storageError(exc, "update");
+  }
+  try {
+    if (description.trim() === "") {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key,
+                           JSON.stringify({ description: description.trim() }));
+    }
+  } catch (exc) {
+    restoreKeys([[key, previous]]);
+    throw storageError(exc, "update");
   }
 }
 
