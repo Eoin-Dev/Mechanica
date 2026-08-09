@@ -123,4 +123,35 @@ describe("splitterDrag", () => {
     el.dispatchEvent(pointer("pointermove", 450));
     expect(moves).toEqual([450]);
   });
+
+  it("is an ARIA separator with bounded keyboard resizing", () => {
+    const el = document.createElement("div");
+    let value = 300;
+    let commits = 0;
+    splitterDrag(el, () => {}, () => { commits++; }, {
+      orientation: "vertical",
+      label: "Resize Inspector",
+      getValue: () => value,
+      setValue: (next) => { value = next; },
+      min: 240,
+      max: 620,
+      increaseKeys: ["ArrowLeft"],
+      decreaseKeys: ["ArrowRight"],
+    });
+    expect(el.getAttribute("role")).toBe("separator");
+    expect(el.getAttribute("aria-orientation")).toBe("vertical");
+    expect(el.getAttribute("aria-valuenow")).toBe("300");
+
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(value).toBe(310);
+    el.dispatchEvent(new KeyboardEvent("keydown",
+      { key: "ArrowLeft", shiftKey: true, bubbles: true }));
+    expect(value).toBe(342);
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    expect(value).toBe(240);
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    expect(value).toBe(620);
+    expect(el.getAttribute("aria-valuenow")).toBe("620");
+    expect(commits).toBe(4);
+  });
 });

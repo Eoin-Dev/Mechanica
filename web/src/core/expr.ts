@@ -31,6 +31,15 @@ export type CompiledExpr = (env: Env) => number;
 
 export class ExprError extends Error {}
 
+/** Resource budgets shared by text parsing, MathLive conversion and field
+ * compilation. They reject an intact expression rather than truncating it,
+ * so an over-complex scene can never silently acquire different physics. */
+export const EXPR_MAX_SOURCE_CHARS = 4_096;
+export const EXPR_MAX_TOKENS = 2_048;
+export const EXPR_MAX_NODES = 1_024;
+export const EXPR_MAX_DEPTH = 128;
+export const EXPR_MAX_ARGUMENTS = 128;
+
 type Fn = (env: Env) => number;
 
 /** A name table with NO prototype.
@@ -94,6 +103,9 @@ export const FUNCS: Record<string, { fn: (...a: number[]) => number; arity: numb
 /** Validate a call's argument count, throwing the same message everywhere
  * a call can be built (the text parser and the math-editor converter). */
 export function checkArity(name: string, argCount: number): void {
+  if (argCount > EXPR_MAX_ARGUMENTS) {
+    throw new ExprError(`a function call may have at most ${EXPR_MAX_ARGUMENTS} arguments`);
+  }
   const spec = FUNCS[name];
   if (!spec) throw new ExprError("only math functions like sin, cos, sqrt may be called");
   if (spec.arity === "var") {
@@ -176,6 +188,9 @@ function tokenize(src: string): Token[] {
       continue;
     }
     throw new ExprError(`unexpected character '${c}'`);
+  }
+  if (tokens.length > EXPR_MAX_TOKENS) {
+    throw new ExprError(`expression has too many tokens (maximum ${EXPR_MAX_TOKENS})`);
   }
   tokens.push({ kind: "end" });
   return tokens;
@@ -438,6 +453,53 @@ function compileNode(node: ExprNode): Fn {
   throw new ExprError("internal: unhandled expression node");
 }
 
+/** Validate an AST supplied by either parser before recursive compilation or
+ * formatting. The walk is iterative, so even an adversarial programmatic AST
+ * cannot overflow the JavaScript stack while its budget is being checked. */
+export function assertExprBudget(root: ExprNode): void {
+  const stack: Array<[ExprNode, number]> = [[root, 1]];
+  let nodes = 0;
+  while (stack.length > 0) {
+    const [node, depth] = stack.pop()!;
+    nodes++;
+    if (nodes > EXPR_MAX_NODES) {
+      throw new ExprError(`expression has too many terms (maximum ${EXPR_MAX_NODES})`);
+    }
+    if (depth > EXPR_MAX_DEPTH) {
+      throw new ExprError(`expression is nested too deeply (maximum depth ${EXPR_MAX_DEPTH})`);
+    }
+    const next = depth + 1;
+    switch (node.kind) {
+      case "call":
+        if (node.args.length > EXPR_MAX_ARGUMENTS) {
+          throw new ExprError(`a function call may have at most ${EXPR_MAX_ARGUMENTS} arguments`);
+        }
+        for (let i = node.args.length - 1; i >= 0; i--) stack.push([node.args[i], next]);
+        break;
+      case "neg":
+      case "not":
+        stack.push([node.operand, next]);
+        break;
+      case "binary":
+      case "logic":
+        stack.push([node.right, next], [node.left, next]);
+        break;
+      case "compare":
+        for (let i = node.operands.length - 1; i >= 0; i--) {
+          stack.push([node.operands[i], next]);
+        }
+        break;
+      case "ternary":
+        stack.push([node.orelse, next], [node.cond, next], [node.body, next]);
+        break;
+      case "num":
+      case "var":
+      case "const":
+        break;
+    }
+  }
+}
+
 /** Parse `source` into an AST without compiling or probing it.
  *
  * Names and arities are validated during the parse, so a returned tree
@@ -445,13 +507,21 @@ function compileNode(node: ExprNode): Fn {
  * Throws ExprError with a human-readable message on invalid input.
  */
 export function parseSource(source: string): ExprNode {
+  if (typeof source !== "string") throw new ExprError("expression source must be text");
+  if (source.length > EXPR_MAX_SOURCE_CHARS) {
+    throw new ExprError(
+      `expression is too long (maximum ${EXPR_MAX_SOURCE_CHARS} characters)`,
+    );
+  }
   source = source.trim();
   if (!source) throw new ExprError("empty expression");
   // mathy convenience: `^` means power (x^2 == x**2). Substituted in the
   // text before parsing so it gets **'s precedence.
   source = source.replaceAll("^", "**");
   try {
-    return new Parser(tokenize(source)).parse();
+    const node = new Parser(tokenize(source)).parse();
+    assertExprBudget(node);
+    return node;
   } catch (exc) {
     if (exc instanceof ExprError) throw exc;
     throw new ExprError(`syntax error: ${(exc as Error).message}`);
@@ -463,7 +533,13 @@ export function parseSource(source: string): ExprNode {
  * Throws ExprError with a human-readable message on invalid input.
  */
 export function compileExpr(source: string): CompiledExpr {
-  const fn = compileNode(parseSource(source));
+  let fn: Fn;
+  try {
+    fn = compileNode(parseSource(source));
+  } catch (exc) {
+    if (exc instanceof ExprError) throw exc;
+    throw new ExprError(`expression could not be compiled: ${String((exc as Error).message ?? exc)}`);
+  }
 
   // Probe once so obviously broken expressions fail at compile time.
   const probe: Env = { x: 0.1, y: 0.1, vx: 0.0, vy: 0.0, t: 0.0, m: 1.0, r: 0.14 };

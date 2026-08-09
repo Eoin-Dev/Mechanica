@@ -13,7 +13,7 @@
  * simulation to show motion, and restores the play state it found.
  */
 import type { App } from "../app";
-import { el, isTouch } from "./dom";
+import { ModalFocus, el, isTouch } from "./dom";
 
 /** One stop on the tour.
  *
@@ -39,7 +39,7 @@ export const STEPS: Step[] = [
     body: "A physics sandbox: build mechanical systems, run them, and " +
           "measure what they do. Everything is real SI units - metres, " +
           "kilograms, seconds, newtons - and everything runs in this " +
-          "browser. Six quick stops and you are done.",
+          "browser.",
   },
   {
     // the bar below the canvas is half of what this step describes
@@ -167,12 +167,14 @@ export class Tour {
   private cells: HTMLElement[] = []; // pooled dark tiles
   private rings: HTMLElement[] = []; // pooled outlines, one per hole
   private card!: HTMLElement;
+  private focus!: ModalFocus;
+  private shell: HTMLElement | null = null;
   private index = 0;
   private wasPlaying = false;
   private steps: Step[] = [];
   private onKey = (e: KeyboardEvent): void => {
     if (e.key === "Escape") this.finish();
-    else if (e.key === "ArrowRight" || e.key === "Enter") this.go(1);
+    else if (e.key === "ArrowRight") this.go(1);
     else if (e.key === "ArrowLeft") this.go(-1);
     else return;
     e.preventDefault();
@@ -221,10 +223,17 @@ export class Tour {
     this.cells.length = 0;
     this.rings.length = 0;
     this.scrim = el("div", { class: "tour-scrim" });
-    this.card = el("div", { class: "tour-card", role: "dialog",
-                            "aria-modal": "true", "aria-label": "Guided tour" });
+    this.card = el("div", { class: "tour-card", "aria-live": "polite",
+                            "aria-atomic": "true" });
+    this.focus = new ModalFocus(this.card, "Guided tour");
     this.root = el("div", { class: "tour-root" }, this.scrim, this.card);
     document.body.append(this.root);
+    const doc = document as Document & {
+      getElementById?: (id: string) => HTMLElement | null;
+    };
+    this.shell = doc.getElementById?.("app") ?? null;
+    this.focus.enter();
+    if (this.shell !== null) this.shell.inert = true;
     // capture phase: the tour owns the keyboard while it is up, so its keys
     // never also reach the app's global shortcuts underneath
     document.addEventListener("keydown", this.onKey, true);
@@ -247,7 +256,10 @@ export class Tour {
     const step = this.steps[this.index];
     step.enter?.(this.app);
     const last = this.index === this.steps.length - 1;
-    const text = (isTouch() && step.touchBody) || step.body;
+    let text = (isTouch() && step.touchBody) || step.body;
+    if (this.index === 0) {
+      text += ` ${this.steps.length} quick stops and you are done.`;
+    }
 
     this.card.replaceChildren();
     this.card.append(
@@ -428,8 +440,11 @@ export class Tour {
     document.removeEventListener("keydown", this.onKey, true);
     window.removeEventListener("resize", this.reflow);
     window.removeEventListener("scroll", this.reflow, true);
+    if (this.shell !== null) this.shell.inert = false;
+    this.focus.exit();
     this.root.remove();
     this.root = null;
+    this.shell = null;
     // drop the pooled tiles/rings with the root that owned them, so they
     // cannot outlive it (build() clears these too - this keeps the removed
     // subtree collectable in the meantime)

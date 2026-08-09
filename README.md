@@ -11,6 +11,9 @@ simulates locally in the visitor's browser.
 
 ## Run locally
 
+Use Node.js 22.23.1 (the repository's `.node-version`); `package.json` accepts
+maintained Node 22 releases from 22.22.2 up to, but not including, Node 23.
+
 ```
 cd web
 npm install
@@ -22,6 +25,8 @@ npm run dev        # dev server, live reload
 ```
 npm test           # verification suite (physics, rendering, robustness)
 npm run build      # production build into web/dist/
+npx playwright install chromium  # one-time browser-test prerequisite
+npm run test:e2e   # production-preview Chromium and axe checks
 ```
 
 The test badge is a lower bound enforced in CI by
@@ -69,6 +74,10 @@ describes how the code works now; it is not a changelog. See
 Repository documentation is intentionally centralized here, in the
 contributor/agent instruction files, and in `docs/`; subsystem folders do not
 carry duplicate README files.
+
+The production distribution includes the upstream MathLive MIT and
+OpenDyslexic SIL Open Font License notices in
+[`web/public/THIRD_PARTY_NOTICES.txt`](web/public/THIRD_PARTY_NOTICES.txt).
 
 ## Controls (press F1 in-app for the full list)
 

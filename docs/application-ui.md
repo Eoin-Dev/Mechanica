@@ -19,8 +19,12 @@ The important `App` state falls into these groups:
 | UI integration | Panel list, toast callback, soft-body hint state, energy cache. |
 
 The app does not wrap engine objects in view models. Inspector controls and the
-controller edit the current `Body`, `Wall`, `Link`, or `World` directly, then
-commit undo state and request structural refresh where necessary.
+controller edit the current `Body`, `Wall`, `Link`, or `World` directly. Every
+user edit has an explicit boundary: `beginEdit()` snapshots the live state
+before the first write, `commitEdit()` records the resulting transition, and
+`cancelEdit()` discards an unused boundary. Capturing the live state is
+important after playback, because the state immediately before an edit can
+differ from the most recent committed history entry.
 
 ## Playback and time controls
 
@@ -39,12 +43,19 @@ per-frame step/time budgets are reached.
 
 `stepOnce()` pauses, advances two 1/120 s quanta (one nominal 60 Hz display
 frame), and uses the same adaptive subdivision and trail recording path as
-normal playback.
+normal playback. Playback, single-step, and time-jump all use the same bounded
+physics-batch primitive. It stops on the first contained divergence or thrown
+solver error, pauses playback, clears pending accumulated time, aggregates the
+affected body names, and emits one throttled diagnostic instead of repeatedly
+retrying the bad state.
 
 `stepBack()` pauses and asks `RewindBuffer` for the previous recorded display
 frame. It reconstructs a new world, resets all live gestures, retains selected
 body IDs where the corresponding reconstructed objects exist, and truncates
-time-series graphs at the rewound clock.
+energy, momentum, and timestamped phase-portrait samples at the rewound clock.
+The compact rewind buffer is limited to 3,000 frames and 48 MB. A frame that
+cannot fit clears rewind history and produces a one-time explanation; ordinary
+undo history remains separate.
 
 ### Reset and time jump
 
@@ -53,31 +64,63 @@ edits committed at time zero. Reset restores it, pauses, clears derived
 display/history state through `replaceWorld`, and preserves the same initial
 snapshot for repeated resets.
 
-The toolbar clock accepts a non-negative target time:
+The toolbar clock accepts a strict unsigned decimal or scientific-notation
+target. Empty text, trailing characters, negative values, and non-finite values
+are rejected rather than partially parsed. A target earlier than a scene's
+nonzero loaded baseline is rejected with that baseline in the message.
 
 - a future target continues from a copy of the current state;
 - a past target restarts from the initial snapshot;
+- the target is rounded to the nearest fixed 1/120 s quantum, so the installed
+  clock differs by at most half a quantum;
+- a backward jump that rounds to zero steps still installs the restored
+  baseline instead of leaving the later live state visible;
 - stepping is synchronous but limited by both a wall-clock budget and a hard
   step count;
 - an incomplete jump installs the reached state and explains that entering the
   target again continues from there;
+- a divergence or exception stops the shared physics batch at its first
+  failure and installs only the bounded result; and
 - work occurs on a copy so an exception cannot leave the visible scene
   half-advanced.
 
 ## Scene and edit operations
 
-- `newScene()` installs an empty world, pauses, and pushes an undo entry so the
-  clear can be reversed.
-- `loadPreset()` installs a newly built world, resets undo, applies preset view
-  hints, frames the initial bounds, captures reset/energy baselines, and arms a
-  one-time soft-body drag hint.
-- `pushUndo()` records a full serialized world after a committed edit. At time
-  zero it also redefines the reset baseline.
-- Undo/redo restore new object graphs and pause.
+- Immediate actions and continuous gestures capture the exact pre-edit world
+  before mutation and commit once at their interaction boundary. This covers
+  canvas creation/deletion/paste/drag operations, Inspector buttons,
+  checkboxes, sliders, colour controls and text/formula edits, formula recipes,
+  and scene clearing. Invalid retained formula source is an undoable edit too.
+- An unchanged transition adds no history entry. At time zero, a committed
+  edit also redefines the reset and baseline-energy snapshot.
+- Undo history holds at most 120 entries and 48 MB of UTF-16 snapshots. Redo
+  entries are discarded with their byte accounting after a new edit. If a
+  complete transition cannot fit, history resets to the resulting current
+  state and the app explains that undo is unavailable for that edit.
+- `newScene()` installs an empty world and pauses as one undoable transaction.
+- `loadPreset()` installs a newly built world, applies preset view hints,
+  frames the initial bounds, captures reset/energy baselines, and arms a
+  one-time soft-body drag hint as one undoable scene replacement.
+- `loadWorld()` handles saved and imported worlds the same way, fits the new
+  scene, pauses, and announces that Ctrl+Z restores the previous scene.
+  Failed reads and failed builds leave both the live world and history intact.
+- `initializePreset()` is used only for startup and is the sole scene-loading
+  path that resets undo history.
+- Undo/redo restore new object graphs and pause. Every world replacement also
+  clears live gestures, trails, graph samples, frame rewind, and other derived
+  state before seeding the replacement's baseline.
 - Property copy/paste applies mass, radius, restitution, friction, locked, and
   collision flags to non-anchor bodies. Position, velocity, name, colour,
   rotation mode, links, and drivers are not in this clipboard.
 - Lock toggle affects selected non-anchor bodies only.
+
+Saved-scene reads distinguish loaded, cancelled, missing, invalid, oversized,
+and storage-error results. Cancelling the native picker is silent; malformed,
+resource-limited, damaged saved data, and blocked/full storage receive specific
+feedback. Uploaded files are rejected above 10 MiB, and the import button stays
+disabled while its one file is being read. Quick-save names include local
+milliseconds, and a repeated or DST-colliding timestamp receives `-2`, `-3`,
+and subsequent collision-safe suffixes.
 
 All deletion routes use `CanvasController.deleteObjects()`. It groups bodies,
 walls, and links, invokes batched world removals, drops body trails, removes
@@ -112,7 +155,9 @@ Duplication:
 For link tools, clicking empty space for the first endpoint creates an anchor;
 clicking empty space for the second creates a normal body. This permits a
 pendulum or suspension link to be drawn without switching tools. Escape
-cancels an unfinished wall or link before it dismisses other application state.
+cancels an unfinished wall or link before it dismisses other application
+state. If the first endpoint was auto-created, cancellation removes that
+temporary anchor and cancels its uncommitted edit boundary.
 
 Picking is top-down by type and reverse draw/list order: bodies first, then
 links, then walls. Pick padding is expressed in pixels and converted by camera
@@ -125,8 +170,10 @@ zoom so objects remain usable at different scales.
 - Primary button drives the active tool.
 - Right-drag on a movable body sets velocity; right-drag elsewhere pans.
 - Middle-drag pans.
-- The mouse wheel zooms around the cursor; the world point under the cursor is
-  kept fixed.
+- An unmodified mouse wheel over the simulation canvas zooms around the cursor;
+  the world point under the cursor is kept fixed.
+- Ctrl/Cmd-wheel and trackpad page-zoom gestures are not consumed by the
+  canvas. They remain browser-owned, like Ctrl/Cmd `+`, `-`, and `0`.
 - A selected wall exposes endpoint/whole-wall dragging.
 - The green velocity arrow tip is another route to exact velocity editing.
 
@@ -141,6 +188,9 @@ keyboard and mouse-button references. A second touch cancels the one-finger
 gesture and enters pinch mode. The controller tracks distance and midpoint to
 combine zoom and pan. Only touch pointers enter the pinch map, preventing a
 lost mouse pointer from creating a false two-finger gesture.
+
+Custom `touch-action: none` behavior is scoped to the simulation/graph canvases
+and splitters. The rest of the page retains native browser zoom and scrolling.
 
 Touch-first detection uses `(pointer: coarse)`; phone layout separately uses
 the CSS breakpoint `(max-width: 760px)`. A tablet can therefore receive touch
@@ -167,6 +217,12 @@ does not mark a body held or touch its motion. Once active:
 
 Position dragging is therefore placement, not throwing. Intentional velocity
 changes use right-drag or the velocity handle.
+
+The controller opens a transaction only when a drag first mutates the world and
+commits once on release. Focus loss, fullscreen changes, pointer cancellation,
+and a second touch restore temporary drag state before committing the final
+position. A press that never crosses the activation threshold is unchanged and
+creates no history entry.
 
 When dragged-wall collision is enabled, both paused and running drags call the
 engine's kinematic capsule sweep. The default is disabled because passing a
@@ -199,10 +255,17 @@ Selection belongs to `App` as an array of `Selectable` references.
 - Object removal prunes references before a later frame can inspect a deleted
   object.
 
-The inspector has `Selection`, `World`, and `View` tabs and supports desktop
-collapse plus a phone drawer handle. It computes a structure key using object
-type and ID, not ID alone, so a body and wall with the same numeric ID remain
-different selections.
+The inspector has `Selection`, `World`, and `View` tabs. They use the
+`tablist`/`tab`/`tabpanel` pattern with one tab in the page tab order;
+Left/Right, Home, and End move focus and selection. The panel computes a
+structure key using object type and ID, not ID alone, so a body and wall with
+the same numeric ID remain different selections.
+
+Desktop/tablet collapsed state follows the persisted `inspector_visible`
+setting. The collapsed-edge and phone handles are real named buttons exposing
+`aria-controls` and `aria-expanded`. Entering the phone layout starts a fresh,
+transiently closed drawer session without writing the desktop preference;
+returning above 760 px restores the persisted desktop state.
 
 ### Selection tab
 
@@ -228,6 +291,11 @@ drivers. Performance mode disables authored solver controls without overwriting
 their values and shows an explanation banner. A preset whose substeps were
 centrally cost-capped receives a transient explanatory note until the value is
 edited.
+
+Formula edits retain invalid source and the resulting actionable error. The
+field's compiled axes are updated atomically by the engine, while the retained
+source change is committed as an ordinary undoable edit so the user can either
+repair or undo it.
 
 ### View tab
 
@@ -287,7 +355,9 @@ x/y/time samples.
 - Ordinary endpoints are added only after sufficient screen-space motion.
 - Trail age is based on simulated time, so a stopped body's old path still
   expires and speed multipliers do not change the simulated history span.
-- Rewind clears future-stamped trails; world replacement clears all trails.
+- Before recording resumes after rewind/re-simulation, future-stamped trails
+  are cleared; whole-world replacement, including undo/redo, clears all trail
+  samples.
 - Trails belonging to removed bodies are deleted.
 - Capacity changes retain the newest points and preserve monotonic serials.
 
@@ -295,7 +365,9 @@ Rendering decimates using a serial-based stride so the same physical samples
 remain selected as the ring rotates. Corners and endpoints are preserved,
 vertices are split into fading bands, and global/per-trail budgets limit draw
 work. App trail quality rises slowly during cheap frames and falls quickly when
-render cost exceeds its target.
+render cost exceeds its target. The renderer also prunes reusable colour groups
+to colours present in the current world and ignores stale trails without a live
+body, so repeated recolouring and scene replacement cannot grow that cache.
 
 ## Graphs
 
@@ -317,13 +389,15 @@ sample in place, clears on backward time, rejects non-finite samples, and lets
 legend clicks hide channels. Rendering uses binary search to find the visible
 range and smooths only shrinking y-axis bounds. Reduced motion snaps the range.
 
-`PhasePlot` stores bounded x/vx/y/vy tuples, compacts in blocks, draws one axis
-pair in a square region, and marks the latest point. Selecting a different body
-clears the previous phase trajectory.
+`PhasePlot` stores bounded time/x/vx/y/vy tuples, compacts in blocks, draws one
+axis pair in a square region, and marks the latest point. Selecting a different
+body clears the previous phase trajectory. Its timestamps let rewind truncate
+future phase points in the same way as the energy and momentum series.
 
-The graph dock supports live following, scroll-back, wheel zoom, pan, reset,
-legend toggles, and a resizable splitter. It avoids redrawing unchanged data
-unless autoscale easing is still active.
+The graph dock supports live following, scroll-back, unmodified-wheel zoom,
+pan, reset, legend toggles, and a resizable splitter. Modified wheel events stay
+browser-owned. The dock avoids redrawing unchanged data unless autoscale easing
+is still active.
 
 ## DOM control system
 
@@ -336,23 +410,33 @@ unless autoscale easing is still active.
 - sliders map a fixed internal range to linear or logarithmic values; paired
   numeric input allows exact edits and commit/revert behavior.
 - `RefreshGroup` polls controls and optionally culls scrolled-out refresh work.
-- `splitterDrag` handles pointer capture, constraints, and commit callbacks.
+- `wireTabs` and `refreshTabs` implement the roving-focus ARIA tab pattern with
+  Left/Right wrapping and Home/End navigation.
+- `splitterDrag` handles pointer capture, constraints, and commit callbacks and
+  exposes a focusable `separator` with orientation and current/minimum/maximum
+  values. Arrow keys resize by 10 CSS px, Shift+Arrow by 32 px, and Home/End
+  select the limits.
 - media predicates reuse live `MediaQueryList` objects and safely degrade when
   `matchMedia` is unavailable.
 - `ModalFocus` labels the dialog, captures/restores prior focus, traps Tab
   navigation, and keeps focus inside an open overlay.
 
-Buttons derive accessible names from visible labels or tooltips. Icon markup
-comes from the internal constant `ICONS` table, not user input.
+Buttons derive accessible names from visible labels or tooltips; icon-only
+buttons receive an explicit `aria-label`. Toggle buttons expose
+`aria-pressed`, and shortcut badges are `aria-hidden` so they do not pollute the
+control name. Colour preset groups and segmented controls expose their selected
+state instead of relying on a CSS class. Icon markup comes from the internal
+constant `ICONS` table, not user input.
 
 ## Panels and overlays
 
 ### Persistent panels
 
 - **Toolbar:** playback, rewind/step/reset, speed, editable clock, undo/redo,
-  clear, fit/auto-fit, library, settings, and FPS.
-- **Palette:** grouped tool buttons, active state, shortcut badges, and tool
-  descriptions.
+  clear, fit/auto-fit, library, settings, and FPS. The play toggle exposes
+  `aria-pressed` and changes its accessible name between Start and Pause.
+- **Palette:** grouped tool buttons, programmatic pressed state, visually shown
+  but accessibility-hidden shortcut badges, and tool descriptions.
 - **Hint bar:** active gesture hint plus current time, body/contact counts,
   adaptive factor, energy drift, and pointer coordinates where appropriate.
 - **Graph dock:** graph mode, view controls, canvas rendering, legend hit
@@ -364,19 +448,35 @@ comes from the internal constant `ICONS` table, not user input.
 ### Modal overlays
 
 - **Library:** category-filtered built-in presets and locally saved scenes.
-  Scene cards support load, rename, description, download, and delete; the
-  action buttons stop propagation so they do not also load the card. Save,
-  rename, description, and delete storage failures are caught and shown as
-  toasts; a failed action does not trigger a success re-render.
+  Cards are descriptive containers with explicit `Load <name>` buttons rather
+  than click-only containers; saved scenes add separately named rename,
+  description, download, and delete buttons. Category filters expose
+  `aria-pressed` and retain keyboard focus across a filtered rerender. Truncated
+  descriptions use a named Show more/less button with `aria-expanded` and
+  `aria-controls`. Save, rename, description, and delete storage failures are
+  caught and shown as toasts; a failed action does not trigger a success
+  re-render.
 - **Settings:** appearance, theme/accent/font, accessibility, interaction,
-  adaptive resolution, performance mode, culling, help, and tour access.
-- **Help:** getting-started steps and device-appropriate shortcut reference.
+  adaptive resolution, performance mode, culling, help, and tour access. Accent
+  swatches form a named pressed-state group and restore focus after their DOM is
+  rebuilt; custom-colour removal is a sibling button rather than nested
+  interactive content.
+- **Help:** getting-started steps, device-appropriate shortcut reference, and a
+  production link to `THIRD_PARTY_NOTICES.txt` for MathLive and OpenDyslexic
+  licensing.
 - **Formula guide:** variables, operators, functions, logic, math-editor help,
-  and clickable field recipes.
+  and recipe cards with explicit `Add <recipe>` buttons.
 
 Clicking an overlay backdrop closes it. Modal focus returns to the prior
 element on close. Shortcut handling gives open overlays and the guided tour
 priority over simulation commands.
+
+The guided tour is a genuine modal dialog. While it is open, the application
+shell is inert, the full-screen tour root intercepts underlying pointer input,
+Tab is trapped in the card, and closing restores the opener and its previous
+play state. Step changes are announced through a polite live region. Introductory
+and progress counts are derived from the responsive set of steps whose targets
+are actually visible, rather than from a fixed total.
 
 ## Shortcuts
 
@@ -393,16 +493,23 @@ testable without constructing the whole app. It:
 5. Prevents browser defaults only for a command the app actually consumed.
 
 The toolbar clock and formula editors also stop key propagation while editing.
-Document-level page zoom shortcuts are suppressed because page zoom would
-misalign canvas layout; canvas/graph zoom gestures remain available.
+Browser page zoom remains browser-owned: the viewport does not prohibit zoom,
+global wheel/gesture/keyboard suppression is absent, and Ctrl/Cmd-wheel plus
+Ctrl/Cmd `+`, `-`, and `0` are not consumed. Unmodified wheels over the
+simulation canvas or graph continue to control those views.
 
 ## Themes and responsive behavior
 
 `theme.ts` defines named semantic palettes (`original`, `dark`, `void`, and
 `light`) and exports live colour bindings consumed by canvas renderers. Theme
 application updates both those bindings and CSS custom properties. An optional
-hex accent derives hot/dark variants. Canvas colour strings are memoized by
-packed colour/alpha value with a bounded cache.
+hex accent derives hot/dark variants. Every palette's `TEXT_FAINT` has at least
+4.5:1 contrast against both panel surfaces. Accent application separately
+derives `ACCENT_TEXT` at 4.5:1 against panel surfaces, `FOCUS` at 3:1 against
+the background and both panel surfaces, and black-or-white `ACCENT_INK` at
+4.5:1 against the accent. Extreme black, white, and mid-grey custom accents are
+therefore still readable and focus-visible. Canvas colour strings are memoized
+by packed colour/alpha value with a bounded cache.
 
 The stylesheet owns:
 
@@ -411,34 +518,60 @@ The stylesheet owns:
 - formula, inspector, graph, library, settings, help, and tour presentation;
 - phone layout at the shared 760 px breakpoint;
 - touch-specific removal of irrelevant key badges/hover-only affordances;
+- native text selection in Help, the formula guide, and tour reference text,
+  while drag-selection remains disabled on direct-manipulation surfaces;
 - OpenDyslexic `@font-face` declarations and body class;
 - light/dark `color-scheme` synchronization; and
 - reduced-motion removal of decorative CSS transitions/animations.
 
-On phones, the inspector becomes a drawer with a persistent handle; toolbar
-content is trimmed/scrollable and the graph/overlay layout adapts. Splitter
-sizes are clamped both while dragging and while sanitizing stored preferences.
+On phones, the inspector becomes a transiently closed drawer with a persistent
+handle; its open/closed state does not overwrite the desktop/tablet visibility
+preference. The toolbar brand becomes visually hidden but remains the level-one
+heading, toolbar content is trimmed/scrollable, and the graph/overlay layout
+adapts. Splitter sizes are clamped both while dragging and while sanitizing
+stored preferences. The layout is kept within a 320-CSS-pixel viewport at 200%
+application text scaling.
 
 ## Accessibility
 
 Accessibility behavior is part of the implementation contract:
 
 - the canvas has an explanatory label;
-- the toolbar brand provides the page's level-one heading;
-- icon-only controls receive accessible labels/tooltips;
+- the toolbar brand provides the page's level-one heading, including while
+  visually hidden on phones;
+- icon-only controls receive explicit accessible labels/tooltips and shortcut
+  badges are excluded from name computation;
+- play state has a state-specific label and `aria-pressed` value;
+- Inspector, Library, and formula-guide pages use connected tablists, tabs,
+  and tabpanels with roving keyboard focus;
+- category filters, segmented choices, and colour swatches expose pressed
+  state and preserve focus across rerenders;
+- Library and recipe cards expose explicit Load/Add buttons without nested or
+  click-only interactive containers, and description toggles expose expansion
+  state;
+- Inspector reopen handles are named buttons and both splitters are keyboard-
+  operable ARIA separators with value metadata;
 - transient toasts and overload messages are polite live status regions;
 - modal overlays are labelled dialogs with trapped and restored focus;
+- the guided tour additionally inerts the application shell, blocks underlying
+  pointer input, announces step changes, and restores its opener;
 - keyboard focus uses a shared `:focus-visible` ring, including compact custom
   controls and range inputs;
+- checkboxes provide at least 24 by 24 CSS px targets;
 - mouse-activated non-text controls are blurred to prevent a stale focused
   button/slider from swallowing the next global shortcut, while keyboard
   activation retains focus;
+- browser zoom and native text selection remain available outside the scoped
+  simulation interaction surfaces;
 - help/hints switch to touch wording where mouse/keyboard actions are
   unavailable;
 - reduced motion affects decorative UI/camera/axis movement, not the physical
   simulation itself; and
 - the dyslexia-friendly font and font scale are persisted preferences.
 
-Tests protect focus rings, labels, modal semantics, device wording, tour
-spotlights, splitter behavior, and shortcut ownership. See [testing and
-operations](testing-and-operations.md).
+Tests protect focus rings, names/states, tab and splitter keyboard behavior,
+theme/custom-accent contrast, browser zoom ownership, modal-tour inertness and
+focus restoration, device wording, responsive inspector state, 320 px/200%
+reflow, pointer alignment, scene-replacement undo, tour spotlights, and
+shortcut ownership. Chromium axe checks cover WCAG A/AA rules. See [testing
+and operations](testing-and-operations.md).

@@ -136,6 +136,8 @@ export class CanvasController {
   private rubber: [number, number] | null = null;
   private wallStart: Vec2 | null = null;
   private linkFirst: Body | null = null;
+  /** Auto-created first endpoint, removed if the pending link is cancelled. */
+  private linkCreatedFirst: Body | null = null;
   private velDrag: Body | null = null;
   private wallDrag: [Wall, number] | null = null; // wall, endpoint (0/1/2=whole)
   private wallGrab: Vec2 | null = null;
@@ -157,15 +159,21 @@ export class CanvasController {
 
   // ------------------------------------------------------------------ helpers
   setTool(tool: Tool): void {
+    this.cancelPending();
     this.tool = tool;
-    this.linkFirst = null;
-    this.wallStart = null;
     this.rubber = null;
   }
 
   /** Cancel an in-progress link or wall draw. Returns true if one was. */
   cancelPending(): boolean {
     if (this.linkFirst !== null || this.wallStart !== null) {
+      if (this.linkCreatedFirst !== null &&
+          this.app.world.bodies.includes(this.linkCreatedFirst)) {
+        this.app.world.removeBodies(new Set([this.linkCreatedFirst]));
+        this.pruneDeleted();
+        this.app.cancelEdit();
+      }
+      this.linkCreatedFirst = null;
       this.linkFirst = null;
       this.wallStart = null;
       return true;
@@ -401,6 +409,7 @@ export class CanvasController {
     this.rubber = null;
     this.wallStart = null;
     this.linkFirst = null;
+    this.linkCreatedFirst = null;
     this.panning = false;
   }
 
@@ -414,8 +423,15 @@ export class CanvasController {
     });
     // a fullscreen toggle or focus loss can swallow the matching pointerup,
     // which would otherwise leave bodies stuck "held"
-    window.addEventListener("blur", () => this.resetInteraction());
-    document.addEventListener("fullscreenchange", () => this.resetInteraction());
+    const abortWindowGesture = (): void => {
+      const moved = this.dragMoved;
+      this.cancelPending();
+      this.resetInteraction();
+      if (moved) this.app.commitEdit();
+      this.dragMoved = false;
+    };
+    window.addEventListener("blur", abortWindowGesture);
+    document.addEventListener("fullscreenchange", abortWindowGesture);
 
     canvas.addEventListener("pointerdown", (e) => {
       try {
@@ -431,7 +447,10 @@ export class CanvasController {
         this.pointers.set(e.pointerId, this.mouse);
         if (this.pointers.size === 2) {
           // second finger: cancel the one-finger gesture, start pinching
+          const moved = this.dragMoved;
           this.abortDrag();
+          if (moved) this.app.commitEdit();
+          this.dragMoved = false;
           this.rubber = null;
           this.wallStart = null;
           this.panning = false;
@@ -496,8 +515,9 @@ export class CanvasController {
         e.preventDefault();
         this.panning = false;
         if (e.button === 2 && this.velDrag !== null) {
-          if (this.dragMoved) this.app.pushUndo();
+          if (this.dragMoved) this.app.commitEdit();
           this.velDrag = null;
+          this.dragMoved = false;
         }
         return;
       }
@@ -506,13 +526,21 @@ export class CanvasController {
     canvas.addEventListener("pointerup", finish);
     canvas.addEventListener("pointercancel", (e) => {
       this.pointers.delete(e.pointerId);
+      const moved = this.dragMoved;
       this.abortDrag();
+      if (moved) this.app.commitEdit();
+      this.dragMoved = false;
       this.rubber = null;
       this.panning = false;
       this.pinchDist = 0;
     });
 
     canvas.addEventListener("wheel", (e) => {
+      // Modified wheel gestures belong to the browser's page zoom. Keeping
+      // them here made Ctrl-wheel and trackpad pinch silently zoom the
+      // simulation instead, leaving people who rely on magnification with
+      // no way to enlarge the interface.
+      if (e.ctrlKey || e.metaKey) return;
       e.preventDefault();
       const pos = this.local(canvas, e);
       const factor = 1.1 ** (-e.deltaY / 100);
@@ -544,18 +572,20 @@ export class CanvasController {
     }
 
     if (tool === "body") {
+      app.beginEdit();
       const b = new Body(this.snap(worldP));
       app.world.bodies.push(b);
       app.setSelection([b]);
-      app.pushUndo();
+      app.commitEdit();
       return;
     }
 
     if (tool === "anchor") {
+      app.beginEdit();
       const b = makeAnchor(new Body(this.snap(worldP), 0.08));
       app.world.bodies.push(b);
       app.setSelection([b]);
-      app.pushUndo();
+      app.commitEdit();
       return;
     }
 
@@ -568,13 +598,18 @@ export class CanvasController {
       const picked = this.pick(mouse);
       let target = picked instanceof Body ? picked : null;
       if (target === null) {
+        app.beginEdit();
         target = new Body(this.snap(worldP), this.linkFirst === null ? 0.08 : 0.12);
-        if (this.linkFirst === null) makeAnchor(target);
+        if (this.linkFirst === null) {
+          makeAnchor(target);
+          this.linkCreatedFirst = target;
+        }
         app.world.bodies.push(target);
       }
       if (this.linkFirst === null) {
         this.linkFirst = target;
       } else if (target !== this.linkFirst) {
+        app.beginEdit();
         let link;
         if (tool === "spring") {
           link = new SpringLink(this.linkFirst, target);
@@ -587,7 +622,8 @@ export class CanvasController {
         app.world.links.push(link);
         app.setSelection([link]);
         this.linkFirst = null;
-        app.pushUndo();
+        this.linkCreatedFirst = null;
+        app.commitEdit();
       }
       return;
     }
@@ -595,8 +631,9 @@ export class CanvasController {
     if (tool === "eraser") {
       const picked = this.pick(mouse);
       if (picked !== null) {
+        app.beginEdit();
         this.deleteObject(picked);
-        app.pushUndo();
+        app.commitEdit();
       }
     }
   }
@@ -700,6 +737,7 @@ export class CanvasController {
     }
     const worldP = app.camera.toWorld(mouse[0], mouse[1]);
     if (this.velDrag !== null) {
+      if (!this.dragMoved) app.beginEdit();
       const body = this.velDrag;
       const s = VEL_ARROW_SCALE * app.view.vectorScale;
       body.vel.set((worldP.x - body.pos.x) / s, (worldP.y - body.pos.y) / s);
@@ -707,6 +745,7 @@ export class CanvasController {
       return;
     }
     if (this.wallDrag !== null) {
+      if (!this.dragMoved) app.beginEdit();
       const [wall, idx] = this.wallDrag;
       if (idx === 0) wall.a = this.snap(worldP);
       else if (idx === 1) wall.b = this.snap(worldP);
@@ -724,6 +763,7 @@ export class CanvasController {
         const dx = mouse[0] - this.dragPress[0];
         const dy = mouse[1] - this.dragPress[1];
         if (dx * dx + dy * dy < 16) return; // a click's jitter never grabs
+        app.beginEdit();
         this.dragActive = true;
         for (const { body } of this.dragItems) body.held = true;
         // first left-drag of a soft-body particle: nudge the user toward
@@ -757,10 +797,11 @@ export class CanvasController {
       // drag repositions without throwing - running or paused, one body or a
       // whole box selection.
       this.releaseDragged();
-      if (this.dragMoved) app.pushUndo();
+      if (this.dragMoved) app.commitEdit();
       this.velDrag = null;
       this.wallDrag = null;
       this.wallGrab = null;
+      this.dragMoved = false;
     }
     if (this.rubber !== null) {
       const [x0, y0] = this.rubber;
@@ -788,10 +829,11 @@ export class CanvasController {
     if (this.wallStart !== null) {
       const end = this.constrainedWallEnd(mouse);
       if (this.wallStart.distTo(end) > 0.05) {
+        app.beginEdit();
         const wall = new Wall(this.wallStart, end);
         app.world.walls.push(wall);
         app.setSelection([wall]);
-        app.pushUndo();
+        app.commitEdit();
       }
       this.wallStart = null;
     }
@@ -928,13 +970,15 @@ export class CanvasController {
 
   deleteSelection(): void {
     if (this.app.selection.length === 0) return;
+    this.app.beginEdit();
     this.deleteObjects([...this.app.selection]);
     this.app.setSelection([]);
-    this.app.pushUndo();
+    this.app.commitEdit();
   }
 
   duplicateSelection(): void {
     const app = this.app;
+    app.beginEdit();
     const newSel: Selectable[] = [];
     const bodies = app.selection.filter((o): o is Body => o instanceof Body);
     const mapping = new Map<number, Body>();
@@ -988,7 +1032,9 @@ export class CanvasController {
     }
     if (newSel.length > 0) {
       app.setSelection(newSel);
-      app.pushUndo();
+      app.commitEdit();
+    } else {
+      app.cancelEdit();
     }
   }
 

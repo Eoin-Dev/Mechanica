@@ -8,9 +8,12 @@
   --accent: rgb(86, 156, 214);
   --accent-hot: rgb(120, 180, 235);
   --accent-dark: rgb(50, 90, 125);
+  --accent-text: rgb(86, 156, 214);
+  --focus: rgb(86, 156, 214);
+  --accent-ink: rgb(0, 0, 0);
   --text: rgb(226, 229, 234);
   --text-dim: rgb(152, 158, 168);
-  --text-faint: rgb(105, 111, 122);
+  --text-faint: rgb(145, 151, 161);
   --good: rgb(120, 190, 120);
   --warn: rgb(230, 200, 90);
   /* --warn at low alpha, for banner fills. Set alongside --warn by
@@ -68,7 +71,19 @@ body {
   -webkit-user-select: none;
   user-select: none;
   overscroll-behavior: none;
+  touch-action: auto;
+}
+
+/* Gesture capture belongs only to surfaces that implement their own direct
+   manipulation. Page chrome and reference text retain native browser zoom,
+   scrolling and text-selection behaviour. */
+#canvas, .dock-canvas-wrap canvas, #inspector-splitter, #dock-splitter {
   touch-action: none;
+}
+#help .overlay-body, #formula-guide .overlay-body,
+.tour-card h3, .tour-card p {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 /* one dark scrollbar style everywhere (inspector, library, help, palette);
@@ -140,11 +155,16 @@ body {
 #inspector.collapsed { width: 22px; }
 .reopen-strip {
   flex: 1;
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   color: var(--text-dim);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
 }
 .reopen-strip:hover { background: var(--panel-hover); color: var(--text); }
 .reopen-strip svg {
@@ -259,7 +279,7 @@ input[type="text"], input[type="number"] {
    app. Buttons kept their ring (nothing competes for them), which is why
    checkboxes and sliders in particular ended up with no keyboard cue at
    all while the rest of the panel looked fine. */
-input:focus { border-color: var(--accent); }
+input:focus { border-color: var(--focus); }
 input:focus:not(:focus-visible) { outline: none; }
 
 /* Keyboard focus ring. There was none at all, so with Tab freed up there
@@ -268,7 +288,7 @@ input:focus:not(:focus-visible) { outline: none; }
    overlay takes focus itself and must not draw a ring around the whole
    dialog, hence the exclusion. */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-radius: var(--radius);
 }
@@ -313,7 +333,7 @@ input.error { border-color: var(--bad); }
 }
 /* border tint while editing, ring only for keyboard focus - scoped the same
    way as the plain inputs so it cannot swallow the :focus-visible outline */
-.math-edit math-field:focus-within { border-color: var(--accent); }
+.math-edit math-field:focus-within { border-color: var(--focus); }
 .math-edit math-field:focus-within:not(:focus-visible) { outline: none; }
 .math-edit math-field.error { border-color: var(--bad); }
 math-field::part(menu-toggle) { display: none; }
@@ -371,7 +391,12 @@ label.checkbox {
 }
 /* two-column checkbox pairs keep their own half, but still hug their text */
 .row-half > label.checkbox { flex: 0 1 auto; }
-label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; flex: none; }
+label.checkbox input {
+  accent-color: var(--accent);
+  width: 24px;
+  height: 24px;
+  flex: none;
+}
 
 .segmented { display: flex; border: 1px solid var(--outline); border-radius: var(--radius); overflow: hidden; }
 .segmented button { border: none; border-radius: 0; flex: 1; background: transparent; padding: 5px 8px; }
@@ -384,6 +409,7 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 
 /* ------------------------------------------------------------ inspector */
 .tabs { display: flex; flex: none; align-items: stretch; border-bottom: 1px solid var(--outline); }
+.tabs .tab-list { display: flex; flex: 1; min-width: 0; }
 .tabs button {
   flex: 1;
   background: transparent;
@@ -409,7 +435,7 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 .inspector-body { flex: 1; overflow-y: auto; padding: 10px 12px 20px; }
 
 .section {
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: calc(11px * var(--fs, 1));
   font-weight: 600;
   text-transform: uppercase;
@@ -493,7 +519,7 @@ label.checkbox input { accent-color: var(--accent); width: 14px; height: 14px; f
 .row .val { width: 74px; flex: none; text-align: right; font-size: calc(11px * var(--fs, 1)); color: var(--text); font-variant-numeric: tabular-nums; }
 .row input.val { background: transparent; border: 1px solid transparent; border-radius: var(--radius); padding: 2px 4px; cursor: text; }
 .row input.val:hover { border-color: var(--outline); }
-.row input.val:focus { border-color: var(--accent); background: var(--bg); }
+.row input.val:focus { border-color: var(--focus); background: var(--bg); }
 .row input.val.error { border-color: var(--bad); }
 /* "Performance mode is on" banner above the disabled Solver controls.
    Warning-coloured rather than accent-coloured on purpose: the accent means
@@ -574,13 +600,13 @@ button.perf-banner-btn:hover:not(:disabled) {
   max-width: 72ch;
 }
 .guide-h {
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: calc(13px * var(--fs, 1));
   margin: 16px 0 6px;
 }
 .guide-table { font-size: calc(12px * var(--fs, 1)); border-spacing: 0; }
 .guide-table .code {
-  color: var(--accent);
+  color: var(--accent-text);
   font-family: Consolas, monospace;
   white-space: nowrap;
   padding: 3px 14px 3px 0;
@@ -630,7 +656,7 @@ button.perf-banner-btn:hover:not(:disabled) {
   font-size: calc(11px * var(--fs, 1)); flex: none; width: 16px; }
 .guide-add-hint {
   margin-top: 8px;
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: calc(11px * var(--fs, 1));
 }
 /* clicking a recipe adds it; flash the border as the in-place cue */
@@ -709,6 +735,7 @@ button.perf-banner-btn:hover:not(:disabled) {
 }
 .overlay-header h2 { font-size: calc(16px * var(--fs, 1)); flex: 1; }
 .overlay-body { overflow-y: auto; padding: 14px 16px; }
+.overlay-body a { color: var(--accent-text); }
 /* Library: no top padding so the sticky category bar sits flush under the
    header with no see-through gap above it. */
 #library .overlay-body { padding-top: 0; }
@@ -736,12 +763,27 @@ button.perf-banner-btn:hover:not(:disabled) {
   border: 1px solid var(--outline);
   border-radius: 8px;
   padding: 10px 12px;
-  cursor: pointer;
+  cursor: default;
   min-height: 96px;
 }
+.card-load-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.card-action-spacer { flex: 1; }
+button.card-load {
+  margin-top: 8px;
+  align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-load-actions button.card-load { margin-top: 0; }
 .preset-card:hover { background: var(--panel-hover); border-color: var(--accent-dark); }
 .preset-card h3 { font-size: calc(13px * var(--fs, 1)); margin-bottom: 4px; }
-.preset-card .cat { color: var(--accent); font-size: calc(10px * var(--fs, 1)); text-transform: uppercase; letter-spacing: 0.05em; }
+.preset-card .cat { color: var(--accent-text); font-size: calc(10px * var(--fs, 1)); text-transform: uppercase; letter-spacing: 0.05em; }
 .preset-card p {
   color: var(--text-dim);
   font-size: calc(11px * var(--fs, 1));
@@ -757,7 +799,7 @@ button.perf-banner-btn:hover:not(:disabled) {
   margin-top: 6px;
   padding: 2px 6px;
   font-size: calc(11px * var(--fs, 1));
-  color: var(--accent);
+  color: var(--accent-text);
   background: transparent;
   border: none;
   border-radius: var(--radius);
@@ -832,8 +874,10 @@ button.swatch {
   position: relative;
   overflow: visible;
 }
-/* delete badge on user-created swatches (always shown on touch) */
-.swatch-x {
+/* A saved custom colour has two sibling buttons: choose and remove. Keeping
+   the remove control outside the swatch avoids nested interactive content. */
+.swatch-item { position: relative; display: inline-flex; }
+.swatch-remove {
   position: absolute;
   top: -7px;
   right: -7px;
@@ -848,11 +892,14 @@ button.swatch {
   text-align: center;
   opacity: 0;
   cursor: pointer;
+  padding: 0;
+  display: inline-flex;
 }
-button.swatch:hover .swatch-x { opacity: 1; }
-.swatch-x:hover { color: var(--text); background: var(--bad); }
+.swatch-item:hover .swatch-remove,
+.swatch-item:focus-within .swatch-remove { opacity: 1; }
+.swatch-remove:hover { color: var(--text); background: var(--bad); }
 @media (pointer: coarse) {
-  .swatch-x { opacity: 1; }
+  .swatch-remove { opacity: 1; }
 }
 
 /* custom-colour popover: stage with the native picker, then Create */
@@ -936,20 +983,21 @@ button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--t
 /* The dimming is tiled so several targets can be lit at once (see
    Tour.paintHoles). Tiles are opaque black and the CONTAINER carries the
    opacity: translucent tiles would double-darken where they overlap and
-   leave a pale seam where they do not. pointer-events stay off throughout
-   - the tour explains the UI, it does not need to intercept it.
+   leave a pale seam where they do not. The root intercepts input while the
+   card remains operable, matching the dialog's modal semantics.
 
    Nothing here is animated. Moving a full-viewport dim every frame is a
    full-viewport repaint every frame, and snapping reads better anyway: the
    spotlight is pointing at a thing, not travelling to it. */
-.tour-root { position: fixed; inset: 0; z-index: 40; pointer-events: none; }
+.tour-root { position: fixed; inset: 0; z-index: 40; pointer-events: auto; }
 .tour-scrim { position: fixed; inset: 0; opacity: 0.62; }
-.tour-tile { position: fixed; background: #000; }
+.tour-tile { position: fixed; background: #000; pointer-events: none; }
 .tour-ring {
   position: fixed;
   border-radius: 8px;
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--focus);
   outline-offset: 0;
+  pointer-events: none;
 }
 .tour-card {
   position: fixed;
@@ -968,7 +1016,7 @@ button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--t
   line-height: 1.55;
 }
 .tour-step {
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: calc(10px * var(--fs, 1));
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -979,7 +1027,7 @@ button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--t
 /* Help: orientation above the reference tables. */
 .help-heading {
   font-size: calc(13px * var(--fs, 1));
-  color: var(--accent);
+  color: var(--accent-text);
   margin: 4px 0 10px;
 }
 .help-cols + .faint, .start-grid + .help-heading { margin-top: 18px; }
@@ -996,7 +1044,7 @@ button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--t
   height: 20px;
   border-radius: 50%;
   background: var(--accent);
-  color: var(--bg);
+  color: var(--accent-ink);
   font-size: calc(11px * var(--fs, 1));
   font-weight: 600;
   display: flex;
@@ -1012,7 +1060,7 @@ button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--t
 }
 
 .help-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
-.help-cols h3 { font-size: calc(13px * var(--fs, 1)); color: var(--accent); margin-bottom: 8px; }
+.help-cols h3 { font-size: calc(13px * var(--fs, 1)); color: var(--accent-text); margin-bottom: 8px; }
 .shortcut-row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; font-size: calc(12px * var(--fs, 1)); }
 .shortcut-row .keys { color: var(--text); font-family: Consolas, monospace; white-space: nowrap; }
 .shortcut-row .what { color: var(--text-dim); text-align: right; }
@@ -1042,7 +1090,19 @@ kbd {
     z-index: 15;
     box-shadow: -8px 0 24px rgba(0, 0, 0, 0.5);
   }
-  .brand { display: none; }
+  /* Keep the only level-one heading in the accessibility tree without
+     spending scarce toolbar width on it. */
+  .brand {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
 
   #inspector-handle {
     display: flex;
@@ -1061,6 +1121,7 @@ kbd {
     color: var(--text-dim);
     z-index: 8;
     cursor: pointer;
+    padding: 0;
   }
   #inspector-handle svg {
     width: 16px;

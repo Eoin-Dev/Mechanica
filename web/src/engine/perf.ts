@@ -223,8 +223,12 @@ export class PerfSolver {
   solve(springs: SpringLink[], h: number, passes: number): void {
     if (!this.gather(springs, h)) return;
     this.project(passes);
-    this.applyVelocities(h);
+    // The emergency strain recovery is another positional projection, so it
+    // must run before the one final combined displacement cap. Running it
+    // afterwards let this last-resort guard teleport an endpoint arbitrarily
+    // far despite PERF_MAX_MOVE_RADII.
     this.limitStrain();
+    this.applyVelocities(h);
     this.scatter();
   }
 
@@ -468,14 +472,15 @@ export class PerfSolver {
     }
   }
 
-  /** Hard geometric bound on every spring: the last line of defence.
+  /** Bounded geometric recovery target for every spring.
    *
    * The projection above is already unconditionally stable, so in a scene
    * that behaves this never fires at all. It is here for everything else that
    * shares these endpoints - a contact resolved in four iterations instead of
    * thirty-two, a force field with a singularity, a body the user flings
-   * across the canvas - and it makes "a soft body cannot come apart" true by
-   * construction rather than by argument.
+   * across the canvas. The combined movement cap runs after this pass, so an
+   * extreme violation may take several substeps to recover rather than
+   * teleporting an endpoint through intervening collision geometry.
    *
    * Only the velocity that is making the violation WORSE is removed. Killing
    * the relative velocity outright sounds safer and is not: it also cancels

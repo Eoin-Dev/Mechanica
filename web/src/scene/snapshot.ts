@@ -5,7 +5,7 @@
  * also be exported as .json downloads / imported from files, using the
  * exact same JSON format - desktop scene files load unchanged.
  */
-import { World, WorldDict } from "../engine/world";
+import { SceneLimitError, World, WorldDict } from "../engine/world";
 
 const SCENE_PREFIX = "mechanica.scene.";
 // per-scene user metadata (description, ...) lives under a separate key so
@@ -18,6 +18,15 @@ export function snapshot(world: World): string {
 
 export function restore(snap: string): World {
   return World.fromDict(JSON.parse(snap) as WorldDict);
+}
+
+/** Rebuild a snapshot produced by this running application without applying
+ * import normalization. Runtime angles deliberately accumulate beyond one
+ * turn, so undo, rewind, reset, and time-jump copies must preserve them
+ * exactly. Saved and uploaded scenes continue through {@link restore}, the
+ * untrusted-input boundary. */
+export function restoreSnapshot(snap: string): World {
+  return World.fromDict(JSON.parse(snap) as WorldDict, true);
 }
 
 // ------------------------------------------------------------ rewind buffer
@@ -163,6 +172,8 @@ interface Frame {
   dyn: Float64Array | null; // null when the frame IS the keyframe's state
 }
 
+export type RewindStoreResult = "stored" | "too-large";
+
 /** Rolling per-frame rewind history.
  *
  * A full JSON snapshot per frame was, on the densest scenes, five times
@@ -197,6 +208,7 @@ export class RewindBuffer {
   constructor(private readonly digestWorld: (world: World) => number = structuralDigest) {}
 
   get length(): number { return this.frames.length; }
+  get bytesUsed(): number { return this.bytes; }
 
   clear(): void {
     this.frames.length = 0;
@@ -207,12 +219,16 @@ export class RewindBuffer {
     this.bytes = 0;
   }
 
-  push(world: World): void {
+  push(world: World): RewindStoreResult {
     const digest = this.digestWorld(world);
     const sameStructure = this.haveDigest && digest === this.digest &&
       structureMatches(world, this.structure);
     if (!sameStructure || this.keys.length === 0) {
       const state = snapshot(world);
+      if (state.length * 2 > RewindBuffer.BUDGET_BYTES) {
+        this.clear();
+        return "too-large";
+      }
       this.keys.push(state);
       this.bytes += state.length * 2;
       this.digest = digest;
@@ -221,6 +237,10 @@ export class RewindBuffer {
       this.frames.push({ key: this.keyBase + this.keys.length - 1, dyn: null });
     } else {
       const dyn = new Float64Array(world.bodies.length * DYN_STRIDE + 1);
+      if (dyn.byteLength > RewindBuffer.BUDGET_BYTES) {
+        this.clear();
+        return "too-large";
+      }
       let i = 0;
       for (const b of world.bodies) {
         dyn[i] = b.pos.x;
@@ -236,6 +256,21 @@ export class RewindBuffer {
       this.frames.push({ key: this.keyBase + this.keys.length - 1, dyn });
     }
     this.trim();
+    // A single delta still owns its keyframe. If that pair cannot fit the
+    // byte budget, retain the latest state as one ordinary keyframe and
+    // start collecting rewind history again from there.
+    if (this.bytes > RewindBuffer.BUDGET_BYTES) {
+      const state = snapshot(world);
+      this.clear();
+      if (state.length * 2 > RewindBuffer.BUDGET_BYTES) return "too-large";
+      this.keys.push(state);
+      this.bytes = state.length * 2;
+      this.digest = digest;
+      this.haveDigest = true;
+      this.structure = captureStructure(world);
+      this.frames.push({ key: 0, dyn: null });
+    }
+    return "stored";
   }
 
   /** Bytes a frame owns outright. A keyframe's string is shared with every
@@ -246,7 +281,7 @@ export class RewindBuffer {
 
   private trim(): void {
     while (this.frames.length > RewindBuffer.MAX_FRAMES ||
-           (this.frames.length > 2 && this.bytes > RewindBuffer.BUDGET_BYTES)) {
+           (this.frames.length > 1 && this.bytes > RewindBuffer.BUDGET_BYTES)) {
       this.bytes -= this.frameBytes(this.frames.shift()!);
       // a keyframe is reclaimable once no surviving frame rests on it
       const oldest = this.frames.length > 0 ? this.frames[0].key : this.keyBase;
@@ -260,7 +295,7 @@ export class RewindBuffer {
   /** Rebuild the world recorded by frame `i`. */
   private at(i: number): World {
     const frame = this.frames[i];
-    const world = restore(this.keys[frame.key - this.keyBase]);
+    const world = restoreSnapshot(this.keys[frame.key - this.keyBase]);
     const dyn = frame.dyn;
     // Exact structural comparison guarantees the body list matches its
     // keyframe. Keep the length guard as a final corruption boundary rather
@@ -286,33 +321,114 @@ export class RewindBuffer {
   back(): World | null {
     if (this.frames.length < 2) return null;
     this.bytes -= this.frameBytes(this.frames.pop()!);
-    return this.at(this.frames.length - 1);
+    const newestKey = this.frames[this.frames.length - 1].key;
+    while (this.keys.length > 0 &&
+           this.keyBase + this.keys.length - 1 > newestKey) {
+      this.bytes -= this.keys.pop()!.length * 2;
+    }
+    // Future pushes compare against the latest surviving keyframe, not the
+    // structural state of the frame that was just discarded.
+    const current = this.at(this.frames.length - 1);
+    this.digest = this.digestWorld(current);
+    this.haveDigest = true;
+    this.structure = captureStructure(current);
+    return current;
   }
 }
+
+/** Result of storing a committed edit in snapshot history. */
+export type HistoryStoreResult = "unchanged" | "stored" | "too-large";
 
 /** Snapshot-based undo/redo. Push after every committed edit. */
 export class UndoStack {
   static LIMIT = 120;
+  /** Full snapshots are UTF-16 strings in the JavaScript heap. */
+  static BUDGET_BYTES = 48_000_000;
 
   private stack: string[];
   private index = 0;
+  private bytes = 0;
 
   constructor(world: World) {
-    this.stack = [snapshot(world)];
+    const state = snapshot(world);
+    this.stack = [state];
+    this.bytes = UndoStack.cost(state);
   }
 
-  push(world: World): void {
-    const snap = snapshot(world);
-    if (snap === this.stack[this.index]) return;
+  private static cost(state: string): number {
+    return state.length * 2;
+  }
+
+  get bytesUsed(): number { return this.bytes; }
+
+  private replaceWith(state: string): void {
+    this.stack = [state];
+    this.index = 0;
+    this.bytes = UndoStack.cost(state);
+  }
+
+  private dropRedo(): void {
+    for (let i = this.index + 1; i < this.stack.length; i++) {
+      this.bytes -= UndoStack.cost(this.stack[i]);
+    }
     this.stack.length = this.index + 1;
-    this.stack.push(snap);
-    if (this.stack.length > UndoStack.LIMIT) this.stack.shift();
+  }
+
+  private append(state: string): void {
+    this.stack.push(state);
+    this.bytes += UndoStack.cost(state);
     this.index = this.stack.length - 1;
   }
 
-  reset(world: World): void {
-    this.stack = [snapshot(world)];
-    this.index = 0;
+  private trim(): void {
+    while (this.stack.length > 1 &&
+           (this.stack.length > UndoStack.LIMIT ||
+            this.bytes > UndoStack.BUDGET_BYTES)) {
+      this.bytes -= UndoStack.cost(this.stack.shift()!);
+      this.index--;
+    }
+  }
+
+  push(world: World): HistoryStoreResult {
+    return this.pushSnapshot(snapshot(world));
+  }
+
+  pushSnapshot(state: string): HistoryStoreResult {
+    if (state === this.stack[this.index]) return "unchanged";
+    if (UndoStack.cost(state) > UndoStack.BUDGET_BYTES) {
+      this.replaceWith(state);
+      return "too-large";
+    }
+    this.dropRedo();
+    this.append(state);
+    this.trim();
+    return "stored";
+  }
+
+  /** Record an edit atomically, including the live state immediately before
+   * it. That state may differ from the last committed entry because physics
+   * can advance between edits. */
+  pushTransition(before: string, after: string): HistoryStoreResult {
+    if (before === after) return "unchanged";
+    const beforeCost = UndoStack.cost(before);
+    const afterCost = UndoStack.cost(after);
+    if (beforeCost > UndoStack.BUDGET_BYTES ||
+        afterCost > UndoStack.BUDGET_BYTES ||
+        beforeCost + afterCost > UndoStack.BUDGET_BYTES) {
+      this.replaceWith(after);
+      return "too-large";
+    }
+    this.dropRedo();
+    if (before !== this.stack[this.index]) this.append(before);
+    this.append(after);
+    this.trim();
+    return "stored";
+  }
+
+  reset(world: World): HistoryStoreResult {
+    const state = snapshot(world);
+    this.replaceWith(state);
+    return UndoStack.cost(state) > UndoStack.BUDGET_BYTES ? "too-large" : "stored";
   }
 
   get canUndo(): boolean {
@@ -326,13 +442,13 @@ export class UndoStack {
   undo(): World | null {
     if (!this.canUndo) return null;
     this.index--;
-    return restore(this.stack[this.index]);
+    return restoreSnapshot(this.stack[this.index]);
   }
 
   redo(): World | null {
     if (!this.canRedo) return null;
     this.index++;
-    return restore(this.stack[this.index]);
+    return restoreSnapshot(this.stack[this.index]);
   }
 }
 
@@ -371,6 +487,21 @@ export function sceneExists(name: string): boolean {
 }
 
 export class SceneSaveError extends Error {}
+
+export const MAX_SCENE_FILE_BYTES = 10 * 1024 * 1024;
+
+export type SceneReadResult =
+  | { status: "loaded"; world: World; name: string }
+  | { status: "cancelled" }
+  | { status: "missing"; name: string }
+  | { status: "invalid"; name: string }
+  | { status: "too-large"; name: string; message: string }
+  | { status: "storage-error"; name: string; message: string };
+
+function sceneLimitMessage(error: SceneLimitError): string {
+  return `Scene has ${error.actual.toLocaleString()} ${error.collection}; ` +
+    `the limit is ${error.limit.toLocaleString()}`;
+}
 
 function storageError(exc: unknown, action: string): SceneSaveError {
   const full = exc instanceof DOMException &&
@@ -427,21 +558,24 @@ export function listScenes(): string[] {
   }
 }
 
-/** A saved scene, or null when there is none by that name OR the stored
- * text is not usable JSON.
- *
- * `World.fromDict` tolerates any SHAPE, but `JSON.parse` still rejects
- * damaged text - a write truncated by a full quota, or an entry edited by
- * hand through devtools. That threw straight out of the card's click
- * handler, so the "Could not load" toast sitting right below this call
- * could never fire and the card simply did nothing when clicked. */
-export function loadScene(name: string): World | null {
+/** Read a saved scene without conflating absence, damaged data, resource
+ * limits, and a browser storage rejection. */
+export function loadScene(name: string): SceneReadResult {
+  let state: string | null;
   try {
-    const snap = localStorage.getItem(SCENE_PREFIX + name);
-    if (snap === null) return null;
-    return restore(snap);
-  } catch {
-    return null;
+    state = localStorage.getItem(SCENE_PREFIX + name);
+  } catch (exc) {
+    return { status: "storage-error", name,
+             message: storageError(exc, "read").message };
+  }
+  if (state === null) return { status: "missing", name };
+  try {
+    return { status: "loaded", world: restore(state), name };
+  } catch (exc) {
+    if (exc instanceof SceneLimitError) {
+      return { status: "too-large", name, message: sceneLimitMessage(exc) };
+    }
+    return { status: "invalid", name };
   }
 }
 
@@ -555,8 +689,29 @@ export function downloadScene(world: World, name: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
-/** Prompt for a .json scene file and parse it into a World. */
-export function uploadScene(): Promise<{ world: World; name: string } | null> {
+/** Parse the browser file selected by uploadScene. Kept separate so size and
+ * failure behavior are testable without opening a native file picker. */
+export async function readSceneFile(
+  file: Pick<File, "name" | "size" | "text">,
+): Promise<SceneReadResult> {
+  const name = file.name.replace(/\.json$/i, "");
+  if (file.size > MAX_SCENE_FILE_BYTES) {
+    return { status: "too-large", name,
+             message: `Scene file exceeds the ${MAX_SCENE_FILE_BYTES / (1024 * 1024)} MiB limit` };
+  }
+  try {
+    const world = restore(await file.text());
+    return { status: "loaded", world, name };
+  } catch (exc) {
+    if (exc instanceof SceneLimitError) {
+      return { status: "too-large", name, message: sceneLimitMessage(exc) };
+    }
+    return { status: "invalid", name };
+  }
+}
+
+/** Prompt for a size-bounded .json scene file and parse it into a World. */
+export function uploadScene(): Promise<SceneReadResult> {
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
@@ -564,21 +719,16 @@ export function uploadScene(): Promise<{ world: World; name: string } | null> {
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) {
-        resolve(null);
+        resolve({ status: "cancelled" });
         return;
       }
-      try {
-        const world = restore(await file.text());
-        resolve({ world, name: file.name.replace(/\.json$/i, "") });
-      } catch {
-        resolve(null);
-      }
+      resolve(await readSceneFile(file));
     };
     // Cancelling the picker fires no `change`, only `cancel`. Every current
     // browser sends it; on one that does not, the promise simply never
     // settles and the caller's toast never fires - which is the quiet
     // failure, not a hang: nothing is awaiting it but the toast.
-    input.oncancel = () => resolve(null);
+    input.oncancel = () => resolve({ status: "cancelled" });
     input.click();
   });
 }

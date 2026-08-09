@@ -17,7 +17,7 @@ import { Body, Wall } from "../src/engine/body";
 import { DistanceLink, SpringLink } from "../src/engine/links";
 import { Driver, ForceField, World } from "../src/engine/world";
 import { PRESETS } from "../src/scene/presets";
-import { RewindBuffer, snapshot, structuralDigest } from "../src/scene/snapshot";
+import { RewindBuffer, UndoStack, snapshot, structuralDigest } from "../src/scene/snapshot";
 
 const DT = 1.0 / 120.0;
 
@@ -192,6 +192,96 @@ describe("rewind buffer", () => {
     }
     for (let i = expected.length - 2; i >= 0; i--) {
       expect(snapshot(buf.back()!), `frame ${i}`).toBe(expected[i]);
+    }
+  });
+
+  it("rejects an individual frame that cannot fit its byte budget", () => {
+    const original = RewindBuffer.BUDGET_BYTES;
+    try {
+      RewindBuffer.BUDGET_BYTES = 16;
+      const buf = new RewindBuffer();
+      expect(buf.push(scene())).toBe("too-large");
+      expect(buf.length).toBe(0);
+      expect(buf.bytesUsed).toBe(0);
+    } finally {
+      RewindBuffer.BUDGET_BYTES = original;
+    }
+  });
+
+  it("reclaims a newer structural keyframe when rewinding past it", () => {
+    const w = scene();
+    const buf = new RewindBuffer();
+    buf.push(w);
+    const firstBytes = buf.bytesUsed;
+    w.bodies[0].mass = 99;
+    buf.push(w);
+    expect(buf.bytesUsed).toBeGreaterThan(firstBytes);
+    expect(buf.back()).not.toBeNull();
+    expect(buf.bytesUsed).toBe(firstBytes);
+  });
+
+  it("preserves an evolved angle beyond one turn exactly", () => {
+    const w = new World();
+    w.gravity = 0;
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    body.collides = false;
+    body.omega = 1000;
+    w.bodies.push(body);
+    w.step(DT);
+    expect(Math.abs(body.angle)).toBeGreaterThan(2 * Math.PI);
+
+    const buf = new RewindBuffer();
+    const expected = snapshot(w);
+    buf.push(w);
+    w.step(DT);
+    buf.push(w);
+
+    expect(snapshot(buf.back()!)).toBe(expected);
+  });
+});
+
+describe("undo byte budget", () => {
+  it("records a live before/after transition as one exact undo boundary", () => {
+    const w = scene();
+    const stack = new UndoStack(w);
+    w.step(DT);
+    const before = snapshot(w);
+    w.bodies[0].mass = 77;
+    expect(stack.pushTransition(before, snapshot(w))).toBe("stored");
+    expect(snapshot(stack.undo()!)).toBe(before);
+  });
+
+  it("preserves an evolved angle beyond one turn through undo and redo", () => {
+    const w = new World();
+    w.gravity = 0;
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    body.collides = false;
+    body.omega = 1000;
+    w.bodies.push(body);
+    w.step(DT);
+    expect(Math.abs(body.angle)).toBeGreaterThan(2 * Math.PI);
+
+    const stack = new UndoStack(w);
+    const before = snapshot(w);
+    body.mass = 2;
+    const after = snapshot(w);
+    expect(stack.pushTransition(before, after)).toBe("stored");
+    expect(snapshot(stack.undo()!)).toBe(before);
+    expect(snapshot(stack.redo()!)).toBe(after);
+  });
+
+  it("resets to an oversized current state and reports undo unavailable", () => {
+    const w = new World();
+    const stack = new UndoStack(w);
+    const original = UndoStack.BUDGET_BYTES;
+    try {
+      UndoStack.BUDGET_BYTES = 32;
+      w.bodies.push(new Body(new Vec2(1, 2)));
+      expect(stack.push(w)).toBe("too-large");
+      expect(stack.canUndo).toBe(false);
+      expect(stack.bytesUsed).toBeGreaterThan(UndoStack.BUDGET_BYTES);
+    } finally {
+      UndoStack.BUDGET_BYTES = original;
     }
   });
 });

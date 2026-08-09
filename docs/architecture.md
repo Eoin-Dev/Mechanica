@@ -57,10 +57,14 @@ Startup proceeds in this order:
    settings, help, formula guide, and guided tour.
 5. Register overlay toggle callbacks, then assign all per-frame `Panel`
    objects to `app.panels`.
-6. Install document-level focus cleanup, keyboard shortcuts, page-zoom
-   suppression, canvas resizing, and window resize handling.
-7. Load the first preset without a toast, call `app.start()`, and either start
-   the first-visit tour or show the returning-user welcome toast.
+6. Install document-level focus cleanup, keyboard shortcuts, canvas resizing,
+   and window resize handling. Browser zoom shortcuts and modified-wheel input
+   remain browser-owned; simulation wheel and touch gestures are scoped to the
+   canvas and graph surfaces.
+7. Install the first preset through `initializePreset()` without a toast, call
+   `app.start()`, and either start the first-visit tour or show the
+   returning-user welcome toast. This startup call is the only scene load that
+   intentionally resets edit history.
 
 Development builds expose the live app and UI objects on `window` for manual
 driving. Production behavior does not depend on these handles.
@@ -69,7 +73,7 @@ driving. Production behavior does not depend on these handles.
 
 | Owner | Long-lived state | Not owned here |
 | --- | --- | --- |
-| `App` | Current `World`, camera, `ViewSettings`, selection, playback speed/accumulator, adaptive-resolution preference, undo and rewind objects, initial reset snapshot, trails, plots, graph mode, clipboard properties, browser settings, performance observations, panel callbacks. | Physical integration rules, pointer gesture internals, DOM control trees. |
+| `App` | Current `World`, camera, `ViewSettings`, selection, playback speed/accumulator, adaptive-resolution preference, active edit transaction, undo and rewind objects, initial reset snapshot, trails, plots, graph mode, clipboard properties, browser settings, performance observations, panel callbacks. | Physical integration rules, pointer gesture internals, DOM control trees. |
 | `World` | Bodies, walls, links, fields, drivers, physical settings, simulation clock, contact snapshot, solver caches, adaptive-slice scratch storage, diagnostics. | Camera, selected objects, playback state, browser preferences, storage, rendering. |
 | `CanvasController` | Active tool, hover, pointer coordinates, pending link/wall gestures, drag/pan/box-selection state, touch pointers and pinch state. | Canonical selection and world lists; it edits those through `App`/`World`. |
 | Panels and overlays | DOM nodes, local tab/filter/open state, refresh groups, focus traps, splitter state. | Canonical physical or playback state; controls read/write `App` and `World`. |
@@ -100,10 +104,11 @@ sequenceDiagram
     A->>C: updateDrag()
     A->>A: update(real-frame dt)
     loop available fixed physics quanta
-        A->>W: step(resolved dt)
+        A->>W: step(resolved dt) through shared batch runner
         W-->>A: state, contacts, trace, divergence
-        A->>A: record trails/history/graphs
+        A->>A: record trail samples
     end
+    A->>A: stop on first failure; record rewind and graphs
     A->>R: render current state
     A->>P: refresh each panel
     A->>RAF: request next frame
@@ -137,6 +142,12 @@ separates simulated time from display timing:
 This budget policy keeps the UI responsive while preserving deterministic
 physics: measured wall-clock cost decides how much simulated time a frame
 advances, not the answer produced for any step that does run.
+
+Play, single-step, and time-jump all use the same physics batch primitive. A
+batch stops at the first solver exception or reported divergence; no later
+step can overwrite the first diagnostic. The application aggregates affected
+body names, pauses playback, clears pending accumulated time, and emits one
+throttled actionable message.
 
 ### Two adaptive levels
 
@@ -195,6 +206,12 @@ Changing trail detail based on measured render time is safe because it changes
 only how an already-computed path is displayed. No simulation state reads the
 quality factor.
 
+Trail stroke batches are cached by colour. Every draw removes colour groups
+that are absent from the current world and ignores stale body IDs; world and
+history replacement also clear the application's per-body trail buffers. The
+cache therefore cannot retain colours or paths from deleted, recoloured, or
+replaced scenes indefinitely.
+
 The overload warning distinguishes a render-bound frame from a physics-bound
 one. A slow display where drawing owns most of the frame suggests reducing
 trail/display work; an undrained accumulator suggests reducing physical work.
@@ -227,15 +244,21 @@ path:
 - clear selection and hover;
 - reset every pointer and pending construction gesture, including half-made
   links that hold direct body references;
-- clear trails, graph series, phase data, and rewind history;
+- clear trails, graph series, timestamped phase data, and rewind history;
 - invalidate the energy cache;
+- reset rewind-unavailable and divergence-notification state;
 - reset or preserve the initial snapshot according to the caller;
 - seed an open graph with the new state; and
 - notify registered UI components.
 
-`loadPreset()` adds preset-specific work after replacement: reset undo history,
-apply view hints, frame the scene, capture the reset baseline, arm the soft-body
-drag hint when applicable, and notify the UI after those hints are in place.
+`loadPreset()` adds preset-specific work after replacement: apply view hints,
+frame the scene, capture the reset baseline, arm the soft-body drag hint when
+applicable, and notify the UI after those hints are in place. Presets, saved
+scenes, uploaded worlds, and scene clearing are ordinary before/after edit
+transactions, so one undo restores the replaced live scene. Only
+`initializePreset()` discards history during startup. A failed or cancelled
+load never reaches `replaceWorld()` and leaves both the live scene and history
+unchanged.
 
 Undo/redo uses serialized snapshots and therefore also creates a fresh object
 graph. Selection is normally cleared. Frame rewind preserves selected body IDs
@@ -245,35 +268,69 @@ where possible and reselects matching bodies in the reconstructed world.
 
 ### Editing and undo
 
-1. A canvas gesture or inspector control mutates live objects.
-2. A committed edit calls `App.pushUndo()`.
-3. `UndoStack` serializes the whole world unless the snapshot is identical to
-   the current history entry.
+1. Before an immediate mutation or the first update of a continuous gesture,
+   the caller invokes `App.beginEdit()`. It captures the exact live world,
+   including any simulation evolution since the preceding edit.
+2. The canvas gesture, inspector control, action, formula recipe, paste, or
+   scene replacement mutates the live state. Continuous motion reuses the same
+   captured boundary.
+3. `App.commitEdit()` captures the post-edit state and calls
+   `UndoStack.pushTransition(before, after)`. Invalid, cancelled, or unchanged
+   controls call `cancelEdit()` or produce the `unchanged` result.
 4. If the edit is at simulation time zero, the reset snapshot and baseline
    energy are updated to make the edited setup the new start state.
-5. Undo or redo restores a serialized world and routes through the replacement
+5. Undo or redo reconstructs a fresh world and routes through the replacement
    protocol.
 
-Continuous control motion may update values many times, but reusable controls
-receive an `onCommit` callback so one completed interaction creates the history
-entry.
+`UndoStack` retains at most 120 full snapshots and an estimated 48,000,000
+bytes. Removing a redo tail and evicting old entries updates the same byte
+accounting. Store operations return `unchanged`, `stored`, or `too-large`. A
+snapshot or exact before/after boundary that cannot fit resets history to the
+current post-edit state, reports `too-large`, and leaves undo unavailable
+instead of retaining a partial transaction.
 
 ### Playing, rewind, and reset
 
 - The first play/step captures an initial full snapshot and baseline energy.
 - After a displayed physics update, `RewindBuffer` records a keyframe or compact
-  dynamic delta and graph series receive a throttled sample.
+  dynamic delta under its 48,000,000-byte and 3,000-frame ceilings, and graph
+  series receive a throttled sample. An individual frame that cannot fit
+  clears rewind state and returns `too-large`.
 - Frame rewind pops the current recorded frame, reconstructs the previous one,
-  truncates graph data to its clock, and pauses playback.
+  truncates energy, momentum, and timestamped phase data to its clock, and
+  pauses playback.
 - Reset reconstructs the original snapshot but preserves that snapshot so
   repeated reset remains meaningful.
+
+Internal history reconstruction uses `restoreSnapshot()`, which preserves
+finite accumulated body and driver angles exactly. Saved and uploaded data use
+the untrusted `restore()` path, which applies import normalization and resource
+limits before the world becomes live.
+
+### Time jumps
+
+Time-jump input must be a complete finite non-negative decimal literal; signs
+other than an optional leading `+`, hexadecimal/binary/octal syntax, units,
+and trailing text are rejected. A scene loaded with a nonzero clock uses that
+clock as its baseline, and targets before it are rejected.
+
+A target ahead of the current clock continues from an exact internal copy of
+the current world. A target behind it reconstructs the stored baseline and
+simulates forward. The target is rounded to the nearest fixed
+`PHYSICS_DT` quantum, so the installed clock is at most half a quantum from
+the requested value. Even a backward target requiring zero steps installs the
+baseline copy. Work is bounded by both 20,000 steps and a 3,000 ms wall-clock
+budget; an incomplete jump reports the reached time and can be continued, and
+the shared batch runner stops immediately on numerical failure.
 
 ### Formula editing and evaluation
 
 1. Inspector formula controls edit the stored `fxSrc`/`fySrc` strings.
-2. On commit, `ForceField.compile()` invokes the restricted expression parser
-   and compiler. Parse failure leaves the source visible, stores an error, and
-   disables evaluation for that field.
+2. On commit, `ForceField.compile()` compiles both axes into local functions
+   before installing either. Any parse, complexity, stack, compile, or probe
+   failure becomes `ExprError`, leaves both source strings visible, stores an
+   actionable error, and clears both compiled axes so no stale closure remains
+   active.
 3. During `World` force accumulation, enabled compiled fields receive a reused
    environment record for each movable body.
 4. Non-finite or throwing samples are skipped for that body without aborting
@@ -289,13 +346,18 @@ The typeset editor is only a view over the same source string; details are in
 - Browser scene saves use the `mechanica.scene.` local-storage namespace.
   Descriptions use a separate metadata namespace so the portable scene payload
   remains compatible.
-- Loading parses JSON and passes every supported collection through
-  `World.fromDict`, which applies type/default/range guards, remaps later
-  duplicate body and wall IDs, and reconstructs link object references from
-  the first body carrying each imported ID.
+- Loading parses JSON and passes every supported collection through the
+  untrusted `World.fromDict` path, which applies type/default/range guards,
+  resource caps, angle normalization, duplicate-ID remapping, and link
+  reference reconstruction. A collection above its cap throws
+  `SceneLimitError` before any objects are constructed.
 - Export creates a formatted JSON blob and clicks a temporary download anchor.
-- Import reads one selected JSON file, restores a world, then routes through
-  the application replacement and framing paths.
+- Import rejects files larger than 10 MiB before reading, then restores one
+  selected JSON file and routes only a successful result through the undoable
+  replacement and framing paths. Saved-scene and file reads use discriminated
+  `loaded`, `cancelled`, `missing`, `invalid`, `too-large`, and
+  `storage-error` results so cancellation stays silent and each failure gets
+  specific feedback.
 
 ## Deterministic and adaptive boundaries
 
@@ -313,9 +375,11 @@ that tradeoff on another user.
 ## Failure containment and feedback
 
 - Scene/settings inputs are parsed behind guards and defaults.
-- A step-level exception is caught by `App.safeStep`; body-level numerical
-  divergence is normally handled by `World.sanitize`.
-- Divergence notifications are throttled, and only a few names are included.
+- A step-level exception is caught by the shared batch runner; body-level
+  numerical divergence is normally contained by `World.sanitize`. Play,
+  single-step, and time-jump stop on the first failure.
+- Divergence notifications aggregate affected bodies, include only a few names
+  in the message, and are throttled.
 - Runaway culling is optional, uses a scene-fixed reference rather than camera
   position, and removes only far, outward-moving bodies.
 - Saved-scene mutation failures become typed errors and user-facing toasts;

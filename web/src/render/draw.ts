@@ -423,7 +423,17 @@ function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
   // one id->body index for the whole pass: world.bodyById is a linear scan,
   // so looking a colour up per trail was quadratic in the body count
   const byId = new Map<number, Body>();
-  for (const b of world.bodies) byId.set(b.id, b);
+  const liveColours = new Set<number>();
+  for (const b of world.bodies) {
+    byId.set(b.id, b);
+    liveColours.add((b.color[0] << 16) | (b.color[1] << 8) | b.color[2]);
+  }
+  // A scene may cycle through thousands of authored colours over time. The
+  // reusable group map must not keep one empty entry for every historical
+  // colour after bodies are deleted or recoloured.
+  for (const key of TRAIL_GROUPS.keys()) {
+    if (!liveColours.has(key)) TRAIL_GROUPS.delete(key);
+  }
 
   // Bin the visible trails by colour. Every trail in a bin shares the same
   // band styles, so the whole bin can be stroked band by band - which is
@@ -438,7 +448,8 @@ function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
     if (trail.maxX < minX || trail.minX > maxX ||
         trail.maxY < minY || trail.minY > maxY) continue;
     const body = byId.get(bid);
-    const base: Color = body ? body.color : [120, 130, 140];
+    if (body === undefined) continue; // stale trail is not part of this world
+    const base: Color = body.color;
     const key = (base[0] << 16) | (base[1] << 8) | base[2];
     let group = TRAIL_GROUPS.get(key);
     if (group === undefined) {

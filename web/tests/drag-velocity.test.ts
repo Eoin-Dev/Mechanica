@@ -51,6 +51,9 @@ function makeApp(playing: boolean) {
         [x * ZOOM, -y * ZOOM],
     },
     setSelection(sel: Selectable[]) { stub.selection = sel; },
+    beginEdit() {},
+    cancelEdit() {},
+    commitEdit() { stub.undos++; return "stored" as const; },
     pushUndo() { stub.undos++; },
     toast() {},
   };

@@ -11,7 +11,7 @@
 import { App } from "../app";
 import { isMathRenderable, sourceToLatex } from "../core/mathfmt";
 import { ForceField } from "../engine/world";
-import { ModalFocus, button, el, isTouch } from "./dom";
+import { ModalFocus, button, el, isTouch, refreshTabs, wireTabs } from "./dom";
 import { RECIPES } from "./guide-recipes";
 import { ICONS } from "./icons";
 
@@ -113,9 +113,12 @@ export class FormulaGuide {
     header.append(button("", () => this.close(),
       { icon: ICONS.close, style: "ghost", tooltip: "Close (Esc)" }).root);
 
-    const chipRow = el("div", { class: "cat-chips" });
+    const chipRow = el("div", { class: "cat-chips",
+                                 "aria-label": "Formula guide sections" });
     for (const p of PAGES) {
-      const b = el("button", { text: p });
+      const slug = p.toLowerCase().replace(/\s+/g, "-");
+      const b = el("button", { text: p, id: `guide-tab-${slug}`,
+                                "aria-controls": "formula-guide-panel" });
       b.addEventListener("click", () => {
         this.page = p;
         this.render();
@@ -123,8 +126,14 @@ export class FormulaGuide {
       this.chips.set(p, b);
       chipRow.append(b);
     }
+    wireTabs(chipRow, this.chips, (page) => {
+      this.page = page;
+      this.render();
+    });
 
-    this.body = el("div", { class: "overlay-body guide-body" });
+    this.body = el("div", { class: "overlay-body guide-body",
+                            id: "formula-guide-panel", role: "tabpanel",
+                            tabindex: "0" });
     const panel = el("div", { class: "overlay-panel" }, header, chipRow, this.body);
     this.focus = new ModalFocus(panel, "Force-field formula guide");
     root.append(panel);
@@ -151,7 +160,7 @@ export class FormulaGuide {
   }
 
   private render(): void {
-    for (const [p, b] of this.chips) b.classList.toggle("active", p === this.page);
+    refreshTabs(this.chips, this.page, this.body);
     this.body.replaceChildren();
     switch (this.page) {
       case "Basics": this.buildBasics(); break;
@@ -356,18 +365,18 @@ export class FormulaGuide {
         el("span", { class: "guide-recipe-lbl", text: "Fx" }), formula(r.fx));
       const fy = el("div", { class: "guide-recipe-row" },
         el("span", { class: "guide-recipe-lbl", text: "Fy" }), formula(r.fy));
-      card.append(fx, fy, el("p", { text: r.blurb }),
-                  el("div", { class: "guide-add-hint", text: "+ Click to add" }));
-      card.addEventListener("click", () => {
-        this.app.world.fields.push(new ForceField(r.name, r.fx, r.fy));
-        this.app.pushUndo();
+      const add = button(`Add ${r.name}`, () => {
+        this.app.edit(() => {
+          this.app.world.fields.push(new ForceField(r.name, r.fx, r.fy));
+        });
         this.app.toast(`Added force field "${r.name}" - see the World tab`);
         // flash the card border as the in-place cue; restart the
         // animation cleanly when the same card is clicked again
         card.classList.remove("guide-added");
         void card.offsetWidth;
         card.classList.add("guide-added");
-      });
+      }, { style: "primary", class: "card-load" });
+      card.append(fx, fy, el("p", { text: r.blurb }), add.root);
       grid.append(card);
     }
     this.body.append(grid);
