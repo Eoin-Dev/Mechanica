@@ -24,7 +24,7 @@ const ORIGINAL: Palette = {
   BG: [24, 26, 31], PANEL: [33, 36, 43], PANEL_LIGHT: [43, 47, 56],
   PANEL_HOVER: [52, 57, 68], OUTLINE: [58, 63, 74], ACCENT: [86, 156, 214],
   ACCENT_HOT: [120, 180, 235], ACCENT_DARK: [50, 90, 125],
-  TEXT: [226, 229, 234], TEXT_DIM: [152, 158, 168], TEXT_FAINT: [105, 111, 122],
+  TEXT: [226, 229, 234], TEXT_DIM: [152, 158, 168], TEXT_FAINT: [145, 151, 161],
   GOOD: [120, 190, 120], WARN: [230, 200, 90], BAD: [230, 110, 110],
   GRID: [33, 36, 42], GRID_MAJOR: [44, 48, 56], AXIS: [66, 72, 84],
   SELECTION: [110, 180, 240], VEL_COLOR: [120, 210, 130],
@@ -37,7 +37,7 @@ const DARK: Palette = {
   BG: [18, 18, 18], PANEL: [28, 28, 28], PANEL_LIGHT: [38, 38, 38],
   PANEL_HOVER: [49, 49, 49], OUTLINE: [58, 58, 58], ACCENT: [92, 156, 214],
   ACCENT_HOT: [125, 180, 235], ACCENT_DARK: [52, 88, 122],
-  TEXT: [229, 229, 229], TEXT_DIM: [156, 156, 156], TEXT_FAINT: [110, 110, 110],
+  TEXT: [229, 229, 229], TEXT_DIM: [156, 156, 156], TEXT_FAINT: [145, 145, 145],
   GRID: [27, 27, 27], GRID_MAJOR: [42, 42, 42], AXIS: [70, 70, 70],
   GOOD: [120, 190, 120], WARN: [230, 200, 90], BAD: [230, 110, 110],
   SELECTION: [110, 180, 240], VEL_COLOR: [120, 210, 130],
@@ -51,7 +51,7 @@ const VOID: Palette = {
   BG: [8, 8, 8], PANEL: [16, 16, 16], PANEL_LIGHT: [25, 25, 25],
   PANEL_HOVER: [36, 36, 36], OUTLINE: [48, 48, 48], ACCENT: [92, 156, 214],
   ACCENT_HOT: [130, 185, 240], ACCENT_DARK: [40, 72, 102],
-  TEXT: [238, 238, 238], TEXT_DIM: [152, 152, 152], TEXT_FAINT: [102, 102, 102],
+  TEXT: [238, 238, 238], TEXT_DIM: [152, 152, 152], TEXT_FAINT: [137, 137, 137],
   GRID: [17, 17, 17], GRID_MAJOR: [32, 32, 32], AXIS: [64, 64, 64],
   GOOD: [110, 195, 110], WARN: [235, 200, 80], BAD: [235, 95, 95],
   SELECTION: [120, 190, 245], VEL_COLOR: [110, 215, 125],
@@ -62,7 +62,7 @@ const LIGHT: Palette = {
   BG: [246, 247, 249], PANEL: [255, 255, 255], PANEL_LIGHT: [240, 242, 245],
   PANEL_HOVER: [227, 230, 235], OUTLINE: [203, 208, 216], ACCENT: [35, 110, 180],
   ACCENT_HOT: [25, 95, 170], ACCENT_DARK: [200, 222, 242],
-  TEXT: [28, 32, 38], TEXT_DIM: [96, 103, 113], TEXT_FAINT: [142, 148, 158],
+  TEXT: [28, 32, 38], TEXT_DIM: [96, 103, 113], TEXT_FAINT: [105, 111, 120],
   GOOD: [40, 145, 60], WARN: [185, 145, 15], BAD: [200, 55, 55],
   GRID: [233, 235, 239], GRID_MAJOR: [216, 219, 225], AXIS: [152, 158, 168],
   SELECTION: [25, 118, 210], VEL_COLOR: [25, 145, 60],
@@ -101,6 +101,12 @@ export let OUTLINE = ORIGINAL.OUTLINE;
 export let ACCENT = ORIGINAL.ACCENT;
 export let ACCENT_HOT = ORIGINAL.ACCENT_HOT;
 export let ACCENT_DARK = ORIGINAL.ACCENT_DARK;
+/** Accent-derived colours reserved for small text and keyboard focus. They
+ * are adjusted toward black or white when a custom accent would disappear
+ * against the current surfaces. */
+export let ACCENT_TEXT = ORIGINAL.ACCENT;
+export let FOCUS = ORIGINAL.ACCENT;
+export let ACCENT_INK: Color = [0, 0, 0];
 export let TEXT = ORIGINAL.TEXT;
 export let TEXT_DIM = ORIGINAL.TEXT_DIM;
 export let TEXT_FAINT = ORIGINAL.TEXT_FAINT;
@@ -128,6 +134,52 @@ export function parseHex(hex: string): Color | null {
 /** The accent a theme ships with (for the "theme default" swatch). */
 export function defaultAccent(name: ThemeName): Color {
   return PALETTES[asThemeName(name)].ACCENT;
+}
+
+/** WCAG relative luminance and contrast, exported so the palette matrix can
+ * be verified without depending on browser-computed styles. */
+export function relativeLuminance(c: Color): number {
+  const linear = (channel: number): number => {
+    const s = channel / 255;
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * linear(c[0]) + 0.7152 * linear(c[1]) + 0.0722 * linear(c[2]);
+}
+
+export function contrastRatio(a: Color, b: Color): number {
+  const la = relativeLuminance(a);
+  const lb = relativeLuminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+function mix(a: Color, b: Color, f: number): Color {
+  return [Math.round(a[0] + (b[0] - a[0]) * f),
+          Math.round(a[1] + (b[1] - a[1]) * f),
+          Math.round(a[2] + (b[2] - a[2]) * f)];
+}
+
+/** Preserve the chosen hue as far as possible, then move it only as far as
+ * needed toward the contrast direction that works across every surface. */
+function contrastSafe(base: Color, surfaces: readonly Color[], minimum: number): Color {
+  const score = (c: Color): number =>
+    Math.min(...surfaces.map((surface) => contrastRatio(c, surface)));
+  if (score(base) >= minimum) return [...base] as Color;
+  const black: Color = [0, 0, 0];
+  const white: Color = [255, 255, 255];
+  for (let i = 1; i <= 100; i++) {
+    const f = i / 100;
+    const dark = mix(base, black, f);
+    const light = mix(base, white, f);
+    const darkScore = score(dark);
+    const lightScore = score(light);
+    if (darkScore >= minimum || lightScore >= minimum) {
+      if (darkScore >= minimum && lightScore >= minimum) {
+        return darkScore >= lightScore ? dark : light;
+      }
+      return darkScore >= minimum ? dark : light;
+    }
+  }
+  return score(black) >= score(white) ? black : white;
 }
 
 // user accent override (settings): null = the theme's own accent
@@ -165,13 +217,20 @@ export function setTheme(requested: ThemeName): void {
       : scale(a, 0.58);
     SELECTION = lighten(a, 25); // the canvas highlight follows the accent
   }
+  ACCENT_TEXT = contrastSafe(ACCENT, [PANEL, PANEL_LIGHT], 4.5);
+  FOCUS = contrastSafe(ACCENT, [BG, PANEL, PANEL_LIGHT], 3.0);
+  const black: Color = [0, 0, 0];
+  const white: Color = [255, 255, 255];
+  ACCENT_INK = contrastRatio(black, ACCENT) >= contrastRatio(white, ACCENT)
+    ? black : white;
   if (typeof document === "undefined") return; // node (tests)
   const s = document.documentElement.style;
   const set = (v: string, c: Color) => s.setProperty(v, css(c));
   set("--bg", BG); set("--panel", PANEL); set("--panel-light", PANEL_LIGHT);
   set("--panel-hover", PANEL_HOVER); set("--outline", OUTLINE);
   set("--accent", ACCENT); set("--accent-hot", ACCENT_HOT);
-  set("--accent-dark", ACCENT_DARK); set("--text", TEXT);
+  set("--accent-dark", ACCENT_DARK); set("--accent-text", ACCENT_TEXT);
+  set("--focus", FOCUS); set("--accent-ink", ACCENT_INK); set("--text", TEXT);
   set("--text-dim", TEXT_DIM); set("--text-faint", TEXT_FAINT);
   set("--good", GOOD); set("--warn", WARN); set("--bad", BAD);
   set("--selection", SELECTION);

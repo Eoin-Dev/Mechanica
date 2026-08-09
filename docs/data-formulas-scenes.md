@@ -70,15 +70,15 @@ Each `bodies` entry maps to `BodyDict`:
 | --- | --- |
 | `id` | Non-negative integer at most `2^40`; otherwise the constructor's fresh ID is retained. The body counter advances beyond every accepted ID. If an imported body repeats an earlier body ID, the first body keeps it and the later body receives a fresh ID. |
 | `name` | String, limited to 200 characters; otherwise `Body <id>`. Anchors are renamed `Anchor`. |
-| `pos` | Two finite numbers `[x, y]`; invalid/missing components become zero. |
-| `vel` | Two finite numbers `[vx, vy]`; invalid/missing components become zero. |
-| `angle` | Finite radians, default zero. |
-| `omega` | Finite radians/second, default zero; forced to zero when `no_rotation` is true. |
-| `mass` | Finite and at least zero, default `1`. Zero behaves as infinite translational mass. |
-| `radius` | Finite and at least `1e-4`, default `0.15`. |
+| `pos` | Two finite numbers `[x, y]`, each clamped to `[-1e6, 1e6]`; invalid/missing components become zero. |
+| `vel` | Two finite numbers `[vx, vy]`, each clamped to `[-1e7, 1e7]`; invalid/missing components become zero. |
+| `angle` | Finite radians normalized to `[-pi, pi)` on untrusted load, default zero. Internal snapshot reconstruction preserves finite accumulated angles exactly. |
+| `omega` | Finite radians/second, default zero, clamped so `abs(omega) * radius <= 1e7`; forced to zero when `no_rotation` is true. |
+| `mass` | Finite, default `1`. Exact zero is preserved as infinite translational mass; every other value is clamped to `1e-9..1e12`. |
+| `radius` | Finite `1e-4..1e6`, default `0.15`. |
 | `restitution` | Finite and clamped to `0..1`, default `0.8`. |
-| `friction` | Finite and at least zero, default `0.4`. |
-| `const_force` | Two finite force components in newtons, default `[0, 0]`. |
+| `friction` | Finite `0..1e6`, default `0.4`. |
+| `const_force` | Two finite force components in newtons, each clamped to `[-1e9, 1e9]`, default `[0, 0]`. |
 | `locked` | Boolean, default `false`; locked bodies have zero inverse mass/inertia. Other runtime types use the default. |
 | `collides` | Boolean, default `true`; other runtime types use the default. |
 | `no_rotation` | Optional boolean, default `false`; other runtime types use the default. |
@@ -103,10 +103,10 @@ Each `walls` entry maps to `WallDict`:
 | --- | --- |
 | `id` | Guarded and counter-advancing like body IDs. The first occurrence of an imported wall ID keeps it; later duplicates receive fresh IDs. |
 | `name` | String limited to 200 characters; otherwise `Wall <id>`. |
-| `a`, `b` | Finite endpoint coordinate pairs; invalid components become zero. |
-| `thickness` | Finite and at least `1e-4`, default `0.08`. |
+| `a`, `b` | Finite endpoint coordinate pairs, each component clamped to `[-1e6, 1e6]`; invalid components become zero. |
+| `thickness` | Finite `1e-4..1e6`, default `0.08`. |
 | `restitution` | Clamped to `0..1`, default `0.8`. |
-| `friction` | At least zero, default `0.5`. |
+| `friction` | Finite `0..1e6`, default `0.5`. |
 | `color` | Validated RGB triple, otherwise the wall grey. |
 
 Walls have no dynamic or transient serialized state.
@@ -183,9 +183,12 @@ serialized.
 - `fx`/`fy` are expression source strings. They are not truncated because
   truncation could produce a different valid formula.
 - `enabled` is boolean and defaults true; other runtime types use the default.
-- Load constructs a field and compiles both sources. A parse/compile error
-  stores an error and leaves compiled functions null, so the field is inert
-  while its source remains editable.
+- Load constructs a field and compiles both sources into temporary functions.
+  They are installed together only after both succeed. Any parse, complexity,
+  compile, stack, or probe failure is reported as `ExprError`, stores an
+  actionable error, clears both compiled axes, and leaves the complete source
+  strings editable. A stale function from one axis can therefore never remain
+  active beside a failed axis.
 - Compiled closures and error text are runtime state, not JSON.
 
 ### Drivers
@@ -206,8 +209,8 @@ serialized.
 | `body_id` | Guarded object ID; invalid becomes `-1`, which resolves to no body and is inert. |
 | `amplitude` | Newtons, finite `[-1e9, 1e9]`, default `5`. |
 | `frequency` | Hz, finite `[0, 1e6]`, default `1`. |
-| `phase` | Radians, finite `[-1e6, 1e6]`, default zero. |
-| `angle` | Force direction radians, finite `[-1e6, 1e6]`, default zero. |
+| `phase` | Radians normalized to `[-pi, pi)` on untrusted load, default zero. Internal snapshot reconstruction preserves finite values exactly. |
+| `angle` | Force direction radians normalized to `[-pi, pi)` on untrusted load, default zero. Internal snapshot reconstruction preserves finite values exactly. |
 | `enabled` | Boolean, default true; other runtime types use the default. |
 
 Drivers whose body is missing or immovable are ignored during step
@@ -217,7 +220,20 @@ copies their drivers to the new IDs.
 ## Deserialization algorithm
 
 `World.fromDict()` is intended to return a usable world for any JSON-compatible
-top-level shape:
+top-level shape within the collection budgets. It throws `SceneLimitError`
+when a collection exceeds its resource cap:
+
+| Collection | Maximum entries |
+| --- | ---: |
+| Bodies | 2,000 |
+| Walls | 2,000 |
+| Links | 10,000 |
+| Force fields | 64 |
+| Drivers | 2,000 |
+
+The loader checks all five array lengths before constructing objects or
+advancing identity counters, so a resource-limit failure is atomic. For an
+input within those limits:
 
 1. A non-object top level becomes an empty partial object.
 2. A non-object settings value becomes an empty settings object.
@@ -237,9 +253,19 @@ top-level shape:
    so the same numeric ID may occur once in each class.
 8. Fields and drivers are reconstructed.
 
-`restore(text)` still begins with `JSON.parse`, so syntactically damaged JSON
-throws there. `loadScene()` and `uploadScene()` catch that parse failure and
-return null to their UI callers.
+`restore(text)` begins with `JSON.parse`, then uses the untrusted import path.
+Syntactically damaged JSON throws there; valid malformed shapes within the
+budgets still produce a usable world. Imported coordinates, velocities,
+sizes, nonzero mass, friction, force, angular surface speed, and angles use the
+central limits documented above. Runtime sanitization reuses the coordinate,
+velocity, and angular surface-speed ceilings and also contains non-finite
+angles.
+
+`restoreSnapshot(text)` is reserved for strings produced by the running
+application. It uses the same shape and finite-number guards but preserves
+body angles and driver phase/direction exactly rather than normalizing them.
+Undo, redo, rewind keyframes, reset, and time-jump copies use this trusted path;
+saved and uploaded scene data always use `restore()`.
 
 Unknown properties are ignored. Missing newer fields use defaults. Saving the
 loaded world emits the current supported shape.
@@ -248,28 +274,39 @@ loaded world emits the current supported shape.
 
 ### Full snapshot
 
-`snapshot(world)` is compact `JSON.stringify(world.toDict())`. `restore()`
-parses and delegates to `World.fromDict`. This is the canonical cloning and
-object-graph reconstruction mechanism used by undo, reset, rewind keyframes,
-time jumps, saves, and tests.
+`snapshot(world)` is compact `JSON.stringify(world.toDict())`. `restore()` is
+the normalized untrusted scene boundary; `restoreSnapshot()` is the exact
+internal reconstruction boundary. Both delegate to `World.fromDict`, but only
+the trusted path requests angle preservation.
 
 ### Undo stack
 
-`UndoStack` stores full snapshot strings:
+`UndoStack` stores full snapshot strings under two limits: 120 entries and an
+estimated 48,000,000 UTF-16 bytes. `App.beginEdit()` captures the live state
+before an immediate mutation or the first update of a continuous gesture;
+`commitEdit()` captures the result and records both through
+`pushTransition(before, after)`. This preserves the exact evolved state before
+an edit even when physics has run since the preceding history entry.
 
-- it starts with the provided world;
-- pushing an identical snapshot is a no-op;
-- pushing after undo drops the redo tail;
-- history is capped at `UndoStack.LIMIT` entries;
-- undo/redo moves an index and restores the selected snapshot;
-- `reset(world)` replaces all edit history with one state.
+- Store operations return `unchanged`, `stored`, or `too-large`.
+- An identical post-edit snapshot is `unchanged`.
+- Pushing after undo removes the redo tail and its accounted bytes.
+- Oldest states are evicted until both limits are satisfied.
+- An individual snapshot, or an exact before/after transition, that cannot fit
+  resets the stack to the current post-edit state and returns `too-large`; no
+  partial undo boundary remains.
+- Undo/redo moves the index and reconstructs with `restoreSnapshot()`.
+- `reset(world)` replaces all edit history with one state and is used for
+  startup initialization.
 
-Undo represents committed edits, not each simulation frame. Callers decide
-when a continuous interaction commits.
+Presets, saved scenes, uploaded worlds, and scene clearing are normal edit
+transactions. Startup `initializePreset()` is the only replacement route that
+intentionally clears undo history.
 
 ### Rewind buffer
 
-`RewindBuffer` records simulation display frames under byte and frame budgets.
+`RewindBuffer` records simulation display frames under a 48,000,000-byte
+budget and a 3,000-frame ceiling. `push()` returns `stored` or `too-large`.
 Only six numbers per body normally change during play: x/y position, x/y
 velocity, angle, and spin. The clock adds one more number to a dynamic frame.
 
@@ -284,9 +321,14 @@ dynamic delta against the latest keyframe.
 Trimming removes oldest frames until the frame/byte budgets are respected and
 reclaims a keyframe once no surviving frame references it. `back()` removes the
 current frame, restores the preceding keyframe, overlays its dynamic array when
-the body count/stride match, and returns a newly constructed world.
+the body count/stride match, prunes future unreferenced keyframes, and returns a
+newly constructed world. If an individual keyframe or dynamic frame cannot fit,
+the buffer clears and reports `too-large`; if a keyframe/delta pair cannot fit,
+it retains the latest state as a fresh keyframe when that snapshot fits.
 
 Rewind state is session-only and is not written to local storage or scene JSON.
+Energy, momentum, and phase-portrait samples carry simulation time and truncate
+future samples when the world rewinds.
 
 ## Browser settings
 
@@ -330,16 +372,24 @@ digits plus literal space, underscore, and hyphen, whitespace-collapsed, capped
 at 80 characters, and defaulted to `scene` if empty. `sceneExists()` checks the
 sanitized key so differently punctuated inputs cannot silently collide.
 
-`saveScene()` writes or overwrites one payload and returns the safe name. A
-quota or blocked-storage failure becomes `SceneSaveError` with a user-facing
-message. `listScenes()` scans only the scene prefix and sorts names.
-`loadScene()` returns null for a missing or syntactically damaged entry without
-deleting it.
+`saveScene()` writes or overwrites one payload and returns the safe name. Quick
+save chooses a millisecond-resolution name such as
+`Scene 2026-08-04 123456-789`; if that sanitized key already exists it probes
+`-2`, `-3`, and later suffixes rather than overwriting it. A quota or
+blocked-storage failure becomes `SceneSaveError` with a user-facing message.
+`listScenes()` scans only the scene prefix and sorts names.
 
-Storage access needed to check or enumerate saved scenes also translates a
-browser rejection into `SceneSaveError`. The library keeps its save action
-available but replaces the scene list with an unavailable message. A rejected
-payload read is treated like an unusable scene and returns null.
+Scene reads use the `SceneReadResult` discriminated union rather than nullable
+success. Its statuses are `loaded`, `cancelled`, `missing`, `invalid`,
+`too-large`, and `storage-error`; successful results carry `world` and `name`,
+and resource/storage failures carry a message. A missing or damaged stored
+entry is left in place. Cancellation is silent, while malformed data,
+collection limits, and rejected storage access receive distinct feedback.
+
+Storage access needed to check or enumerate saved scenes translates a browser
+rejection into `SceneSaveError`. The library keeps its save action available
+but replaces the scene list with an unavailable message. A rejected payload
+read returns `storage-error` rather than being conflated with a missing scene.
 
 Delete, rename, and description updates also translate rejected storage
 operations into `SceneSaveError`. Multi-key operations capture their prior
@@ -360,10 +410,15 @@ non-ASCII/punctuation that survived the storage name is folded to underscores,
 and a name without ASCII alphanumerics becomes `scene.json`. The object URL is
 revoked after a delay so the browser has time to begin reading it.
 
-Import creates a temporary file input accepting JSON, reads the selected file
-as text, restores it, and returns `{ world, name }` or null. Cancelling resolves
-null. The library then installs the result, resets undo, captures the start,
-fits the camera, and closes the overlay.
+Import creates a temporary file input accepting JSON and rejects a file larger
+than 10 MiB from its byte-reported `File.size` before calling `text()`. While a
+file is being read the import action is disabled. Parsing uses the untrusted
+`restore()` path and returns `SceneReadResult`; cancelling returns `cancelled`
+without feedback. Invalid JSON and collection-limit failures leave the live
+world and its history unchanged. A `loaded` result is installed as an undoable
+world replacement, captures that world's clock as the reset/time-jump
+baseline, fits the camera, and closes the overlay. Saved-scene loads follow the
+same atomic replacement rule.
 
 ## Force-field expression language
 
@@ -431,6 +486,27 @@ tightly than unary minus, so `-x^2` is `-(x^2)` and `2^-3` is valid.
 Compilation folds the AST into nested closures. It probes the result once at a
 representative environment so obvious NaN/domain failures surface while the
 user is editing. Successful functions are called directly from the force loop.
+
+### Expression resource budgets
+
+Parsing, compilation, source formatting, and MathLive conversion share the
+same exported limits:
+
+| Resource | Maximum |
+| --- | ---: |
+| Source characters | 4,096 |
+| Tokens | 2,048 |
+| AST nodes | 1,024 |
+| AST depth | 128 |
+| Arguments in one function call | 128 |
+
+Limits reject the complete expression with `ExprError`; source is never
+truncated into potentially different valid physics. AST validation uses an
+iterative budget walk before recursive compilation or formatting, and parser,
+compiler, and probe stack/complexity failures are converted to actionable
+`ExprError` messages. `ForceField.compile()` installs `fx` and `fy` atomically
+only after both compile successfully; any failure clears both closures while
+retaining both source strings and the error.
 
 ## Source text and typeset math
 

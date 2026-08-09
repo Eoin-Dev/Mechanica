@@ -403,7 +403,8 @@ export class TimeSeries {
  * aspect ratio.
  */
 export class PhasePlot {
-  points: Array<[number, number, number, number]> = [];
+  /** x, vx, y, vy, and simulation time. */
+  points: Array<[number, number, number, number, number]> = [];
   /** Bumped on every mutation so renderers can skip unchanged frames. */
   rev = 0;
   private maxlen: number;
@@ -417,9 +418,24 @@ export class PhasePlot {
     this.rev++;
   }
 
-  add(x: number, vx: number, y: number, vy: number): void {
-    if (Number.isFinite(x + vx + y + vy)) {
-      this.points.push([x, vx, y, vy]);
+  truncate(t: number): void {
+    const before = this.points.length;
+    while (this.points.length > 0 && this.points[this.points.length - 1][4] > t) {
+      this.points.pop();
+    }
+    if (this.points.length !== before) this.rev++;
+  }
+
+  add(t: number, x: number, vx: number, y: number, vy: number): void {
+    if (Number.isFinite(t + x + vx + y + vy)) {
+      this.truncate(t);
+      const last = this.points[this.points.length - 1];
+      if (last !== undefined && last[4] === t) {
+        this.points[this.points.length - 1] = [x, vx, y, vy, t];
+        this.rev++;
+        return;
+      }
+      this.points.push([x, vx, y, vy, t]);
       // batched like TimeSeries.evict: a per-sample shift() is O(n) and
       // this runs on every graph sample for the whole run
       if (this.points.length > this.maxlen + EVICT_BLOCK) {

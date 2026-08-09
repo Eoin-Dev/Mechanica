@@ -126,3 +126,48 @@ describe("Inspector structure key", () => {
     expect(rendered(panel)).not.toBe("");
   });
 });
+
+describe("Inspector accessibility and persisted visibility", () => {
+  it("wires tabs, their panel, reopen control and splitter semantics", () => {
+    const { panel } = makeInspector();
+    panel.id = "inspector";
+    const tablist = panel.querySelector<HTMLElement>("[role=tablist]");
+    const tabs = [...panel.querySelectorAll<HTMLButtonElement>("[role=tab]")];
+    const tabpanel = panel.querySelector<HTMLElement>("[role=tabpanel]");
+    const reopen = panel.querySelector<HTMLButtonElement>("button.reopen-strip");
+    const splitter = document.body.querySelector<HTMLElement>("[role=separator]");
+
+    expect(tablist?.getAttribute("aria-label")).toBe("Inspector sections");
+    expect(tabs.map((tab) => [tab.textContent, tab.getAttribute("aria-selected"),
+                              tab.tabIndex]))
+      .toEqual([["Selection", "true", 0], ["World", "false", -1],
+                ["View", "false", -1]]);
+    expect(tabpanel?.getAttribute("aria-labelledby")).toBe(tabs[0].id);
+    expect(reopen?.getAttribute("aria-controls")).toBe("inspector");
+    expect(reopen?.getAttribute("aria-expanded")).toBe("true");
+    expect(splitter?.getAttribute("aria-orientation")).toBe("vertical");
+    expect(splitter?.getAttribute("aria-label")).toBe("Resize Inspector");
+  });
+
+  it("honours and updates the desktop visibility preference", () => {
+    document.body.replaceChildren();
+    const canvas = stubCanvas();
+    const panel = document.createElement("aside");
+    panel.id = "inspector";
+    const splitter = document.createElement("div");
+    document.body.append(canvas, panel, splitter);
+    const app = new App(canvas);
+    app.settings.inspector_visible = false;
+    const inspector = new Inspector(app, panel, splitter);
+
+    expect(panel.classList.contains("collapsed")).toBe(true);
+    const reopen = panel.querySelector<HTMLButtonElement>("button.reopen-strip")!;
+    expect(reopen.hidden).toBe(false);
+    expect(reopen.getAttribute("aria-expanded")).toBe("false");
+    inspector.toggleCollapsed();
+    expect(panel.classList.contains("collapsed")).toBe(false);
+    expect(app.settings.inspector_visible).toBe(true);
+    expect(JSON.parse(localStorage.getItem("mechanica.settings") ?? "{}")
+      .inspector_visible).toBe(true);
+  });
+});

@@ -6,8 +6,9 @@
  *      level (warm-started Gauss-Seidel). Integrate with the selected
  *      integrator:
  *        - Symplectic Euler: 1st order, symplectic. Very robust.
- *        - Velocity Verlet:  2nd order, symplectic. Default -- excellent
- *          long-term energy behaviour for orbits and oscillators.
+ *        - Velocity Verlet:  2nd order; symplectic for velocity-independent
+ *          conservative forces. Default -- excellent long-term energy
+ *          behaviour for orbits and oscillators.
  *        - RK4: 4th order, non-symplectic. Best short-term accuracy for
  *          smooth systems; may slowly drift on orbits.
  *   2. Remove the tiny residual link drift with an XPBD position solve and
@@ -29,9 +30,13 @@
  * an existing dial. See engine/perf.ts.
  */
 import { CompiledExpr, ExprError, compileExpr } from "../core/expr";
-import { arrayOr, boolOr, idOr, intIn, numIn, strOr } from "../core/guards";
+import { arrayOr, boolOr, idOr, intIn, numIn, numOr, strOr } from "../core/guards";
 import { Vec2 } from "../core/vec";
-import { Body, BodyDict, Wall, WallDict } from "./body";
+import {
+  Body, BodyDict, SCENE_MAX_COORDINATE, SCENE_MAX_FORCE,
+  SCENE_MAX_SURFACE_SPEED, SCENE_MAX_VELOCITY, Wall, WallDict,
+  normalizeAngle,
+} from "./body";
 import { Contact, ContactCache, ContactStatic, solveContacts } from "./contacts";
 import { DistanceLink, Link, LinkDict, SpringLink, linkFromDict } from "./links";
 import {
@@ -41,6 +46,28 @@ import {
 
 export const INTEGRATORS = ["Velocity Verlet", "Symplectic Euler", "RK4"] as const;
 export type Integrator = (typeof INTEGRATORS)[number];
+
+export const SCENE_MAX_BODIES = 2_000;
+export const SCENE_MAX_WALLS = 2_000;
+export const SCENE_MAX_LINKS = 10_000;
+export const SCENE_MAX_FIELDS = 64;
+export const SCENE_MAX_DRIVERS = 2_000;
+
+export type SceneCollection = "bodies" | "walls" | "links" | "fields" | "drivers";
+
+/** A scene whose raw collection size would make loading it an unbounded
+ * main-thread operation. Malformed entries below the limits are still handled
+ * by the ordinary total loader. */
+export class SceneLimitError extends Error {
+  constructor(
+    readonly collection: SceneCollection,
+    readonly limit: number,
+    readonly actual: number,
+  ) {
+    super(`Scene has ${actual} ${collection}; the maximum is ${limit}`);
+    this.name = "SceneLimitError";
+  }
+}
 
 // Gauss-Seidel passes for the acceleration-level rod tension solve. Warm
 // starting makes a handful of passes enough even for long chains.
@@ -164,13 +191,19 @@ export class ForceField {
 
   compile(): boolean {
     try {
-      this.fx = compileExpr(this.fxSrc);
-      this.fy = compileExpr(this.fySrc);
+      // Compile into locals so a failed second component can never leave a
+      // newly installed x function paired with stale/absent y physics.
+      const fx = compileExpr(this.fxSrc);
+      const fy = compileExpr(this.fySrc);
+      this.fx = fx;
+      this.fy = fy;
       this.error = "";
       return true;
     } catch (exc) {
-      if (!(exc instanceof ExprError)) throw exc;
-      this.error = exc.message;
+      const error = exc instanceof ExprError
+        ? exc
+        : new ExprError(`field could not be compiled: ${String((exc as Error).message ?? exc)}`);
+      this.error = error.message;
       this.fx = this.fy = null;
       return false;
     }
@@ -234,14 +267,14 @@ export class Driver {
     };
   }
 
-  static fromDict(d: DriverDict): Driver {
+  static fromDict(d: DriverDict, preserveAngles = false): Driver {
     // -1 matches no body, so a driver naming one that is missing or
     // malformed is simply inert (prepareStep drops it)
     const drv = new Driver(idOr(d.body_id, -1),
-                           numIn(d.amplitude, 5.0, -1e9, 1e9),
+                           numIn(d.amplitude, 5.0, -SCENE_MAX_FORCE, SCENE_MAX_FORCE),
                            numIn(d.frequency, 1.0, 0.0, 1e6),
-                           numIn(d.phase, 0.0, -1e6, 1e6),
-                           numIn(d.angle, 0.0, -1e6, 1e6));
+                           preserveAngles ? numOr(d.phase, 0.0) : normalizeAngle(d.phase),
+                           preserveAngles ? numOr(d.angle, 0.0) : normalizeAngle(d.angle));
     drv.enabled = boolOr(d.enabled, true);
     return drv;
   }
@@ -383,8 +416,7 @@ export class World {
       // radii - there the link holds them permanently overlapped, so the
       // contact could never be satisfied and the two solvers would fight
       // each other forever (constant jitter).
-      const gap = ln instanceof DistanceLink ? ln.length : ln.restLength;
-      if (gap < ln.a.radius + ln.b.radius) {
+      if (ln instanceof DistanceLink && ln.length < ln.a.radius + ln.b.radius) {
         const a = ln.a.id;
         const b = ln.b.id;
         noCollide.add(a < b ? `${a},${b}` : `${b},${a}`);
@@ -469,21 +501,16 @@ export class World {
    * limits so extreme user settings behave like "as stiff as this timestep
    * can carry" instead of blowing up.
    *
-   * Note this is a PER-SPRING limit, and it is not sufficient for a node
-   * that several springs meet at: their stiffnesses add, so a soft-body
-   * particle on twelve of them sits well past the margin each one was
-   * clamped to individually. That is the failure performance mode used to
-   * inherit, and why it now takes the branch above rather than a tighter
-   * version of this one.
+   * This is a PER-SPRING limit and is not sufficient for a node where many
+   * springs meet: their stiffnesses add, so performance mode uses the
+   * projection branch above instead of relying on a tighter force clamp.
    *
    * Clamp against a FIXED reference substep, not the one this step happens
-   * to be using. The app subdivides its timestep adaptively, and how far it
-   * subdivides depends on measured frame times - i.e. on how busy the
-   * machine is. Clamping against the live h therefore made a clamped
-   * spring's *effective* stiffness and damping vary with performance: the
-   * same scene, reset and replayed, could ring on one run and sit dead still
-   * on the next. Anchoring the limits to the base timestep makes them a
-   * property of the scene alone.
+   * to be using. The app may subdivide a base quantum from simulation state,
+   * but that accuracy choice must not also change the spring being resolved.
+   * Clamping against the live h would make effective stiffness and damping
+   * vary with the selected refinement. Anchoring the limits to the base
+   * timestep keeps them a property of the scene alone.
    *
    * Taking the larger of the two keeps this conservative: the app only ever
    * steps finer than the reference (so the reference governs), while a
@@ -1035,19 +1062,43 @@ export class World {
     } else { // Velocity Verlet
       this.accumulateForces(t0);
       const half = 0.5 * h;
-      for (const b of movers) {
+      this.verletEnsure(movers.length);
+      const halfVel = this.verletHalfVelocity;
+      for (let i = 0; i < movers.length; i++) {
+        const b = movers[i];
         b.angle += b.omega * h;
         b.vel.x += b.acc.x * half;
         b.vel.y += b.acc.y * half;
+        halfVel[2 * i] = b.vel.x;
+        halfVel[2 * i + 1] = b.vel.y;
         b.pos.x += b.vel.x * h;
         b.pos.y += b.vel.y * h;
-      }
-      this.accumulateForces(t0 + h);
-      for (const b of movers) {
+        // Velocity-dependent forces at t+h need a full-step velocity. The
+        // first-order acceleration predictor is second-order accurate in the
+        // final trapezoidal correction and is ignored bit-for-bit by forces
+        // that depend only on position/time.
         b.vel.x += b.acc.x * half;
         b.vel.y += b.acc.y * half;
       }
+      this.accumulateForces(t0 + h);
+      for (let i = 0; i < movers.length; i++) {
+        const b = movers[i];
+        b.vel.x = halfVel[2 * i] + b.acc.x * half;
+        b.vel.y = halfVel[2 * i + 1] + b.acc.y * half;
+      }
     }
+  }
+
+  // Half-step velocities retained across the second Verlet force evaluation.
+  // The buffer grows geometrically and is reused, keeping the hot path free of
+  // per-slice allocations during adaptive integration.
+  private verletHalfVelocity = new Float64Array(0);
+
+  private verletEnsure(n: number): void {
+    if (this.verletHalfVelocity.length >= 2 * n) return;
+    let cap = Math.max(16, this.verletHalfVelocity.length);
+    while (cap < 2 * n) cap *= 2;
+    this.verletHalfVelocity = new Float64Array(cap);
   }
 
   // RK4 scratch: [px, py, vx, vy] per mover for the base state and the four
@@ -1132,8 +1183,21 @@ export class World {
   // ------------------------------------------------------------------- step
   /** Advance the world by dt seconds using the configured substeps. */
   step(dt: number): void {
+    if (!Number.isFinite(dt) || dt < 0.0) {
+      throw new RangeError("World.step(dt) requires a finite, non-negative timestep");
+    }
+    // Zero and a positive value too small to survive substep division are
+    // strict no-ops: diagnostics, caches, counters and body scratch state all
+    // remain untouched.
+    if (dt === 0.0) return;
     const n = this.effectiveSubsteps;
     const h = dt / n;
+    // Constraint compliance and predictor terms use h squared. If that
+    // product underflows, running would manufacture infinities/NaNs even
+    // though h itself is still positive (notably with one configured
+    // substep). Treat the whole call as the documented strict no-op.
+    const h2 = h * h;
+    if (h === 0.0 || h2 === 0.0 || !Number.isFinite(1.0 / h2)) return;
     const invH = 1.0 / h;
     this.prepareStep(h);
     this.contacts = [];
@@ -1311,18 +1375,25 @@ export class World {
     for (const b of this.bodies) {
       // any inf/nan component makes the sum non-finite; huge-but-finite
       // values are just as fatal one step later, so they count too
-      if (Number.isFinite(b.pos.x + b.pos.y + b.vel.x + b.vel.y + b.omega) &&
-          b.pos.x > -1e6 && b.pos.x < 1e6 && b.pos.y > -1e6 && b.pos.y < 1e6 &&
-          b.vel.x > -1e7 && b.vel.x < 1e7 && b.vel.y > -1e7 && b.vel.y < 1e7) {
+      if (Number.isFinite(b.pos.x) && Number.isFinite(b.pos.y) &&
+          Number.isFinite(b.vel.x) && Number.isFinite(b.vel.y) &&
+          Number.isFinite(b.angle) && Number.isFinite(b.omega) &&
+          Math.abs(b.pos.x) <= SCENE_MAX_COORDINATE &&
+          Math.abs(b.pos.y) <= SCENE_MAX_COORDINATE &&
+          Math.abs(b.vel.x) <= SCENE_MAX_VELOCITY &&
+          Math.abs(b.vel.y) <= SCENE_MAX_VELOCITY &&
+          Math.abs(b.omega) <= SCENE_MAX_SURFACE_SPEED / b.radius) {
         continue;
       }
       if (Number.isFinite(b.prev.x) && Number.isFinite(b.prev.y) &&
-          b.prev.x > -1e6 && b.prev.x < 1e6 && b.prev.y > -1e6 && b.prev.y < 1e6) {
+          Math.abs(b.prev.x) <= SCENE_MAX_COORDINATE &&
+          Math.abs(b.prev.y) <= SCENE_MAX_COORDINATE) {
         b.pos.setVec(b.prev);
       } else {
         b.pos.set(0.0, 0.0);
       }
       b.vel.set(0.0, 0.0);
+      b.angle = Number.isFinite(b.angle) ? normalizeAngle(b.angle) : 0.0;
       b.omega = 0.0;
       b.acc.set(0.0, 0.0);
       this.diverged.push(b.name);
@@ -1546,10 +1617,24 @@ export class World {
    * TypeError, past the two call sites that stand ready to report a bad
    * file, into a click handler where it surfaced as nothing happening.
    */
-  static fromDict(data: Partial<WorldDict> | null | undefined): World {
+  static fromDict(data: Partial<WorldDict> | null | undefined,
+                  preserveAngles = false): World {
     const w = new World();
     const d: Partial<WorldDict> =
       typeof data === "object" && data !== null ? data : {};
+    const capped = <T>(value: unknown, collection: SceneCollection, limit: number): T[] => {
+      const items = arrayOr<T>(value);
+      if (items.length > limit) throw new SceneLimitError(collection, limit, items.length);
+      return items;
+    };
+    // Check every collection before constructing objects or advancing global
+    // identity counters. An over-limit load therefore fails atomically and
+    // its cost is bounded by five array length reads.
+    const bodyInput = capped<BodyDict>(d.bodies, "bodies", SCENE_MAX_BODIES);
+    const wallInput = capped<WallDict>(d.walls, "walls", SCENE_MAX_WALLS);
+    const linkInput = capped<LinkDict>(d.links, "links", SCENE_MAX_LINKS);
+    const fieldInput = capped<FieldDict>(d.fields, "fields", SCENE_MAX_FIELDS);
+    const driverInput = capped<DriverDict>(d.drivers, "drivers", SCENE_MAX_DRIVERS);
     const raw = d.settings;
     const s: Partial<WorldDict["settings"]> =
       typeof raw === "object" && raw !== null ? raw : {};
@@ -1598,15 +1683,15 @@ export class World {
       }
     };
 
-    const bodyDocs = arrayOr<BodyDict>(d.bodies).filter(entry);
-    w.bodies = bodyDocs.map((body) => Body.fromDict(body));
+    const bodyDocs = bodyInput.filter(entry);
+    w.bodies = bodyDocs.map((body) => Body.fromDict(body, preserveAngles));
     uniqueIds(w.bodies, () => Body.nextId++, (body, i) => {
       if (!body.isAnchor && typeof bodyDocs[i].name !== "string") {
         body.name = `Body ${body.id}`;
       }
     });
 
-    const wallDocs = arrayOr<WallDict>(d.walls).filter(entry);
+    const wallDocs = wallInput.filter(entry);
     w.walls = wallDocs.map((wall) => Wall.fromDict(wall));
     uniqueIds(w.walls, () => Wall.nextId++, (wall, i) => {
       if (typeof wallDocs[i].name !== "string") wall.name = `Wall ${wall.id}`;
@@ -1614,7 +1699,7 @@ export class World {
 
     const byId = new Map<number, Body>();
     for (const b of w.bodies) byId.set(b.id, b);
-    w.links = arrayOr<LinkDict>(d.links)
+    w.links = linkInput
       .filter(entry)
       // `a !== b` rejects a link from a body to itself. Every solver stage
       // already skips one (its length is zero, so the direction is
@@ -1630,10 +1715,10 @@ export class World {
               () => DistanceLink.nextId++);
     uniqueIds(w.links.filter((link): link is SpringLink => link instanceof SpringLink),
               () => SpringLink.nextId++);
-    w.fields = arrayOr<FieldDict>(d.fields).filter(entry)
+    w.fields = fieldInput.filter(entry)
       .map((f) => ForceField.fromDict(f));
-    w.drivers = arrayOr<DriverDict>(d.drivers).filter(entry)
-      .map((x) => Driver.fromDict(x));
+    w.drivers = driverInput.filter(entry)
+      .map((x) => Driver.fromDict(x, preserveAngles));
     return w;
   }
 }

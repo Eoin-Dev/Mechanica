@@ -31,7 +31,8 @@ export class Toolbar implements Panel {
 
     const play = g.add(button("", () => app.togglePlay(),
       { icon: ICONS.play, style: "primary",
-        tooltip: "Start or pause the simulation (Space)." }));
+        tooltip: "Start the simulation (Space).",
+        isActive: () => app.playing }));
     this.playBtn = play.root as HTMLButtonElement;
     root.append(play.root);
     root.append(g.add(button("", () => app.stepBack(),
@@ -59,6 +60,7 @@ export class Toolbar implements Panel {
       type: "text", inputmode: "decimal",
       style: "width:76px;flex:none;text-align:right;",
       title: "Simulation clock (s). Type a time to re-simulate to it.",
+      "aria-label": "Simulation time in seconds",
     });
     let timeFocused = false;
     this.timeInput.addEventListener("focus", () => {
@@ -123,7 +125,10 @@ export class Toolbar implements Panel {
     if (this.lastPlaying !== this.app.playing) {
       this.lastPlaying = this.app.playing;
       this.playBtn.innerHTML = this.app.playing ? ICONS.pause : ICONS.play;
-      this.playBtn.classList.toggle("active", this.app.playing);
+      const action = this.app.playing
+        ? "Pause the simulation (Space)." : "Start the simulation (Space).";
+      this.playBtn.title = action;
+      this.playBtn.setAttribute("aria-label", action);
     }
     const fps = `${this.app.fpsNow.toFixed(0)} fps`;
     if (fps !== this.lastFps) {
@@ -167,7 +172,8 @@ export class Palette implements Panel {
           tooltip: `${name} - ${desc}`,
           isActive: () => app.controller.tool === tool,
         }));
-        b.root.append(el("span", { class: "key-badge", text: keyOf[tool] ?? "" }));
+        b.root.append(el("span", { class: "key-badge", text: keyOf[tool] ?? "",
+                                   "aria-hidden": "true" }));
         root.append(b.root);
       }
     });
@@ -303,15 +309,29 @@ export class GraphDock implements Panel {
       root.style.height =
         `${Math.max(DOCK_H_MIN, Math.min(DOCK_H_MAX, saved))}px`;
     }
+    const applyHeight = (h: number): void => {
+      root.style.height = `${h}px`;
+      app.resizeCanvas();
+    };
+    const dockMax = (): number => Math.max(DOCK_H_MIN,
+      Math.min(DOCK_H_MAX, (root.parentElement?.clientHeight ?? DOCK_H_MAX) - 160));
     splitterDrag(splitter, (e) => {
       const main = root.parentElement!;
       const h = Math.max(DOCK_H_MIN, Math.min(main.clientHeight - 160,
         main.getBoundingClientRect().bottom - e.clientY));
-      root.style.height = `${h}px`;
-      app.resizeCanvas();
+      applyHeight(h);
     }, () => {
       app.settings.dock_h = root.clientHeight;
       app.saveSettings();
+    }, {
+      orientation: "horizontal",
+      label: "Resize graph dock",
+      getValue: () => root.clientHeight,
+      setValue: applyHeight,
+      min: DOCK_H_MIN,
+      max: dockMax,
+      increaseKeys: ["ArrowUp"],
+      decreaseKeys: ["ArrowDown"],
     });
   }
 
@@ -321,6 +341,7 @@ export class GraphDock implements Panel {
     const spanFor = (px: number): number => this.viewSpan * (px / Math.max(1, this.canvas.clientWidth));
 
     this.canvas.addEventListener("wheel", (e) => {
+      if (e.ctrlKey || e.metaKey) return; // browser page zoom / trackpad pinch
       const series = this.activeSeries();
       if (series === undefined || series.count === 0) return;
       e.preventDefault();

@@ -2,7 +2,8 @@
 import { App } from "../app";
 import { CATEGORIES, PRESETS } from "../scene/presets";
 import * as snap from "../scene/snapshot";
-import { Control, ModalFocus, button, checkbox, el, isTouch, segmented } from "./dom";
+import { Control, ModalFocus, button, checkbox, el, isTouch, refreshTabs,
+         segmented, wireTabs } from "./dom";
 import { ICONS } from "./icons";
 import { ThemeName, css, defaultAccent } from "./theme";
 
@@ -50,9 +51,11 @@ export class Library {
   private build(): void {
     const header = el("div", { class: "overlay-header" },
       el("h2", { text: "Library" }));
-    const tabs = el("div", { class: "tabs", style: "border:none;flex:none;width:280px" });
+    const tabs = el("div", { class: "tabs", style: "border:none;flex:none;width:280px",
+                             "aria-label": "Library sections" });
     for (const t of ["Examples", "My scenes"] as const) {
-      const b = el("button", { text: t });
+      const b = el("button", { text: t, id: `library-tab-${t === "Examples" ? "examples" : "scenes"}`,
+                                "aria-controls": "library-panel" });
       b.addEventListener("click", () => {
         this.tab = t;
         this.render();
@@ -60,19 +63,24 @@ export class Library {
       this.tabBtns.set(t, b);
       tabs.append(b);
     }
+    wireTabs(tabs, this.tabBtns, (tab) => {
+      this.tab = tab;
+      this.render();
+    });
     header.append(tabs);
     header.append(el("div", { style: "flex:1" }));
     header.append(button("", () => this.close(),
       { icon: ICONS.close, style: "ghost", tooltip: "Close (Esc)" }).root);
 
-    this.content = el("div", { class: "overlay-body" });
+    this.content = el("div", { class: "overlay-body", id: "library-panel",
+                               role: "tabpanel", tabindex: "0" });
     const panel = el("div", { class: "overlay-panel" }, header, this.content);
     this.focus = new ModalFocus(panel, "Library");
     this.root.append(panel);
   }
 
   private render(): void {
-    for (const [t, b] of this.tabBtns) b.classList.toggle("active", t === this.tab);
+    refreshTabs(this.tabBtns, this.tab, this.content);
     this.content.replaceChildren();
     if (this.tab === "Examples") this.renderExamples();
     else this.renderScenes();
@@ -80,13 +88,22 @@ export class Library {
 
   // ------------------------------------------------------------- examples
   private renderExamples(): void {
-    const chips = el("div", { class: "cat-chips" });
+    const chips = el("div", { class: "cat-chips", role: "group",
+                               "aria-label": "Example categories" });
     for (const cat of CATEGORIES) {
-      const b = el("button", { text: cat });
-      if (cat === this.category) b.classList.add("active");
+      const on = cat === this.category;
+      const b = el("button", { text: cat, "aria-pressed": String(on) });
+      b.dataset.category = cat;
+      if (on) b.classList.add("active");
       b.addEventListener("click", () => {
+        const keepFocus = document.activeElement === b;
         this.category = cat;
         this.render();
+        if (keepFocus) {
+          const next = [...this.content.querySelectorAll<HTMLButtonElement>("[data-category]")]
+            .find((candidate) => candidate.dataset.category === cat);
+          next?.focus();
+        }
       });
       chips.append(b);
     }
@@ -95,32 +112,40 @@ export class Library {
     // "Show more" toggle (mouse- or keyboard-activated) to reveal the full text
     // without loading the preset. Whether it's needed can only be measured once
     // the cards are laid out, so collect them and check after appending.
-    const clampable: Array<{ desc: HTMLElement; card: HTMLElement }> = [];
+    const clampable: Array<{ desc: HTMLElement; card: HTMLElement;
+                             actions: HTMLElement }> = [];
+    let descriptionIndex = 0;
     for (const preset of PRESETS) {
       if (this.category !== "All" && preset.category !== this.category) continue;
-      const desc = el("p", { text: preset.description });
+      const desc = el("p", { text: preset.description,
+                              id: `preset-description-${descriptionIndex++}` });
       const card = el("div", { class: "preset-card" },
         el("div", { class: "cat", text: preset.category }),
         el("h3", { text: preset.name }),
         desc);
-      card.addEventListener("click", () => {
+      const load = button(`Load ${preset.name}`, () => {
         this.app.loadPreset(preset);
         this.close();
-      });
+      }, { style: "primary", class: "card-load" });
+      const actions = el("div", { class: "card-load-actions" },
+        el("div", { class: "card-action-spacer" }), load.root);
+      card.append(actions);
       grid.append(card);
-      clampable.push({ desc, card });
+      clampable.push({ desc, card, actions });
     }
     this.content.append(chips, grid);
 
-    for (const { desc, card } of clampable) {
+    for (const { desc, card, actions } of clampable) {
       if (desc.scrollHeight <= desc.clientHeight + 1) continue; // fully visible
-      const more = el("button", { class: "card-more", text: "Show more" });
-      more.addEventListener("click", (e) => {
-        e.stopPropagation(); // don't load the preset when toggling the text
+      const more = el("button", { class: "card-more", text: "Show more",
+                                   "aria-expanded": "false",
+                                   "aria-controls": desc.id });
+      more.addEventListener("click", () => {
         const open = card.classList.toggle("expanded");
         more.textContent = open ? "Show less" : "Show more";
+        more.setAttribute("aria-expanded", String(open));
       });
-      card.append(more);
+      actions.insertBefore(more, actions.firstChild);
     }
   }
 
@@ -148,21 +173,36 @@ export class Library {
                                                      : "Could not save the scene");
       }
     }, { icon: ICONS.save }).root);
-    actions.append(button("Import .json", async () => {
-      const result = await snap.uploadScene();
-      if (result === null) {
-        app.toast("Could not read that scene file");
-        return;
+    let importing = false;
+    const imported = button("Import .json", async () => {
+      if (importing) return;
+      importing = true;
+      (imported.root as HTMLButtonElement).disabled = true;
+      try {
+        const result = await snap.uploadScene();
+        switch (result.status) {
+          case "cancelled": return;
+          case "loaded":
+            app.loadWorld(result.world, result.name);
+            this.close();
+            return;
+          case "too-large":
+          case "storage-error":
+            app.toast(result.message);
+            return;
+          case "missing":
+          case "invalid":
+            app.toast(`Could not read '${result.name}' as a Mechanica scene`);
+            return;
+        }
+      } finally {
+        importing = false;
+        (imported.root as HTMLButtonElement).disabled = false;
       }
-      app.replaceWorld(result.world);
-      app.undoStack.reset(app.world);
-      app.ensureInitial();
-      app.zoomToFit();
-      app.toast(`Loaded scene '${result.name}'`);
-      this.close();
     }, { icon: ICONS.import,
          tooltip: "Load a .json scene saved from this app or the desktop " +
-                  "version." }).root);
+                  "version." });
+    actions.append(imported.root);
     this.content.append(actions);
 
     let names: string[];
@@ -201,7 +241,7 @@ export class Library {
       const mkBtn = (icon: string, tooltip: string, fn: () => void,
                      danger = false): HTMLElement => {
         const b = el("button", { class: `ghost icon${danger ? " danger" : ""}`,
-                                 title: tooltip });
+                                 title: tooltip, "aria-label": tooltip });
         b.insertAdjacentHTML("beforeend", icon);
         b.addEventListener("click", stop(fn));
         return b;
@@ -231,8 +271,13 @@ export class Library {
         }
       }));
       bar.append(mkBtn(ICONS.download, "Download as a .json file", () => {
-        const world = snap.loadScene(name);
-        if (world !== null) snap.downloadScene(world, name);
+        const result = snap.loadScene(name);
+        if (result.status === "loaded") snap.downloadScene(result.world, name);
+        else if (result.status === "too-large" || result.status === "storage-error") {
+          app.toast(result.message);
+        } else {
+          app.toast(`Could not read saved scene '${name}'`);
+        }
       }));
       bar.append(mkBtn(ICONS.trash, "Delete this saved scene", () => {
         if (!confirm(`Delete saved scene '${name}'?`)) return;
@@ -244,21 +289,17 @@ export class Library {
                                                        : "Could not delete the scene");
         }
       }, true));
-      card.append(bar);
-
-      card.addEventListener("click", () => {
-        const world = snap.loadScene(name);
-        if (world === null) {
-          app.toast(`Could not load '${name}'`);
-          return;
+      card.append(button(`Load ${name}`, () => {
+        const result = snap.loadScene(name);
+        if (result.status === "loaded") {
+          app.loadWorld(result.world, name);
+          this.close();
+        } else if (result.status === "too-large" || result.status === "storage-error") {
+          app.toast(result.message);
+        } else {
+          app.toast(`Could not load '${name}': the saved data is missing or damaged`);
         }
-        app.replaceWorld(world);
-        app.undoStack.reset(app.world);
-        app.ensureInitial();
-        app.zoomToFit();
-        app.toast(`Loaded scene '${name}'`);
-        this.close();
-      });
+      }, { style: "primary", class: "card-load" }).root, bar);
       grid.append(card);
     }
     this.content.append(grid);
@@ -348,7 +389,8 @@ export class SettingsPanel {
     // accent colour: preset swatch circles + a custom picker. UI chrome
     // and highlights only - physics object colours are never touched.
     label("Accent colour");
-    const swatchRow = el("div", { class: "swatch-row" });
+    const swatchRow = el("div", { class: "swatch-row", role: "group",
+                                  "aria-label": "Accent colour" });
     const accentNote = el("div", { class: "faint settings-note",
       text: "Highlight colour for buttons, selection outlines and graph " +
             "lines. Object colours are set per body in the Inspector and " +
@@ -384,17 +426,31 @@ export class SettingsPanel {
     popover.append(colorInput, createBtn.root, cancelBtn.root);
 
     const rebuildSwatches = (): void => {
+      // Choosing or removing a colour rebuilds this compact list. Preserve
+      // keyboard focus across that replacement so activation does not dump
+      // the user back at the start of the Settings dialog.
+      const focused = swatchRow.contains(document.activeElement)
+        ? document.activeElement as HTMLElement : null;
+      const focusedChoice = focused?.dataset.accentChoice;
+      const focusedAction = focused?.dataset.accentAction;
       swatchRow.replaceChildren();
       const current = app.settings.accent ?? null;
       const mkSwatch = (hex: string | null, tip: string, colour: string,
                         deletable = false): void => {
-        const b = el("button", { class: "swatch", title: tip });
+        const selected = hex === current;
+        const b = el("button", { class: "swatch", title: tip,
+                                 "aria-label": tip,
+                                 "aria-pressed": String(selected) });
+        b.dataset.accentChoice = hex ?? "theme-default";
         b.append(el("span", { class: "dot", style: `background:${colour}` }));
-        if (hex === current) b.classList.add("active");
+        if (selected) b.classList.add("active");
         b.addEventListener("click", () => applyAccent(hex));
         if (deletable) {
-          const x = el("span", { class: "swatch-x", text: "×",
-                                 title: "Remove this saved colour" });
+          const item = el("div", { class: "swatch-item" }, b);
+          const x = el("button", { class: "swatch-remove", text: "×",
+                                    title: `Remove saved colour ${hex}`,
+                                    "aria-label": `Remove saved colour ${hex}` });
+          x.dataset.accentAction = "remove";
           x.addEventListener("click", (e) => {
             e.stopPropagation();
             app.settings.custom_accents =
@@ -403,9 +459,11 @@ export class SettingsPanel {
             applyAccent(app.settings.accent === hex ? null
                                                     : app.settings.accent ?? null);
           });
-          b.append(x);
+          item.append(x);
+          swatchRow.append(item);
+        } else {
+          swatchRow.append(b);
         }
-        swatchRow.append(b);
       };
       mkSwatch(null, "Theme default",
         css(defaultAccent(app.settings.theme ?? "dark")));
@@ -416,12 +474,26 @@ export class SettingsPanel {
         }
       }
       const addBtn = el("button", { class: "swatch-add", text: "+",
-                                    title: "Create a custom colour" });
+                                    title: "Create a custom colour",
+                                    "aria-label": "Create a custom accent colour" });
+      addBtn.dataset.accentAction = "add";
       addBtn.addEventListener("click", () => {
         colorInput.value = app.settings.accent ?? "#8b5cf6";
         popover.hidden = false;
       });
       swatchRow.append(addBtn);
+      if (focused !== null) {
+        const choices = [...swatchRow.querySelectorAll<HTMLElement>(
+          "[data-accent-choice]")];
+        const restore = focusedChoice !== undefined
+          ? choices.find((candidate) => candidate.dataset.accentChoice === focusedChoice)
+          : focusedAction === "add" ? addBtn
+            // A removed button no longer exists. Land on the active colour,
+            // or on Add if the setting fell back and no match is present.
+            : choices.find((candidate) => candidate.getAttribute("aria-pressed") === "true")
+              ?? addBtn;
+        restore?.focus();
+      }
     };
     this.controls.push({ root: swatchRow, refresh: () => {
       popover.hidden = true; // reopening settings starts with it closed
@@ -652,11 +724,13 @@ export class Help {
     }
     const about = el("div", { class: "faint", style:
       "margin-top:16px;font-size:calc(12px * var(--fs, 1));line-height:1.5" });
-    about.textContent =
+    about.append(
       "Mechanica is a 2D physics lab: rigid discs with rotation, walls, " +
       "rods, strings, springs, N-body gravity, drag, drivers and custom " +
       "force fields, integrated with symplectic solvers. Everything is in " +
-      "SI units. All simulation runs locally in your browser.";
+      "SI units. All simulation runs locally in your browser.");
+    about.append(" ", el("a", { href: "./THIRD_PARTY_NOTICES.txt",
+                                  text: "Third-party notices" }));
     const body = el("div", { class: "overlay-body" },
       el("h3", { class: "help-heading", text: "Getting started" }),
       startGrid,

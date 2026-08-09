@@ -185,9 +185,60 @@ export const DOCK_H_MAX = 1200;
  *     the handler runs; uncaught, that aborted the gesture's setup and left
  *     the flag set with no capture to release.
  */
+export interface SplitterKeyboardOptions {
+  orientation: "horizontal" | "vertical";
+  label: string;
+  getValue: () => number;
+  setValue: (value: number) => void;
+  min: number | (() => number);
+  max: number | (() => number);
+  increaseKeys: readonly string[];
+  decreaseKeys: readonly string[];
+}
+
+/** Pointer resizing plus the ARIA separator keyboard pattern.
+ *
+ * Arrow keys move by 10 CSS pixels, Shift+Arrow by 32, and Home/End select
+ * the available limits. `increaseKeys` is explicit because a pane on the
+ * right grows when its separator moves left, while a bottom pane grows when
+ * its separator moves up. */
 export function splitterDrag(splitter: HTMLElement,
                              onMove: (e: PointerEvent) => void,
-                             onCommit: () => void): void {
+                             onCommit: () => void,
+                             keyboard?: SplitterKeyboardOptions): void {
+  const bound = (v: number | (() => number)): number =>
+    typeof v === "function" ? v() : v;
+  const syncAria = (): void => {
+    if (keyboard === undefined) return;
+    splitter.setAttribute("aria-valuemin", String(Math.round(bound(keyboard.min))));
+    splitter.setAttribute("aria-valuemax", String(Math.round(bound(keyboard.max))));
+    splitter.setAttribute("aria-valuenow", String(Math.round(keyboard.getValue())));
+  };
+  if (keyboard !== undefined) {
+    splitter.tabIndex = 0;
+    splitter.setAttribute("role", "separator");
+    splitter.setAttribute("aria-orientation", keyboard.orientation);
+    splitter.setAttribute("aria-label", keyboard.label);
+    syncAria();
+    splitter.addEventListener("keydown", (e) => {
+      let next: number | null = null;
+      const lo = bound(keyboard.min);
+      const hi = bound(keyboard.max);
+      if (e.key === "Home") next = lo;
+      else if (e.key === "End") next = hi;
+      else {
+        const step = e.shiftKey ? 32 : 10;
+        if (keyboard.increaseKeys.includes(e.key)) next = keyboard.getValue() + step;
+        else if (keyboard.decreaseKeys.includes(e.key)) next = keyboard.getValue() - step;
+      }
+      if (next === null) return;
+      keyboard.setValue(Math.max(lo, Math.min(hi, next)));
+      syncAria();
+      onCommit();
+      e.preventDefault();
+      e.stopPropagation();
+    });
+  }
   let dragging = false;
   const end = (): void => {
     if (!dragging) return;
@@ -203,13 +254,61 @@ export function splitterDrag(splitter: HTMLElement,
     }
   });
   splitter.addEventListener("pointermove", (e) => {
-    if (dragging) onMove(e);
+    if (dragging) {
+      onMove(e);
+      syncAria();
+    }
   });
   splitter.addEventListener("pointerup", end);
   splitter.addEventListener("pointercancel", end);
   // fires after pointerup too, but `end` is idempotent; it is here for the
   // case where capture is lost without either of the events above
   splitter.addEventListener("lostpointercapture", end);
+}
+
+// ---------------------------------------------------------------------- tabs
+/** Install the WAI-ARIA tab keyboard model on a stable set of buttons.
+ * Selection follows focus for Left/Right and Home/End, and only the selected
+ * tab stays in the page's Tab order. */
+export function wireTabs<T extends string>(list: HTMLElement,
+                                            buttons: Map<T, HTMLButtonElement>,
+                                            activate: (tab: T) => void): void {
+  list.setAttribute("role", "tablist");
+  for (const b of buttons.values()) b.setAttribute("role", "tab");
+  list.addEventListener("keydown", (e) => {
+    const entries = [...buttons.entries()];
+    const index = entries.findIndex(([, b]) => b === document.activeElement);
+    if (index < 0) return;
+    let next = index;
+    if (e.key === "ArrowRight") next = (index + 1) % entries.length;
+    else if (e.key === "ArrowLeft") next = (index - 1 + entries.length) % entries.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = entries.length - 1;
+    else return;
+    const [tab, button] = entries[next];
+    activate(tab);
+    button.focus();
+    e.preventDefault();
+    e.stopPropagation();
+  });
+}
+
+/** Synchronize visual and semantic tab state without per-frame writes. */
+export function refreshTabs<T extends string>(buttons: Map<T, HTMLButtonElement>,
+                                               active: T,
+                                               panel?: HTMLElement): void {
+  for (const [tab, b] of buttons) {
+    const on = tab === active;
+    b.classList.toggle("active", on);
+    const selected = String(on);
+    if (b.getAttribute("aria-selected") !== selected) {
+      b.setAttribute("aria-selected", selected);
+    }
+    b.tabIndex = on ? 0 : -1;
+    if (on && panel !== undefined && b.id) {
+      panel.setAttribute("aria-labelledby", b.id);
+    }
+  }
 }
 
 // --------------------------------------------------------------- modal a11y
@@ -270,13 +369,15 @@ export class ModalFocus {
     document.removeEventListener("keydown", this.onKey, true);
     const prev = this.previous;
     this.previous = null;
-    if (prev instanceof HTMLElement && prev.isConnected) {
+    if (typeof HTMLElement !== "undefined" &&
+        prev instanceof HTMLElement && prev.isConnected) {
       prev.focus({ preventScroll: true });
     }
     // `body.focus()` is a no-op, so a dialog opened by a shortcut rather
     // than a click would keep the focus ring inside a now-hidden panel and
     // the next Tab would resume from nowhere. Drop it explicitly.
-    if (this.panel.contains(document.activeElement)) {
+    if (typeof this.panel.contains === "function" &&
+        this.panel.contains(document.activeElement)) {
       (document.activeElement as HTMLElement).blur();
     }
   }
@@ -303,6 +404,10 @@ export function button(label: string, onClick: () => void,
   if (opts.style) b.classList.add(opts.style);
   if (opts.class) b.classList.add(...opts.class.split(" "));
   if (opts.tooltip) b.title = opts.tooltip;
+  // `title` is not a dependable accessible name once visible shortcut text
+  // is appended to an icon button. Give every icon-only control an explicit
+  // name while keeping the tooltip as its mouse affordance.
+  if (!label && opts.tooltip) b.setAttribute("aria-label", opts.tooltip);
   b.addEventListener("click", onClick);
   // A button that reports an active state is a TOGGLE, and its state was
   // carried by a CSS class alone - visible to a viewer, invisible to
@@ -411,10 +516,13 @@ export function slider(label: string, get: () => number,
     set(v);
     show(v);
   });
-  input.addEventListener("change", () => {
+  const finishDrag = (): void => {
+    if (!dragging) return;
     dragging = false;
     opts.onCommit?.();
-  });
+  };
+  input.addEventListener("change", finishDrag);
+  input.addEventListener("pointercancel", finishDrag);
 
   // The readout is a text field: clicking it lets you type an exact value.
   // Typed values are clamped to the slider's range (and its step, if any).
@@ -687,10 +795,12 @@ export function colourEdit(label: string, get: () => readonly number[],
   let chips: HTMLElement | null = null;
   const chipList: Array<{ el: HTMLElement; hex: string }> = [];
   if (opts.presets && opts.presets.length > 0) {
-    chips = el("div", { class: "swatch-row colour-presets" });
+    chips = el("div", { class: "swatch-row colour-presets", role: "group",
+                         "aria-label": `${label} presets` });
     for (const c of opts.presets) {
       const ph = rgbToHex(c);
-      const b = el("button", { class: "swatch", title: `Use ${ph}` });
+      const b = el("button", { class: "swatch", title: `Use ${ph}`,
+                                "aria-label": `Use ${ph}` });
       b.append(el("span", { class: "dot", style: `background:${ph}` }));
       b.addEventListener("click", () => apply(hexToRgb(ph), true));
       chips.append(b);
@@ -708,7 +818,11 @@ export function colourEdit(label: string, get: () => readonly number[],
     }
     // mark the palette entry in use, so the chips read as a choice rather
     // than as eight buttons that do something unrelated
-    for (const c of chipList) c.el.classList.toggle("active", c.hex === cur);
+    for (const c of chipList) {
+      const on = c.hex === cur;
+      c.el.classList.toggle("active", on);
+      c.el.setAttribute("aria-pressed", String(on));
+    }
   };
   refresh();
   return { root: wrap, refresh };

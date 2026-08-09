@@ -9,10 +9,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";
-import { World } from "../src/engine/world";
+import { SCENE_MAX_BODIES, World } from "../src/engine/world";
 import {
-  SceneSaveError, deleteScene, listScenes, loadScene, renameScene, saveScene,
-  sceneDescription, sceneExists, setSceneDescription,
+  MAX_SCENE_FILE_BYTES, SceneSaveError, deleteScene, listScenes, loadScene,
+  readSceneFile, renameScene, saveScene, sceneDescription, sceneExists,
+  setSceneDescription,
 } from "../src/scene/snapshot";
 
 /** Minimal localStorage, with a settable byte budget so the quota path is
@@ -71,6 +72,13 @@ function scene(x = 1.5): World {
   return w;
 }
 
+function loaded(name: string): World {
+  const result = loadScene(name);
+  expect(result.status).toBe("loaded");
+  if (result.status !== "loaded") throw new Error(`Scene '${name}' did not load`);
+  return result.world;
+}
+
 describe("name sanitisation", () => {
   it("keeps letters and digits in any script", () => {
     for (const name of ["Épreuve", "実験", "Опыт", "μ test", "Ball 3"]) {
@@ -126,22 +134,22 @@ describe("collisions", () => {
     saveScene(scene(1.0), "dup");
     saveScene(scene(9.0), "dup");
     expect(listScenes().filter((n) => n === "dup")).toHaveLength(1);
-    expect(loadScene("dup")!.bodies[0].pos.x).toBe(9.0);
+    expect(loaded("dup").bodies[0].pos.x).toBe(9.0);
   });
 });
 
 describe("save and load round trip", () => {
   it("restores the world that was saved", () => {
     saveScene(scene(3.25), "round trip");
-    const back = loadScene("round trip")!;
+    const back = loaded("round trip");
     expect(back.bodies).toHaveLength(1);
     expect(back.bodies[0].pos.x).toBe(3.25);
     expect(back.bodies[0].mass).toBe(3.0);
     expect(back.gravity).toBe(4.25);
   });
 
-  it("returns null for a scene that is not there", () => {
-    expect(loadScene("missing")).toBeNull();
+  it("reports a scene that is not there as missing", () => {
+    expect(loadScene("missing").status).toBe("missing");
   });
 
   it("lists saved scenes in sorted order and nothing else", () => {
@@ -161,6 +169,44 @@ describe("save and load round trip", () => {
     }
     // and nothing was half-written
     expect(listScenes()).toEqual([]);
+  });
+
+  it("distinguishes a rejected storage read from missing data", () => {
+    store.getItem = () => { throw new DOMException("blocked", "SecurityError"); };
+    const result = loadScene("blocked");
+    expect(result.status).toBe("storage-error");
+    if (result.status === "storage-error") expect(result.message).toMatch(/refused/i);
+  });
+});
+
+describe("file import", () => {
+  const file = (name: string, text: string, size = text.length) => ({
+    name, size, text: async () => text,
+  });
+
+  it("rejects a file before reading when it exceeds 10 MiB", async () => {
+    let read = false;
+    const result = await readSceneFile({
+      name: "huge.json",
+      size: MAX_SCENE_FILE_BYTES + 1,
+      text: async () => { read = true; return "{}"; },
+    });
+    expect(result.status).toBe("too-large");
+    expect(read).toBe(false);
+  });
+
+  it("distinguishes damaged JSON from a valid scene", async () => {
+    expect((await readSceneFile(file("broken.json", "{"))).status).toBe("invalid");
+    const result = await readSceneFile(file("valid.json", '{"bodies":[]}'));
+    expect(result.status).toBe("loaded");
+    if (result.status === "loaded") expect(result.name).toBe("valid");
+  });
+
+  it("reports engine collection limits as too-large", async () => {
+    const text = JSON.stringify({ bodies: Array(SCENE_MAX_BODIES + 1).fill({}) });
+    const result = await readSceneFile(file("crowded.json", text));
+    expect(result.status).toBe("too-large");
+    if (result.status === "too-large") expect(result.message).toMatch(/bodies/i);
   });
 });
 
@@ -210,26 +256,25 @@ describe("descriptions", () => {
  * there.
  */
 describe("a damaged scene payload is reported, not thrown", () => {
-  it("returns null for text that is not JSON", () => {
+  it("reports text that is not JSON as invalid", () => {
     store.setItem("mechanica.scene.broken", "{\"bodies\": [");
-    expect(loadScene("broken")).toBeNull();
+    expect(loadScene("broken").status).toBe("invalid");
   });
 
-  it("returns null for an empty or truncated entry", () => {
+  it("reports an empty or truncated entry as invalid", () => {
     store.setItem("mechanica.scene.empty", "");
     store.setItem("mechanica.scene.cut", '{"bodies":[{"id":1,"pos":[0,');
-    expect(loadScene("empty")).toBeNull();
-    expect(loadScene("cut")).toBeNull();
+    expect(loadScene("empty").status).toBe("invalid");
+    expect(loadScene("cut").status).toBe("invalid");
   });
 
   it("still loads a scene whose JSON is valid but whose SHAPE is wrong", () => {
     // valid JSON is not a parse failure, so the loader must absorb it and
     // hand back a usable (empty) world rather than refusing
     store.setItem("mechanica.scene.odd", '{"bodies":"nope","walls":7}');
-    const w = loadScene("odd");
-    expect(w).not.toBeNull();
-    expect(w!.bodies).toEqual([]);
-    expect(() => w!.step(1 / 120)).not.toThrow();
+    const w = loaded("odd");
+    expect(w.bodies).toEqual([]);
+    expect(() => w.step(1 / 120)).not.toThrow();
   });
 
   it("leaves a damaged entry in place rather than deleting it", () => {
@@ -246,8 +291,8 @@ describe("rename", () => {
     saveScene(scene(7.5), "before");
     setSceneDescription("before", "note");
     expect(renameScene("before", "after")).toBe("after");
-    expect(loadScene("before")).toBeNull();
-    expect(loadScene("after")!.bodies[0].pos.x).toBe(7.5);
+    expect(loadScene("before").status).toBe("missing");
+    expect(loaded("after").bodies[0].pos.x).toBe(7.5);
     expect(sceneDescription("after")).toBe("note");
     expect(listScenes()).toEqual(["after"]);
   });
@@ -257,8 +302,8 @@ describe("rename", () => {
     saveScene(scene(2), "two");
     expect(renameScene("one", "two")).toBeNull();
     // both survive, untouched
-    expect(loadScene("one")!.bodies[0].pos.x).toBe(1);
-    expect(loadScene("two")!.bodies[0].pos.x).toBe(2);
+    expect(loaded("one").bodies[0].pos.x).toBe(1);
+    expect(loaded("two").bodies[0].pos.x).toBe(2);
   });
 
   it("refuses to rename a scene that does not exist", () => {
@@ -282,9 +327,9 @@ describe("rename", () => {
     setSceneDescription("before", "keep me");
     store.failNextSetKey = "mechanica.scenemeta.after";
     expect(() => renameScene("before", "after")).toThrow(SceneSaveError);
-    expect(loadScene("before")!.bodies[0].pos.x).toBe(4.5);
+    expect(loaded("before").bodies[0].pos.x).toBe(4.5);
     expect(sceneDescription("before")).toBe("keep me");
-    expect(loadScene("after")).toBeNull();
+    expect(loadScene("after").status).toBe("missing");
     expect(sceneDescription("after")).toBe("");
   });
 
@@ -301,7 +346,7 @@ describe("delete", () => {
     saveScene(scene(), "doomed");
     setSceneDescription("doomed", "note");
     deleteScene("doomed");
-    expect(loadScene("doomed")).toBeNull();
+    expect(loadScene("doomed").status).toBe("missing");
     expect(sceneDescription("doomed")).toBe("");
     expect(listScenes()).toEqual([]);
   });
@@ -318,7 +363,7 @@ describe("delete", () => {
     setSceneDescription("kept", "still here");
     store.failNextRemoveKey = "mechanica.scenemeta.kept";
     expect(() => deleteScene("kept")).toThrow(SceneSaveError);
-    expect(loadScene("kept")!.bodies[0].pos.x).toBe(6);
+    expect(loaded("kept").bodies[0].pos.x).toBe(6);
     expect(sceneDescription("kept")).toBe("still here");
   });
 });

@@ -12,8 +12,8 @@ import { Selectable } from "../render/draw";
 import { isMathRenderable } from "../core/mathfmt";
 import { INSPECTOR_W_MAX, INSPECTOR_W_MIN, PHONE_QUERY, RefreshGroup, button,
          checkbox, colourEdit, el, fmt3dp, halfRow, isPhone, isTouch, numEdit,
-         onMediaChange, section, segmented, slider, splitterDrag,
-         textEdit } from "./dom";
+         onMediaChange, refreshTabs, section, segmented, slider, splitterDrag,
+         textEdit, wireTabs } from "./dom";
 import { ICONS } from "./icons";
 import { mathEdit } from "./mathedit";
 import { overlayToggles } from "./panels";
@@ -89,7 +89,10 @@ export class Inspector implements Panel {
    * editor they had just left. The row index is what survives, and it is
    * also what the user is actually pointing at. */
   private preferTextFormula = new Set<string>();
-  private collapsed = false;
+  /** Desktop collapse is persisted; phone drawer visibility is deliberately
+   * transient so opening/closing it never overwrites the desktop choice. */
+  private desktopCollapsed: boolean;
+  private phoneCollapsed = true;
   private splitter: HTMLElement;
   private reopenStrip: HTMLElement;
   private handle: HTMLElement;
@@ -98,31 +101,77 @@ export class Inspector implements Panel {
     this.app = app;
     this.root = root;
     this.splitter = splitter;
+    this.desktopCollapsed = app.settings.inspector_visible === false;
+
+    // Capture the live pre-edit state before a control's target listener
+    // mutates it. This covers continuous range/colour input, text commits on
+    // blur, checkboxes and segmented/action buttons without forcing every
+    // individual property row to duplicate transaction plumbing. View-only
+    // controls do not touch the world and deliberately stay out of history.
+    const beginControlEdit = (event: Event): void => {
+      if (this.tab === "View") return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target !== null && target.closest("input, math-field") !== null) {
+        app.beginEdit();
+        if (event.type === "blur" || event.type === "change") {
+          // Successful commits clear the boundary synchronously in the
+          // target handler. Invalid, unchanged, or UI-only input has no commit, so
+          // discard its speculative snapshot after event dispatch rather
+          // than letting it absorb the next unrelated edit.
+          queueMicrotask(() => app.cancelEdit());
+        }
+      }
+    };
+    root.addEventListener("input", beginControlEdit, true);
+    root.addEventListener("change", beginControlEdit, true);
+    root.addEventListener("blur", beginControlEdit, true);
+    root.addEventListener("click", (event) => {
+      if (this.tab === "View") return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target === null || target.closest("button") === null) return;
+      app.beginEdit();
+      // Mutation buttons synchronously commit in their own handler. A tab,
+      // collapse or guide button does not; clear that speculative boundary
+      // after bubbling so it cannot absorb a later unrelated edit.
+      queueMicrotask(() => app.cancelEdit());
+    }, true);
 
     // slim clickable strip shown while the panel is collapsed
-    this.reopenStrip = el("div", { class: "reopen-strip",
-                                   title: "Show the panel (\\)" });
+    this.reopenStrip = el("button", { class: "reopen-strip",
+                                      title: "Show the panel (\\)",
+                                      "aria-label": "Show Inspector",
+                                      "aria-controls": "inspector" });
     this.reopenStrip.insertAdjacentHTML("beforeend", ICONS.chev_left);
     this.reopenStrip.hidden = true;
     this.reopenStrip.addEventListener("click", () => this.toggleCollapsed());
     root.append(this.reopenStrip);
 
     const tabs = el("div", { class: "tabs" });
+    const tabList = el("div", { class: "tab-list",
+                                 "aria-label": "Inspector sections" });
     for (const t of TABS) {
-      const b = el("button", { text: t });
+      const id = `inspector-tab-${t.toLowerCase()}`;
+      const b = el("button", { text: t, id, "aria-controls": "inspector-panel" });
       b.addEventListener("click", () => {
         this.tab = t;
         this.rebuild();
       });
       this.tabBtns.set(t, b);
-      tabs.append(b);
+      tabList.append(b);
     }
+    wireTabs(tabList, this.tabBtns, (tab) => {
+      this.tab = tab;
+      this.rebuild();
+    });
     const collapseBtn = el("button", { class: "collapse-btn",
-                                       title: "Hide the panel (\\)" });
+                                       title: "Hide the panel (\\)",
+                                       "aria-label": "Hide Inspector",
+                                       "aria-controls": "inspector" });
     collapseBtn.insertAdjacentHTML("beforeend", ICONS.chev_right);
     collapseBtn.addEventListener("click", () => this.toggleCollapsed());
-    tabs.append(collapseBtn);
-    this.body = el("div", { class: "inspector-body" });
+    tabs.append(tabList, collapseBtn);
+    this.body = el("div", { class: "inspector-body", id: "inspector-panel",
+                            role: "tabpanel", tabindex: "0" });
     // long panels (many drivers/fields) only refresh the controls that
     // are actually scrolled into view
     this.group.cullWithin(this.body);
@@ -131,14 +180,29 @@ export class Inspector implements Panel {
     // width splitter (persisted)
     const saved = app.settings.inspector_w;
     if (typeof saved === "number") root.style.width = `${clampInspectorW(saved)}px`;
+    const applyWidth = (w: number): void => {
+      root.style.width = `${clampInspectorW(w)}px`;
+      app.resizeCanvas();
+    };
     splitterDrag(splitter, (e) => {
       const w = Math.max(INSPECTOR_W_MIN,
                          Math.min(INSPECTOR_W_MAX, window.innerWidth - e.clientX));
-      root.style.width = `${w}px`;
-      app.resizeCanvas();
+      applyWidth(w);
     }, () => {
-      app.settings.inspector_w = root.clientWidth;
+      app.settings.inspector_w = root.getBoundingClientRect().width;
       app.saveSettings();
+    }, {
+      orientation: "vertical",
+      label: "Resize Inspector",
+      // Use the border-box width that applyWidth sets. clientWidth excludes
+      // the panel border, so a requested 10 px keyboard step was announced
+      // as 9 px and compounded that one-pixel loss on every key press.
+      getValue: () => root.getBoundingClientRect().width,
+      setValue: applyWidth,
+      min: INSPECTOR_W_MIN,
+      max: INSPECTOR_W_MAX,
+      increaseKeys: ["ArrowLeft"],
+      decreaseKeys: ["ArrowRight"],
     });
 
     app.onSelectionChange = () => {
@@ -151,18 +215,24 @@ export class Inspector implements Panel {
     // a fixed handle on the right screen edge opens it - without one there
     // is no way in at all (no keyboard, and the desktop reopen strip lives
     // inside the hidden panel).
-    this.handle = el("div", { id: "inspector-handle", title: "Open the panel" });
+    this.handle = el("button", { id: "inspector-handle", title: "Open the panel",
+                                  "aria-label": "Open Inspector",
+                                  "aria-controls": "inspector" });
     this.handle.insertAdjacentHTML("beforeend", ICONS.chev_left);
     this.handle.addEventListener("click", () => this.toggleCollapsed());
     document.body.append(this.handle);
-    if (isPhone()) this.collapsed = true;
     this.applyCollapsed();
     // re-apply when the viewport crosses the phone breakpoint (media-change
     // AND resize: some webviews throttle one or the other)
     let wasPhone = isPhone();
     const onViewportChange = () => {
-      if (isPhone() === wasPhone) return;
-      wasPhone = !wasPhone;
+      const phone = isPhone();
+      if (phone === wasPhone) return;
+      wasPhone = phone;
+      // Every entry into the phone layout is a fresh transient drawer
+      // session. Its open state never becomes a hidden preference that can
+      // surprise the user after a rotation or later resize.
+      if (phone) this.phoneCollapsed = true;
       this.applyCollapsed();
     };
     onMediaChange(PHONE_QUERY, onViewportChange);
@@ -174,26 +244,37 @@ export class Inspector implements Panel {
   /** Reflect the collapsed state in the DOM for the current viewport. */
   private applyCollapsed(): void {
     const phone = isPhone();
-    this.root.classList.toggle("collapsed", this.collapsed);
-    this.root.classList.toggle("mobile-open", !this.collapsed && phone);
-    this.body.hidden = this.collapsed;
-    (this.root.querySelector(".tabs") as HTMLElement).hidden = this.collapsed;
-    this.reopenStrip.hidden = !this.collapsed;
-    this.splitter.hidden = this.collapsed || phone; // no resizing drawers
-    if (this.collapsed || phone) {
+    const collapsed = phone ? this.phoneCollapsed : this.desktopCollapsed;
+    this.root.classList.toggle("collapsed", collapsed);
+    this.root.classList.toggle("mobile-open", !collapsed && phone);
+    this.body.hidden = collapsed;
+    (this.root.querySelector(".tabs") as HTMLElement).hidden = collapsed;
+    this.reopenStrip.hidden = !collapsed || phone;
+    this.splitter.hidden = collapsed || phone; // no resizing drawers
+    if (collapsed || phone) {
       // let .collapsed / the drawer CSS set the width
       this.root.style.removeProperty("width");
     } else if (typeof this.app.settings.inspector_w === "number") {
       this.root.style.width = `${clampInspectorW(this.app.settings.inspector_w)}px`;
     }
-    this.handle.hidden = !phone || !this.collapsed;
+    this.handle.hidden = !phone || !collapsed;
+    this.reopenStrip.setAttribute("aria-expanded", String(!collapsed));
+    this.handle.setAttribute("aria-expanded", String(!collapsed));
+    const collapse = this.root.querySelector<HTMLButtonElement>(".collapse-btn");
+    collapse?.setAttribute("aria-expanded", String(!collapsed));
     this.app.resizeCanvas();
   }
 
   toggleCollapsed(): void {
-    this.collapsed = !this.collapsed;
+    if (isPhone()) {
+      this.phoneCollapsed = !this.phoneCollapsed;
+    } else {
+      this.desktopCollapsed = !this.desktopCollapsed;
+      this.app.settings.inspector_visible = !this.desktopCollapsed;
+      this.app.saveSettings();
+    }
     this.applyCollapsed();
-    if (this.collapsed && !isPhone()) {
+    if (this.desktopCollapsed && !isPhone()) {
       this.app.toast("Panel hidden - press \\ or click the right edge to reopen");
     }
   }
@@ -231,7 +312,7 @@ export class Inspector implements Panel {
   }
 
   refresh(): void {
-    if (this.collapsed) return;
+    if (isPhone() ? this.phoneCollapsed : this.desktopCollapsed) return;
     this.refreshStructure();
     this.group.refreshAll();
   }
@@ -246,7 +327,7 @@ export class Inspector implements Panel {
     this.group.clear();
     this.body.replaceChildren();
     this.target = this.body;
-    for (const [t, b] of this.tabBtns) b.classList.toggle("active", t === this.tab);
+    refreshTabs(this.tabBtns, this.tab, this.body);
     if (this.tab === "Selection") this.buildSelection();
     else if (this.tab === "World") this.buildWorld();
     else this.buildView();
@@ -945,7 +1026,10 @@ export class Inspector implements Panel {
           // expression just disables the field and shows the error
           field[attr] = s;
           const ok = field.compile();
-          if (ok) app.pushUndo();
+          // Invalid source is intentionally retained so it can be fixed in
+          // place. It is still an edit and must be undoable just like a
+          // valid formula; the compiled field remains atomically disabled.
+          app.pushUndo();
           this.markDirty();
           return ok;
         };

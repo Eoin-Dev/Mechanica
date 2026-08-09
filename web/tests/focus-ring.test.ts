@@ -73,7 +73,7 @@ describe("focus ring cascade", () => {
   it("keeps the input border tint, which is the cue while typing", () => {
     // dropping this alongside the outline fix would leave text fields with
     // no indication at all during mouse-driven editing
-    expect(css).toMatch(/input:focus\s*\{[^}]*border-color:\s*var\(--accent\)/);
+    expect(css).toMatch(/input:focus\s*\{[^}]*border-color:\s*var\(--focus\)/);
   });
 
   it("tightens the ring on the controls that sit flush against neighbours", () => {

@@ -174,10 +174,18 @@ export function sweepClearOfWalls(walls: Wall[], from: { x: number; y: number },
   return cur;
 }
 
-/** Persistent per-contact cache carried between substeps: [pn, pt] for warm
- * starting, optionally followed by [ax, ay] - a tangential position anchor for
- * static resting friction (see solveStaticFriction). */
-export type ContactCache = Map<string, number[]>;
+/** Persistent data carried between substeps for warm starting and supported
+ * static-friction anchoring. A structured entry prevents a missing/shifted
+ * array slot from silently changing the meaning of the cache. */
+export interface ContactCacheEntry {
+  normalImpulse: number;
+  tangentImpulse: number;
+  anchorX: number;
+  anchorY: number;
+  anchored: boolean;
+  fixedSupport: boolean;
+}
+export type ContactCache = Map<string, ContactCacheEntry>;
 
 /** Identity of an unordered body pair, and so of the contact between them.
  *
@@ -239,6 +247,10 @@ class Manifold {
   ax = 0.0;
   ay = 0.0;
   anchored = false;
+  /** Whether the cached anchor belonged to a fixed-supported contact. */
+  cachedFixedSupport = false;
+  /** Recomputed from this substep's static contact graph. */
+  fixedSupport = false;
   sepBase: number;
   key: string;
 
@@ -529,27 +541,17 @@ function solvePosition(manifolds: Manifold[]): void {
  * freeze the roll. Non-rotating bodies have no such motion, so anchoring is
  * exactly the point-particle behaviour the user expects.
  *
- * Each fixable body is pinned to the anchor INDEPENDENTLY, which matters as
- * soon as both ends of a contact are pinnable. The previous version measured
- * one body's drift and then split a correction between the two in opposite
- * directions - a relative correction driven by an absolute measurement. On a
- * level stack the drift is zero and it did nothing; on a slope it drove the
- * pair apart along the surface every substep. Two blocks resting on a 15
- * degree ramp at mu = 2 (a friction angle of 63 degrees, so nothing should
- * move at all) slid 0.28 m apart in the first second - against 3e-4 m with
- * this function disabled entirely, i.e. the creep-remover was adding 800
- * times the creep it exists to remove.
- *
- * Pinning each body to the anchor is also what the wall case always did, and
- * it is right here for the same reason: every static contact chain in this
- * engine terminates at something world-fixed (walls and locked bodies are the
- * only immovable things, and neither moves), so "this contact is not sliding"
- * and "neither end of it is drifting" are the same statement.
+ * A world-space anchor is valid only for a static-contact component connected
+ * to fixed furniture. Freely translating blocks can have zero relative slip
+ * without being fixed in world space; pinning that unsupported pair violates
+ * Galilean invariance. `markFixedSupport` identifies supported components in
+ * O(contacts), and cached anchors are rebased whenever support is absent or
+ * newly acquired.
  */
 function solveStaticFriction(manifolds: Manifold[]): void {
   const STILL = 0.02; // m/s: far below anything visible, well above solver noise
   for (const m of manifolds) {
-    if (!m.anchored) continue;           // no reference point yet (new contact)
+    if (!m.anchored || !m.fixedSupport || !m.cachedFixedSupport) continue;
     if (m.pn <= 0.0) continue;           // not pressed together
     if (Math.abs(m.pt) >= m.mu * m.pn * (1 - 1e-6)) continue; // sliding: let it
     const a = m.a;
@@ -580,6 +582,71 @@ function solveStaticFriction(manifolds: Manifold[]): void {
     // the anchor and restores normal physics untouched.
     if (aFix && a.vel.length2() < STILL * STILL) a.vel.set(0.0, 0.0);
     if (bFix && b!.vel.length2() < STILL * STILL) b!.vel.set(0.0, 0.0);
+  }
+}
+
+function fixableBody(b: Body): boolean {
+  return b.invInertia === 0.0 && b.invMass > 0.0;
+}
+
+/** A structural root does not move as part of physics. `held` is deliberately
+ * excluded: a held body is kinematic user input, not world-fixed furniture. */
+function fixedRoot(b: Body): boolean {
+  return !b.held && (b.locked || b.mass <= 0.0);
+}
+
+function staticCandidate(m: Manifold): boolean {
+  return m.pn > 0.0 &&
+    Math.abs(m.pt) < m.mu * m.pn * (1 - 1e-6);
+}
+
+/** Mark every unsaturated, non-rotating static-contact component reachable
+ * from a wall or structurally immovable body. Each manifold is inserted into
+ * at most two adjacency lists and traversed at most twice. */
+function markFixedSupport(manifolds: Manifold[]): void {
+  const adjacency = new Map<Body, Array<[Body, Manifold]>>();
+  const supported = new Set<Body>();
+  const queue: Body[] = [];
+  const addSupport = (body: Body, manifold: Manifold): void => {
+    manifold.fixedSupport = true;
+    if (!supported.has(body)) {
+      supported.add(body);
+      queue.push(body);
+    }
+  };
+  const addEdge = (from: Body, to: Body, manifold: Manifold): void => {
+    let edges = adjacency.get(from);
+    if (edges === undefined) adjacency.set(from, edges = []);
+    edges.push([to, manifold]);
+  };
+
+  for (const m of manifolds) {
+    m.fixedSupport = false;
+    if (!staticCandidate(m)) continue;
+    const aFix = fixableBody(m.a);
+    const b = m.b;
+    if (b === null) {
+      if (aFix) addSupport(m.a, m);
+      continue;
+    }
+    const bFix = fixableBody(b);
+    if (fixedRoot(m.a) && bFix) addSupport(b, m);
+    if (fixedRoot(b) && aFix) addSupport(m.a, m);
+    if (aFix && bFix) {
+      addEdge(m.a, b, m);
+      addEdge(b, m.a, m);
+    }
+  }
+
+  for (let head = 0; head < queue.length; head++) {
+    const body = queue[head];
+    for (const [other, manifold] of adjacency.get(body) ?? []) {
+      manifold.fixedSupport = true;
+      if (!supported.has(other)) {
+        supported.add(other);
+        queue.push(other);
+      }
+    }
   }
 }
 
@@ -919,12 +986,14 @@ function warmStart(manifolds: Manifold[], cache: ContactCache): void {
   for (const m of manifolds) {
     const cached = cache.get(m.key);
     if (cached === undefined) continue;
-    const [pn, pt] = cached;
+    const pn = cached.normalImpulse;
+    const pt = cached.tangentImpulse;
     m.pn = pn;
     m.pt = pt;
-    if (cached.length >= 4) { // a static-friction anchor from last substep
-      m.ax = cached[2];
-      m.ay = cached[3];
+    m.cachedFixedSupport = cached.fixedSupport;
+    if (cached.anchored) {
+      m.ax = cached.anchorX;
+      m.ay = cached.anchorY;
       m.anchored = true;
     }
     const nx = m.nx;
@@ -979,23 +1048,35 @@ export function solveContacts(bodies: Body[], walls: Wall[],
   solveImpacts(manifolds);
   solveVelocity(manifolds, iterations);
   solvePosition(manifolds);
+  markFixedSupport(manifolds);
   solveStaticFriction(manifolds);
   for (const m of manifolds) {
     contacts.push(new Contact(m.px, m.py, m.nx, m.ny, m.pn + m.pnBounce));
     if (cache === null) continue;
     const aFix = m.a.invInertia === 0.0 && m.a.invMass > 0.0;
     const bFix = m.b !== null && m.b.invInertia === 0.0 && m.b.invMass > 0.0;
+    const base = {
+      normalImpulse: m.pn,
+      tangentImpulse: m.pt,
+      anchorX: m.px,
+      anchorY: m.py,
+      anchored: false,
+      fixedSupport: false,
+    } satisfies ContactCacheEntry;
     if (!aFix && !bFix) {
-      cache.set(m.key, [m.pn, m.pt]); // no anchor needed (rotating/immovable)
+      cache.set(m.key, base); // no anchor needed (rotating/immovable)
       continue;
     }
-    // keep the anchor while a static contact persists; (re)set it to the
-    // current contact point on a new contact or once friction is sliding
-    const saturated = Math.abs(m.pt) >= m.mu * m.pn * (1 - 1e-6);
-    if (m.anchored && !saturated && m.pn > 0.0) {
-      cache.set(m.key, [m.pn, m.pt, m.ax, m.ay]);
-    } else {
-      cache.set(m.key, [m.pn, m.pt, m.px, m.py]);
-    }
+    // Unsupported contacts deliberately rebase on every substep. A newly
+    // supported contact also rebases once before it may pin, so motion while
+    // unsupported can never be corrected back to a stale world point.
+    const preserve = m.anchored && m.cachedFixedSupport && m.fixedSupport;
+    cache.set(m.key, {
+      ...base,
+      anchorX: preserve ? m.ax : m.px,
+      anchorY: preserve ? m.ay : m.py,
+      anchored: true,
+      fixedSupport: m.fixedSupport,
+    });
   }
 }

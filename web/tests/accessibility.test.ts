@@ -19,7 +19,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { button, checkbox, colourEdit, numEdit, segmented, slider,
-         textEdit } from "../src/ui/dom";
+         refreshTabs, textEdit, wireTabs } from "../src/ui/dom";
 
 /** The name assistive tech would announce for a control. */
 function accessibleName(el: Element): string {
@@ -70,6 +70,19 @@ describe("every control has an accessible name", () => {
   it("an icon-only button is named by its tooltip", () => {
     const c = button("", () => {}, { icon: "<svg></svg>", tooltip: "Zoom to fit" });
     expect(accessibleName(c.root)).toBe("Zoom to fit");
+    expect(c.root.getAttribute("aria-label")).toBe("Zoom to fit");
+  });
+
+  it("colour presets expose the selected swatch", () => {
+    let colour: [number, number, number] = [255, 0, 0];
+    const c = colourEdit("Body colour", () => colour,
+      (next) => { colour = next; }, { presets: [[255, 0, 0], [0, 0, 255]] });
+    const swatches = [...c.root.querySelectorAll<HTMLButtonElement>("button.swatch")];
+    expect(swatches.map((b) => b.getAttribute("aria-pressed")))
+      .toEqual(["true", "false"]);
+    swatches[1].click();
+    expect(swatches.map((b) => b.getAttribute("aria-pressed")))
+      .toEqual(["false", "true"]);
   });
 
   it("colourEdit names its swatch and its hex field", () => {
@@ -147,6 +160,45 @@ describe("selected state is exposed, not only styled", () => {
     const b = [...c.root.querySelectorAll("button")];
     expect(b[1].getAttribute("aria-pressed")).toBe("true");
     expect(b.every((x) => x.disabled)).toBe(true);
+  });
+});
+
+describe("tab navigation", () => {
+  it("uses roving focus and activates with arrows, Home and End", () => {
+    const list = document.createElement("div");
+    const buttons = new Map<string, HTMLButtonElement>();
+    for (const name of ["Selection", "World", "View"]) {
+      const b = document.createElement("button");
+      b.textContent = name;
+      list.append(b);
+      buttons.set(name, b);
+    }
+    document.body.append(list);
+    let active = "Selection";
+    const select = (next: string) => {
+      active = next;
+      refreshTabs(buttons, active);
+    };
+    wireTabs(list, buttons, select);
+    select(active);
+    expect(list.getAttribute("role")).toBe("tablist");
+    expect([...buttons.values()].map((b) => [b.getAttribute("role"), b.tabIndex,
+                                             b.getAttribute("aria-selected")]))
+      .toEqual([["tab", 0, "true"], ["tab", -1, "false"],
+                ["tab", -1, "false"]]);
+
+    buttons.get("Selection")!.focus();
+    buttons.get("Selection")!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(active).toBe("View");
+    expect(document.activeElement).toBe(buttons.get("View"));
+    buttons.get("View")!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    expect(active).toBe("Selection");
+    buttons.get("Selection")!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    expect(active).toBe("View");
+    list.remove();
   });
 });
 

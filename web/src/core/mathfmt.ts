@@ -17,8 +17,9 @@
  * successful conversion always yields compilable source. Conversions
  * never touch precision: numbers are re-emitted from the parsed double.
  */
-import { CONSTS, ExprError, ExprNode, FUNCS, VAR_NAMES, checkArity,
-         nameTable, parseSource } from "./expr";
+import { CONSTS, EXPR_MAX_SOURCE_CHARS, EXPR_MAX_TOKENS, ExprError, ExprNode,
+         FUNCS, VAR_NAMES, assertExprBudget, checkArity, nameTable,
+         parseSource } from "./expr";
 
 // ------------------------------------------------------- renderable subset
 /** True if `source` parses and uses only constructs the typeset editor can
@@ -237,7 +238,14 @@ function srcNode(node: ExprNode): string {
 /** Linearize an AST back into source text (used after LaTeX parsing and in
  * round-trip tests). Always yields text `parseSource` accepts. */
 export function astToSource(node: ExprNode): string {
-  return emitSrc(node, 0);
+  assertExprBudget(node);
+  const source = emitSrc(node, 0);
+  if (source.length > EXPR_MAX_SOURCE_CHARS) {
+    throw new ExprError(
+      `expression is too long (maximum ${EXPR_MAX_SOURCE_CHARS} characters)`,
+    );
+  }
+  return source;
 }
 
 // ------------------------------------------------------------ LaTeX → AST
@@ -678,9 +686,25 @@ class LatexParser {
  * Throws ExprError with a friendly message when the content is incomplete
  * or uses notation outside the formula language. */
 export function latexToAst(latex: string): ExprNode {
+  if (typeof latex !== "string") throw new ExprError("formula source must be text");
+  if (latex.length > EXPR_MAX_SOURCE_CHARS) {
+    throw new ExprError(
+      `formula is too long (maximum ${EXPR_MAX_SOURCE_CHARS} characters)`,
+    );
+  }
   const toks = lexLatex(latex);
+  if (toks.length > EXPR_MAX_TOKENS) {
+    throw new ExprError(`formula has too many tokens (maximum ${EXPR_MAX_TOKENS})`);
+  }
   if (toks.length === 0) throw new ExprError("empty expression");
-  return new LatexParser(toks).parse();
+  try {
+    const node = new LatexParser(toks).parse();
+    assertExprBudget(node);
+    return node;
+  } catch (exc) {
+    if (exc instanceof ExprError) throw exc;
+    throw new ExprError(`formula is too complex: ${String((exc as Error).message ?? exc)}`);
+  }
 }
 
 /** Convert the math editor's LaTeX back into formula source text. */

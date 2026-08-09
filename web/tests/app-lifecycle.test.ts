@@ -14,11 +14,12 @@
  * is never started - so a stub context is enough to let construction
  * through, and it keeps the environment honest about what is faked.
  */
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, PHYSICS_DT } from "../src/app";
 import { Body } from "../src/engine/body";
 import { PRESETS } from "../src/scene/presets";
 import { Vec2 } from "../src/core/vec";
+import { listScenes, snapshot } from "../src/scene/snapshot";
 
 /** The handful of 2D-context members construction and resizing touch. */
 function stubCanvas(): HTMLCanvasElement {
@@ -44,6 +45,10 @@ function makeApp(): App {
 
 beforeEach(() => {
   localStorage.clear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("App construction", () => {
@@ -147,10 +152,31 @@ describe("time jump", () => {
 
   it("refuses input that is not a time", () => {
     const app = makeApp();
-    for (const bad of ["", "abc", "-1", "NaN", "1e999x"]) {
+    for (const bad of ["", "abc", "-1", "NaN", "1e999x", "1second", "Infinity",
+                       "0x10", "0b10", "0o10", "--1"]) {
       expect(app.commitTimeJump(bad)).toBe(false);
     }
     expect(app.world.time).toBe(0);
+  });
+
+  it("rejects targets earlier than a non-zero scene baseline", () => {
+    const app = makeApp();
+    app.world.time = 5;
+    app.ensureInitial();
+    expect(app.commitTimeJump("4.99")).toBe(false);
+    expect(app.world.time).toBe(5);
+  });
+
+  it("installs the restored baseline even when rounding needs zero steps", () => {
+    const app = makeApp();
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    app.world.bodies.push(body);
+    app.ensureInitial();
+    body.pos.x = 9;
+    app.world.time = PHYSICS_DT * 0.25;
+    expect(app.commitTimeJump("0")).toBe(true);
+    expect(app.world.time).toBe(0);
+    expect(app.world.bodies[0].pos.x).toBe(0);
   });
 });
 
@@ -167,6 +193,24 @@ describe("playback and history", () => {
     expect(app.world.bodies[0].pos.y).toBeCloseTo(5, 9);
   });
 
+  it("reset preserves an evolved angle beyond one turn exactly", () => {
+    const app = makeApp();
+    app.world.gravity = 0;
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    body.collides = false;
+    body.omega = 1000;
+    app.world.bodies.push(body);
+    app.world.step(PHYSICS_DT);
+    app.ensureInitial();
+    const expected = body.angle;
+    expect(Math.abs(expected)).toBeGreaterThan(2 * Math.PI);
+
+    body.angle = 0;
+    app.resetSim();
+
+    expect(app.world.bodies[0].angle).toBe(expected);
+  });
+
   it("undo and redo round-trip an edit", () => {
     const app = makeApp();
     const before = app.world.bodies.length;
@@ -177,6 +221,19 @@ describe("playback and history", () => {
     expect(app.world.bodies.length).toBe(before);
     app.redo();
     expect(app.world.bodies.length).toBe(before + 1);
+  });
+
+  it("undo restores the exact live state immediately before an edit", () => {
+    const app = makeApp();
+    app.world.bodies.push(new Body(new Vec2(0, 4), 0.2, 1));
+    app.pushUndo();
+    app.stepOnce();
+    const before = snapshot(app.world);
+    app.beginEdit();
+    app.world.bodies[0].mass = 42;
+    expect(app.commitEdit()).toBe("stored");
+    app.undo();
+    expect(snapshot(app.world)).toBe(before);
   });
 
   it("stepping back rewinds the clock and never goes below the start", () => {
@@ -200,6 +257,21 @@ describe("playback and history", () => {
     }
   });
 
+  it("makes a preset replacement undoable", () => {
+    const app = makeApp();
+    app.loadPreset(PRESETS[0], false);
+    const before = snapshot(app.world);
+    app.loadPreset(PRESETS[1], false);
+    app.undo();
+    expect(snapshot(app.world)).toBe(before);
+  });
+
+  it("startup preset initialization is the only history-resetting load", () => {
+    const app = makeApp();
+    app.initializePreset(PRESETS[0]);
+    expect(app.undoStack.canUndo).toBe(false);
+  });
+
   it("clearing the scene is undoable", () => {
     const app = makeApp();
     app.loadPreset(PRESETS[0], false);
@@ -220,6 +292,54 @@ describe("playback and history", () => {
     app.loadPreset(PRESETS[1], false);
     expect(app.selection).toEqual([]);
     expect(app.world.bodies.includes(body)).toBe(false);
+  });
+});
+
+describe("failure containment", () => {
+  it("stops a batch at the first divergence and emits one diagnostic", () => {
+    const app = makeApp();
+    const messages: string[] = [];
+    app.toastFn = (message) => messages.push(message);
+    const step = vi.fn(() => { app.world.diverged = ["Alpha", "Beta"]; });
+    app.world.step = step;
+    app.playing = true;
+    app.accumulator = 3;
+
+    app.stepOnce();
+
+    expect(step).toHaveBeenCalledTimes(1);
+    expect(app.playing).toBe(false);
+    expect(app.accumulator).toBe(0);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatch(/Alpha.*Beta/);
+  });
+
+  it("stops retrying after an unexpected solver exception", () => {
+    const app = makeApp();
+    const messages: string[] = [];
+    app.toastFn = (message) => messages.push(message);
+    const step = vi.fn(() => { throw new Error("solver failed"); });
+    app.world.step = step;
+
+    app.stepOnce();
+
+    expect(step).toHaveBeenCalledTimes(1);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatch(/unexpected solver error/i);
+  });
+});
+
+describe("quick save", () => {
+  it("uses milliseconds and never overwrites a same-instant save", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 4, 12, 34, 56, 789));
+    const app = makeApp();
+    app.quickSave();
+    app.quickSave();
+    expect(listScenes()).toEqual([
+      "Scene 2026-08-04 123456-789",
+      "Scene 2026-08-04 123456-789-2",
+    ]);
   });
 });
 
@@ -356,6 +476,18 @@ describe("graph recording", () => {
     expect(app.energySeries.count).toBeGreaterThan(0);
     expect(Number.isFinite(app.energySeries.lastT)).toBe(true);
     expect(before).toBeGreaterThan(0);
+  });
+
+  it("truncates timestamped phase samples when rewinding", () => {
+    const app = makeApp();
+    movingScene(app);
+    app.setSelection([app.world.bodies[0]]);
+    app.setGraphMode("Phase");
+    for (let i = 0; i < 12; i++) app.stepOnce();
+    expect(app.phasePlot.points.length).toBeGreaterThan(2);
+    app.stepBack();
+    app.stepBack();
+    expect(app.phasePlot.points.every((point) => point[4] <= app.world.time)).toBe(true);
   });
 
   it("clears the graphs when the world is replaced", () => {

@@ -8,6 +8,9 @@ export default defineConfig({
   // it only loads when a force-field row is opened, so its size is fine.
   build: { target: "es2022", chunkSizeWarningLimit: 900 },
   test: {
+    // Browser acceptance tests use Playwright's runner and live under e2e/;
+    // keep Vitest focused on the headless/unit verification tree.
+    include: ["tests/**/*.test.ts"],
     // Vitest stubs CSS imports to empty strings by default, which makes a
     // `?raw` import of the stylesheet unreadable. The focus-ring test needs
     // the real text: the one rule that draws the keyboard ring is a bare

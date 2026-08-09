@@ -1,10 +1,45 @@
 /** Physical objects: dynamic circular bodies and static wall segments. */
-import { boolOr, clamp01, colorOr, idOr, numOr as num, strOr } from "../core/guards";
+import { boolOr, clamp01, colorOr, idOr, numIn, numOr as num, strOr } from "../core/guards";
 import { Vec2 } from "../core/vec";
 
 export type Color = [number, number, number];
 
 const WALL_GREY: Color = [150, 155, 165];
+
+/** Bounds applied at the untrusted scene-data boundary and reused by the
+ * world's runtime divergence guard. */
+export const SCENE_MAX_COORDINATE = 1e6;
+export const SCENE_MAX_VELOCITY = 1e7;
+export const SCENE_MIN_SIZE = 1e-4;
+export const SCENE_MAX_SIZE = 1e6;
+export const SCENE_MIN_MASS = 1e-9;
+export const SCENE_MAX_MASS = 1e12;
+export const SCENE_MAX_FRICTION = 1e6;
+export const SCENE_MAX_FORCE = 1e9;
+export const SCENE_MAX_SURFACE_SPEED = 1e7;
+
+/** Canonical angle representation used for imported body and driver data. */
+export function normalizeAngle(value: unknown, fallback = 0.0): number {
+  const angle = num(value, fallback);
+  // Preserve canonical inputs exactly. Besides avoiding needless floating
+  // point noise, this keeps serialize -> deserialize snapshots byte-stable
+  // for undo, redo and rewind.
+  if (angle >= -Math.PI && angle < Math.PI) return angle;
+  const tau = 2.0 * Math.PI;
+  return ((angle + Math.PI) % tau + tau) % tau - Math.PI;
+}
+
+function boundedMass(value: unknown): number {
+  const mass = num(value, 1.0);
+  if (mass === 0.0) return 0.0;
+  if (mass < SCENE_MIN_MASS) return SCENE_MIN_MASS;
+  return mass > SCENE_MAX_MASS ? SCENE_MAX_MASS : mass;
+}
+
+function boundedOmega(value: unknown, radius: number): number {
+  const limit = SCENE_MAX_SURFACE_SPEED / radius;
+  return numIn(value, 0.0, -limit, limit);
+}
 
 // Material presets: [restitution, friction]. Restitution combines with min(),
 // friction with sqrt(mu_a * mu_b) at contact time.
@@ -191,26 +226,35 @@ export class Body {
     };
   }
 
-  static fromDict(d: BodyDict): Body {
+  static fromDict(d: BodyDict, preserveAngle = false): Body {
     // Every field is defaulted and finite-checked: scene .json can come
     // from an import, a hand-edited file or an older/newer version, and a
     // single missing or non-numeric field used to reach the solver as
     // undefined -> NaN, which silently froze the whole scene on step 1
     // with no message the user could act on.
-    const b = new Body(new Vec2(num(d.pos?.[0], 0), num(d.pos?.[1], 0)),
-                       Math.max(1e-4, num(d.radius, 0.15)),
-                       Math.max(0, num(d.mass, 1)));
+    const b = new Body(
+      new Vec2(numIn(d.pos?.[0], 0, -SCENE_MAX_COORDINATE, SCENE_MAX_COORDINATE),
+               numIn(d.pos?.[1], 0, -SCENE_MAX_COORDINATE, SCENE_MAX_COORDINATE)),
+      numIn(d.radius, 0.15, SCENE_MIN_SIZE, SCENE_MAX_SIZE),
+      boundedMass(d.mass),
+    );
     if (d.color !== undefined) b.color = colorOr(d.color, b.color);
     b.id = idOr(d.id, b.id);
     Body.nextId = Math.max(Body.nextId, b.id + 1);
     b.name = strOr(d.name, `Body ${b.id}`);
-    b.vel = new Vec2(num(d.vel?.[0], 0), num(d.vel?.[1], 0));
-    b.angle = num(d.angle, 0);
-    b.omega = num(d.omega, 0);
+    b.vel = new Vec2(
+      numIn(d.vel?.[0], 0, -SCENE_MAX_VELOCITY, SCENE_MAX_VELOCITY),
+      numIn(d.vel?.[1], 0, -SCENE_MAX_VELOCITY, SCENE_MAX_VELOCITY),
+    );
+    b.angle = preserveAngle ? num(d.angle, 0) : normalizeAngle(d.angle);
+    b.omega = boundedOmega(d.omega, b.radius);
     b.restitution = clamp01(num(d.restitution, 0.8));
-    b.friction = Math.max(0, num(d.friction, 0.4));
+    b.friction = numIn(d.friction, 0.4, 0, SCENE_MAX_FRICTION);
     const cf = d.const_force ?? [0, 0];
-    b.constForce = new Vec2(num(cf[0], 0), num(cf[1], 0));
+    b.constForce = new Vec2(
+      numIn(cf[0], 0, -SCENE_MAX_FORCE, SCENE_MAX_FORCE),
+      numIn(cf[1], 0, -SCENE_MAX_FORCE, SCENE_MAX_FORCE),
+    );
     b.locked = boolOr(d.locked, false);
     b.collides = boolOr(d.collides, true);
     b.noRotation = boolOr(d.no_rotation, false);
@@ -266,14 +310,18 @@ export class Wall {
   }
 
   static fromDict(d: WallDict): Wall {
-    const w = new Wall(new Vec2(num(d.a?.[0], 0), num(d.a?.[1], 0)),
-                       new Vec2(num(d.b?.[0], 0), num(d.b?.[1], 0)),
-                       Math.max(1e-4, num(d.thickness, 0.08)));
+    const w = new Wall(
+      new Vec2(numIn(d.a?.[0], 0, -SCENE_MAX_COORDINATE, SCENE_MAX_COORDINATE),
+               numIn(d.a?.[1], 0, -SCENE_MAX_COORDINATE, SCENE_MAX_COORDINATE)),
+      new Vec2(numIn(d.b?.[0], 0, -SCENE_MAX_COORDINATE, SCENE_MAX_COORDINATE),
+               numIn(d.b?.[1], 0, -SCENE_MAX_COORDINATE, SCENE_MAX_COORDINATE)),
+      numIn(d.thickness, 0.08, SCENE_MIN_SIZE, SCENE_MAX_SIZE),
+    );
     w.id = idOr(d.id, w.id);
     Wall.nextId = Math.max(Wall.nextId, w.id + 1);
     w.name = strOr(d.name, `Wall ${w.id}`);
     w.restitution = clamp01(num(d.restitution, 0.8));
-    w.friction = Math.max(0, num(d.friction, 0.5));
+    w.friction = numIn(d.friction, 0.5, 0, SCENE_MAX_FRICTION);
     w.color = colorOr(d.color, WALL_GREY);
     return w;
   }

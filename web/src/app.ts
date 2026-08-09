@@ -145,6 +145,16 @@ export interface Panel {
   refresh(): void;
 }
 
+interface PhysicsFailure {
+  names: string[];
+  exception: boolean;
+}
+
+interface PhysicsBatchResult {
+  completed: number;
+  failure: PhysicsFailure | null;
+}
+
 export class App {
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
@@ -185,6 +195,7 @@ export class App {
   private static TRAIL_QUALITY_MAX = 6.0;
 
   undoStack = new snap.UndoStack(this.world);
+  private editBefore: string | null = null;
   initialSnapshot: string | null = null;
   baselineEnergy: number | null = null;
   clipboardProps: Record<string, number | boolean> | null = null;
@@ -199,9 +210,10 @@ export class App {
   settings: Settings = {};
   private autofitRatio = 1.0; // user zoom-out factor while auto-fitting
   private history = new snap.RewindBuffer(); // per-frame rewind (rolling)
+  private rewindUnavailable = false;
   private overloadSince: number | null = null;
   private overloadHintAt = 0.0;
-  private divergeCooldown = 0.0;
+  private divergeCooldown = -Infinity;
   private lastFrame = 0.0;
   private fpsSmoothed = 0.0;
 
@@ -369,16 +381,51 @@ export class App {
     this.playing = !this.playing;
   }
 
-  /** Step the world, converting a mid-step numerical blow-up into frozen
-   * bodies via sanitize instead of crashing the app. */
-  private safeStep(world: World, dt: number): boolean {
+  /** Run one engine step and preserve its diagnostic before a later step can
+   * clear `world.diverged`. */
+  private safeStep(world: World, dt: number): PhysicsFailure | null {
     try {
       world.performance = this.perfMode; // every stepping path, no exceptions
       world.step(dt);
-      return true;
+      if (world.diverged.length === 0) return null;
+      return { names: [...new Set(world.diverged)], exception: false };
     } catch {
-      if (world.diverged.length === 0) world.diverged.push("a body");
-      return false;
+      return { names: [...new Set(world.diverged)], exception: true };
+    }
+  }
+
+  /** Shared stepping primitive for play, frame-step, and time-jump paths. */
+  private runPhysicsBatch(world: World, count: number, dt: number,
+                          afterStep: (() => void) | null = null): PhysicsBatchResult {
+    for (let i = 0; i < count; i++) {
+      const failure = this.safeStep(world, dt);
+      if (failure !== null) {
+        // A divergence is a completed, contained engine step. An exception
+        // may have interrupted the step, so it is not counted or sampled.
+        if (!failure.exception) afterStep?.();
+        return { completed: i + (failure.exception ? 0 : 1), failure };
+      }
+      afterStep?.();
+    }
+    return { completed: count, failure: null };
+  }
+
+  private stopForPhysicsFailure(failure: PhysicsFailure,
+                                prefix = "Simulation paused"): void {
+    this.playing = false;
+    this.accumulator = 0;
+    this.overloaded = false;
+    const nowS = performance.now() / 1000;
+    if (nowS < this.divergeCooldown) return;
+    this.divergeCooldown = nowS + 5;
+    if (failure.names.length > 0) {
+      const shown = failure.names.slice(0, 3).join(", ");
+      const rest = failure.names.length > 3 ? ` and ${failure.names.length - 3} more` : "";
+      this.toast(`${prefix}: ${shown}${rest} hit a numerical limit - ` +
+                 "check extreme forces, fields, or object sizes");
+    } else {
+      this.toast(`${prefix} after an unexpected solver error - reset the scene ` +
+                 "or check extreme forces and fields");
     }
   }
 
@@ -403,25 +450,26 @@ export class App {
     // PHYSICS_DT steps, so frame-stepping through a close encounter - the
     // exact thing anyone steps frame by frame to study - integrated more
     // coarsely than just watching it, and the two disagreed.
-    for (let q = 0; q < 2; q++) {
+    let failure: PhysicsFailure | null = null;
+    for (let q = 0; q < 2 && failure === null; q++) {
       const n = this.pickResolution(PHYSICS_DT);
       const h = PHYSICS_DT / n;
-      for (let i = 0; i < n; i++) {
-        this.safeStep(this.world, h);
-        this.recordTrails();
-      }
+      failure = this.runPhysicsBatch(
+        this.world, n, h, () => this.recordTrails()).failure;
     }
     this.afterPhysics();
+    if (failure !== null) this.stopForPhysicsFailure(failure);
   }
 
   /** Rewind the simulation by one displayed frame (,). */
   stepBack(): void {
+    this.cancelEdit();
     this.playing = false;
     let world = this.history.back();
     if (world === null) {
       if (this.initialSnapshot === null) return;
       this.clearHistory();
-      world = snap.restore(this.initialSnapshot);
+      world = snap.restoreSnapshot(this.initialSnapshot);
     }
     this.frameSeq++; // the world is about to be swapped: drop cached energy
     const selIds = new Set(this.selection
@@ -435,6 +483,7 @@ export class App {
     // trim graphs back to the rewound time instead of wiping them
     this.energySeries.truncate(world.time);
     this.momentumSeries.truncate(world.time);
+    this.phasePlot.truncate(world.time);
   }
 
   ensureInitial(): void {
@@ -449,7 +498,7 @@ export class App {
     // keepInitial: resetting must not consume the thing it resets TO.
     // Without it the second Ctrl+R in a row did nothing at all (no toast,
     // no feedback) and the dE readout went blank until the next play.
-    this.replaceWorld(snap.restore(this.initialSnapshot), true);
+    this.replaceWorld(snap.restoreSnapshot(this.initialSnapshot), true);
     this.playing = false;
     this.toast("Reset to the initial state");
   }
@@ -483,36 +532,48 @@ export class App {
    * with the fact that asking again continues.
    */
   commitTimeJump(text: string): boolean {
-    const target = parseFloat(text);
-    if (!Number.isFinite(target) || target < 0) return false;
+    const trimmed = text.trim();
+    if (trimmed === "") return false;
+    if (!/^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) {
+      return false;
+    }
+    const target = Number(trimmed);
+    if (!Number.isFinite(target)) return false;
     this.ensureInitial();
+    const baseline = snap.restoreSnapshot(this.initialSnapshot!);
+    if (target < baseline.time) {
+      this.toast(`This scene starts at ${baseline.time.toFixed(2)} s`);
+      return false;
+    }
     // Work on a copy either way, so a blow-up part-way through cannot leave
     // the live scene half-stepped.
     const forward = target >= this.world.time;
-    const world = snap.restore(forward ? snap.snapshot(this.world)
-                                       : this.initialSnapshot!);
-    const steps = Math.round((target - world.time) / PHYSICS_DT);
-    if (steps <= 0) return true;
+    const world = snap.restoreSnapshot(forward ? snap.snapshot(this.world)
+                                               : snap.snapshot(baseline));
+    // The engine advances fixed quanta, so the closest representable clock
+    // is used. This keeps a jump deterministic and at most half a quantum
+    // from the requested value.
+    const steps = Math.max(0, Math.round((target - world.time) / PHYSICS_DT));
     const t0 = performance.now();
     let ran = 0;
-    let blewUp = false;
-    for (; ran < steps && ran < App.TIME_JUMP_MAX_STEPS; ran++) {
-      if (!this.safeStep(world, PHYSICS_DT)) {
-        blewUp = true;
-        break;
-      }
-      // the clock is only read every 64th step: at ~0.1 ms a step that is
-      // a check every 6 ms, far finer than the budget, for no measurable cost
-      if ((ran & 63) === 63 &&
-          performance.now() - t0 > App.TIME_JUMP_BUDGET_MS) {
-        ran++;
-        break;
-      }
+    let failure: PhysicsFailure | null = null;
+    const allowed = Math.min(steps, App.TIME_JUMP_MAX_STEPS);
+    while (ran < allowed && failure === null) {
+      // Check wall time once per small deterministic block instead of once
+      // per engine step. The batch still stops on the first failure.
+      const block = Math.min(64, allowed - ran);
+      const result = this.runPhysicsBatch(world, block, PHYSICS_DT);
+      ran += result.completed;
+      failure = result.failure;
+      if (performance.now() - t0 > App.TIME_JUMP_BUDGET_MS) break;
     }
+    // Even a zero-step backward jump installs the restored baseline instead
+    // of leaving the later live scene visible.
     this.replaceWorld(world, true);
     this.playing = false;
-    if (blewUp) {
-      this.toast(`Stopped at ${world.time.toFixed(2)} s - the scene blew up`);
+    if (failure !== null) {
+      this.stopForPhysicsFailure(
+        failure, `Stopped at ${world.time.toFixed(2)} s`);
     } else if (ran < steps) {
       // "enter it again", not "press Enter again": the box refreshes to the
       // time actually reached, so the target has to be typed afresh
@@ -532,7 +593,8 @@ export class App {
    * a cheap scene must not be able to buy an unbounded jump either. */
   private static TIME_JUMP_MAX_STEPS = 20000;
 
-  replaceWorld(world: World, keepInitial = false): void {
+  replaceWorld(world: World, keepInitial = false, preserveEdit = false): void {
+    if (!preserveEdit) this.cancelEdit();
     this.world = world;
     // any world swap (undo, reset, clear, load) disarms the soft-body drag
     // hint; loadPreset re-arms it afterwards only for soft-body presets, so
@@ -549,14 +611,15 @@ export class App {
     this.momentumSeries.clear();
     this.phasePlot.clear();
     this.clearHistory();
+    this.rewindUnavailable = false;
+    this.divergeCooldown = -Infinity;
     this.frameSeq++; // new world: any cached energy belongs to the old one
     if (!keepInitial) {
       this.initialSnapshot = null;
       this.baselineEnergy = null;
-      // A world that is already at t = 0 IS a start state, so adopt it
-      // immediately rather than waiting for the next play. Undoing back to
-      // the beginning otherwise left Ctrl+R inert and the dE readout blank.
-      if (world.time === 0.0) this.ensureInitial();
+      // A loaded/imported scene may deliberately start at a non-zero clock.
+      // Its exact loaded state is still the reset and time-jump baseline.
+      this.ensureInitial();
     }
     // an open graph should show the new world's state straight away (the
     // sampling throttle is reset - the old world's clock is meaningless)
@@ -571,16 +634,57 @@ export class App {
   }
 
   // -------------------------------------------------------------- undo/redo
-  pushUndo(): void {
-    this.undoStack.push(this.world);
+  /** Capture the exact live state before an immediate or continuous edit. */
+  beginEdit(): void {
+    if (this.editBefore === null) this.editBefore = snap.snapshot(this.world);
+  }
+
+  cancelEdit(): void {
+    this.editBefore = null;
+  }
+
+  /** Commit one edit boundary. A captured pre-edit state is inserted before
+   * the result, so undo remains exact even when physics ran since the last
+   * edit. Existing callers that only call pushUndo retain legacy behavior. */
+  commitEdit(): snap.HistoryStoreResult {
+    const after = snap.snapshot(this.world);
+    const before = this.editBefore;
+    this.editBefore = null;
+    const result = before === null
+      ? this.undoStack.pushSnapshot(after)
+      : this.undoStack.pushTransition(before, after);
     if (this.world.time === 0.0) {
-      this.initialSnapshot = snap.snapshot(this.world);
+      this.initialSnapshot = after;
       this.baselineEnergy = this.world.energy().total;
     }
     this.onSelectionChange(); // structure may have changed: rebuild inspector
+    if (result === "too-large") {
+      this.toast("This scene is too large to keep undo history");
+    }
+    return result;
+  }
+
+  /** Convenience boundary for one synchronous mutation. */
+  edit<T>(mutation: () => T): T {
+    this.beginEdit();
+    try {
+      const value = mutation();
+      this.commitEdit();
+      return value;
+    } catch (exc) {
+      this.cancelEdit();
+      throw exc;
+    }
+  }
+
+  /** Compatibility name used by existing controls. New mutation paths call
+   * beginEdit before changing live state, then commitEdit at the boundary. */
+  pushUndo(): snap.HistoryStoreResult {
+    return this.commitEdit();
   }
 
   undo(): void {
+    this.cancelEdit();
     const world = this.undoStack.undo();
     if (world !== null) {
       this.replaceWorld(world);
@@ -589,6 +693,7 @@ export class App {
   }
 
   redo(): void {
+    this.cancelEdit();
     const world = this.undoStack.redo();
     if (world !== null) {
       this.replaceWorld(world);
@@ -598,16 +703,56 @@ export class App {
 
   // -------------------------------------------------------------- scene ops
   newScene(): void {
-    this.replaceWorld(new World());
+    this.beginEdit();
+    this.replaceWorld(new World(), false, true);
     this.playing = false;
-    this.pushUndo();
+    this.commitEdit();
     this.toast("Scene cleared (Ctrl+Z restores it)");
   }
 
   loadPreset(preset: Preset, announce = true): void {
-    this.replaceWorld(preset.build());
-    this.playing = false;
+    this.beginEdit();
+    try {
+      this.installPreset(preset);
+      this.commitEdit();
+    } catch (exc) {
+      this.cancelEdit();
+      throw exc;
+    }
+    if (announce) {
+      this.toast(`Loaded '${preset.name}' - Ctrl+Z restores the previous scene; ` +
+                 "press Space to run");
+    }
+  }
+
+  /** The composition root uses this once at startup. It is deliberately the
+   * only scene-loading API that discards edit history. */
+  initializePreset(preset: Preset): void {
+    this.cancelEdit();
+    this.installPreset(preset);
     this.undoStack.reset(this.world);
+  }
+
+  /** Install a saved or uploaded world as one undoable scene replacement. */
+  loadWorld(world: World, name = "scene", announce = true): void {
+    this.beginEdit();
+    try {
+      this.replaceWorld(world, false, true);
+      this.playing = false;
+      this.zoomToFit();
+      this.commitEdit();
+    } catch (exc) {
+      this.cancelEdit();
+      throw exc;
+    }
+    if (announce) {
+      this.toast(`Loaded '${name}' - Ctrl+Z restores the previous scene`);
+    }
+  }
+
+  private installPreset(preset: Preset): void {
+    this.replaceWorld(preset.build(), false, true);
+    this.playing = false;
     const hints = preset.hints;
     // view toggles follow the preset, so a scene always loads looking the
     // way it is meant to be read (vectors are symmetric with trails: a
@@ -624,7 +769,6 @@ export class App {
     // arm the one-time "right-drag a soft body" hint for soft-body scenes
     this.softBodyHintArmed = this.world.bodies.some((b) => b.softBody);
     this.onWorldReplaced();
-    if (announce) this.toast(`Loaded '${preset.name}' - press Space to run`);
   }
 
   /** Frame a freshly loaded preset so nothing starts off-screen.
@@ -675,11 +819,10 @@ export class App {
   pasteProps(): void {
     if (this.clipboardProps === null) return;
     const bodies = this.selection.filter((o): o is Body => o instanceof Body && !o.isAnchor);
-    for (const b of bodies) {
-      Object.assign(b, this.clipboardProps);
-    }
     if (bodies.length > 0) {
-      this.pushUndo();
+      this.edit(() => {
+        for (const b of bodies) Object.assign(b, this.clipboardProps);
+      });
       this.toast(`Pasted properties onto ${bodies.length} body(ies)`);
     }
   }
@@ -746,10 +889,14 @@ export class App {
   quickSave(): void {
     const now = new Date();
     const pad = (n: number) => String(n).padStart(2, "0");
-    const name = `Scene ${now.getFullYear()}-${pad(now.getMonth() + 1)}-` +
+    const millis = String(now.getMilliseconds()).padStart(3, "0");
+    const base = `Scene ${now.getFullYear()}-${pad(now.getMonth() + 1)}-` +
       `${pad(now.getDate())} ${pad(now.getHours())}${pad(now.getMinutes())}` +
-      `${pad(now.getSeconds())}`;
+      `${pad(now.getSeconds())}-${millis}`;
     try {
+      let name = base;
+      let suffix = 2;
+      while (snap.sceneExists(name)) name = `${base}-${suffix++}`;
       const saved = snap.saveScene(this.world, name);
       this.toast(`Saved scene '${saved}' - press L to browse scenes`);
     } catch (exc) {
@@ -828,8 +975,9 @@ export class App {
       return;
     }
     const target = !bodies.every((b) => b.locked);
-    for (const b of bodies) b.locked = target;
-    this.pushUndo();
+    this.edit(() => {
+      for (const b of bodies) b.locked = target;
+    });
     const n = bodies.length;
     this.toast(`${target ? "Locked" : "Unlocked"} ${n} ${n !== 1 ? "bodies" : "body"}`);
   }
@@ -931,18 +1079,19 @@ export class App {
                                   nominal * this.speed * MAX_CATCHUP_FRAMES);
       let quanta = 0;
       let qUsed = 1;
+      let failure: PhysicsFailure | null = null;
       const t0 = performance.now();
-      while (this.accumulator >= effDt && quanta < MAX_STEPS_PER_FRAME) {
+      while (this.accumulator >= effDt && quanta < MAX_STEPS_PER_FRAME &&
+             failure === null) {
         // resolution is re-chosen per quantum from the freshest
         // accelerations, so a close encounter that flares up mid-frame
         // is caught within 1/120 s
         const q = this.pickResolution(effDt);
         if (q > qUsed) qUsed = q;
         const h = effDt / q;
-        for (let i = 0; i < q; i++) {
-          this.safeStep(this.world, h);
-          this.recordTrails();
-        }
+        failure = this.runPhysicsBatch(
+          this.world, q, h, () => this.recordTrails()).failure;
+        if (failure !== null) break;
         this.accumulator -= effDt;
         quanta++;
         if (performance.now() - t0 > PHYSICS_BUDGET_S * 1000) {
@@ -950,18 +1099,15 @@ export class App {
         }
       }
       this.qNow = qUsed;
-      this.overloaded = this.accumulator >= effDt;
-      if (this.overloaded) this.accumulator = 0.0;
-      this.checkSustainedOverload();
-      this.cullEscaped();
-      this.afterPhysics();
-      const nowS = performance.now() / 1000;
-      if (this.world.diverged.length > 0 && nowS > this.divergeCooldown) {
-        this.divergeCooldown = nowS + 5.0;
-        const names = this.world.diverged.slice(0, 3).join(", ");
-        this.toast(`${names} hit a numerical blow-up and was frozen ` +
-                   "- check extreme forces or fields");
+      if (failure !== null) {
+        this.stopForPhysicsFailure(failure);
+      } else {
+        this.overloaded = this.accumulator >= effDt;
+        if (this.overloaded) this.accumulator = 0.0;
+        this.checkSustainedOverload();
+        this.cullEscaped();
       }
+      this.afterPhysics();
     }
 
     // A camera that glides is decoration on top of the simulation, and
@@ -1153,7 +1299,11 @@ export class App {
     this.frameSeq++;
     this.sweepTrails();
     // rolling per-frame history so the user can step backwards (,)
-    this.history.push(this.world);
+    const rewindResult = this.history.push(this.world);
+    if (rewindResult === "too-large" && !this.rewindUnavailable) {
+      this.rewindUnavailable = true;
+      this.toast("This scene is too large to keep frame-rewind history");
+    }
     this.recordGraphSample();
   }
 
@@ -1192,7 +1342,8 @@ export class App {
         this.phaseBodyId = body.id;
         this.phasePlot.clear();
       }
-      this.phasePlot.add(body.pos.x, body.vel.x, body.pos.y, body.vel.y);
+      this.phasePlot.add(
+        this.world.time, body.pos.x, body.vel.x, body.pos.y, body.vel.y);
     }
   }
 

@@ -125,9 +125,11 @@ chosen by its author.
 
 1. Split links into rod and spring arrays.
 2. Build the set of linked endpoint pairs that should not collide. Linked
-   bodies normally collide; exclusion applies only when natural link length is
-   shorter than the sum of radii, where contact and link constraints would be
-   permanently contradictory.
+   bodies normally collide; exclusion applies only to a `DistanceLink` whose
+   natural length is shorter than the sum of endpoint radii, where its rigid
+   distance constraint and contact constraint would be permanently
+   contradictory. Springs and tension-only elastic strings remain collidable
+   at every rest length in both solver modes.
 3. Prepare effective spring coefficients.
 4. Mark spring endpoints for adaptive-resolution exclusions and performance
    contact-mass behavior.
@@ -140,6 +142,15 @@ chosen by its author.
 
 The world assumes object lists and editable physical properties do not change
 inside a step. The application and controls make edits between step calls.
+
+### Step input contract
+
+`World.step(dt)` accepts finite, non-negative seconds. A negative, `NaN`, or
+infinite value throws `RangeError` before state changes. Zero is a strict
+no-op. A positive value is also a strict no-op when its effective substep `h`
+is too small for the solver's squared-timestep terms: `h == 0`, `h² == 0`, or
+`1/h²` is non-finite. A strict no-op leaves physical state, diagnostics,
+caches, scratch state, `time`, and `stepCount` unchanged.
 
 ## Force accumulation
 
@@ -203,7 +214,11 @@ Each enabled `ForceField` has compiled x/y functions of
 `x, y, vx, vy, t, m, r`. The world reuses one environment object, refills it
 for each movable body, evaluates both components as newtons, divides by mass,
 and adds finite results. A singular or throwing sample is skipped for that
-body. Syntax and compilation are documented in [data, formulas, and
+body. Compiling a field is atomic: both components are installed together, or
+both compiled functions become null while the intact sources and error remain
+available for repair. Parsing, compilation, and math formatting share bounded
+source/token/AST/depth/argument limits. Their exact values and language syntax
+are documented in [data, formulas, and
 scenes](data-formulas-scenes.md#force-field-expression-language).
 
 ### Spring forces
@@ -259,10 +274,22 @@ performance mode always selects it.
 
 ### Velocity Verlet
 
-The default method. It advances position using current velocity/acceleration,
-re-evaluates acceleration at the new position, and advances velocity with the
-average acceleration. It is second-order and symplectic, giving strong
-long-term energy behavior for oscillators and orbits.
+The default method is a generalized predictor-corrector form that remains
+second-order when acceleration depends on velocity, as it does for drag,
+damped springs, and velocity-dependent custom fields:
+
+1. Evaluate acceleration at the initial position, velocity, and time.
+2. Kick to half-step velocity, retain that velocity in reusable packed scratch,
+   and drift position through the full slice.
+3. Install the full-step velocity predictor `v0 + h*a0`, then evaluate the
+   second acceleration at the new position and time.
+4. Finish with the trapezoidal correction
+   `v1 = vHalf + (h/2)*a1`.
+
+For forces independent of velocity, the predictor does not affect the second
+evaluation and the arithmetic reduces to the standard kick-drift-kick path,
+preserving its symplectic long-term energy behavior. The half-velocity scratch
+grows geometrically and is reused across calls and adaptive slices.
 
 ### RK4
 
@@ -324,14 +351,18 @@ multiplier, capped damping fraction, strain bounds, and one-sidedness.
 The stage performs:
 
 1. Several Gauss-Seidel XPBD projection passes.
-2. A per-body displacement limit, preventing a constraint correction from
-   teleporting a particle through another body.
-3. Conversion of displacement into velocity.
-4. Axial relative-velocity damping as a bounded fraction, which cannot
+2. Strain recovery toward a generous maximum length and, for bilateral
+   springs, a compression floor. Relative velocity that worsens an active
+   violation is removed; tension-only springs have no compression floor.
+3. One final per-body limit on the combined displacement from all projection
+   and strain-recovery work, preventing any later correction from bypassing
+   the movement cap and teleporting a particle through another body. An
+   extreme strain violation therefore recovers over several substeps rather
+   than overriding this cap.
+4. Conversion of the retained displacement into velocity, followed by axial
+   relative-velocity damping as a bounded fraction, which cannot
    overshoot and reverse the velocity it is damping.
-5. A generous hard stretch limit, plus a compression floor for bilateral
-   springs. Tension-only springs have no compression floor.
-6. Scatter back to live bodies.
+5. Scatter back to live bodies.
 
 This path trades force-model accuracy for unconditional spring stability at
 coarse resolution.
@@ -385,17 +416,24 @@ The response has four stages:
    `mu * normalImpulse`. Applying the tangent impulse at the contact arms
    changes spin, so rolling emerges rather than being prescribed.
 4. **Position and static-friction passes.** Split-impulse projection removes
-   overlap without changing velocity. Non-rotating movable bodies can use a
-   persisted world-space tangential anchor to resist static creep until the
-   Coulomb limit is saturated.
+   overlap without changing velocity. The solver then builds an O(contacts)
+   graph of pressed, unsaturated contacts between non-rotating movable bodies.
+   Walls and structurally immovable bodies are fixed roots; a transiently
+   `held` body is deliberately not a root. Only components connected to a root
+   may use persisted world-space tangential anchors to resist static creep.
+   Unsupported contacts rebase their anchor every substep, and a newly
+   supported contact rebases once before pinning, so a freely translating pair
+   retains its common motion rather than being pinned to the world.
 
 Under heavy contact load, the iteration count is capped so manifold count
 times iterations stays bounded. Warm starting carries the converged support
 impulses between substeps.
 
 The contact cache key is independent of body detection order. Body-wall keys
-use a negative wall ID namespace. Cache entries hold `[normal, tangent]` and,
-when needed, a static-friction anchor `[x, y]`.
+use a negative wall ID namespace. Each typed `ContactCacheEntry` holds normal
+and tangent impulses, anchor coordinates, whether an anchor exists, and
+whether that anchor was connected to fixed support. The support bit prevents
+an anchor recorded during a different support state from being reused.
 
 ## Kinematic wall clearing
 
@@ -453,15 +491,29 @@ it.
 
 ## Numerical safeguards and lifecycle invariants
 
-- Deserialized finite numbers are defaulted and clamped before entering solver
-  loops; solver iteration counts have strict limits.
+- Untrusted body and wall data uses shared bounds before entering solver loops:
+  coordinates `[-1e6, 1e6]`, velocity components `[-1e7, 1e7]`, radius and
+  wall thickness `[1e-4, 1e6]`, friction `[0, 1e6]`, and constant-force
+  components `[-1e9, 1e9]`. Zero mass remains an immovable zero; any other
+  finite mass is clamped to `[1e-9, 1e12]`. Driver amplitude uses the same
+  force bound. Imported body angles and driver phase/direction are normalized
+  to `[-pi, pi)`, and imported spin is limited so `|omega| * radius <= 1e7`.
+  Internal snapshot restoration selects the guarded preserve-angle path so
+  undo and rewind reproduce finite accumulated body/driver angles exactly.
+- `World.fromDict()` bounds raw collections before constructing objects:
+  2,000 bodies, 2,000 walls, 10,000 links, 64 fields, and 2,000 drivers. It
+  throws typed `SceneLimitError` above a limit while retaining total guarded
+  reconstruction for malformed shapes within the limits. Solver iteration
+  counts also have strict limits.
 - Spring coefficients are stability-clamped in accurate mode.
 - Rod/contact solvers exit early after convergence.
 - Adaptive slice work, contact work, and performance-mode speeds are bounded.
-- `World.sanitize()` runs after a full step. A body with non-finite or extreme
-  position/velocity/spin returns to its finite previous position when possible,
-  otherwise the origin, then has motion and acceleration cleared and its name
-  reported.
+- `World.sanitize()` runs after a full step. Position and velocity must remain
+  within their import bounds; angle and spin must be finite; surface spin must
+  remain at most `1e7`. A failing body returns to its bounded finite previous
+  position when possible, otherwise the origin. Velocity, spin, and
+  acceleration are cleared, a finite angle is normalized (otherwise reset to
+  zero), and the body's name is reported.
 - `escapedBodies()` identifies non-finite bodies or bodies beyond a generous
   scene-centred distance that are still moving outward. Locked, anchored, and
   held bodies are protected. `App` optionally removes the result in one batch.
