@@ -43,6 +43,7 @@ function makeApp(playing: boolean) {
     dragHitsWalls: false,
     softBodyHintArmed: false,
     undos: 0,
+    energyInvalidations: 0,
     camera: {
       zoom: ZOOM,
       toWorld: (sx: number, sy: number) => worldAt(sx, sy),
@@ -51,6 +52,8 @@ function makeApp(playing: boolean) {
         [x * ZOOM, -y * ZOOM],
     },
     setSelection(sel: Selectable[]) { stub.selection = sel; },
+    invalidateCanvas() {},
+    invalidateEnergy() { stub.energyInvalidations++; },
     beginEdit() {},
     cancelEdit() {},
     commitEdit() { stub.undos++; return "stored" as const; },
@@ -69,7 +72,8 @@ function dragBody(opts: {
   to: [number, number];
   locked?: boolean;
   stepWorld?: boolean;
-}): { body: Body; app: App; controller: CanvasController; undos: () => number } {
+}): { body: Body; app: App; controller: CanvasController; undos: () => number;
+      energyInvalidations: () => number } {
   const { app, world, stub, controller } = makeApp(opts.playing);
   const start = worldAt(opts.from[0], opts.from[1]);
   const body = new Body(new Vec2(start.x, start.y), 0.2, 1.0);
@@ -98,10 +102,18 @@ function dragBody(opts: {
   }
   controller.mouse = opts.to;
   press.release(opts.to);
-  return { body, app, controller, undos: () => stub.undos };
+  return { body, app, controller, undos: () => stub.undos,
+           energyInvalidations: () => stub.energyInvalidations };
 }
 
 describe("left-drag preserves velocity", () => {
+  it("invalidates derived energy for every live position update", () => {
+    const { energyInvalidations } = dragBody({
+      playing: false, vel0: [0, 0], from: [0, 0], to: [40, 25],
+    });
+    expect(energyInvalidations()).toBeGreaterThan(1);
+  });
+
   it.each([true, false])("restores the grabbed velocity (playing=%s)", (playing) => {
     const { body } = dragBody({
       playing, vel0: [3.5, -1.25], from: [0, 0], to: [40, 25],

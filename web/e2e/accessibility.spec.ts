@@ -60,7 +60,11 @@ test("keyboard controls expose state, tabs, and splitter values", async ({ page 
 
   await page.getByRole("button", { name: "Library" }).click();
   await expect(page.getByRole("dialog", { name: "Library" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Load Earth & Moon", exact: true })).toBeVisible();
+  const earthCardLoad = page.getByRole("button", {
+    name: "Load Earth & Moon", exact: true,
+  });
+  await expect(earthCardLoad).toBeVisible();
+  await expect(earthCardLoad).toHaveText("");
   await expect(page.getByRole("button", { name: "All", exact: true }))
     .toHaveAttribute("aria-pressed", "true");
 });
@@ -71,7 +75,8 @@ test("scene replacement is recoverable with undo", async ({ page }) => {
   await expect(page.locator("#status-text")).toContainText("2 bodies");
 
   await page.getByRole("button", { name: "Library" }).click();
-  await page.getByRole("button", { name: "Load Simple pendulum", exact: true }).click();
+  const pendulumCard = page.locator('[data-preset-name="Simple pendulum"]');
+  await pendulumCard.click({ position: { x: 18, y: 18 } });
   await expect(page.locator("#toasts")).toContainText("Ctrl+Z restores the previous scene");
   await expect(page.locator("#status-text")).toContainText("1 bodies");
   await page.keyboard.press("Control+z");

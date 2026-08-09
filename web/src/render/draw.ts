@@ -51,24 +51,36 @@ export function drawGrid(ctx: CanvasRenderingContext2D, cam: Camera,
   const j0 = Math.floor(minY / spacing);
   const j1 = Math.floor(maxY / spacing) + 1;
   if (i1 - i0 + (j1 - j0) > 400) return;
-  // Three styles across up to 400 lines - axis, major, minor - so the grid is
-  // three strokes rather than one per line. It was the largest remaining
-  // draw-call cost in every scene once links and bodies were batched.
+  // Keep each line as its own narrow current path. Combining the disjoint
+  // lines into a few explicit Path2Ds gives those paths almost full-canvas
+  // bounds; Chromium/Edge then scale their raster work with backing-canvas
+  // area (including devicePixelRatio), which can make an otherwise empty
+  // scene render-bound on a large display. Object geometry below still
+  // benefits from style batching because its occupied bounds are local to
+  // the scene rather than guaranteed to span the viewport.
+  ctx.lineWidth = 1;
   for (let i = i0; i <= i1; i++) {
     const [sx] = cam.toScreenXY(i * spacing, 0);
     const color = i === 0 ? theme.AXIS
       : i % 5 === 0 ? theme.GRID_MAJOR : theme.GRID;
     const x = Math.round(sx) + 0.5;
-    addLine(STROKES.path(color, 1), x, 0, x, h);
+    ctx.strokeStyle = css(color);
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.stroke();
   }
   for (let j = j0; j <= j1; j++) {
     const [, sy] = cam.toScreenXY(0, j * spacing);
     const color = j === 0 ? theme.AXIS
       : j % 5 === 0 ? theme.GRID_MAJOR : theme.GRID;
     const y = Math.round(sy) + 0.5;
-    addLine(STROKES.path(color, 1), 0, y, w, y);
+    ctx.strokeStyle = css(color);
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
   }
-  STROKES.strokeAll(ctx);
 }
 
 /** Shaft and head of one arrow, appended to a stroke batch and a fill batch.
@@ -414,6 +426,11 @@ interface ColourGroup {
   paths: Path2D[];
 }
 const TRAIL_GROUPS = new Map<number, ColourGroup>();
+// Per-pass indexes are cleared and reused. Trail drawing can run every frame
+// for thousands of bodies; rebuilding these collection objects only creates
+// garbage without changing the lookup work or result.
+const TRAIL_BODIES = new Map<number, Body>();
+const LIVE_TRAIL_COLOURS = new Set<number>();
 
 function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
                     trails: Map<number, Trail>, quality: number,
@@ -422,8 +439,10 @@ function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
   ctx.lineJoin = "round";
   // one id->body index for the whole pass: world.bodyById is a linear scan,
   // so looking a colour up per trail was quadratic in the body count
-  const byId = new Map<number, Body>();
-  const liveColours = new Set<number>();
+  const byId = TRAIL_BODIES;
+  const liveColours = LIVE_TRAIL_COLOURS;
+  byId.clear();
+  liveColours.clear();
   for (const b of world.bodies) {
     byId.set(b.id, b);
     liveColours.add((b.color[0] << 16) | (b.color[1] << 8) | b.color[2]);
@@ -460,7 +479,12 @@ function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
     group.trails.push(trail);
     visible++;
   }
-  if (visible === 0) return;
+  if (visible === 0) {
+    byId.clear();
+    liveColours.clear();
+    ctx.lineJoin = "miter";
+    return;
+  }
   let groups = 0;
   for (const g of TRAIL_GROUPS.values()) if (g.trails.length > 0) groups++;
 
@@ -510,8 +534,18 @@ function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
     }
     paths.length = 0; // release the frame's paths, keep the group
   }
+  byId.clear();
+  liveColours.clear();
   ctx.lineJoin = "miter";
 }
+
+// `drawWorld` is a single synchronous pass. Reusing its membership and label
+// scratch avoids one Set, one array, and one tuple per visible label per
+// rendered frame while retaining exactly the same ordering and lookups.
+const PICKED = new Set<Selectable>();
+const LABEL_NAMES: string[] = [];
+const LABEL_X: number[] = [];
+const LABEL_Y: number[] = [];
 
 /** `simplify` drops the decorative geometry that costs the most to build:
  * spring coils become plain lines (a coil is up to twenty segments) and spin
@@ -535,7 +569,9 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   // whether it is in there. As an array scan that is bodies x selection per
   // frame, which a box-select over a large scene turns quadratic; hashing
   // it once makes each test constant time.
-  const picked = new Set<Selectable>(selection);
+  const picked = PICKED;
+  picked.clear();
+  for (const item of selection) picked.add(item);
 
   // --- trails ---------------------------------------------------------------
   if (view.trails) {
@@ -612,7 +648,9 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   // Discs, edges, spin markers and hubs all batch by style; labels are text
   // and have to wait until the fills beneath them are down, so they are
   // collected and drawn after the flush.
-  const labels: Array<[string, number, number]> = [];
+  LABEL_NAMES.length = 0;
+  LABEL_X.length = 0;
+  LABEL_Y.length = 0;
   for (const body of world.bodies) {
     const r = body.radius;
     if (body.pos.x + r < minX || body.pos.x - r > maxX ||
@@ -640,15 +678,21 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     if (picked.has(body)) {
       addCircle(STROKES.path(theme.SELECTION, 2), sx, sy, pr + 3);
     }
-    if (view.labels && pr >= 3) labels.push([body.name, sx, sy - pr - 6]);
+    if (view.labels && pr >= 3) {
+      LABEL_NAMES.push(body.name);
+      LABEL_X.push(sx);
+      LABEL_Y.push(sy - pr - 6);
+    }
   }
   FILLS.fillAll(ctx);    // discs and hubs
   STROKES.strokeAll(ctx); // edges, spin markers, selection rings
-  if (labels.length > 0) {
+  if (LABEL_NAMES.length > 0) {
     ctx.font = "11px system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.fillStyle = css(theme.TEXT_DIM);
-    for (const [name, x, y] of labels) ctx.fillText(name, x, y);
+    for (let i = 0; i < LABEL_NAMES.length; i++) {
+      ctx.fillText(LABEL_NAMES[i], LABEL_X[i], LABEL_Y[i]);
+    }
     ctx.textAlign = "left";
   }
 
@@ -716,18 +760,32 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     const j0 = Math.floor(minY / cell);
     const j1 = Math.floor(maxY / cell) + 1;
     if (i1 - i0 + (j1 - j0) < 200) {
-      const path = STROKES.path([70, 45, 45], 1); // one colour, one stroke
+      // Like the ordinary grid, keep every full-height/full-width line in a
+      // narrow current path. One explicit Path2D containing all of these
+      // disjoint lines acquires viewport-sized bounds and is unusually
+      // expensive for Chromium/Edge to raster on a high-DPI canvas.
+      ctx.strokeStyle = css([70, 45, 45]);
+      ctx.lineWidth = 1;
       for (let i = i0; i <= i1; i++) {
         const [sx] = cam.toScreenXY(i * cell, 0);
-        addLine(path, sx, 0, sx, areaH);
+        ctx.beginPath();
+        ctx.moveTo(sx, 0);
+        ctx.lineTo(sx, areaH);
+        ctx.stroke();
       }
       for (let j = j0; j <= j1; j++) {
         const [, sy] = cam.toScreenXY(0, j * cell);
-        addLine(path, 0, sy, areaW, sy);
+        ctx.beginPath();
+        ctx.moveTo(0, sy);
+        ctx.lineTo(areaW, sy);
+        ctx.stroke();
       }
-      STROKES.strokeAll(ctx);
     }
   }
+  picked.clear();
+  LABEL_NAMES.length = 0;
+  LABEL_X.length = 0;
+  LABEL_Y.length = 0;
 }
 
 /** Draggable arrow-tip handle used to set a body's velocity directly.

@@ -80,7 +80,10 @@ export class Toolbar implements Panel {
       e.stopPropagation();
     });
     this.group.add({ root: this.timeInput, refresh: () => {
-      if (!timeFocused) this.timeInput.value = app.world.time.toFixed(2);
+      if (!timeFocused) {
+        const value = app.world.time.toFixed(2);
+        if (this.timeInput.value !== value) this.timeInput.value = value;
+      }
     } });
     root.append(el("span", { class: "dim", text: "t =" }), this.timeInput,
                 el("span", { class: "dim", text: "s" }));
@@ -268,6 +271,7 @@ export class GraphDock implements Panel {
   private hintEl: HTMLElement;
   private liveBtn: HTMLButtonElement;
   private group = new RefreshGroup();
+  private syncSplitterAria: () => void = () => {};
   // time-axis view: zoom (span) and scroll-back position (end; null=live)
   private viewSpan = GRAPH_WINDOW_S;
   private viewEnd: number | null = null;
@@ -315,7 +319,7 @@ export class GraphDock implements Panel {
     };
     const dockMax = (): number => Math.max(DOCK_H_MIN,
       Math.min(DOCK_H_MAX, (root.parentElement?.clientHeight ?? DOCK_H_MAX) - 160));
-    splitterDrag(splitter, (e) => {
+    this.syncSplitterAria = splitterDrag(splitter, (e) => {
       const main = root.parentElement!;
       const h = Math.max(DOCK_H_MIN, Math.min(main.clientHeight - 160,
         main.getBoundingClientRect().bottom - e.clientY));
@@ -460,8 +464,13 @@ export class GraphDock implements Panel {
       this.root.hidden = !visible;
       this.splitter.hidden = !visible;
       app.resizeCanvas();
+      if (visible) this.syncSplitterAria();
     }
     if (!visible) return;
+    // The dock maximum follows its parent height. Attribute writes are
+    // internally guarded, so this cheap poll also keeps metadata current after
+    // viewport/layout changes without creating DOM churn on stable frames.
+    this.syncSplitterAria();
     this.group.refreshAll();
     const dockHint = this.hint();
     if (this.hintEl.textContent !== dockHint) {
@@ -496,8 +505,8 @@ export class GraphDock implements Panel {
     const phaseBody = app.selection.find((o): o is Body => o instanceof Body);
     const rev = series !== undefined ? series.rev
       : `${app.phasePlot.rev}:${phaseBody?.name ?? ""}`;
-    const sig = `${app.graphMode}:${bw}x${bh}:${rev}:` +
-                `${this.viewEnd ?? "live"}:${this.viewSpan}`;
+    const sig = `${app.graphMode}:${bw}x${bh}:${rev}:p${theme.paletteRevision}:` +
+                 `${this.viewEnd ?? "live"}:${this.viewSpan}`;
     if (sig === this.lastDrawSig && !(series?.easing ?? false)) return;
     this.lastDrawSig = sig;
 

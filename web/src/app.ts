@@ -194,6 +194,27 @@ export class App {
   private static TRAIL_QUALITY_MIN = 0.35;
   private static TRAIL_QUALITY_MAX = 6.0;
 
+  // Canvas drawing is retained by the browser until something visible
+  // changes. Keep a generation rather than repainting the full high-DPI
+  // backing store on every rAF: an empty or settled scene can still advance
+  // its clock and refresh DOM readouts without paying for fill/grid/world
+  // raster work. Repeated invalidations coalesce while a draw is pending.
+  private canvasGeneration = 1;
+  private renderedCanvasGeneration = 0;
+  private renderedPresentation = new Float64Array(21).fill(Number.NaN);
+  private currentPresentation = new Float64Array(21);
+
+  // Reusable exact snapshot around a displayed physics batch. Physics time
+  // alone is not visual; body position/rotation/vector changes are. The
+  // geometric growth keeps the running loop allocation-free after a scene's
+  // body count has been seen once.
+  private physicsVisualBefore = new Float64Array(0);
+  private physicsVisualBodies = 0;
+  private physicsContactsBefore = 0;
+  private physicsVisualAngle = false;
+  private physicsVisualVelocity = false;
+  private physicsVisualAcceleration = false;
+
   undoStack = new snap.UndoStack(this.world);
   private editBefore: string | null = null;
   initialSnapshot: string | null = null;
@@ -230,7 +251,10 @@ export class App {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext("2d")!;
+    // Every render starts with an opaque background fill. Asking the browser
+    // for an opaque backing store avoids needless alpha compositing without
+    // changing any pixel the renderer can produce.
+    this.ctx = canvas.getContext("2d", { alpha: false })!;
     this.controller = new CanvasController(this);
     this.controller.attach(canvas);
     this.settings = this.loadSettings();
@@ -253,6 +277,10 @@ export class App {
     } catch {
       // storage full or blocked: settings just don't persist
     }
+    // Appearance and performance-mode preferences both affect canvas pixels.
+    // Some layout-only callers also arrive here; a harmless extra draw on a
+    // user action is preferable to coupling persistence to every setting.
+    this.invalidateCanvas();
   }
 
   /** Apply the persisted appearance settings (theme defaults to dark). */
@@ -262,6 +290,7 @@ export class App {
     document.body.classList.toggle("dyslexic", this.settings.dyslexic_font ?? false);
     document.documentElement.style.setProperty(
       "--fs", String(this.settings.font_scale ?? 1));
+    this.invalidateCanvas();
   }
 
   /** Delete bodies that have escaped for good (recommended; default on). */
@@ -370,9 +399,26 @@ export class App {
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
     if (w === 0 || h === 0) return;
-    this.canvas.width = Math.round(w * dpr);
-    this.canvas.height = Math.round(h * dpr);
+    const backingW = Math.round(w * dpr);
+    const backingH = Math.round(h * dpr);
+    const changed = this.canvas.width !== backingW ||
+                    this.canvas.height !== backingH ||
+                    this.camera.screenW !== w || this.camera.screenH !== h;
+    // Assigning either dimension clears the backing store and resets the 2D
+    // state. ResizeObserver can report the same box repeatedly, so only write
+    // dimensions that genuinely changed.
+    if (this.canvas.width !== backingW) this.canvas.width = backingW;
+    if (this.canvas.height !== backingH) this.canvas.height = backingH;
     this.camera.resize(w, h);
+    if (changed) this.invalidateCanvas();
+  }
+
+  /** Mark the retained canvas image stale. Public so the interaction layer
+   * can cover hover, construction previews and direct camera gestures. */
+  invalidateCanvas(): void {
+    if (this.canvasGeneration === this.renderedCanvasGeneration) {
+      this.canvasGeneration++;
+    }
   }
 
   // --------------------------------------------------------------- playback
@@ -390,7 +436,14 @@ export class App {
       if (world.diverged.length === 0) return null;
       return { names: [...new Set(world.diverged)], exception: false };
     } catch {
+      // A throwing step may already have changed part of the live world. Its
+      // diagnostic is contained below, but derived readouts must not retain
+      // values from before the attempted step.
       return { names: [...new Set(world.diverged)], exception: true };
+    } finally {
+      // Time jumps step a detached working copy; only the installed live world
+      // participates in the App's derived-value cache.
+      if (world === this.world) this.invalidateEnergy();
     }
   }
 
@@ -439,6 +492,7 @@ export class App {
   stepOnce(): void {
     this.ensureInitial();
     this.playing = false;
+    this.capturePhysicsVisualState();
     // Frame-stepping is what you do to study a close encounter, so it needs
     // the same in-slice path capture as playing does; this used to be set
     // only on the playing path, so single-stepping through an encounter
@@ -458,6 +512,7 @@ export class App {
         this.world, n, h, () => this.recordTrails()).failure;
     }
     this.afterPhysics();
+    if (this.physicsVisualStateChanged()) this.invalidateCanvas();
     if (failure !== null) this.stopForPhysicsFailure(failure);
   }
 
@@ -471,10 +526,10 @@ export class App {
       this.clearHistory();
       world = snap.restoreSnapshot(this.initialSnapshot);
     }
-    this.frameSeq++; // the world is about to be swapped: drop cached energy
     const selIds = new Set(this.selection
       .filter((o): o is Body => o instanceof Body).map((o) => o.id));
     this.world = world;
+    this.invalidateEnergy();
     this.controller.hover = null;
     // a rewind swaps the world just as much as a load does, so the same
     // in-progress gestures have to go with it (see resetInteraction)
@@ -489,7 +544,8 @@ export class App {
   ensureInitial(): void {
     if (this.initialSnapshot === null) {
       this.initialSnapshot = snap.snapshot(this.world);
-      this.baselineEnergy = this.world.energy().total;
+      this.invalidateEnergy();
+      this.baselineEnergy = this.energyNow().total;
     }
   }
 
@@ -613,7 +669,7 @@ export class App {
     this.clearHistory();
     this.rewindUnavailable = false;
     this.divergeCooldown = -Infinity;
-    this.frameSeq++; // new world: any cached energy belongs to the old one
+    this.invalidateEnergy(); // any cached energy belongs to the old world
     if (!keepInitial) {
       this.initialSnapshot = null;
       this.baselineEnergy = null;
@@ -626,27 +682,42 @@ export class App {
     this.lastGraphSampleT = -Infinity;
     if (this.graphMode !== "Off") this.recordGraphSample();
     this.onWorldReplaced();
+    this.invalidateCanvas();
   }
 
   setSelection(sel: Selectable[]): void {
     this.selection = sel;
+    this.syncPhaseSelection();
     this.onSelectionChange();
+    this.invalidateCanvas();
   }
 
   // -------------------------------------------------------------- undo/redo
   /** Capture the exact live state before an immediate or continuous edit. */
   beginEdit(): void {
     if (this.editBefore === null) this.editBefore = snap.snapshot(this.world);
+    // Continuous controls call beginEdit for each live input even though the
+    // transaction snapshot is captured only once. Each input may have changed
+    // a rendered property, so keep the canvas live throughout the gesture.
+    this.invalidateCanvas();
+    this.invalidateEnergy();
   }
 
   cancelEdit(): void {
     this.editBefore = null;
+    // Cancellation drops the transaction boundary, not necessarily the live
+    // mutation (for example, cancelling an auto-created link endpoint removes
+    // that endpoint). Treat the resulting state as authoritative.
+    this.invalidateEnergy();
   }
 
   /** Commit one edit boundary. A captured pre-edit state is inserted before
    * the result, so undo remains exact even when physics ran since the last
    * edit. Existing callers that only call pushUndo retain legacy behavior. */
   commitEdit(): snap.HistoryStoreResult {
+    // Continuous gestures can span panel refreshes. Even if energy was read
+    // after beginEdit(), the final mutation at the boundary must win.
+    this.invalidateEnergy();
     const after = snap.snapshot(this.world);
     const before = this.editBefore;
     this.editBefore = null;
@@ -655,12 +726,13 @@ export class App {
       : this.undoStack.pushTransition(before, after);
     if (this.world.time === 0.0) {
       this.initialSnapshot = after;
-      this.baselineEnergy = this.world.energy().total;
+      this.baselineEnergy = this.energyNow().total;
     }
     this.onSelectionChange(); // structure may have changed: rebuild inspector
     if (result === "too-large") {
       this.toast("This scene is too large to keep undo history");
     }
+    this.invalidateCanvas();
     return result;
   }
 
@@ -1001,25 +1073,35 @@ export class App {
     this.toastFn(msg);
   }
 
-  /** `world.energy()` for the current frame, computed at most once.
+  /** Mark derived energy stale after a live-world mutation.
    *
-   * It is O(n^2) under mutual gravity and had two callers per frame - the
-   * graph sampler and the status-bar drift readout - so an N-body scene
-   * paid for it twice. The cache is scoped to one animation frame, and
-   * everything that can change the energy (a step, an inspector edit)
-   * happens between frames, so a reader can never see a stale value. */
-  private energyFrame = -1;
+   * The revision advances only from a clean state. A displayed physics batch
+   * can contain many substeps and a drag can write several bodies, but all
+   * readers need is one recomputation after the complete mutation. Public so
+   * the interaction layer can cover direct position/velocity writes. */
+  invalidateEnergy(): void {
+    if (this.energyRevision === this.energyCachedRevision) {
+      this.energyRevision++;
+    }
+  }
+
+  /** `world.energy()` for the current live state, computed at most once.
+   *
+   * Mutual gravity makes this O(n^2). A mutation revision lets graph sampling
+   * and the drift readout share a result while unchanged paused frames retain
+   * it indefinitely; animation-frame cadence alone never invalidates it. */
+  private energyRevision = 1;
+  private energyCachedRevision = 0;
   private energyCached: { ke: number; pe: number; total: number } | null = null;
 
   energyNow(): { ke: number; pe: number; total: number } {
-    if (this.energyCached === null || this.energyFrame !== this.frameSeq) {
-      this.energyFrame = this.frameSeq;
+    if (this.energyCached === null ||
+        this.energyCachedRevision !== this.energyRevision) {
       this.energyCached = this.world.energy();
+      this.energyCachedRevision = this.energyRevision;
     }
     return this.energyCached;
   }
-
-  private frameSeq = 0;
 
   energyDriftText(): string {
     if (this.baselineEnergy === null) return "";
@@ -1039,13 +1121,77 @@ export class App {
     if (on && !this.view.trails) this.trails.clear();
     this.view.trails = on;
     if (!on) this.world.trace.length = 0;
+    this.invalidateCanvas();
   }
 
   // --------------------------------------------------------------- main loop
+  /** Snapshot only physics-owned values that can change canvas pixels.
+   * Scene edits have explicit invalidations; this is for World.step, where a
+   * clock-only change in an empty/settled world must remain draw-free. */
+  private capturePhysicsVisualState(): void {
+    const bodies = this.world.bodies;
+    // Position always changes scene geometry. Rotation is absent from the
+    // simplified performance renderer; velocity matters only for enabled
+    // arrows or the selected body's handle; acceleration matters only for
+    // its analytical arrows. Do not stream unused vectors through memory in
+    // a dense scene merely to discover that they cannot affect its pixels.
+    this.physicsVisualAngle = !this.perfMode;
+    this.physicsVisualVelocity = this.view.velVectors ||
+      (this.selection.length === 1 && this.selection[0] instanceof Body);
+    this.physicsVisualAcceleration = this.view.accVectors || this.view.forceVectors;
+    const stride = 3 + Number(this.physicsVisualAngle) +
+      2 * Number(this.physicsVisualVelocity) +
+      2 * Number(this.physicsVisualAcceleration);
+    const need = bodies.length * stride;
+    if (this.physicsVisualBefore.length < need) {
+      let capacity = Math.max(64, this.physicsVisualBefore.length);
+      while (capacity < need) capacity *= 2;
+      this.physicsVisualBefore = new Float64Array(capacity);
+    }
+    let i = 0;
+    for (const body of bodies) {
+      const out = this.physicsVisualBefore;
+      out[i++] = body.id;
+      out[i++] = body.pos.x;
+      out[i++] = body.pos.y;
+      if (this.physicsVisualAngle && !body.locked) out[i++] = body.angle;
+      if (this.physicsVisualVelocity && !body.locked) {
+        out[i++] = body.vel.x;
+        out[i++] = body.vel.y;
+      }
+      if (this.physicsVisualAcceleration && body.invMass !== 0) {
+        out[i++] = body.acc.x;
+        out[i++] = body.acc.y;
+      }
+    }
+    this.physicsVisualBodies = bodies.length;
+    this.physicsContactsBefore = this.world.contacts.length;
+  }
+
+  private physicsVisualStateChanged(): boolean {
+    const bodies = this.world.bodies;
+    if (bodies.length !== this.physicsVisualBodies) return true;
+    let i = 0;
+    for (const body of bodies) {
+      const before = this.physicsVisualBefore;
+      if (before[i++] !== body.id ||
+          before[i++] !== body.pos.x || before[i++] !== body.pos.y) return true;
+      if (this.physicsVisualAngle && !body.locked && before[i++] !== body.angle) return true;
+      if (this.physicsVisualVelocity && !body.locked &&
+          (before[i++] !== body.vel.x || before[i++] !== body.vel.y)) return true;
+      if (this.physicsVisualAcceleration && body.invMass !== 0 &&
+          (before[i++] !== body.acc.x || before[i++] !== body.acc.y)) return true;
+    }
+    // Contact arrows are the only solver output not represented by a body's
+    // visual state. If either side of the batch has contacts, their manifold
+    // points may have changed and the diagnostic overlay must stay live.
+    return this.view.contacts &&
+      (this.physicsContactsBefore > 0 || this.world.contacts.length > 0);
+  }
+
   start(): void {
     this.lastFrame = performance.now();
     const frame = (now: number) => {
-      this.frameSeq++; // invalidates the per-frame energy cache
       const dtFrame = Math.min(0.25, (now - this.lastFrame) / 1000);
       this.lastFrame = now;
       if (dtFrame > 0) {
@@ -1080,9 +1226,14 @@ export class App {
       let quanta = 0;
       let qUsed = 1;
       let failure: PhysicsFailure | null = null;
+      let capturedVisualState = false;
       const t0 = performance.now();
       while (this.accumulator >= effDt && quanta < MAX_STEPS_PER_FRAME &&
              failure === null) {
+        if (!capturedVisualState) {
+          this.capturePhysicsVisualState();
+          capturedVisualState = true;
+        }
         // resolution is re-chosen per quantum from the freshest
         // accelerations, so a close encounter that flares up mid-frame
         // is caught within 1/120 s
@@ -1108,6 +1259,9 @@ export class App {
         this.cullEscaped();
       }
       this.afterPhysics();
+      if (capturedVisualState && this.physicsVisualStateChanged()) {
+        this.invalidateCanvas();
+      }
     }
 
     // A camera that glides is decoration on top of the simulation, and
@@ -1226,24 +1380,33 @@ export class App {
     const maxlen = this.view.trailLen;
     const now = this.world.time;
     const threshold = 0.5 / this.camera.zoom;
+    let changed = false;
     const trailFor = (bid: number): Trail => {
       let t = this.trails.get(bid);
       if (t === undefined) {
         t = new Trail(maxlen);
         this.trails.set(bid, t);
+        changed = true;
       } else if (t.capacity !== maxlen) {
         t.setCapacity(maxlen); // the user changed Trail length
+        changed = true;
       }
       // stepping back / re-simulating leaves points stamped in the
       // future; they would never expire and would draw a path the body
       // has not taken yet, so drop them
-      if (t.count > 0 && t.time(t.count - 1) > now + 1e-9) t.clear();
+      if (t.count > 0 && t.time(t.count - 1) > now + 1e-9) {
+        t.clear();
+        changed = true;
+      }
       return t;
     };
     // sub-step path samples captured inside the adaptive integrator
     // (close encounters turn around within a single step)
     if (this.world.trace.length > 0) {
-      for (const [bid, x, y] of this.world.trace) trailFor(bid).push(x, y, now);
+      for (const [bid, x, y] of this.world.trace) {
+        trailFor(bid).push(x, y, now);
+        changed = true;
+      }
       this.world.trace.length = 0;
     }
     for (const b of this.world.bodies) {
@@ -1253,8 +1416,10 @@ export class App {
       if (n === 0 ||
           Math.abs(t.x(n - 1) - b.pos.x) + Math.abs(t.y(n - 1) - b.pos.y) > threshold) {
         t.push(b.pos.x, b.pos.y, now);
+        changed = true;
       }
     }
+    if (changed) this.invalidateCanvas();
   }
 
   /** Age out trail points and drop the trails of bodies that no longer
@@ -1286,17 +1451,20 @@ export class App {
       if (!b.locked) live.add(b.id);
     }
     for (const [bid, t] of this.trails) {
-      if (live.has(bid)) t.expireBefore(cutoff);
-      else this.trails.delete(bid);
+      if (live.has(bid)) {
+        const before = t.count;
+        t.expireBefore(cutoff);
+        if (t.count !== before) this.invalidateCanvas();
+      } else {
+        this.trails.delete(bid);
+        this.invalidateCanvas();
+      }
     }
   }
 
   private trailLive = new Set<number>();
 
   private afterPhysics(): void {
-    // the world just moved, so anything cached against the old state is
-    // stale - including a single-step (`.`) outside the animation frame
-    this.frameSeq++;
     this.sweepTrails();
     // rolling per-frame history so the user can step backwards (,)
     const rewindResult = this.history.push(this.world);
@@ -1313,11 +1481,32 @@ export class App {
 
   private lastGraphSampleT = -Infinity;
 
+  /** Keep phase data and its selected-body identity inseparable.
+   *
+   * Selection can change while paused, when the sampling clock is deliberately
+   * quiet. Clear the old body's trace and seed the new body immediately so the
+   * graph can never relabel stale samples as belonging to a different body. */
+  private syncPhaseSelection(): Body | undefined {
+    const body = this.selection.find((o): o is Body => o instanceof Body);
+    const nextId = body?.id ?? null;
+    if (nextId === this.phaseBodyId) return body;
+    this.phaseBodyId = nextId;
+    this.phasePlot.clear();
+    if (body !== undefined) {
+      this.phasePlot.add(
+        this.world.time, body.pos.x, body.vel.x, body.pos.y, body.vel.y);
+    }
+    return body;
+  }
+
   /** Sample the current state into every graph series. Runs after each
    * physics frame, and immediately when a graph is enabled or the world
    * changes, so an opened graph shows data from the very first frame
    * instead of waiting for the simulation to produce a backlog. */
   recordGraphSample(): void {
+    // Selection identity is independent of the sampling cadence: synchronise
+    // it before the throttle can return on a paused or just-sampled clock.
+    const phaseBody = this.syncPhaseSelection();
     // Cap the cadence in SIM time: the window shows GRAPH_WINDOW_S seconds
     // in at most GRAPH_MAX_POINTS samples, so anything finer is sub-pixel.
     // This bounds both the sampling cost (energy() is O(n^2) with mutual
@@ -1336,18 +1525,49 @@ export class App {
     this.momentumSeries.add(this.world.time, {
       "|p|": p.length(), px: p.x, py: p.y, L: this.world.angularMomentum(),
     });
-    const body = this.selection.find((o): o is Body => o instanceof Body);
-    if (body !== undefined) {
-      if (body.id !== this.phaseBodyId) {
-        this.phaseBodyId = body.id;
-        this.phasePlot.clear();
-      }
+    if (phaseBody !== undefined) {
       this.phasePlot.add(
-        this.world.time, body.pos.x, body.vel.x, body.pos.y, body.vel.y);
+        this.world.time, phaseBody.pos.x, phaseBody.vel.x,
+        phaseBody.pos.y, phaseBody.vel.y);
     }
   }
 
   // ------------------------------------------------------------------ render
+  /** Capture camera/view inputs that callers are allowed to mutate directly.
+   * Explicit dirty calls cover model edits and theme changes; this guard makes
+   * direct camera helpers and ViewSettings controls impossible to forget. */
+  private updatePresentationState(): boolean {
+    const p = this.currentPresentation;
+    const cam = this.camera;
+    const view = this.view;
+    p[0] = cam.centre.x;
+    p[1] = cam.centre.y;
+    p[2] = cam.zoom;
+    p[3] = cam.screenW;
+    p[4] = cam.screenH;
+    p[5] = window.devicePixelRatio || 1;
+    p[6] = Number(view.grid);
+    p[7] = Number(view.snap);
+    p[8] = Number(view.velVectors);
+    p[9] = Number(view.accVectors);
+    p[10] = Number(view.forceVectors);
+    p[11] = Number(view.trails);
+    p[12] = Number(view.com);
+    p[13] = Number(view.contacts);
+    p[14] = Number(view.spatialGrid);
+    p[15] = Number(view.labels);
+    p[16] = view.vectorScale;
+    p[17] = view.trailLen;
+    p[18] = Number(view.follow);
+    p[19] = Number(view.autoFit);
+    p[20] = Number(this.perfMode);
+    const old = this.renderedPresentation;
+    for (let i = 0; i < p.length; i++) {
+      if (p[i] !== old[i]) return true;
+    }
+    return false;
+  }
+
   /** Nudge the trail vertex budget toward whatever this machine can hold.
    *
    * Climbs slowly and falls fast: overshooting costs dropped frames, while
@@ -1366,6 +1586,15 @@ export class App {
   }
 
   private render(): void {
+    if (this.updatePresentationState()) this.invalidateCanvas();
+    if (this.canvasGeneration === this.renderedCanvasGeneration) {
+      // A prior expensive frame must not keep the overload diagnosis latched
+      // while the retained canvas costs nothing. Decay toward zero without
+      // feeding a skipped frame into trail-quality tuning.
+      this.renderMs *= 0.85;
+      if (this.renderMs < 0.01) this.renderMs = 0;
+      return;
+    }
     const t0 = performance.now();
     const ctx = this.ctx;
     const dpr = window.devicePixelRatio || 1;
@@ -1382,6 +1611,8 @@ export class App {
     drawScaleBar(ctx, this.camera, w, h);
     this.renderMs = 0.85 * this.renderMs + 0.15 * (performance.now() - t0);
     this.tuneTrailQuality();
+    this.renderedCanvasGeneration = this.canvasGeneration;
+    this.renderedPresentation.set(this.currentPresentation);
   }
 }
 

@@ -19,6 +19,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "../src/app";
 import { Body, Wall } from "../src/engine/body";
 import { DistanceLink, SpringLink } from "../src/engine/links";
+import { Driver } from "../src/engine/world";
 import { Vec2 } from "../src/core/vec";
 import { Inspector } from "../src/ui/inspector";
 
@@ -169,5 +170,51 @@ describe("Inspector accessibility and persisted visibility", () => {
     expect(app.settings.inspector_visible).toBe(true);
     expect(JSON.parse(localStorage.getItem("mechanica.settings") ?? "{}")
       .inspector_visible).toBe(true);
+  });
+
+  it("names the icon-only control that removes a world driver", () => {
+    const { app, panel } = makeInspector();
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    body.name = "Runner";
+    app.world.bodies.push(body);
+    app.world.drivers.push(new Driver(body.id));
+
+    const worldTab = [...panel.querySelectorAll<HTMLButtonElement>("[role=tab]")]
+      .find((tab) => tab.textContent === "World")!;
+    worldTab.click();
+
+    const remove = panel.querySelector<HTMLButtonElement>(
+      'button[aria-label="Remove driver for Runner"]');
+    expect(remove).not.toBeNull();
+    expect(remove?.title).toBe("Remove driver for Runner");
+  });
+});
+
+describe("Inspector edit transactions", () => {
+  it("captures a delayed text commit after intervening simulation", () => {
+    const { app, panel, inspector } = makeInspector();
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    body.name = "Runner";
+    body.vel.x = 2;
+    app.world.gravity = 0;
+    app.world.bodies.push(body);
+    app.undoStack.reset(app.world);
+    app.setSelection([body]);
+    inspector.refresh();
+
+    const name = panel.querySelector<HTMLInputElement>('input[aria-label="Name"]')!;
+    name.focus();
+    name.value = "Renamed";
+    name.dispatchEvent(new Event("input", { bubbles: true }));
+
+    app.world.step(0.25);
+    const evolvedX = body.pos.x;
+    expect(evolvedX).toBeGreaterThan(0);
+    name.blur();
+    expect(body.name).toBe("Renamed");
+
+    app.undo();
+    expect(app.world.bodies[0].name).toBe("Runner");
+    expect(app.world.bodies[0].pos.x).toBeCloseTo(evolvedX, 12);
   });
 });

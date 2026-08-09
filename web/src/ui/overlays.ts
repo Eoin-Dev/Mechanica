@@ -19,6 +19,8 @@ export class Library {
   private category = "All";
   private tabBtns = new Map<LibraryTab, HTMLButtonElement>();
   private content!: HTMLElement;
+  private importing = false;
+  private importButton: HTMLButtonElement | null = null;
 
   constructor(app: App, root: HTMLElement) {
     this.app = app;
@@ -81,6 +83,10 @@ export class Library {
 
   private render(): void {
     refreshTabs(this.tabBtns, this.tab, this.content);
+    // Do not retain a detached action when tabs replace the panel. If a file
+    // read is still pending, renderScenes binds the new button to the same
+    // instance-level importing state below.
+    this.importButton = null;
     this.content.replaceChildren();
     if (this.tab === "Examples") this.renderExamples();
     else this.renderScenes();
@@ -112,30 +118,30 @@ export class Library {
     // "Show more" toggle (mouse- or keyboard-activated) to reveal the full text
     // without loading the preset. Whether it's needed can only be measured once
     // the cards are laid out, so collect them and check after appending.
-    const clampable: Array<{ desc: HTMLElement; card: HTMLElement;
-                             actions: HTMLElement }> = [];
+    const clampable: Array<{ desc: HTMLElement; card: HTMLElement }> = [];
     let descriptionIndex = 0;
     for (const preset of PRESETS) {
       if (this.category !== "All" && preset.category !== this.category) continue;
       const desc = el("p", { text: preset.description,
                               id: `preset-description-${descriptionIndex++}` });
-      const card = el("div", { class: "preset-card" },
+      const card = el("div", { class: "preset-card",
+                               "data-preset-name": preset.name },
         el("div", { class: "cat", text: preset.category }),
-        el("h3", { text: preset.name }),
-        desc);
-      const load = button(`Load ${preset.name}`, () => {
+        el("h3", { text: preset.name }), desc);
+      const load = el("button", { class: "preset-card-hit",
+                                   "aria-label": `Load ${preset.name}`,
+                                   "aria-describedby": desc.id });
+      load.addEventListener("click", () => {
         this.app.loadPreset(preset);
         this.close();
-      }, { style: "primary", class: "card-load" });
-      const actions = el("div", { class: "card-load-actions" },
-        el("div", { class: "card-action-spacer" }), load.root);
-      card.append(actions);
+      });
+      card.append(load);
       grid.append(card);
-      clampable.push({ desc, card, actions });
+      clampable.push({ desc, card });
     }
     this.content.append(chips, grid);
 
-    for (const { desc, card, actions } of clampable) {
+    for (const { desc, card } of clampable) {
       if (desc.scrollHeight <= desc.clientHeight + 1) continue; // fully visible
       const more = el("button", { class: "card-more", text: "Show more",
                                    "aria-expanded": "false",
@@ -145,7 +151,8 @@ export class Library {
         more.textContent = open ? "Show less" : "Show more";
         more.setAttribute("aria-expanded", String(open));
       });
-      actions.insertBefore(more, actions.firstChild);
+      card.classList.add("has-more");
+      card.append(more);
     }
   }
 
@@ -173,11 +180,10 @@ export class Library {
                                                      : "Could not save the scene");
       }
     }, { icon: ICONS.save }).root);
-    let importing = false;
     const imported = button("Import .json", async () => {
-      if (importing) return;
-      importing = true;
-      (imported.root as HTMLButtonElement).disabled = true;
+      if (this.importing) return;
+      this.importing = true;
+      this.syncImportButton();
       try {
         const result = await snap.uploadScene();
         switch (result.status) {
@@ -196,12 +202,14 @@ export class Library {
             return;
         }
       } finally {
-        importing = false;
-        (imported.root as HTMLButtonElement).disabled = false;
+        this.importing = false;
+        this.syncImportButton();
       }
     }, { icon: ICONS.import,
          tooltip: "Load a .json scene saved from this app or the desktop " +
-                  "version." });
+                   "version." });
+    this.importButton = imported.root as HTMLButtonElement;
+    this.syncImportButton();
     actions.append(imported.root);
     this.content.append(actions);
 
@@ -303,6 +311,12 @@ export class Library {
       grid.append(card);
     }
     this.content.append(grid);
+  }
+
+  private syncImportButton(): void {
+    if (this.importButton === null) return;
+    this.importButton.disabled = this.importing;
+    this.importButton.setAttribute("aria-busy", String(this.importing));
   }
 }
 
@@ -730,6 +744,7 @@ export class Help {
       "force fields, integrated with symplectic solvers. Everything is in " +
       "SI units. All simulation runs locally in your browser.");
     about.append(" ", el("a", { href: "./THIRD_PARTY_NOTICES.txt",
+                                  target: "_blank", rel: "noopener",
                                   text: "Third-party notices" }));
     const body = el("div", { class: "overlay-body" },
       el("h3", { class: "help-heading", text: "Getting started" }),

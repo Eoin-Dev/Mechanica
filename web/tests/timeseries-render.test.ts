@@ -186,4 +186,27 @@ describe("time-series rendering", () => {
     s.clear();
     expect(s.rev).toBeGreaterThan(r1);
   });
+
+  it("stops autoscale redraws whenever there is nothing plottable", () => {
+    const { ctx } = recCtx();
+    const s = new TimeSeries(["E"]);
+    s.easing = true;
+    s.draw(ctx, 300, 120, "Energy");
+    expect(s.easing).toBe(false);
+
+    s.add(1, { E: 2 });
+    s.hidden.add("E");
+    s.easing = true;
+    s.draw(ctx, 300, 120, "Energy");
+    expect(s.easing).toBe(false);
+
+    s.hidden.clear();
+    s.easing = true;
+    s.draw(ctx, 10, 10, "Energy");
+    expect(s.easing).toBe(false);
+
+    s.easing = true;
+    s.clear();
+    expect(s.easing).toBe(false);
+  });
 });

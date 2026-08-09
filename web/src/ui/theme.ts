@@ -107,6 +107,7 @@ export let ACCENT_DARK = ORIGINAL.ACCENT_DARK;
 export let ACCENT_TEXT = ORIGINAL.ACCENT;
 export let FOCUS = ORIGINAL.ACCENT;
 export let ACCENT_INK: Color = [0, 0, 0];
+export let ACCENT_DARK_INK: Color = [255, 255, 255];
 export let TEXT = ORIGINAL.TEXT;
 export let TEXT_DIM = ORIGINAL.TEXT_DIM;
 export let TEXT_FAINT = ORIGINAL.TEXT_FAINT;
@@ -122,6 +123,8 @@ export let ACC_COLOR = ORIGINAL.ACC_COLOR;
 export let FORCE_COLOR = ORIGINAL.FORCE_COLOR;
 
 export let themeName: ThemeName = "original";
+/** Monotonic palette identity for retained Canvas consumers. */
+export let paletteRevision = 0;
 
 /** Parse "#rrggbb" into a Color (null on anything else). */
 export function parseHex(hex: string): Color | null {
@@ -182,6 +185,14 @@ function contrastSafe(base: Color, surfaces: readonly Color[], minimum: number):
   return score(black) >= score(white) ? black : white;
 }
 
+/** Black or white, whichever remains clearest on one filled control surface. */
+function surfaceInk(surface: Color): Color {
+  const black: Color = [0, 0, 0];
+  const white: Color = [255, 255, 255];
+  return contrastRatio(black, surface) >= contrastRatio(white, surface)
+    ? black : white;
+}
+
 // user accent override (settings): null = the theme's own accent
 let accentOverride: Color | null = null;
 
@@ -218,11 +229,10 @@ export function setTheme(requested: ThemeName): void {
     SELECTION = lighten(a, 25); // the canvas highlight follows the accent
   }
   ACCENT_TEXT = contrastSafe(ACCENT, [PANEL, PANEL_LIGHT], 4.5);
-  FOCUS = contrastSafe(ACCENT, [BG, PANEL, PANEL_LIGHT], 3.0);
-  const black: Color = [0, 0, 0];
-  const white: Color = [255, 255, 255];
-  ACCENT_INK = contrastRatio(black, ACCENT) >= contrastRatio(white, ACCENT)
-    ? black : white;
+  FOCUS = contrastSafe(ACCENT, [BG, PANEL, PANEL_LIGHT, PANEL_HOVER], 3.0);
+  ACCENT_INK = surfaceInk(ACCENT);
+  ACCENT_DARK_INK = surfaceInk(ACCENT_DARK);
+  paletteRevision++;
   if (typeof document === "undefined") return; // node (tests)
   const s = document.documentElement.style;
   const set = (v: string, c: Color) => s.setProperty(v, css(c));
@@ -230,7 +240,8 @@ export function setTheme(requested: ThemeName): void {
   set("--panel-hover", PANEL_HOVER); set("--outline", OUTLINE);
   set("--accent", ACCENT); set("--accent-hot", ACCENT_HOT);
   set("--accent-dark", ACCENT_DARK); set("--accent-text", ACCENT_TEXT);
-  set("--focus", FOCUS); set("--accent-ink", ACCENT_INK); set("--text", TEXT);
+  set("--focus", FOCUS); set("--accent-ink", ACCENT_INK);
+  set("--accent-dark-ink", ACCENT_DARK_INK); set("--text", TEXT);
   set("--text-dim", TEXT_DIM); set("--text-faint", TEXT_FAINT);
   set("--good", GOOD); set("--warn", WARN); set("--bad", BAD);
   set("--selection", SELECTION);

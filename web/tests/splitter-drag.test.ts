@@ -128,7 +128,7 @@ describe("splitterDrag", () => {
     const el = document.createElement("div");
     let value = 300;
     let commits = 0;
-    splitterDrag(el, () => {}, () => { commits++; }, {
+    const syncAria = splitterDrag(el, () => {}, () => { commits++; }, {
       orientation: "vertical",
       label: "Resize Inspector",
       getValue: () => value,
@@ -142,11 +142,17 @@ describe("splitterDrag", () => {
     expect(el.getAttribute("aria-orientation")).toBe("vertical");
     expect(el.getAttribute("aria-valuenow")).toBe("300");
 
+    // Owners can reveal a pane that was hidden during construction and
+    // resynchronise the value against its real laid-out size.
+    value = 360;
+    syncAria();
+    expect(el.getAttribute("aria-valuenow")).toBe("360");
+
     el.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
-    expect(value).toBe(310);
+    expect(value).toBe(370);
     el.dispatchEvent(new KeyboardEvent("keydown",
       { key: "ArrowLeft", shiftKey: true, bubbles: true }));
-    expect(value).toBe(342);
+    expect(value).toBe(402);
     el.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
     expect(value).toBe(240);
     el.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
