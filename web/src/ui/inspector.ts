@@ -103,23 +103,28 @@ export class Inspector implements Panel {
     this.splitter = splitter;
     this.desktopCollapsed = app.settings.inspector_visible === false;
 
-    // Capture the live pre-edit state before a control's target listener
-    // mutates it. This covers continuous range/colour input, text commits on
-    // blur, checkboxes and segmented/action buttons without forcing every
-    // individual property row to duplicate transaction plumbing. View-only
-    // controls do not touch the world and deliberately stay out of history.
+    // Capture the live pre-edit state immediately before a control's target
+    // listener mutates it. Range and colour inputs write continuously, while
+    // text, numeric and math fields only write on change/blur; beginning on
+    // their ordinary typing events would snapshot too early if physics keeps
+    // evolving before the eventual commit. View-only controls do not touch
+    // the world and deliberately stay out of history.
     const beginControlEdit = (event: Event): void => {
       if (this.tab === "View") return;
       const target = event.target instanceof Element ? event.target : null;
-      if (target !== null && target.closest("input, math-field") !== null) {
-        app.beginEdit();
-        if (event.type === "blur" || event.type === "change") {
-          // Successful commits clear the boundary synchronously in the
-          // target handler. Invalid, unchanged, or UI-only input has no commit, so
-          // discard its speculative snapshot after event dispatch rather
-          // than letting it absorb the next unrelated edit.
-          queueMicrotask(() => app.cancelEdit());
-        }
+      const control = target?.closest("input, math-field") ?? null;
+      if (control === null) return;
+      if (event.type === "input" &&
+          !control.matches('input[type="range"], input[type="color"]')) {
+        return;
+      }
+      app.beginEdit();
+      if (event.type === "blur" || event.type === "change") {
+        // Successful commits clear the boundary synchronously in the target
+        // handler. Invalid, unchanged, or UI-only input has no commit, so
+        // discard its speculative snapshot after event dispatch rather than
+        // letting it absorb the next unrelated edit.
+        queueMicrotask(() => app.cancelEdit());
       }
     };
     root.addEventListener("input", beginControlEdit, true);
@@ -1103,7 +1108,8 @@ export class Inspector implements Panel {
           world.drivers = world.drivers.filter((d) => d !== drv);
           this.commit();
           this.markDirty();
-        }, { icon: ICONS.close, style: "ghost" }).root);
+        }, { icon: ICONS.close, style: "ghost",
+             tooltip: `Remove driver for ${name}` }).root);
         this.body.append(row);
       }
     }

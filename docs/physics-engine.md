@@ -485,9 +485,9 @@ applied by the solver. Locked/held bodies are excluded from dynamic energy and
 momentum. Mutual-gravity energy follows the same softened and solid-interior
 model as the force.
 
-The application caches `world.energy()` for one rendered frame because mutual
-gravity makes it O(n²), and both graph sampling and the status bar may request
-it.
+The application caches `world.energy()` by physical-state mutation revision
+because mutual gravity makes it O(n²). Graph sampling and the status bar share
+the cached result, and unchanged frames retain it until the world mutates.
 
 ## Numerical safeguards and lifecycle invariants
 

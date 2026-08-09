@@ -6,7 +6,7 @@ import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";
 import { World } from "../src/engine/world";
 import { Camera } from "../src/render/camera";
-import { ViewSettings, drawWorld } from "../src/render/draw";
+import { ViewSettings, drawGrid, drawWorld } from "../src/render/draw";
 import { Trail } from "../src/render/trail";
 
 interface Op { op: string; style?: string; x?: number; y?: number;
@@ -86,6 +86,95 @@ function trailStrokes(ops: Op[]): Op[] {
 }
 
 const view = (): ViewSettings => { const v = new ViewSettings(); v.trails = true; v.grid = false; return v; };
+
+describe("grid rendering", () => {
+  it("keeps every grid line in a bounded current path", () => {
+    const pathArgs: Array<FakePath2D | undefined> = [];
+    const segmentsPerStroke: number[] = [];
+    const stylesPerStroke: string[] = [];
+    let segments = 0;
+    let begins = 0;
+    let strokeStyle = "";
+    let lineWidth = 0;
+    const base: Record<string, unknown> = {
+      beginPath() { begins++; segments = 0; },
+      moveTo() {},
+      lineTo() { segments++; },
+      stroke(path?: FakePath2D) {
+        pathArgs.push(path);
+        segmentsPerStroke.push(segments);
+        stylesPerStroke.push(strokeStyle);
+      },
+    };
+    const ctx = new Proxy(base, {
+      get(t, p) { return p in t ? t[p as string] : undefined; },
+      set(_t, p, value) {
+        if (p === "strokeStyle") strokeStyle = String(value);
+        if (p === "lineWidth") lineWidth = Number(value);
+        return true;
+      },
+    }) as unknown as CanvasRenderingContext2D;
+
+    drawGrid(ctx, new Camera(1200, 650), 1200, 650);
+
+    // A full-canvas Path2D per colour caused raster cost to grow with canvas
+    // backing area. The bounded grid contains at most 402 individual lines;
+    // each must be a one-segment current path with no Path2D stroke argument.
+    expect(pathArgs.length).toBeGreaterThan(3);
+    expect(pathArgs.length).toBeLessThanOrEqual(402);
+    expect(pathArgs.every((path) => path === undefined)).toBe(true);
+    expect(segmentsPerStroke.every((count) => count === 1)).toBe(true);
+    expect(begins).toBe(pathArgs.length);
+    expect(lineWidth).toBe(1);
+    expect(new Set(stylesPerStroke).size).toBe(3); // minor, major and axis
+  });
+
+  it("keeps spatial-debug lines out of a disjoint full-canvas Path2D", () => {
+    const pathArgs: Array<FakePath2D | undefined> = [];
+    const segmentsPerStroke: number[] = [];
+    const stylesPerStroke: string[] = [];
+    let segments = 0;
+    let begins = 0;
+    let strokeStyle = "";
+    let lineWidth = 0;
+    const base: Record<string, unknown> = {
+      beginPath() { begins++; segments = 0; },
+      moveTo() {},
+      lineTo() { segments++; },
+      stroke(path?: FakePath2D) {
+        pathArgs.push(path);
+        segmentsPerStroke.push(segments);
+        stylesPerStroke.push(strokeStyle);
+      },
+      fill() {},
+    };
+    const ctx = new Proxy(base, {
+      get(t, p) { return p in t ? t[p as string] : () => {}; },
+      set(_t, p, value) {
+        if (p === "strokeStyle") strokeStyle = String(value);
+        if (p === "lineWidth") lineWidth = Number(value);
+        return true;
+      },
+    }) as unknown as CanvasRenderingContext2D;
+    const body = new Body(new Vec2(1000, 1000), 0.1, 1); // enables grid, remains culled
+    const world = worldWith(body);
+    const debugView = new ViewSettings();
+    debugView.grid = false;
+    debugView.trails = false;
+    debugView.spatialGrid = true;
+
+    drawWorld(ctx, new Camera(800, 600), world, debugView, [], null,
+              new Map(), 800, 600);
+
+    expect(pathArgs.length).toBeGreaterThan(3);
+    expect(pathArgs.length).toBeLessThanOrEqual(201);
+    expect(pathArgs.every((path) => path === undefined)).toBe(true);
+    expect(segmentsPerStroke.every((count) => count === 1)).toBe(true);
+    expect(begins).toBe(pathArgs.length);
+    expect(lineWidth).toBe(1);
+    expect(new Set(stylesPerStroke).size).toBe(1);
+  });
+});
 
 describe("trail rendering", () => {
   it("renders a visible trail as a connected, faded polyline", () => {

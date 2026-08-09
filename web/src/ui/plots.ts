@@ -125,6 +125,7 @@ export class TimeSeries {
     for (const d of this.data.values()) d.length = 0;
     this.head = 0;
     this.view = null;
+    this.easing = false;
     this.rev++;
   }
 
@@ -250,6 +251,7 @@ export class TimeSeries {
     ctx.font = "11px system-ui, sans-serif";
     this.drawLegend(ctx, w);
     if (this.count === 0) {
+      this.easing = false;
       ctx.fillStyle = css(theme.TEXT_FAINT);
       ctx.textAlign = "center";
       ctx.fillText("Run the simulation to collect data", w / 2, h / 2);
@@ -258,6 +260,7 @@ export class TimeSeries {
     }
     const visible = this.channels.filter((c) => !this.hidden.has(c));
     if (visible.length === 0) {
+      this.easing = false;
       ctx.fillStyle = css(theme.TEXT_FAINT);
       ctx.textAlign = "center";
       ctx.fillText(`All channels hidden - ${isTouch() ? "tap" : "click"} the ` +
@@ -266,7 +269,10 @@ export class TimeSeries {
       return;
     }
     const plot = { x: 8, y: 26, w: w - 16, h: h - 42 };
-    if (plot.w < 20 || plot.h < 16) return;
+    if (plot.w < 20 || plot.h < 16) {
+      this.easing = false;
+      return;
+    }
     // i0/i1 below are LIVE indices (0 = oldest unexpired sample); H turns
     // one into an index in the backing arrays
     const ts = this.ts;

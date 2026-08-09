@@ -412,7 +412,8 @@ revoked after a delay so the browser has time to begin reading it.
 
 Import creates a temporary file input accepting JSON and rejects a file larger
 than 10 MiB from its byte-reported `File.size` before calling `text()`. While a
-file is being read the import action is disabled. Parsing uses the untrusted
+file is being read the Library's instance-level import state disables both the
+current action and any replacement action created by a tab rerender. Parsing uses the untrusted
 `restore()` path and returns `SceneReadResult`; cancelling returns `cancelled`
 without feedback. Invalid JSON and collection-limit failures leave the live
 world and its history unchanged. A `loaded` result is installed as an undoable

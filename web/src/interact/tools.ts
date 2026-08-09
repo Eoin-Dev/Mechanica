@@ -162,6 +162,7 @@ export class CanvasController {
     this.cancelPending();
     this.tool = tool;
     this.rubber = null;
+    this.app.invalidateCanvas();
   }
 
   /** Cancel an in-progress link or wall draw. Returns true if one was. */
@@ -176,6 +177,7 @@ export class CanvasController {
       this.linkCreatedFirst = null;
       this.linkFirst = null;
       this.wallStart = null;
+      this.app.invalidateCanvas();
       return true;
     }
     return false;
@@ -190,6 +192,11 @@ export class CanvasController {
    * vel0 is what it has.
    */
   private releaseDragged(): void {
+    // A body press arms dragItems before the activation threshold. A pure
+    // inspect click changes no physical state and must not evict the expensive
+    // energy cache on release; an activated drag did change held/position/
+    // velocity state and its restoration must.
+    const changed = this.dragActive;
     this.clearChaseCaps();
     for (const { body, vel0 } of this.dragItems) {
       body.held = false;
@@ -199,6 +206,7 @@ export class CanvasController {
     this.dragItems = [];
     this.dragActive = false;
     this.dragPrev = null;
+    if (changed) this.app.invalidateEnergy();
   }
 
   /** Drop any in-progress drag (e.g. world replaced). */
@@ -207,6 +215,7 @@ export class CanvasController {
     this.velDrag = null;
     this.wallDrag = null;
     this.wallGrab = null;
+    this.app.invalidateCanvas();
   }
 
   /** Refresh the drag every frame (pointer-move events stop while the
@@ -227,6 +236,10 @@ export class CanvasController {
    * also throwing it. */
   updateDrag(): void {
     if (this.dragItems.length === 0 || !this.dragActive) return;
+    // A held object and its hidden/shown velocity handle are live interaction
+    // feedback even when the pointer is parked between DOM events.
+    this.app.invalidateCanvas();
+    this.app.invalidateEnergy();
     const app = this.app;
     const worldP = app.camera.toWorld(this.mouse[0], this.mouse[1]);
     if (!app.playing) {
@@ -411,6 +424,7 @@ export class CanvasController {
     this.linkFirst = null;
     this.linkCreatedFirst = null;
     this.panning = false;
+    this.app.invalidateCanvas();
   }
 
   attach(canvas: HTMLCanvasElement): void {
@@ -429,6 +443,7 @@ export class CanvasController {
       this.resetInteraction();
       if (moved) this.app.commitEdit();
       this.dragMoved = false;
+      this.app.invalidateCanvas();
     };
     window.addEventListener("blur", abortWindowGesture);
     document.addEventListener("fullscreenchange", abortWindowGesture);
@@ -440,6 +455,7 @@ export class CanvasController {
         // pointer already gone (released mid-dispatch): continue uncaptured
       }
       this.mouse = this.local(canvas, e);
+      this.app.invalidateCanvas();
       // only touch contacts take part in pinch detection: a mouse whose
       // pointerup got eaten (context menu, F11) must never leave a stale
       // entry that turns every later click into a phantom two-finger pinch
@@ -483,6 +499,7 @@ export class CanvasController {
 
     canvas.addEventListener("pointermove", (e) => {
       const pos = this.local(canvas, e);
+      this.app.invalidateCanvas();
       this.shiftDown = e.shiftKey;
       if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, pos);
       if (this.pointers.size === 2) {
@@ -505,6 +522,7 @@ export class CanvasController {
     });
 
     const finish = (e: PointerEvent) => {
+      this.app.invalidateCanvas();
       this.pointers.delete(e.pointerId);
       if (this.pointers.size > 0) {
         this.pinchDist = 0;
@@ -525,6 +543,7 @@ export class CanvasController {
     };
     canvas.addEventListener("pointerup", finish);
     canvas.addEventListener("pointercancel", (e) => {
+      this.app.invalidateCanvas();
       this.pointers.delete(e.pointerId);
       const moved = this.dragMoved;
       this.abortDrag();
@@ -546,6 +565,7 @@ export class CanvasController {
       const factor = 1.1 ** (-e.deltaY / 100);
       this.app.camera.zoomAt(pos[0], pos[1], factor);
       this.app.noteUserZoom(); // auto-fit: allow out, cap in
+      this.app.invalidateCanvas();
     }, { passive: false });
   }
 
@@ -741,6 +761,7 @@ export class CanvasController {
       const body = this.velDrag;
       const s = VEL_ARROW_SCALE * app.view.vectorScale;
       body.vel.set((worldP.x - body.pos.x) / s, (worldP.y - body.pos.y) / s);
+      app.invalidateEnergy();
       this.dragMoved = true;
       return;
     }
@@ -755,6 +776,7 @@ export class CanvasController {
         wall.b.addIp(delta);
         this.wallGrab = worldP;
       }
+      app.invalidateEnergy();
       this.dragMoved = true;
       return;
     }
@@ -965,6 +987,9 @@ export class CanvasController {
     app.world.removeBodies(bodies); // cascades their links and drivers
     app.world.removeWalls(walls);
     app.world.removeLinks(links);
+    if (bodies.size > 0 || walls.size > 0 || links.size > 0) {
+      app.invalidateEnergy();
+    }
     this.pruneDeleted();
   }
 

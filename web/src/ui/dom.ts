@@ -205,14 +205,18 @@ export interface SplitterKeyboardOptions {
 export function splitterDrag(splitter: HTMLElement,
                              onMove: (e: PointerEvent) => void,
                              onCommit: () => void,
-                             keyboard?: SplitterKeyboardOptions): void {
+                             keyboard?: SplitterKeyboardOptions): () => void {
   const bound = (v: number | (() => number)): number =>
     typeof v === "function" ? v() : v;
   const syncAria = (): void => {
     if (keyboard === undefined) return;
-    splitter.setAttribute("aria-valuemin", String(Math.round(bound(keyboard.min))));
-    splitter.setAttribute("aria-valuemax", String(Math.round(bound(keyboard.max))));
-    splitter.setAttribute("aria-valuenow", String(Math.round(keyboard.getValue())));
+    const set = (name: string, value: number): void => {
+      const text = String(Math.round(value));
+      if (splitter.getAttribute(name) !== text) splitter.setAttribute(name, text);
+    };
+    set("aria-valuemin", bound(keyboard.min));
+    set("aria-valuemax", bound(keyboard.max));
+    set("aria-valuenow", keyboard.getValue());
   };
   if (keyboard !== undefined) {
     splitter.tabIndex = 0;
@@ -264,6 +268,10 @@ export function splitterDrag(splitter: HTMLElement,
   // fires after pointerup too, but `end` is idempotent; it is here for the
   // case where capture is lost without either of the events above
   splitter.addEventListener("lostpointercapture", end);
+  // A splitter may be wired while its pane is hidden, so its initial measured
+  // value can be zero. Owners call this after revealing or externally resizing
+  // the pane to keep the separator's announced range truthful.
+  return syncAria;
 }
 
 // ---------------------------------------------------------------------- tabs

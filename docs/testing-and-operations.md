@@ -144,7 +144,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`scene-storage.test.ts`](../web/tests/scene-storage.test.ts) | Unicode name normalization, millisecond/suffix save collisions, save/load/list, discriminated cancellation/invalid/oversize/storage outcomes, upload and collection limits, quota reporting, metadata, damaged payload handling, rollback/error semantics, rename behavior, orphan metadata, and deletion. |
 | [`settings-guards.test.ts`](../web/tests/settings-guards.test.ts) | `sanitizeSettings` type filtering, enum/hex validation, collection limits, and layout/font clamping. |
 | [`rewind.test.ts`](../web/tests/rewind.test.ts) | Digest-prefiltered structural keyframes versus exactly verified dynamic deltas, forced digest collisions, exact reconstruction including evolved angles, 48 MB/entry bounds and oversize rejection, changing structures, key reclamation, and frame-back behavior. |
-| [`app-lifecycle.test.ts`](../web/tests/app-lifecycle.test.ts) | Exact pre-edit transactions after simulation, undoable replacement routes and atomic failures, history byte limits, first-failure physics batching, strict time jumps, inspector persistence, phase/trail rewind cleanup, playback/reset, settings, energy baselines, and graph sampling. |
+| [`app-lifecycle.test.ts`](../web/tests/app-lifecycle.test.ts) | Exact pre-edit transactions after simulation, undoable replacement routes and atomic failures, history byte limits, first-failure physics batching, strict time jumps, phase/trail rewind cleanup, playback/reset, persisted-settings guards, energy baselines, live-state energy-cache invalidation, and graph sampling. |
 
 ### Expressions and math editing
 
@@ -165,8 +165,9 @@ with the behavior it protects rather than an exact assertion count.
 | [`camera.test.ts`](../web/tests/camera.test.ts) | World/screen inverse transforms, panning, cursor-anchored zoom/clamps, visible bounds, and nice scale-bar formatting. |
 | [`body-culling.test.ts`](../web/tests/body-culling.test.ts) | Scene-centred runaway classification, outward-motion requirement, orbit/furniture/held protections, and non-finite cleanup. |
 | [`trail.test.ts`](../web/tests/trail.test.ts) | Ring-buffer order/capacity, timestamps, expiration, resize, serial continuity, and conservative bounds. |
-| [`trail-render.test.ts`](../web/tests/trail-render.test.ts) | Visible/off-screen trail drawing, budgets, fading, stable decimation, endpoint/corner retention, and curve fidelity. |
-| [`timeseries-render.test.ts`](../web/tests/timeseries-render.test.ts) | Visible-window selection, scrolling/zoom ranges, legends, axis labels, single points, hidden channels, autoscale, history retention, and redraw state. |
+| [`trail-render.test.ts`](../web/tests/trail-render.test.ts) | Narrow non-`Path2D` world-grid and spatial-debug strokes plus visible/off-screen trail drawing, budgets, fading, stable decimation, endpoint/corner retention, and curve fidelity. |
+| [`timeseries-render.test.ts`](../web/tests/timeseries-render.test.ts) | Visible-window selection, scrolling/zoom ranges, legends, axis labels, single points, hidden channels, autoscale, history retention, redraw state, and easing termination for non-plottable data. |
+| [`render-invalidation.test.ts`](../web/tests/render-invalidation.test.ts) | Opaque 2D context creation, idempotent backing-store resize, retained unchanged/empty-playback frames, render-cost decay, and redraws for resize, view, camera, edit, dynamic physics, selection, and pointer changes. |
 
 ### DOM, shortcuts, accessibility, and responsive UI
 
@@ -175,14 +176,14 @@ with the behavior it protects rather than an exact assertion count.
 | [`accessibility.test.ts`](../web/tests/accessibility.test.ts) | Accessible control names, shortcut-name isolation, play state, value/selected semantics, tab helpers, and refresh behavior that avoids redundant ARIA/DOM updates. |
 | [`focus-ring.test.ts`](../web/tests/focus-ring.test.ts) | Stylesheet cascade retains keyboard focus visibility and the TypeScript/CSS phone breakpoints agree. |
 | [`shortcuts.test.ts`](../web/tests/shortcuts.test.ts) | Focused-control ownership, modifier edits, tool keys, playback/view commands, modal/tour/Escape precedence, and unusual event targets. |
-| [`splitter-drag.test.ts`](../web/tests/splitter-drag.test.ts) | Pointer capture plus keyboard 10/32-pixel steps and Home/End limits, separator orientation/value metadata, size direction, min/max clamps, commit behavior, and cancellation for inspector/dock resizing. |
+| [`splitter-drag.test.ts`](../web/tests/splitter-drag.test.ts) | Pointer capture plus keyboard 10/32-pixel steps and Home/End limits, separator orientation/value metadata and reveal-time resynchronization, size direction, min/max clamps, commit behavior, and cancellation for inspector/dock resizing. |
 | [`refresh-culling.test.ts`](../web/tests/refresh-culling.test.ts) | Scrolled controls skip refresh while hidden zero-rect controls remain eligible to reveal themselves. |
-| [`inspector-rebuild.test.ts`](../web/tests/inspector-rebuild.test.ts) | Inspector structure keys detect type/identity/field/driver/tab changes without rebuilding for ordinary values, while tab state/focus and colour selection survive semantic rerenders. |
+| [`inspector-rebuild.test.ts`](../web/tests/inspector-rebuild.test.ts) | Inspector structure keys and stable refreshes, semantic tabs/reopen/splitter metadata, desktop visibility persistence, accessible driver removal, and exact delayed-input transactions after intervening simulation. |
 | [`tour.test.ts`](../web/tests/tour.test.ts) | Tour construction, first-visit behavior, progress/finish, settings persistence, and cleanup. |
 | [`tour-spotlight.test.ts`](../web/tests/tour-spotlight.test.ts) | Multi-target spotlight tiling, clipping, rings, viewport placement, and responsive target geometry. |
-| [`panel-accessibility.test.ts`](../web/tests/panel-accessibility.test.ts) | Toolbar/graph icon names, play state labels, splitter semantics, and shortcut badges excluded from name computation. |
-| [`settings-accessibility.test.ts`](../web/tests/settings-accessibility.test.ts) | Settings tab semantics, category/choice pressed states, inspector reopen buttons, and desktop versus transient phone visibility. |
-| [`theme-contrast.test.ts`](../web/tests/theme-contrast.test.ts) | Every theme surface/text combination and black, white, and intermediate custom accents meet the required text/focus contrast thresholds. |
+| [`panel-accessibility.test.ts`](../web/tests/panel-accessibility.test.ts) | Toolbar/graph icon names, play state labels, unchanged-clock write suppression, revealed/dynamically bounded graph-splitter metadata, retained-graph palette invalidation, and shortcut badges excluded from name computation. |
+| [`settings-accessibility.test.ts`](../web/tests/settings-accessibility.test.ts) | Accent-swatch selection/focus, built-in preset full-card activation and independent description expansion, persistent single-flight scene import across rerenders, compact checkbox sizing, and safe new-tab third-party notice behavior. |
+| [`theme-contrast.test.ts`](../web/tests/theme-contrast.test.ts) | Every theme surface/text combination and black, white, and intermediate custom accents meet text, neutral-focus, accent/accent-dark ink, and filled-control focus-cue thresholds. |
 | [`tour-modal.test.ts`](../web/tests/tour-modal.test.ts) | App-shell inertness, pointer blocking, focus trapping/restoration, active-step progress, live announcements, and modal cleanup. |
 | [`zoom-accessibility.test.ts`](../web/tests/zoom-accessibility.test.ts) | Zoom-permissive viewport metadata, browser-owned modified wheel/keyboard/gesture input, canvas-only unmodified wheel/touch zoom, mobile heading presence, and selectable reference content. |
 
@@ -190,7 +191,7 @@ with the behavior it protects rather than an exact assertion count.
 
 | Test file | Protected behavior |
 | --- | --- |
-| [`e2e/accessibility.spec.ts`](../web/e2e/accessibility.spec.ts) | Production boot without console/page errors; axe WCAG A/AA scan; keyboard play/tabs/splitters/library; undo after scene replacement; rendered-canvas pointer alignment; 390 x 844 transient inspector behavior; modal-tour focus/inertness/restoration; and contained 320-CSS-pixel/200%-text layout. |
+| [`e2e/accessibility.spec.ts`](../web/e2e/accessibility.spec.ts) | Production boot without console/page errors; axe WCAG A/AA scan; keyboard play/tabs/splitters/full-card library activation; undo after scene replacement; rendered-canvas pointer alignment; 390 x 844 transient inspector behavior; modal-tour focus/inertness/restoration; and contained 320-CSS-pixel/200%-text layout. |
 
 ## Verification philosophy
 
@@ -228,6 +229,9 @@ Performance work must preserve these boundaries:
   the same state-derived resolution and force/constraint order.
 - Presentation-only quality, such as trail vertex count or DOM refresh culling,
   may react to measured cost because it does not feed simulation state.
+- The full opaque canvas is retained while its visual generation is unchanged;
+  clock-only empty/settled steps must not repaint, while every visible model,
+  camera, view, trail, selection, theme, resize, or interaction change must.
 - Hot loops use reusable typed arrays/batches and geometric growth. New per-
   pair/per-spring/per-body allocations in repeated force/contact/render loops
   require measurement and justification.

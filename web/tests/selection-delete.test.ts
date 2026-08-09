@@ -20,6 +20,7 @@ function makeApp(): { app: App; controller: CanvasController; undos: number } {
     selection: [] as Selectable[],
     undos: 0,
     setSelection(sel: Selectable[]) { stub.selection = sel; },
+    invalidateEnergy() {},
     beginEdit() {},
     cancelEdit() {},
     commitEdit() { stub.undos++; return "stored" as const; },

@@ -354,9 +354,9 @@ export class FormulaGuide {
 
   private buildRecipes(): void {
     this.body.append(para(
-      "Ready-made fields to drop into the world and take apart. Click a " +
-      "card to add it as a new force field (undo removes it); open the " +
-      "World tab to see and edit what arrived."));
+      "Ready-made fields to drop into the world and take apart. Choose Add " +
+      "on a recipe to create it as a new force field (undo removes it); " +
+      "open the World tab to see and edit what arrived."));
     const grid = el("div", { class: "card-grid guide-recipes" });
     for (const r of RECIPES) {
       const card = el("div", { class: "preset-card guide-recipe" },

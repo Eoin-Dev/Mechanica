@@ -11,6 +11,7 @@
   --accent-text: rgb(86, 156, 214);
   --focus: rgb(86, 156, 214);
   --accent-ink: rgb(0, 0, 0);
+  --accent-dark-ink: rgb(255, 255, 255);
   --text: rgb(226, 229, 234);
   --text-dim: rgb(152, 158, 168);
   --text-faint: rgb(145, 151, 161);
@@ -236,15 +237,26 @@ button {
   white-space: nowrap;
   flex: none;
 }
-button:hover:not(:disabled) { background: var(--panel-hover); }
+button:hover:not(:disabled):not(.active) { background: var(--panel-hover); }
 button:disabled { opacity: 0.45; cursor: default; }
-button.primary { background: var(--accent-dark); border-color: var(--accent); }
-button.primary:hover:not(:disabled) { background: var(--accent); }
+button.primary {
+  background: var(--accent-dark);
+  border-color: var(--accent);
+  color: var(--accent-dark-ink);
+}
+button.primary:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
 button.danger { border-color: rgb(120, 60, 60); }
 button.danger:hover:not(:disabled) { background: rgb(120, 60, 60); }
 button.ghost { background: transparent; border-color: transparent; }
 button.ghost:hover:not(:disabled) { background: var(--panel-hover); }
-button.active { background: var(--accent-dark); border-color: var(--accent); }
+button.active {
+  background: var(--accent-dark);
+  border-color: var(--accent);
+  color: var(--accent-dark-ink);
+}
 button.icon { padding: 5px; width: 32px; height: 32px; }
 button svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 button svg .fill { fill: currentColor; stroke: none; }
@@ -292,6 +304,10 @@ input:focus:not(:focus-visible) { outline: none; }
   outline-offset: 2px;
   border-radius: var(--radius);
 }
+/* The outer outline contrasts with the surrounding panel. Filled buttons
+   also receive an inset stroke in their contrast-safe text colour, keeping
+   the focus cue visible against accent and accent-dark surfaces themselves. */
+button:focus-visible { box-shadow: inset 0 0 0 2px currentColor; }
 /* Small controls sit tight against their labels and neighbours, so the ring
    hugs them instead of overlapping what is next to it. */
 label.checkbox input:focus-visible,
@@ -319,9 +335,9 @@ input.error { border-color: var(--bad); }
   border: 1px solid var(--outline);
   border-radius: var(--radius);
   padding: 1px 6px;
-  /* the app disables selection and touch gestures globally; both inherit
-     into the shadow DOM and break click/tap caret placement, so restore
-     them here like input[type=text] does */
+  /* interaction surfaces suppress drag selection, but the embedded editor
+     needs native text selection plus touch/caret handling inside its shadow
+     DOM, like input[type=text] */
   -webkit-user-select: text;
   user-select: text;
   touch-action: auto;
@@ -381,6 +397,7 @@ label.checkbox {
   align-items: center;
   gap: 7px;
   padding: 3px 0;
+  min-height: 24px;
   cursor: pointer;
   color: var(--text);
   /* hug the text: a block-level flex box stretches the full panel width,
@@ -393,15 +410,18 @@ label.checkbox {
 .row-half > label.checkbox { flex: 0 1 auto; }
 label.checkbox input {
   accent-color: var(--accent);
-  width: 24px;
-  height: 24px;
+  width: 14px;
+  height: 14px;
   flex: none;
 }
 
 .segmented { display: flex; border: 1px solid var(--outline); border-radius: var(--radius); overflow: hidden; }
 .segmented button { border: none; border-radius: 0; flex: 1; background: transparent; padding: 5px 8px; }
 .segmented button + button { border-left: 1px solid var(--outline); }
-.segmented button.active { background: var(--accent-dark); color: var(--text); }
+.segmented button.active {
+  background: var(--accent-dark);
+  color: var(--accent-dark-ink);
+}
 /* Dim the strip as a whole, matching .row.disabled, rather than letting each
    button's own :disabled opacity stack into near-invisibility. */
 .segmented.disabled { opacity: 0.4; }
@@ -759,28 +779,30 @@ button.perf-banner-btn:hover:not(:disabled) {
   margin-top: 12px;
 }
 .preset-card {
+  position: relative;
   background: var(--panel-light);
   border: 1px solid var(--outline);
   border-radius: 8px;
   padding: 10px 12px;
-  cursor: default;
+  cursor: pointer;
   min-height: 96px;
 }
-.card-load-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
+/* Built-in examples use one transparent native button over the whole card.
+   It preserves the compact card appearance while keeping Enter/Space and a
+   useful accessible name. The description toggle sits above this hit area. */
+button.preset-card-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  border-radius: inherit;
+  background: transparent;
 }
-.card-action-spacer { flex: 1; }
-button.card-load {
-  margin-top: 8px;
-  align-self: flex-start;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.card-load-actions button.card-load { margin-top: 0; }
+button.preset-card-hit:hover:not(:disabled) { background: transparent; }
+.preset-card.has-more { padding-bottom: 34px; }
 .preset-card:hover { background: var(--panel-hover); border-color: var(--accent-dark); }
 .preset-card h3 { font-size: calc(13px * var(--fs, 1)); margin-bottom: 4px; }
 .preset-card .cat { color: var(--accent-text); font-size: calc(10px * var(--fs, 1)); text-transform: uppercase; letter-spacing: 0.05em; }
@@ -796,7 +818,10 @@ button.card-load {
 }
 .preset-card.expanded p { -webkit-line-clamp: unset; overflow: visible; }
 .card-more {
-  margin-top: 6px;
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  z-index: 2;
   padding: 2px 6px;
   font-size: calc(11px * var(--fs, 1));
   color: var(--accent-text);
@@ -811,7 +836,7 @@ button.card-load {
   color: var(--accent-hot);
   text-decoration: underline;
 }
-.scene-card { display: flex; flex-direction: column; }
+.scene-card { display: flex; flex-direction: column; cursor: default; }
 .scene-card h3 { word-break: break-word; }
 .card-actions {
   display: flex;

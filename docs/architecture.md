@@ -73,7 +73,7 @@ driving. Production behavior does not depend on these handles.
 
 | Owner | Long-lived state | Not owned here |
 | --- | --- | --- |
-| `App` | Current `World`, camera, `ViewSettings`, selection, playback speed/accumulator, adaptive-resolution preference, active edit transaction, undo and rewind objects, initial reset snapshot, trails, plots, graph mode, clipboard properties, browser settings, performance observations, panel callbacks. | Physical integration rules, pointer gesture internals, DOM control trees. |
+| `App` | Current `World`, camera, `ViewSettings`, selection, playback speed/accumulator, adaptive-resolution preference, active edit transaction, undo and rewind objects, initial reset snapshot, trails, plots, graph mode, clipboard properties, browser settings, canvas invalidation generation, performance observations, panel callbacks. | Physical integration rules, pointer gesture internals, DOM control trees. |
 | `World` | Bodies, walls, links, fields, drivers, physical settings, simulation clock, contact snapshot, solver caches, adaptive-slice scratch storage, diagnostics. | Camera, selected objects, playback state, browser preferences, storage, rendering. |
 | `CanvasController` | Active tool, hover, pointer coordinates, pending link/wall gestures, drag/pan/box-selection state, touch pointers and pinch state. | Canonical selection and world lists; it edits those through `App`/`World`. |
 | Panels and overlays | DOM nodes, local tab/filter/open state, refresh groups, focus traps, splitter state. | Canonical physical or playback state; controls read/write `App` and `World`. |
@@ -100,7 +100,7 @@ sequenceDiagram
     participant P as Panels
 
     RAF->>A: frame(now)
-    A->>A: update FPS and frame sequence
+    A->>A: update FPS
     A->>C: updateDrag()
     A->>A: update(real-frame dt)
     loop available fixed physics quanta
@@ -109,15 +109,19 @@ sequenceDiagram
         A->>A: record trail samples
     end
     A->>A: stop on first failure; record rewind and graphs
-    A->>R: render current state
+    A->>R: render current state when visually dirty
     A->>P: refresh each panel
     A->>RAF: request next frame
 ```
 
 Calling `updateDrag()` before physics keeps a held body under a stationary
-pointer even when no pointer-move event fires. Rendering precedes panel refresh
-so both observe the same post-physics world. DOM controls do not drive their
-own timers; their `refresh` functions are polled by the panel layer.
+pointer even when no pointer-move event fires. A retained canvas image is
+redrawn only after visual invalidation; panel refresh still runs every frame so
+clock and control readouts observe the same post-physics world. DOM controls do
+not drive their own timers; their `refresh` functions are polled by the panel
+layer. The energy readout is revision-cached against physical state rather than
+display frames, so an unchanged paused mutual-gravity scene does not repeat its
+quadratic pair-energy pass at the monitor refresh rate.
 
 ## Fixed-timestep scheduling
 
@@ -191,9 +195,19 @@ display.
 
 ## Rendering lifecycle
 
-`App.render()` measures rendering cost independently from physics cost. It:
+`App` keeps a coalescing canvas generation. Resize, appearance/view changes,
+scene edits or replacement, selection, pointer previews, and camera changes
+invalidate it. A displayed physics batch compares a reusable snapshot of only
+the body values used by the active renderer; advancing an empty or settled
+world's clock does not invalidate unchanged pixels. Trail insertion/expiry and
+enabled contact diagnostics invalidate independently.
 
-1. Applies the device-pixel-ratio transform and clears with the current theme
+`App.render()` first compares direct camera/view inputs with their last drawn
+values. If the generation is unchanged it retains the existing pixels, decays
+the measured render-cost average toward zero, and skips all Canvas calls. A
+dirty render measures cost independently from physics cost and:
+
+1. Applies the device-pixel-ratio transform and paints the current theme
    background.
 2. Draws the optional world grid.
 3. Calls `drawWorld()` with world, camera, view settings, selection, hover,
@@ -205,6 +219,11 @@ display.
 Changing trail detail based on measured render time is safe because it changes
 only how an already-computed path is displayed. No simulation state reads the
 quality factor.
+
+The 2D context requests an opaque backing store because every dirty frame
+paints the entire background. Resize handling writes canvas backing dimensions
+only when their device-pixel dimensions change, while CSS-size changes still
+update the camera and invalidate drawing.
 
 Trail stroke batches are cached by colour. Every draw removes colour groups
 that are absent from the current world and ignores stale body IDs; world and

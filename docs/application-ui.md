@@ -13,7 +13,7 @@ The important `App` state falls into these groups:
 | --- | --- |
 | Model | `world`, current `selection`, property clipboard, undo stack, initial reset snapshot, rolling rewind history. |
 | Playback | `playing`, speed multiplier, fixed-step accumulator, overload state, adaptive-resolution toggle/current factor, FPS observations. |
-| View | `camera`, `ViewSettings`, trails keyed by body ID, adaptive trail quality, graph mode and series. |
+| View | `camera`, `ViewSettings`, trails keyed by body ID, coalesced canvas invalidation state, adaptive trail quality, graph mode and series. |
 | Interaction | One `CanvasController`, plus callbacks for selection and world replacement. |
 | Preferences | Sanitized browser `settings`, performance mode, culling, dragged-wall collision, appearance and layout values. |
 | UI integration | Panel list, toast callback, soft-body hint state, energy cache. |
@@ -118,7 +118,8 @@ Saved-scene reads distinguish loaded, cancelled, missing, invalid, oversized,
 and storage-error results. Cancelling the native picker is silent; malformed,
 resource-limited, damaged saved data, and blocked/full storage receive specific
 feedback. Uploaded files are rejected above 10 MiB, and the import button stays
-disabled while its one file is being read. Quick-save names include local
+disabled while its one file is being read, including if a Library tab rerender
+replaces the button during that read. Quick-save names include local
 milliseconds, and a repeated or DST-colliding timestamp receives `-2`, `-3`,
 and subsequent collision-safe suffixes.
 
@@ -330,20 +331,34 @@ following cannot cause bodies to be deleted.
 `drawWorld()` receives all display state explicitly and draws in Canvas 2D.
 Major behavior includes:
 
+- retaining the last complete opaque canvas image until a camera, view,
+  interaction, scene, selection, trail, or rendered physics value changes;
+- allowing empty or visually settled playback to advance simulation time and
+  DOM readouts without repainting the full high-DPI canvas;
 - visible-bounds culling for bodies, walls, links, and whole trails;
 - style batching through reusable `Path2D` groups so objects sharing colour and
   width use few draw calls;
-- optional minor/major/axis grid, skipped if zoom would demand excessive lines;
+- reused selection, label, and trail-index scratch collections so a displayed
+  frame does not allocate replacement lookup containers for the same pass;
+- optional minor/major/axis grid and spatial-hash overlay, each skipped if zoom
+  would demand excessive lines. Both grids use independent narrow current
+  paths instead of disjoint full-canvas `Path2D` batches, keeping raster cost
+  from scaling path bounds across a high-DPI backing canvas;
 - spring coils in accurate mode and simplified lines in performance mode;
 - distinct taut/slack string styling;
 - body fills/rings, anchor treatment, selection/hover outlines, labels, and
   spin markers;
 - velocity, acceleration, and net-force arrows at configurable scale;
-- centre-of-mass marker, contact normals/impulses, and spatial-hash overlay;
+- centre-of-mass marker and contact normals/impulses;
 - scale bar drawn after interaction overlays.
 
 `ViewSettings` defaults to grid on and all analytical overlays off. View state
 is not serialized with the world; preset hints and user controls set it.
+The app compares direct camera and view values before each draw, so setters do
+not need to duplicate invalidation bookkeeping. Physics comparison uses
+reusable typed scratch and omits inactive velocity/acceleration data. Pointer
+gestures invalidate explicitly so hover, rubber bands, pending links/walls and
+parked drags remain continuous.
 
 ## Trails
 
@@ -380,7 +395,10 @@ The graph dock shows:
 `App.recordGraphSample()` records every time-series family regardless of which
 one is displayed, so switching modes does not create gaps. Sampling cadence is
 capped in simulation time from the visible window and maximum point budget.
-Mutual-gravity energy is computed through the per-frame cache.
+Mutual-gravity energy is computed through a live-state revision cache shared by
+graph sampling and the status-bar drift readout. Physics, edits, direct drags,
+rewind, culling, and whole-world replacement invalidate the revision; camera,
+selection, pointer-preview, and unchanged paused frames retain the result.
 
 `TimeSeries` keeps named channel arrays with a logical head index. Expired
 history advances the head in O(1); backing arrays are compacted only in blocks.
@@ -391,13 +409,16 @@ range and smooths only shrinking y-axis bounds. Reduced motion snaps the range.
 
 `PhasePlot` stores bounded time/x/vx/y/vy tuples, compacts in blocks, draws one
 axis pair in a square region, and marks the latest point. Selecting a different
-body clears the previous phase trajectory. Its timestamps let rewind truncate
-future phase points in the same way as the energy and momentum series.
+body immediately clears the previous phase trajectory and seeds the new body's
+current state, even while paused. Its timestamps let rewind truncate future
+phase points in the same way as the energy and momentum series.
 
 The graph dock supports live following, scroll-back, unmodified-wheel zoom,
 pan, reset, legend toggles, and a resizable splitter. Modified wheel events stay
 browser-owned. The dock avoids redrawing unchanged data unless autoscale easing
-is still active.
+is still active. Empty, undersized, or all-hidden plots cancel easing, and the
+retained draw signature includes the live palette revision so a theme/accent
+change repaints a paused graph exactly once.
 
 ## DOM control system
 
@@ -415,7 +436,9 @@ is still active.
 - `splitterDrag` handles pointer capture, constraints, and commit callbacks and
   exposes a focusable `separator` with orientation and current/minimum/maximum
   values. Arrow keys resize by 10 CSS px, Shift+Arrow by 32 px, and Home/End
-  select the limits.
+  select the limits. A pane revealed after hidden construction resynchronizes
+  those values from its laid-out size, and a dynamic maximum stays current as
+  the containing layout changes.
 - media predicates reuse live `MediaQueryList` objects and safely degrade when
   `matchMedia` is unavailable.
 - `ModalFocus` labels the dialog, captures/restores prior focus, traps Tab
@@ -448,14 +471,15 @@ constant `ICONS` table, not user input.
 ### Modal overlays
 
 - **Library:** category-filtered built-in presets and locally saved scenes.
-  Cards are descriptive containers with explicit `Load <name>` buttons rather
-  than click-only containers; saved scenes add separately named rename,
-  description, download, and delete buttons. Category filters expose
-  `aria-pressed` and retain keyboard focus across a filtered rerender. Truncated
-  descriptions use a named Show more/less button with `aria-expanded` and
-  `aria-controls`. Save, rename, description, and delete storage failures are
-  caught and shown as toasts; a failed action does not trigger a success
-  re-render.
+  A built-in preset's transparent native button covers its entire card, so the
+  card loads from any ordinary click or from Enter/Space without displaying a
+  separate Load control. Its independently operable Show more/less control is
+  pinned to the bottom-right and exposes `aria-expanded` and `aria-controls`.
+  Saved scenes retain explicit Load, rename, description, download, and delete
+  buttons. Category filters expose `aria-pressed` and retain keyboard focus
+  across a filtered rerender. Save, rename, description, and delete storage
+  failures are caught and shown as toasts; a failed action does not trigger a
+  success re-render.
 - **Settings:** appearance, theme/accent/font, accessibility, interaction,
   adaptive resolution, performance mode, culling, help, and tour access. Accent
   swatches form a named pressed-state group and restore focus after their DOM is
@@ -463,7 +487,8 @@ constant `ICONS` table, not user input.
   interactive content.
 - **Help:** getting-started steps, device-appropriate shortcut reference, and a
   production link to `THIRD_PARTY_NOTICES.txt` for MathLive and OpenDyslexic
-  licensing.
+  licensing. The notice opens in a separate `noopener` tab so following it
+  cannot navigate the live in-memory scene away.
 - **Formula guide:** variables, operators, functions, logic, math-editor help,
   and recipe cards with explicit `Add <recipe>` buttons.
 
@@ -502,14 +527,18 @@ simulation canvas or graph continue to control those views.
 
 `theme.ts` defines named semantic palettes (`original`, `dark`, `void`, and
 `light`) and exports live colour bindings consumed by canvas renderers. Theme
-application updates both those bindings and CSS custom properties. An optional
+application updates those bindings, a monotonic palette revision for retained
+Canvas consumers, and CSS custom properties. An optional
 hex accent derives hot/dark variants. Every palette's `TEXT_FAINT` has at least
 4.5:1 contrast against both panel surfaces. Accent application separately
 derives `ACCENT_TEXT` at 4.5:1 against panel surfaces, `FOCUS` at 3:1 against
-the background and both panel surfaces, and black-or-white `ACCENT_INK` at
-4.5:1 against the accent. Extreme black, white, and mid-grey custom accents are
-therefore still readable and focus-visible. Canvas colour strings are memoized
-by packed colour/alpha value with a bounded cache.
+the background and neutral button surfaces, and black-or-white `ACCENT_INK`
+and `ACCENT_DARK_INK` at 4.5:1 against their matching fills. Accent-filled
+controls use those ink tokens for text and an inset focus stroke while the
+outer focus ring contrasts with the surrounding panel. Extreme black, white,
+and mid-grey custom accents are therefore still readable and focus-visible.
+Canvas colour strings are memoized by packed colour/alpha value with a bounded
+cache.
 
 The stylesheet owns:
 
@@ -546,9 +575,9 @@ Accessibility behavior is part of the implementation contract:
   and tabpanels with roving keyboard focus;
 - category filters, segmented choices, and colour swatches expose pressed
   state and preserve focus across rerenders;
-- Library and recipe cards expose explicit Load/Add buttons without nested or
-  click-only interactive containers, and description toggles expose expansion
-  state;
+- built-in Library cards expose a visually integrated full-card native button,
+  recipe and saved-scene cards expose explicit actions, and description toggles
+  remain separate controls with expansion state;
 - Inspector reopen handles are named buttons and both splitters are keyboard-
   operable ARIA separators with value metadata;
 - transient toasts and overload messages are polite live status regions;
@@ -557,7 +586,8 @@ Accessibility behavior is part of the implementation contract:
   pointer input, announces step changes, and restores its opener;
 - keyboard focus uses a shared `:focus-visible` ring, including compact custom
   controls and range inputs;
-- checkboxes provide at least 24 by 24 CSS px targets;
+- checkboxes retain compact 14 by 14 CSS px native tick boxes inside labelled
+  targets that are at least 24 CSS px high;
 - mouse-activated non-text controls are blurred to prevent a stale focused
   button/slider from swallowing the next global shortcut, while keyboard
   activation retains focus;

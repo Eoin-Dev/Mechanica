@@ -49,6 +49,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("App construction", () => {
@@ -318,7 +319,14 @@ describe("failure containment", () => {
     const app = makeApp();
     const messages: string[] = [];
     app.toastFn = (message) => messages.push(message);
-    const step = vi.fn(() => { throw new Error("solver failed"); });
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    app.world.bodies.push(body);
+    app.ensureInitial(); // primes the pre-step derived-energy cache
+    const energy = vi.spyOn(app.world, "energy");
+    const step = vi.fn(() => {
+      body.vel.x = 5; // throwing steps can partially mutate before failing
+      throw new Error("solver failed");
+    });
     app.world.step = step;
 
     app.stepOnce();
@@ -326,6 +334,8 @@ describe("failure containment", () => {
     expect(step).toHaveBeenCalledTimes(1);
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatch(/unexpected solver error/i);
+    expect(app.energyNow().ke).toBeCloseTo(body.kineticEnergy(), 12);
+    expect(energy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -381,6 +391,54 @@ describe("settings persistence", () => {
 });
 
 describe("energy bookkeeping", () => {
+  it("does not repeat mutual-gravity energy work on paused display frames", () => {
+    const app = makeApp();
+    app.world.mutualGravity = true;
+    app.world.bodies.push(
+      new Body(new Vec2(-1, 0), 0.2, 1),
+      new Body(new Vec2(1, 0), 0.2, 1),
+    );
+    app.ensureInitial();
+    const energy = vi.spyOn(app.world, "energy");
+    app.invalidateEnergy();
+    app.panels.push({ refresh: () => { app.energyDriftText(); } });
+
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("Path2D", class {
+      moveTo() {} lineTo() {} closePath() {} arc() {} rect() {}
+      quadraticCurveTo() {} bezierCurveTo() {}
+    });
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return frames.length;
+    });
+    const base = performance.now();
+    app.start();
+    for (let i = 1; i <= 12; i++) frames.shift()!(base + i * 16.67);
+
+    expect(app.playing).toBe(false);
+    expect(energy).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares a time-zero edit baseline with the following drift readout", () => {
+    const app = makeApp();
+    const body = new Body(new Vec2(0, 2), 0.2, 1);
+    app.world.bodies.push(body);
+    const energy = vi.spyOn(app.world, "energy");
+
+    app.beginEdit();
+    body.mass = 2;
+    expect(app.commitEdit()).toBe("stored");
+    app.energyDriftText();
+    expect(energy).toHaveBeenCalledTimes(1);
+
+    // Legacy immediate callers mutate first and use pushUndo as the boundary.
+    body.mass = 3;
+    app.pushUndo();
+    app.energyDriftText();
+    expect(energy).toHaveBeenCalledTimes(2);
+  });
+
   it("reports drift against the state the scene started in", () => {
     const app = makeApp();
     app.world.bodies.push(new Body(new Vec2(0, 5), 0.2, 1));
@@ -412,6 +470,44 @@ describe("graph recording", () => {
     app.world.bodies.push(a, b);
     app.ensureInitial();
   }
+
+  it("reuses energy across unchanged frames and invalidates every state route", () => {
+    const app = makeApp();
+    movingScene(app);
+    // Keep later edits from redefining the time-zero baseline, whose direct
+    // baseline measurement is deliberately independent from the live cache.
+    app.world.time = PHYSICS_DT;
+    const energy = vi.spyOn(app.world, "energy");
+    app.invalidateEnergy();
+
+    app.energyNow();
+    app.energyDriftText();
+    app.energyNow();
+    expect(energy).toHaveBeenCalledTimes(1);
+
+    // Presentation-only changes do not dirty a physical derived quantity.
+    app.camera.panPixels(12, -8);
+    app.invalidateCanvas();
+    app.energyDriftText();
+    expect(energy).toHaveBeenCalledTimes(1);
+
+    app.beginEdit();
+    app.world.bodies[0].pos.x += 0.5;
+    expect(app.commitEdit()).toBe("stored");
+    app.energyDriftText();
+    expect(energy).toHaveBeenCalledTimes(2);
+
+    app.stepOnce();
+    // Graph sampling and the later drift reader share the post-step value.
+    app.energyDriftText();
+    expect(energy).toHaveBeenCalledTimes(3);
+
+    app.stepBack();
+    const rewoundEnergy = vi.spyOn(app.world, "energy");
+    app.energyDriftText();
+    expect(energy).toHaveBeenCalledTimes(3);
+    expect(rewoundEnergy).toHaveBeenCalledTimes(1);
+  });
 
   it("fills every channel the series declares", () => {
     // The App hands each series a plain object keyed by channel NAME, and
@@ -488,6 +584,25 @@ describe("graph recording", () => {
     app.stepBack();
     app.stepBack();
     expect(app.phasePlot.points.every((point) => point[4] <= app.world.time)).toBe(true);
+  });
+
+  it("replaces a paused phase trace as soon as the selected body changes", () => {
+    const app = makeApp();
+    movingScene(app);
+    const [first, second] = app.world.bodies;
+    app.setSelection([first]);
+    app.setGraphMode("Phase");
+    for (let i = 0; i < 8; i++) app.stepOnce();
+    expect(app.phasePlot.points.length).toBeGreaterThan(1);
+
+    app.setSelection([second]);
+
+    expect(app.playing).toBe(false);
+    expect(app.phasePlot.points).toHaveLength(1);
+    expect(app.phasePlot.points[0].slice(0, 4)).toEqual([
+      second.pos.x, second.vel.x, second.pos.y, second.vel.y,
+    ]);
+    expect(app.phasePlot.points[0][4]).toBe(app.world.time);
   });
 
   it("clears the graphs when the world is replaced", () => {
