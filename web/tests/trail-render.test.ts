@@ -218,6 +218,19 @@ describe("body rendering", () => {
 });
 
 describe("trail rendering", () => {
+  it("does not draw trail geometry in Performance mode", () => {
+    const b = new Body(new Vec2(0, 0), 0.1, 1);
+    const t = new Trail(20);
+    for (let i = 0; i < 20; i++) t.push(i * 0.02, Math.sin(i * 0.1));
+    const { ctx, ops } = recCtx();
+
+    drawWorld(ctx, new Camera(800, 600), worldWith(b), view(), [], null,
+              new Map([[b.id, t]]), 800, 600, 1, true);
+
+    expect(ops.filter((op) => op.op === "lineTo" ||
+      op.op === "quadraticCurveTo")).toHaveLength(0);
+  });
+
   it("renders a visible trail as a connected, faded polyline", () => {
     const b = new Body(new Vec2(0, 0), 0.1, 1);
     const t = new Trail(400);

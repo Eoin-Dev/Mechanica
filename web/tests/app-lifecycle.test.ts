@@ -390,6 +390,38 @@ describe("settings persistence", () => {
   });
 });
 
+describe("Performance-mode trails", () => {
+  it("removes trail work while preserving the Normal-mode preference", () => {
+    const app = makeApp();
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    body.vel.x = 1;
+    app.world.gravity = 0;
+    app.world.bodies.push(body);
+    app.setTrails(true);
+    app.stepOnce();
+    expect(app.trails.size).toBe(1);
+
+    const toast = vi.fn();
+    app.toast = toast;
+    app.world.traceSpacing = 4;
+    app.setPerfMode(true);
+    expect(app.view.trails).toBe(true);
+    expect(app.trails.size).toBe(0);
+    expect(app.world.traceSpacing).toBe(0);
+    app.stepOnce();
+    expect(app.trails.size).toBe(0);
+
+    app.setTrails(false); // keyboard/programmatic routes are inert too
+    expect(app.view.trails).toBe(true);
+    expect(toast).toHaveBeenCalledWith(
+      "Motion trails are not available in performance mode");
+
+    app.setPerfMode(false);
+    app.stepOnce();
+    expect(app.trails.size).toBe(1);
+  });
+});
+
 describe("energy bookkeeping", () => {
   it("does not repeat mutual-gravity energy work on paused display frames", () => {
     const app = makeApp();

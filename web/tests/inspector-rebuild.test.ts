@@ -188,6 +188,37 @@ describe("Inspector accessibility and persisted visibility", () => {
     expect(remove).not.toBeNull();
     expect(remove?.title).toBe("Remove driver for Runner");
   });
+
+  it("disables unavailable solver and trail controls in Performance mode", () => {
+    const { app, panel, inspector } = makeInspector();
+    const tab = (name: string): HTMLButtonElement =>
+      [...panel.querySelectorAll<HTMLButtonElement>("[role=tab]")]
+        .find((button) => button.textContent === name)!;
+
+    app.view.trails = true;
+    app.setPerfMode(true);
+
+    tab("World").click();
+    inspector.refresh();
+    expect(panel.textContent).toContain("Performance mode is active");
+    expect(panel.textContent).toContain(
+      "Solver settings cannot be set in performance mode.");
+    expect(panel.querySelector<HTMLInputElement>(
+      'input[type="range"][aria-label="Substeps"]')?.disabled).toBe(true);
+
+    tab("View").click();
+    inspector.refresh();
+    const motionLabel = [...panel.querySelectorAll<HTMLLabelElement>("label.checkbox")]
+      .find((label) => label.textContent?.includes("Motion trails"))!;
+    const motion = motionLabel.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(panel.textContent).toContain(
+      "Motion trails are not available in performance mode.");
+    expect(motion.disabled).toBe(true);
+    expect(motion.checked).toBe(true); // Normal-mode preference is preserved
+    expect(motionLabel.classList.contains("disabled")).toBe(true);
+    expect(panel.querySelector<HTMLInputElement>(
+      'input[type="range"][aria-label="Trail length"]')?.disabled).toBe(true);
+  });
 });
 
 describe("Inspector edit transactions", () => {

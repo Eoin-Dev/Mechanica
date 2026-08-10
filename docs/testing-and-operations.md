@@ -152,7 +152,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`scene-storage.test.ts`](../web/tests/scene-storage.test.ts) | Unicode name normalization, millisecond/suffix save collisions, save/load/list, discriminated cancellation/invalid/oversize/storage outcomes, upload and collection limits, quota reporting, metadata, damaged payload handling, rollback/error semantics, rename behavior, orphan metadata, and deletion. |
 | [`settings-guards.test.ts`](../web/tests/settings-guards.test.ts) | `sanitizeSettings` type filtering, enum/hex validation, collection limits, and layout/font clamping. |
 | [`rewind.test.ts`](../web/tests/rewind.test.ts) | Digest-prefiltered structural keyframes versus exactly verified dynamic deltas, forced digest collisions, exact reconstruction including evolved angles, 48 MB/entry bounds and oversize rejection, changing structures, key reclamation, and frame-back behavior. |
-| [`app-lifecycle.test.ts`](../web/tests/app-lifecycle.test.ts) | Exact pre-edit transactions after simulation, undoable replacement routes and atomic failures, history byte limits, first-failure physics batching, strict time jumps, phase/trail rewind cleanup, playback/reset, persisted-settings guards, energy baselines, live-state energy-cache invalidation, graph sampling, and paused-loop energy behavior. |
+| [`app-lifecycle.test.ts`](../web/tests/app-lifecycle.test.ts) | Exact pre-edit transactions after simulation, undoable replacement routes and atomic failures, history byte limits, first-failure physics batching, strict time jumps, phase/trail rewind cleanup, playback/reset, persisted-settings guards, Performance-mode trail suppression/restoration, energy baselines, live-state energy-cache invalidation, graph sampling, and paused-loop energy behavior. |
 
 ### Expressions and math editing
 
@@ -173,7 +173,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`camera.test.ts`](../web/tests/camera.test.ts) | World/screen inverse transforms, panning, cursor-anchored zoom/clamps, visible bounds, and nice scale-bar formatting. |
 | [`body-culling.test.ts`](../web/tests/body-culling.test.ts) | Scene-centred runaway classification, outward-motion requirement, orbit/furniture/held protections, and non-finite cleanup. |
 | [`trail.test.ts`](../web/tests/trail.test.ts) | Ring-buffer order/capacity, timestamps, expiration, resize, serial continuity, and conservative bounds. |
-| [`trail-render.test.ts`](../web/tests/trail-render.test.ts) | Narrow non-`Path2D` full/coarse world-grid, spatial-debug and disjoint-body strokes plus visible/off-screen trail drawing, bounded performance paths, budgets, fading, stable decimation, endpoint/corner retention, and curve fidelity. |
+| [`trail-render.test.ts`](../web/tests/trail-render.test.ts) | Narrow non-`Path2D` full/coarse world-grid, spatial-debug and disjoint-body strokes plus Performance-mode trail omission, visible/off-screen Normal-mode trail drawing, bounded dense paths, budgets, fading, stable decimation, endpoint/corner retention, and curve fidelity. |
 | [`timeseries-render.test.ts`](../web/tests/timeseries-render.test.ts) | Visible-window selection, scrolling/zoom ranges, legends, axis labels, single points, hidden channels, autoscale, history retention, redraw state, and easing termination for non-plottable data. |
 | [`render-invalidation.test.ts`](../web/tests/render-invalidation.test.ts) | Opaque 2D context creation, idempotent and Performance-DPR backing resize, retained unchanged/empty-playback frames, paused 20 Hz scheduling with immediate invalidation wake, adaptive maximum level, overloaded alternate presentation, render-cost decay, and every redraw route. |
 
@@ -186,7 +186,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`shortcuts.test.ts`](../web/tests/shortcuts.test.ts) | Focused-control ownership, modifier edits, tool keys, playback/view commands, modal/tour/Escape precedence, and unusual event targets. |
 | [`splitter-drag.test.ts`](../web/tests/splitter-drag.test.ts) | Pointer capture plus keyboard 10/32-pixel steps and Home/End limits, separator orientation/value metadata and reveal-time resynchronization, size direction, min/max clamps, commit behavior, and cancellation for inspector/dock resizing. |
 | [`refresh-culling.test.ts`](../web/tests/refresh-culling.test.ts) | Scrolled controls skip refresh while hidden zero-rect controls remain eligible to reveal themselves. |
-| [`inspector-rebuild.test.ts`](../web/tests/inspector-rebuild.test.ts) | Inspector structure keys and stable refreshes, semantic tabs/reopen/splitter metadata, desktop visibility persistence, accessible driver removal, and exact delayed-input transactions after intervening simulation. |
+| [`inspector-rebuild.test.ts`](../web/tests/inspector-rebuild.test.ts) | Inspector structure keys and stable refreshes, semantic tabs/reopen/splitter metadata, desktop visibility persistence, accessible driver removal, Performance-mode solver/trail disabled states and banner copy, and exact delayed-input transactions after intervening simulation. |
 | [`tour.test.ts`](../web/tests/tour.test.ts) | Tour construction, first-visit behavior, progress/finish, settings persistence, and cleanup. |
 | [`tour-spotlight.test.ts`](../web/tests/tour-spotlight.test.ts) | Multi-target spotlight tiling, clipping, rings, viewport placement, and responsive target geometry. |
 | [`panel-accessibility.test.ts`](../web/tests/panel-accessibility.test.ts) | Toolbar/graph icon names, play state labels, unchanged-clock write suppression, revealed/dynamically bounded graph-splitter metadata, retained-graph palette invalidation, and shortcut badges excluded from name computation. |
@@ -237,8 +237,9 @@ Performance work must preserve these boundaries:
   the engine result is deterministic for that selected level.
 - A slow frame may advance less simulated time, but each completed step uses
   the same state-derived resolution and force/constraint order.
-- Presentation-only quality, such as trail vertex count, Performance DPR/frame
-  cadence, or DOM refresh culling, may react to measured cost.
+- Presentation-only quality, such as Normal-mode trail vertex count,
+  Performance DPR/frame cadence, or DOM refresh culling, may react to measured
+  cost.
 - The full opaque canvas is retained while its visual generation is unchanged;
   clock-only empty/settled steps must not repaint, while every visible model,
   camera, view, trail, selection, theme, resize, or interaction change must.

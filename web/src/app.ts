@@ -189,8 +189,8 @@ export class App {
   trailQuality = 1.0;
   private renderMs = 4.0; // EMA of measured render cost, ms
   private physicsMs = 0.0;
-  // Aim to leave the rest of a 60 Hz frame alone. Trails are the only part
-  // of rendering that can be scaled, so this is the whole render budget.
+  // Aim to leave the rest of a 60 Hz frame alone. In Normal mode, trails are
+  // the only part of rendering that reacts to this budget.
   private static RENDER_TARGET_MS = 6.0;
   private static TRAIL_QUALITY_MIN = 0.35;
   private static TRAIL_QUALITY_MAX = 6.0;
@@ -356,6 +356,14 @@ export class App {
   }
 
   setPerfMode(on: boolean): void {
+    if (on) {
+      // Performance mode removes the trail workload altogether. Preserve the
+      // view preference so turning the mode off restores the user's choice,
+      // but discard old samples instead of retaining invisible trail data.
+      this.trails.clear();
+      this.world.trace.length = 0;
+      this.world.traceSpacing = 0;
+    }
     this.settings.perf_mode = on;
     this.performanceLevel = on ? 1 : 0;
     this.performanceBadSince = null;
@@ -552,7 +560,9 @@ export class App {
    * integrator captures, or 0 when trails are off. Half a pixel at the
    * current zoom, matching what recordTrails asks of the bodies. */
   private syncTraceSpacing(): void {
-    this.world.traceSpacing = this.view.trails ? 0.5 / this.camera.zoom : 0.0;
+    this.world.traceSpacing = this.view.trails && !this.perfMode
+      ? 0.5 / this.camera.zoom
+      : 0.0;
   }
 
   /** Performance mode may halve the physics cadence under sustained load.
@@ -1202,6 +1212,10 @@ export class App {
   }
 
   setTrails(on: boolean): void {
+    if (this.perfMode) {
+      this.toast("Motion trails are not available in performance mode");
+      return;
+    }
     // Re-enabling starts fresh, so no bogus straight line joins where
     // recording stopped to where it resumed.
     if (on && !this.view.trails) this.trails.clear();
@@ -1563,7 +1577,7 @@ export class App {
   /** Append trail points; called after every physics step so extra
    * adaptive steps show up as extra trail resolution. */
   private recordTrails(): void {
-    if (!this.view.trails) {
+    if (!this.view.trails || this.perfMode) {
       this.world.trace.length = 0;
       return;
     }
@@ -1628,7 +1642,7 @@ export class App {
    * would leave its buffers behind - a steady leak of megabytes in a
    * debris-heavy scene. */
   private sweepTrails(): void {
-    if (!this.view.trails || this.trails.size === 0) return;
+    if (!this.view.trails || this.perfMode || this.trails.size === 0) return;
     // The trail is a window on the last trailLen x PHYSICS_DT seconds of
     // SIMULATED time, so it decays even while a body sits still (a
     // stationary body used to keep a frozen line forever) and covers the
@@ -1750,7 +1764,7 @@ export class App {
     p[8] = Number(view.velVectors);
     p[9] = Number(view.accVectors);
     p[10] = Number(view.forceVectors);
-    p[11] = Number(view.trails);
+    p[11] = Number(view.trails && !this.perfMode);
     p[12] = Number(view.com);
     p[13] = Number(view.contacts);
     p[14] = Number(view.spatialGrid);
@@ -1775,7 +1789,7 @@ export class App {
    * up to its ceiling during a cheap frame and then blow the first frame
    * after they are switched on. */
   private tuneTrailQuality(): void {
-    if (!this.view.trails) return;
+    if (!this.view.trails || this.perfMode) return;
     const target = App.RENDER_TARGET_MS;
     if (this.renderMs < target * 0.6) {
       this.trailQuality = Math.min(App.TRAIL_QUALITY_MAX, this.trailQuality * 1.04);
