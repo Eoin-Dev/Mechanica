@@ -507,8 +507,7 @@ const TRAIL_BODIES = new Map<number, Body>();
 const LIVE_TRAIL_COLOURS = new Set<number>();
 
 function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
-                    trails: Map<number, Trail>, quality: number, simplify: boolean,
-                    aggressive: boolean,
+                    trails: Map<number, Trail>, quality: number,
                     minX: number, minY: number, maxX: number, maxY: number): void {
   ctx.lineWidth = 1;
   ctx.lineJoin = "round";
@@ -576,22 +575,16 @@ function drawTrails(ctx: CanvasRenderingContext2D, cam: Camera, world: World,
   const ox = cam.screenW * 0.5;
   const oy = cam.screenH * 0.5;
 
-  // A style-wide explicit Path2D is excellent for a handful of nearby
-  // trails, but pathological when many disjoint trails make its bounds cover
-  // the viewport. The bounded route makes raster cost follow actual trail
-  // geometry. Performance mode always takes it and also spends fewer
-  // vertices; Normal mode switches only once the disjoint-path cliff is more
-  // expensive than the extra current-path stroke calls.
-  const bounded = simplify || visible >= 48;
+  // A style-wide explicit Path2D is excellent for a handful of nearby trails,
+  // but pathological when many disjoint trails make its bounds cover the
+  // viewport. Dense Normal-mode scenes switch to bounded current paths once
+  // the disjoint-path cliff is more expensive than the extra stroke calls.
+  const bounded = visible >= 48;
   if (bounded) {
-    const boundedVerts = simplify
-      ? Math.max(24, Math.min(aggressive ? 64 : 192,
-          Math.floor(vertsPerTrail * (aggressive ? 0.25 : 0.5))))
-      : vertsPerTrail;
     for (const group of TRAIL_GROUPS.values()) {
       if (group.trails.length === 0) continue;
       for (const trail of group.trails) {
-        const want = Math.max(1, trail.count / boundedVerts);
+        const want = Math.max(1, trail.count / vertsPerTrail);
         let stride = 1;
         while (stride < want) stride *= 2;
         const m = trail.sampleScreen(stride, SX, SY, cx, cy, zoom, ox, oy);
@@ -655,11 +648,10 @@ const LABEL_X: number[] = [];
 const LABEL_Y: number[] = [];
 
 /** `simplify` drops the decorative geometry that costs the most to build:
- * spring coils become plain lines (a coil is up to twenty segments) and spin
- * markers are skipped. Performance mode passes it. Everything that carries
- * information - position, size, colour, selection, links, walls - is
- * untouched, because a mode that hid what the scene contains would not be a
- * performance trade, it would be a different app. */
+ * spring coils become plain lines (a coil is up to twenty segments), spin
+ * markers are skipped, and trails are unavailable. Performance mode passes
+ * it. Core scene contents - position, size, colour, selection, links and walls
+ * - remain visible. */
 export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
                           world: World, view: ViewSettings,
                           selection: Selectable[], hover: Selectable | null,
@@ -687,8 +679,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   for (const item of selection) picked.add(item);
 
   // --- trails ---------------------------------------------------------------
-  if (view.trails) {
-    drawTrails(ctx, cam, world, trails, trailQuality, simplify, aggressive,
+  if (view.trails && !simplify) {
+    drawTrails(ctx, cam, world, trails, trailQuality,
                minX, minY, maxX, maxY);
   }
 

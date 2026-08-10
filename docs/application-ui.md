@@ -289,7 +289,8 @@ already evenly spaced and produce explanatory feedback.
 The world tab edits uniform/mutual gravity, point-mass mode, softening, drag,
 global damping, integrator, substeps, iterations, custom force fields, and
 drivers. Performance mode disables authored solver controls without overwriting
-their values and shows an adaptive-approximation banner; the hint bar reports
+their values and shows a Performance-mode banner explaining that the settings
+cannot be set while the mode is active; the hint bar reports
 the current `high`, `fast`, `faster`, or `maximum` profile. A preset whose substeps were
 centrally cost-capped receives a transient explanatory note until the value is
 edited.
@@ -304,7 +305,9 @@ repair or undo it.
 The view tab controls grid, snapping, labels, camera follow, velocity/
 acceleration/force vectors, vector scale, trails and length, centre of mass,
 contacts, spatial grid, and graph mode. These are application/view state, not
-scene JSON.
+scene JSON. Performance mode disables the Motion trails and Trail length
+controls and displays an explanatory banner. The Normal-mode trail choice is
+preserved for restoration when Performance mode is turned off.
 
 ## Camera and framing
 
@@ -376,6 +379,12 @@ parked drags remain continuous.
 Each moving body can own a `Trail`, a fixed-capacity typed-array ring buffer of
 x/y/time samples.
 
+Trails are unavailable in Performance mode. Enabling the mode clears existing
+trail buffers and pending trace samples, stops sampling/aging/rendering work,
+and blocks both the Inspector control and the `T` shortcut from changing the
+preserved Normal-mode choice. Turning Performance mode off restores that
+choice and begins a fresh trail rather than joining across the disabled span.
+
 - App recording occurs after every physical step, including adaptive steps.
 - Encounter trace samples captured inside a world slice are drained first.
 - Ordinary endpoints are added only after sufficient screen-space motion.
@@ -390,9 +399,9 @@ x/y/time samples.
 Rendering decimates using a serial-based stride so the same physical samples
 remain selected as the ring rotates. Corners and endpoints are preserved,
 vertices are split into fading bands for sparse Normal scenes, and global/per-
-trail budgets limit work. Dense scenes and all Performance profiles use one
-bounded gradient current path per trail instead of a disjoint colour-wide
-`Path2D`. App trail quality rises slowly during cheap frames and falls quickly
+trail budgets limit work. Dense Normal-mode scenes use one bounded gradient
+current path per trail instead of a disjoint colour-wide `Path2D`. App trail
+quality rises slowly during cheap frames and falls quickly
 when render cost exceeds its target. The renderer also prunes reusable colour
 groups to colours present in the current world and ignores stale trails without
 a live body, so repeated recolouring and scene replacement cannot grow that

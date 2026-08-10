@@ -46,9 +46,9 @@ function selectionKey(o: Selectable): string {
 const TABS = ["Selection", "World", "View"] as const;
 type Tab = (typeof TABS)[number];
 
-/** The adaptive Performance-mode banner above the Solver controls: why they
- * are greyed out, and the single click that gives them back. Present only
- * while the mode is on.
+/** A Performance-mode banner above controls the mode makes unavailable: why
+ * they are greyed out, and the single click that gives them back. Present
+ * only while the mode is on.
  *
  * Deliberately not accent-coloured. The accent is the app's "this is
  * yours/this is active" colour and it is user-configurable, so a banner
@@ -58,16 +58,14 @@ type Tab = (typeof TABS)[number];
  * leans on a filled pill, a tinted block and a left bar so the signal survives
  * whatever accent the user has picked, colourblindness included.
  */
-function perfModeBanner(app: App): { root: HTMLElement; refresh: () => void } {
+function perfModeBanner(app: App, message: string): { root: HTMLElement; refresh: () => void } {
   const off = button("Turn off performance mode", () => app.setPerfMode(false),
-    { tooltip: "Switch performance mode off, restoring this scene's own " +
-               "solver settings and full accuracy." });
+    { tooltip: "Switch performance mode off, restoring Normal-mode controls " +
+               "and full accuracy." });
   off.root.classList.add("perf-banner-btn");
   const root = el("div", { class: "perf-banner" },
-    el("span", { class: "perf-badge", text: "Performance mode is adaptive" }),
-    el("span", { class: "perf-banner-text",
-                 text: "The solver settings below are disabled and are not " +
-                       "what is running." }),
+    el("span", { class: "perf-badge", text: "Performance mode is active" }),
+    el("span", { class: "perf-banner-text", text: message }),
     off.root);
   return { root, refresh: () => { root.hidden = !app.perfMode; } };
 }
@@ -958,7 +956,8 @@ export class Inspector implements Panel {
     // banner says why and offers the way out in one click. The VALUES stay
     // the scene's own throughout - they are what a save writes, and they are
     // exactly what comes back the moment the mode is switched off.
-    this.add(perfModeBanner(app));
+    this.add(perfModeBanner(app,
+      "Solver settings cannot be set in performance mode."));
     const perfOn = (): boolean => app.perfMode;
     const short: Record<Integrator, string> = {
       "Velocity Verlet": "Verlet", "Symplectic Euler": "Euler", RK4: "RK4",
@@ -1146,18 +1145,22 @@ export class Inspector implements Panel {
         tooltip: "Length multiplier for every vector arrow." }));
 
     this.body.append(section("Analysis"));
+    const perfOn = (): boolean => app.perfMode;
+    this.add(perfModeBanner(app,
+      "Motion trails are not available in performance mode."));
     this.add(checkbox("Motion trails", () => view.trails, (v) => app.setTrails(v),
-      "Draw a fading path behind each moving body (T)."));
+      "Draw a fading path behind each moving body (T).", perfOn));
     this.add(slider("Trail length", () => view.trailLen,
       (v) => { view.trailLen = Math.round(v); }, 10, 10000,
       { unit: "pts", fmt: (v) => v.toFixed(0), step: 10, log: true,
+        disabled: perfOn,
         tooltip: "Points kept per trail, which sets how far back it reaches." }));
     const trailWarn = el("div", { class: "error-text",
       text: "Long trails or many bodies at once can lower the frame rate.",
       style: "display:none" });
     this.add({ root: trailWarn, refresh: () => {
       const moving = app.world.bodies.reduce((n, b) => n + (b.locked ? 0 : 1), 0);
-      const heavy = view.trails &&
+      const heavy = view.trails && !app.perfMode &&
         (view.trailLen >= 1500 || moving >= 40 || view.trailLen * moving >= 30000);
       trailWarn.style.display = heavy ? "" : "none";
     } });

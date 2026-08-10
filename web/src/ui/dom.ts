@@ -650,12 +650,18 @@ export function numEdit(label: string, get: () => number,
 
 // ----------------------------------------------------------------- checkbox
 export function checkbox(label: string, get: () => boolean,
-                         set: (v: boolean) => void, tooltip = ""): Control {
+                         set: (v: boolean) => void, tooltip = "",
+                         disabled?: () => boolean): Control {
   const input = el("input", { type: "checkbox" });
   const lab = el("label", { class: "checkbox" }, input, label);
   if (tooltip) lab.title = tooltip;
-  input.addEventListener("change", () => set(input.checked));
+  input.addEventListener("change", () => {
+    if (!input.disabled) set(input.checked);
+  });
   const refresh = () => {
+    const dis = disabled?.() ?? false;
+    if (input.disabled !== dis) input.disabled = dis;
+    lab.classList.toggle("disabled", dis);
     const v = get();
     if (input.checked !== v) input.checked = v;
   };

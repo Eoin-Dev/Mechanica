@@ -226,14 +226,15 @@ dirty render measures cost independently from physics cost and:
    it at `1.5`, `1.25`, `1`, and `1` without changing CSS/input geometry.
 2. Draws the optional world grid; maximum level omits minor lines.
 3. Calls `drawWorld()` with world, camera, view settings, selection, hover,
-   trails, viewport dimensions, adaptive trail quality, and performance mode.
+   Normal-mode trails, viewport dimensions, adaptive trail quality, and
+   performance mode. Performance mode omits trail drawing entirely.
 4. Draws interaction previews and the scale bar.
 5. Updates an exponential moving average of draw cost and tunes only the trail
    vertex budget.
 
-Maximum level also limits trails to at most 64 retained vertices each, shows
-labels/vectors only for the hovered or selected body, suppresses contact and
-spatial-grid diagnostics, and—only after at least 750 ms of continuing maximum-
+Maximum level shows labels/vectors only for the hovered or selected body,
+suppresses contact and spatial-grid diagnostics, and—only after at least 750 ms
+of continuing maximum-
 level overload or excess render cost—presents alternate simulation frames.
 Physics and input continue each display tick; the visual fallback is
 approximately 30 Hz rather than allowing raster work to make simulated time
@@ -248,11 +249,12 @@ paints the entire background. Resize handling writes canvas backing dimensions
 only when their device-pixel dimensions change, while CSS-size changes still
 update the camera and invalidate drawing.
 
-Sparse Normal-mode trail stroke batches are cached by colour. Dense scenes and
-all Performance profiles instead draw each trail as one bounded current path,
-avoiding viewport-sized disjoint `Path2D` raster bounds. Every draw removes
-colour groups absent from the current world and ignores stale body IDs; world
-and history replacement also clear per-body trail buffers.
+Sparse Normal-mode trail stroke batches are cached by colour. Dense Normal-mode
+scenes instead draw each trail as one bounded current path, avoiding viewport-
+sized disjoint `Path2D` raster bounds. Performance mode clears existing trail
+buffers and skips sampling, maintenance, and drawing. Every Normal-mode draw
+removes colour groups absent from the current world and ignores stale body IDs;
+world and history replacement also clear per-body trail buffers.
 
 The overload warning distinguishes a render-bound frame from a physics-bound
 one. Lower Performance profiles suppress it while the adaptive controller can
