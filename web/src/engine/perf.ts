@@ -76,6 +76,22 @@ import { SpringLink } from "./links";
 export const PERF_SUBSTEPS = 2;
 export const PERF_ITERATIONS = 4;
 
+/** Machine-load-selected quality ladder for Performance mode.
+ * Level zero is the existing robust profile. Higher levels deliberately
+ * spend progressively less solver work; the browser app selects the level,
+ * while the headless engine merely applies the explicit value it is given. */
+export type PerformanceLevel = 0 | 1 | 2 | 3;
+export const PERF_SUBSTEPS_BY_LEVEL = [2, 2, 1, 1] as const;
+export const PERF_ITERATIONS_BY_LEVEL = [4, 3, 2, 1] as const;
+export const PERF_SPRING_PASSES_BY_LEVEL = [4, 3, 2, 1] as const;
+
+export function performanceLevel(value: number): PerformanceLevel {
+  if (value >= 3) return 3;
+  if (value >= 2) return 2;
+  if (value >= 1) return 1;
+  return 0;
+}
+
 // Gauss-Seidel passes for the spring projection.
 //
 // Under-converging is safe here in a way it is not for an explicit force: it

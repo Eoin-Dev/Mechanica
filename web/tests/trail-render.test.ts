@@ -127,6 +127,17 @@ describe("grid rendering", () => {
     expect(begins).toBe(pathArgs.length);
     expect(lineWidth).toBe(1);
     expect(new Set(stylesPerStroke).size).toBe(3); // minor, major and axis
+
+    const detailedLines = pathArgs.length;
+    pathArgs.length = 0;
+    segmentsPerStroke.length = 0;
+    stylesPerStroke.length = 0;
+    begins = 0;
+    drawGrid(ctx, new Camera(1200, 650), 1200, 650, true);
+    expect(pathArgs.length).toBeLessThan(detailedLines / 2);
+    expect(pathArgs.every((path) => path === undefined)).toBe(true);
+    expect(segmentsPerStroke.every((count) => count === 1)).toBe(true);
+    expect(new Set(stylesPerStroke).size).toBe(2); // major and axis only
   });
 
   it("keeps spatial-debug lines out of a disjoint full-canvas Path2D", () => {
@@ -173,6 +184,36 @@ describe("grid rendering", () => {
     expect(begins).toBe(pathArgs.length);
     expect(lineWidth).toBe(1);
     expect(new Set(stylesPerStroke).size).toBe(1);
+  });
+});
+
+describe("body rendering", () => {
+  it("keeps disjoint bodies in bounded current paths", () => {
+    const strokeArgs: Array<FakePath2D | undefined> = [];
+    const fillArgs: Array<FakePath2D | undefined> = [];
+    const base: Record<string, unknown> = {
+      beginPath() {}, moveTo() {}, lineTo() {}, arc() {},
+      stroke(path?: FakePath2D) { strokeArgs.push(path); },
+      fill(path?: FakePath2D) { fillArgs.push(path); },
+    };
+    const ctx = new Proxy(base, {
+      get(t, p) { return p in t ? t[p as string] : () => {}; },
+      set() { return true; },
+    }) as unknown as CanvasRenderingContext2D;
+    const world = new World();
+    for (let i = 0; i < 200; i++) {
+      world.bodies.push(new Body(new Vec2((i % 20) * 0.25 - 2.5,
+        Math.floor(i / 20) * 0.25 - 1.2), 0.08, 1));
+    }
+    const noTrails = new ViewSettings();
+    noTrails.grid = false;
+    drawWorld(ctx, new Camera(1200, 650), world, noTrails, [], null,
+      new Map(), 1200, 650);
+
+    expect(strokeArgs.length).toBe(200);
+    expect(fillArgs.length).toBe(200);
+    expect(strokeArgs.every((path) => path === undefined)).toBe(true);
+    expect(fillArgs.every((path) => path === undefined)).toBe(true);
   });
 });
 

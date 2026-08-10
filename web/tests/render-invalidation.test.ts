@@ -85,7 +85,10 @@ function harness(): Harness {
 type AppInternals = {
   render(): void;
   update(dt: number): void;
+  tunePerformance(now: number): void;
   renderMs: number;
+  physicsMs: number;
+  performanceBadSince: number | null;
 };
 
 function internals(app: App): AppInternals {
@@ -102,6 +105,30 @@ afterEach(() => {
 });
 
 describe("retained App canvas", () => {
+  it("idles below monitor rate while paused and wakes immediately on invalidation", () => {
+    const frames: FrameRequestCallback[] = [];
+    const timers: Array<() => void> = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return 1;
+    });
+    vi.spyOn(window, "setTimeout").mockImplementation(((cb: TimerHandler) => {
+      if (typeof cb === "function") timers.push(() => cb());
+      return 7;
+    }) as typeof window.setTimeout);
+    const clear = vi.spyOn(window, "clearTimeout").mockImplementation(() => {});
+    const h = harness();
+    h.app.start();
+    expect(frames).toHaveLength(1);
+    frames.shift()!(performance.now() + 16);
+    expect(frames).toHaveLength(0);
+    expect(timers).toHaveLength(1);
+
+    h.app.invalidateCanvas();
+    expect(clear).toHaveBeenCalledWith(7);
+    expect(frames).toHaveLength(1);
+  });
+
   it("uses an opaque context and does not reset unchanged backing dimensions", () => {
     const h = harness();
     expect(h.contextOptions()).toEqual({ alpha: false });
@@ -115,6 +142,61 @@ describe("retained App canvas", () => {
     h.app.resizeCanvas();
     expect([h.widthWrites(), h.heightWrites()]).toEqual([2, 1]);
     expect([h.app.camera.screenW, h.app.camera.screenH]).toEqual([640, 600]);
+  });
+
+  it("reduces only the simulation backing density as adaptive pressure rises", () => {
+    vi.stubGlobal("devicePixelRatio", 2);
+    const h = harness();
+    h.app.resizeCanvas();
+    expect(h.canvas.width).toBe(1600);
+    expect(h.canvas.height).toBe(1200);
+
+    h.app.setPerfMode(true);
+    expect(h.app.performanceLevel).toBe(1);
+    expect(h.canvas.width).toBe(1000); // 800 CSS px at the 1.25 cap
+    expect(h.canvas.height).toBe(750);
+
+    const raw = internals(h.app);
+    h.app.fpsNow = 25;
+    h.app.overloaded = true;
+    raw.renderMs = 20;
+    raw.physicsMs = 20;
+    raw.tunePerformance(1000);
+    raw.tunePerformance(1300);
+    raw.tunePerformance(1600);
+    expect(h.app.performanceLevel).toBe(3);
+    expect(h.canvas.width).toBe(800);
+    expect(h.canvas.height).toBe(600);
+    expect(h.app.world.performanceLevel).toBe(3);
+  });
+
+  it("presents alternate frames only when maximum mode remains overloaded", () => {
+    const h = harness();
+    const raw = internals(h.app);
+    h.app.setPerfMode(true);
+    h.app.performanceLevel = 3;
+    h.app.world.performanceLevel = 3;
+    h.app.playing = true;
+    h.app.overloaded = true;
+    raw.performanceBadSince = performance.now() - 1000;
+    h.app.invalidateCanvas();
+    raw.render();
+    expect(h.fillCount()).toBe(0);
+    raw.render();
+    expect(h.fillCount()).toBe(1);
+  });
+
+  it("defers overload feedback until adaptive Performance mode reaches maximum", () => {
+    const h = harness();
+    h.app.setPerfMode(true);
+    h.app.playing = true;
+    h.app.overloaded = true;
+    h.app.performanceLevel = 2;
+    expect(h.app.slowReason()).toBeNull();
+    h.app.performanceLevel = 3;
+    expect(h.app.slowReason()).toBeNull();
+    internals(h.app).performanceBadSince = performance.now() - 1000;
+    expect(h.app.slowReason()).toBe("physics");
   });
 
   it("skips unchanged and empty-playback frames but redraws every visual route", () => {

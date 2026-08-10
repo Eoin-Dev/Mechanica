@@ -128,11 +128,11 @@ headless and testable.
 | Substep | One of the configured slices inside a call to `World.step(dt)`. Constraint and contact resolution run for each substep. |
 | Adaptive resolution | Extra `World.step` calls selected by `App` from simulation state before a base quantum is advanced. |
 | Encounter slice | Finer integration performed inside a world substep for mutual-gravity close encounters. |
-| Performance mode | A browser preference that caps solver work, uses Symplectic Euler, disables adaptive refinement, simplifies rendering, and projects springs as stable XPBD constraints. It is not serialized into scenes. |
+| Performance mode | A browser preference with four load-selected approximation levels. It projects springs, caps collision/constraint work, may aggregate gravity and sleep bodies, and progressively reduces rendering fidelity. Neither the preference level nor sleep state is serialized into scenes. |
 | Warm start | Reusing the previous substep's rod tension or contact impulses as the next solve's initial estimate. |
 | Split impulse | Removing penetration by changing position without changing velocity, so the correction does not add kinetic energy. |
 | Structural state | Serialized world properties other than body position, velocity, angle, spin, and clock; used to decide when rewind needs a full keyframe. |
-| Panel | A DOM component with `refresh()`, called after each rendered frame. |
+| Panel | A DOM component with `refresh()`, polled at 30 Hz while playing and 20 Hz while paused. |
 | Selectable | A body, wall, or link. Selection itself belongs to `App`, not to engine objects. |
 
 ## Documentation contract

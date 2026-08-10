@@ -621,7 +621,7 @@ function buildRestitutionLadder(): World {
 }
 
 /** Random elastic gas in a box. */
-function gasWorld(count: number, half: number, seed: number): World {
+export function gasWorld(count: number, half: number, seed: number): World {
   const w = new World();
   w.gravity = 0.0;
   solver(w, 2);

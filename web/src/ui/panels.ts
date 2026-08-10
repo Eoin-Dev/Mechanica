@@ -133,7 +133,10 @@ export class Toolbar implements Panel {
       this.playBtn.title = action;
       this.playBtn.setAttribute("aria-label", action);
     }
-    const fps = `${this.app.fpsNow.toFixed(0)} fps`;
+    // Paused state deliberately polls at 20 Hz and wakes on pointer events.
+    // Reporting that wake cadence as FPS makes an idle optimisation look like
+    // a performance failure (and makes the number follow mouse speed).
+    const fps = this.app.playing ? `${this.app.fpsNow.toFixed(0)} fps` : "Idle";
     if (fps !== this.lastFps) {
       this.lastFps = fps;
       this.fps.textContent = fps;
@@ -232,7 +235,7 @@ export class HintBar implements Panel {
     // Performance mode changes what the numbers beside it MEAN - the drift
     // readout will wander, and the substeps in the inspector are not what is
     // running - so it says so rather than leaving that a mystery.
-    const perf = app.perfMode ? "perf   " : "";
+    const perf = app.perfMode ? `perf ${app.performanceQualityLabel}   ` : "";
     const stats = `${nBodies} bodies   ${nAnchors} anchors   ${nLinks} links   ` +
                   `${app.world.contacts.length} contacts   ` +
                   `${res}${trail}${perf}${drift}`;

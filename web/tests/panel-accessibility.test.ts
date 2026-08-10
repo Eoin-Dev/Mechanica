@@ -32,11 +32,13 @@ describe("toolbar and palette semantics", () => {
     expect(heading?.getAttribute("aria-level")).toBe("1");
     expect(play.getAttribute("aria-label")).toMatch(/^Start the simulation/);
     expect(play.getAttribute("aria-pressed")).toBe("false");
+    expect(root.querySelector("#fps")?.textContent).toBe("Idle");
 
     app.playing = true;
     toolbar.refresh();
     expect(play.getAttribute("aria-label")).toMatch(/^Pause the simulation/);
     expect(play.getAttribute("aria-pressed")).toBe("true");
+    expect(root.querySelector("#fps")?.textContent).toBe("60 fps");
   });
 
   it("hides shortcut badges from accessible-name computation", () => {

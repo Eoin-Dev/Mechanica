@@ -1,8 +1,8 @@
 /** Inspector: tabbed side panel editing the selection, world and view.
  *
  * Rebuilt whenever the selection structure changes; while the structure is
- * stable, controls refresh in place every frame so live values (positions,
- * velocities) stay current without stealing focus.
+ * stable, controls refresh in place on the panel cadence so live values
+ * (positions, velocities) stay current without stealing focus.
  */
 import { App, GraphMode, Panel } from "../app";
 import { BODY_PALETTE, Body, Color, MATERIALS, Wall } from "../engine/body";
@@ -46,7 +46,7 @@ function selectionKey(o: Selectable): string {
 const TABS = ["Selection", "World", "View"] as const;
 type Tab = (typeof TABS)[number];
 
-/** The "performance mode is on" banner above the Solver controls: why they
+/** The adaptive Performance-mode banner above the Solver controls: why they
  * are greyed out, and the single click that gives them back. Present only
  * while the mode is on.
  *
@@ -64,7 +64,7 @@ function perfModeBanner(app: App): { root: HTMLElement; refresh: () => void } {
                "solver settings and full accuracy." });
   off.root.classList.add("perf-banner-btn");
   const root = el("div", { class: "perf-banner" },
-    el("span", { class: "perf-badge", text: "Performance mode is on" }),
+    el("span", { class: "perf-badge", text: "Performance mode is adaptive" }),
     el("span", { class: "perf-banner-text",
                  text: "The solver settings below are disabled and are not " +
                        "what is running." }),

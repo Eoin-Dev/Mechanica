@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:e2e": "node scripts/run-e2e.mjs",
+    "benchmark:performance": "node scripts/benchmark-performance.mjs",
     "test:watch": "vitest"
   },
   "devDependencies": {

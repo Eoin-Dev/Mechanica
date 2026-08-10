@@ -2,8 +2,8 @@
  *
  * Controls read their value through a getter and write through a setter
  * (matching the desktop widget design), and register a `refresh` that the
- * app calls every frame so the UI always reflects live simulation state —
- * unless the user is actively editing that control.
+ * app calls on its panel cadence so live state remains current without
+ * monitor-rate DOM polling, unless the user is actively editing.
  */
 
 type Child = Node | string | null | undefined;
@@ -31,7 +31,7 @@ export interface Control {
 
 /** A media query kept as one live MediaQueryList.
  *
- * The predicates below are polled every frame (the hint bar and the tool
+ * The predicates below are polled on display/panel updates (the hint bar and the tool
  * hint both ask isTouch, the camera easing asks reducedMotion), and
  * `matchMedia()` builds a fresh MediaQueryList each call - measured at
  * 1.5 us against 105 ns for reading `.matches` off a kept one. The object
@@ -96,7 +96,7 @@ export class RefreshGroup {
 
   /** Skip refreshing controls scrolled out of view inside `scrollRoot`.
    * A long panel (hundreds of driver/field rows) otherwise refreshes
-   * every control every frame, which shows up as an fps drop just from
+   * every control on every panel poll, which shows up as a slowdown just from
    * having the panel open. */
   cullWithin(scrollRoot: HTMLElement): void {
     if (typeof IntersectionObserver === "undefined") return;

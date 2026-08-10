@@ -412,9 +412,17 @@ describe("energy bookkeeping", () => {
       frames.push(cb);
       return frames.length;
     });
+    const timers: Array<() => void> = [];
+    vi.spyOn(window, "setTimeout").mockImplementation(((cb: TimerHandler) => {
+      if (typeof cb === "function") timers.push(() => cb());
+      return timers.length;
+    }) as typeof window.setTimeout);
     const base = performance.now();
     app.start();
-    for (let i = 1; i <= 12; i++) frames.shift()!(base + i * 16.67);
+    for (let i = 1; i <= 12; i++) {
+      frames.shift()!(base + i * 50);
+      timers.shift()?.();
+    }
 
     expect(app.playing).toBe(false);
     expect(energy).toHaveBeenCalledTimes(1);

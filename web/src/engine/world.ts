@@ -23,11 +23,11 @@
  * chains energy-conserving: pure projection would systematically discard
  * the radial velocity gained within each substep and drain energy.
  *
- * Performance mode changes one thing about that pipeline and one thing only:
- * springs leave step 1 and become position constraints solved between steps 2
- * and 3, because a spring is the one element here whose FORCE treatment
- * cannot be made unconditionally stable. Everything else it does is a cap on
- * an existing dial. See engine/perf.ts.
+ * Performance mode is the deliberately approximate pipeline: springs become
+ * position constraints, work caps fall across four levels, large gravity
+ * fields may aggregate distant cells, resting bodies may sleep, and maximum
+ * level simplifies contacts/rotation. Normal mode never takes those paths.
+ * See engine/perf.ts and engine/perf-gravity.ts.
  */
 import { CompiledExpr, ExprError, compileExpr } from "../core/expr";
 import { arrayOr, boolOr, idOr, intIn, numIn, numOr, strOr } from "../core/guards";
@@ -39,9 +39,11 @@ import {
 } from "./body";
 import { Contact, ContactCache, ContactStatic, solveContacts } from "./contacts";
 import { DistanceLink, Link, LinkDict, SpringLink, linkFromDict } from "./links";
+import { ApproximateGravity } from "./perf-gravity";
 import {
-  PERF_ITERATIONS, PERF_MAX_SPEED, PERF_SPRING_PASSES,
-  PERF_SPRUNG_CONTACT_GAIN, PERF_SUBSTEPS, PerfSolver, clampSpeeds,
+  PERF_ITERATIONS_BY_LEVEL, PERF_MAX_SPEED, PERF_SPRING_PASSES_BY_LEVEL,
+  PERF_SPRUNG_CONTACT_GAIN, PERF_SUBSTEPS_BY_LEVEL, PerfSolver, clampSpeeds,
+  performanceLevel,
 } from "./perf";
 
 export const INTEGRATORS = ["Velocity Verlet", "Symplectic Euler", "RK4"] as const;
@@ -343,17 +345,23 @@ export class World {
   // numbers with a note saying what is actually running - writing the cheap
   // values into the world would save them into the user's scene file.
   performance = false;
+  /** Explicit approximate-work level chosen by the browser scheduler.
+   * It is transient, ignored while Performance mode is off, and never saved. */
+  performanceLevel = 0;
 
   /** Substeps this step will actually take. */
   get effectiveSubsteps(): number {
     const n = Math.max(1, this.substeps);
-    return this.performance ? Math.min(n, PERF_SUBSTEPS) : n;
+    const level = performanceLevel(this.performanceLevel);
+    return this.performance ? Math.min(n, PERF_SUBSTEPS_BY_LEVEL[level]) : n;
   }
 
   /** Solver iterations this step will actually use. */
   get effectiveIterations(): number {
-    return this.performance ? Math.min(this.iterations, PERF_ITERATIONS)
-                            : this.iterations;
+    const level = performanceLevel(this.performanceLevel);
+    return this.performance
+      ? Math.min(this.iterations, PERF_ITERATIONS_BY_LEVEL[level])
+      : this.iterations;
   }
 
   /** Integrator this step will actually use. Performance mode drops to
@@ -361,6 +369,17 @@ export class World {
    * twice (Verlet) or four times (RK4). */
   get effectiveIntegrator(): Integrator {
     return this.performance ? "Symplectic Euler" : this.integrator;
+  }
+
+  /** Wake every approximate-mode sleeper after an edit, mode transition, or
+   * quality transition. Sleeping is runtime work suppression, never state. */
+  wakePerformanceBodies(): void {
+    if (!this.performanceSleepActive) return;
+    for (const body of this.bodies) {
+      body.perfSleeping = false;
+      body.perfSleepFrames = 0;
+    }
+    this.performanceSleepActive = false;
   }
 
   time = 0.0;
@@ -393,20 +412,68 @@ export class World {
     body: Body; amplitude: number; frequency: number; phase: number;
     ax: number; ay: number; // unit direction already divided by mass
   }> = [];
-  private contactStatic: ContactStatic = {};
+  private noCollide = new Set<string>();
+  private driverBodies = new Map<number, Body>();
+  private traceLive = new Set<number>();
+  private performanceSleepActive = false;
+  private contactStatic: ContactStatic = {
+    noCollide: this.noCollide,
+    colliders: [], movers: [], small: [], large: [], radii: [],
+  };
   // slices the current step may still spend (see SLICE_WORK_BUDGET)
   private sliceBudget = 0;
   // interval separating each body's `acc` from its `accPrev` sample
   private accSampleDt = 0.0;
+
+  private updatePerformanceSleep(): void {
+    const level = performanceLevel(this.performanceLevel);
+    if (!this.performance || level < 2) {
+      this.wakePerformanceBodies();
+      return;
+    }
+    const hasTimeForce = this.fields.some((field) => field.enabled) ||
+      this.drivers.some((driver) => driver.enabled);
+    const allowed = !this.mutualGravity &&
+      this.links.length === 0 && !hasTimeForce;
+    if (!allowed) {
+      this.wakePerformanceBodies();
+      return;
+    }
+    const frames = level >= 3 ? 20 : 45;
+    const still2 = 0.02 * 0.02;
+    for (const body of this.bodies) {
+      if (body.perfSleeping || body.locked || body.held || body.mass <= 0 ||
+          body.isAnchor) continue;
+      const surface = body.omega * body.radius;
+      const motion2 = body.vel.x * body.vel.x + body.vel.y * body.vel.y +
+        surface * surface;
+      if (body.touching && motion2 < still2) {
+        this.performanceSleepActive = true;
+        body.perfSleepFrames++;
+        if (body.perfSleepFrames >= frames) {
+          body.vel.set(0, 0);
+          body.omega = 0;
+          body.acc.set(0, 0);
+          body.perfSleeping = true;
+          this.performanceSleepActive = true;
+        }
+      } else {
+        body.perfSleepFrames = 0;
+      }
+    }
+  }
 
   // ------------------------------------------------------------------ forces
   /** Rebuild the per-step caches. Body/link lists cannot change during a
    * step, so quantities that only the UI edits (mass, stiffness, ...) are
    * gathered once here instead of every force evaluation. */
   private prepareStep(h: number): void {
-    const springs: SpringLink[] = [];
-    const rods: DistanceLink[] = [];
-    const noCollide = new Set<string>();
+    const springs = this.springs;
+    const rods = this.rods;
+    const noCollide = this.noCollide;
+    springs.length = 0;
+    rods.length = 0;
+    noCollide.clear();
     for (const ln of this.links) {
       if (ln instanceof DistanceLink) rods.push(ln);
       else springs.push(ln);
@@ -422,8 +489,6 @@ export class World {
         noCollide.add(a < b ? `${a},${b}` : `${b},${a}`);
       }
     }
-    this.rods = rods;
-    this.springs = springs;
     this.prepareSprings(h, springs);
     // Flag the spring endpoints for subdivisionNeed. Doing it here rather
     // than in the force loop keeps it out of the per-evaluation path: the
@@ -444,8 +509,16 @@ export class World {
     // slice under RK4. It cannot change within a step (mass, locked and
     // held are all edited between frames), so it is read once here and
     // the loops index this array alongside `movers`.
-    const movers = this.bodies.filter((b) => b.invMass !== 0.0);
-    this.movers = movers;
+    const movers = this.movers;
+    movers.length = 0;
+    const maximumApproximation = this.performance &&
+      performanceLevel(this.performanceLevel) >= 3;
+    for (const body of this.bodies) {
+      // Maximum mode does not render spin markers and omits tangent contact
+      // impulses, so angular motion has no visible or translational effect.
+      if (maximumApproximation) body.omega = 0.0;
+      if (body.invMass !== 0.0) movers.push(body);
+    }
     if (this.moverInvMass.length < movers.length) {
       this.moverInvMass = new Float64Array(Math.max(16, movers.length * 2));
     }
@@ -458,15 +531,18 @@ export class World {
     // scene, and a growing cost on every sliced substep. Only worth a pass
     // once it has clearly outgrown the live set.
     if (this.traceLast.size > this.movers.length * 2 + 16) {
-      const live = new Set<number>();
+      const live = this.traceLive;
+      live.clear();
       for (const b of this.movers) live.add(b.id);
       for (const id of this.traceLast.keys()) {
         if (!live.has(id)) this.traceLast.delete(id);
       }
+      live.clear();
     }
     this.driven.length = 0;
     if (this.drivers.length > 0) {
-      const byId = new Map<number, Body>();
+      const byId = this.driverBodies;
+      byId.clear();
       for (const b of this.bodies) byId.set(b.id, b);
       for (const drv of this.drivers) {
         if (!drv.enabled) continue;
@@ -482,8 +558,39 @@ export class World {
           ax: Math.cos(drv.angle) * invM, ay: Math.sin(drv.angle) * invM,
         });
       }
+      byId.clear();
     }
-    this.contactStatic = { noCollide };
+    // Detection arrays are derived lazily from current colliders/radii and
+    // reused by all substeps. Delete prior references without allocating a
+    // replacement state object.
+    const contactColliders = this.contactStatic.colliders!;
+    const contactMovers = this.contactStatic.movers!;
+    contactColliders.length = 0;
+    contactMovers.length = 0;
+    for (const body of this.bodies) {
+      if (!body.collides) continue;
+      contactColliders.push(body);
+      if (body.invMass !== 0.0) contactMovers.push(body);
+    }
+    this.contactStatic.small!.length = 0;
+    this.contactStatic.large!.length = 0;
+    this.contactStatic.radii!.length = 0;
+    this.contactStatic.cell = undefined;
+    if (this.performance) {
+      const level = performanceLevel(this.performanceLevel);
+      this.contactStatic.workBudget = [400, 300, 180, 96][level];
+      this.contactStatic.positionIterations = [3, 2, 2, 1][level];
+      this.contactStatic.impactIterations = [32, 16, 8, 4][level];
+      this.contactStatic.wallSweep = level >= 1;
+      this.contactStatic.simplified = level >= 3;
+      if (this.contactStatic.simplified) this.contactCache.clear();
+    } else {
+      this.contactStatic.workBudget = undefined;
+      this.contactStatic.positionIterations = undefined;
+      this.contactStatic.impactIterations = undefined;
+      this.contactStatic.wallSweep = false;
+      this.contactStatic.simplified = false;
+    }
   }
 
   /** Set each spring's effective stiffness and damping for this step.
@@ -596,6 +703,7 @@ export class World {
   private nbAy = new Float64Array(0);
   private nbMovable = new Uint8Array(0);
   private nbBody: Body[] = [];
+  private approximateGravity = new ApproximateGravity();
 
   /** Pairwise Newtonian attraction between every non-anchor body.
    *
@@ -662,6 +770,20 @@ export class World {
 
     const G = this.G;
     const eps2 = this.softening * this.softening;
+    const level = performanceLevel(this.performanceLevel);
+    const approximateThreshold = [Infinity, 384, 256, 128][level];
+    if (this.performance && n >= approximateThreshold) {
+      const grid = [16, 16, 12, 8][level];
+      this.approximateGravity.accumulate(
+        px, py, mass, radius, movable, ax, ay, n,
+        G, eps2, this.pointGravity, grid);
+      for (let k = 0; k < n; k++) {
+        const acc = ref[k].acc;
+        acc.x = ax[k];
+        acc.y = ay[k];
+      }
+      return;
+    }
     if (this.pointGravity) {
       // point masses: the whole mass acts from the centre, singular as r->0
       for (let i = 0; i < n; i++) {
@@ -1243,7 +1365,8 @@ export class World {
       // Springs first, rods second: a rod is an exact constraint and must
       // have the final say where an assembly mixes the two.
       if (projected !== null && projected.length > 0) {
-        this.perf.solve(projected, h, PERF_SPRING_PASSES);
+        const level = performanceLevel(this.performanceLevel);
+        this.perf.solve(projected, h, PERF_SPRING_PASSES_BY_LEVEL[level]);
       }
       if (rigid.length > 0) this.solveRodPositions(rigid, invH, iters);
 
@@ -1251,9 +1374,9 @@ export class World {
       // overlay and the status-bar count - so each substep replaces the
       // last rather than appending. Accumulating meant a 4-substep step
       // reported (and drew) every contact four times over.
-      this.contacts.length = 0;
       solveContacts(this.bodies, this.walls, this.contacts, iters,
-                    this.contactCache, this.contactStatic);
+                    this.contactStatic.simplified ? null : this.contactCache,
+                    this.contactStatic);
 
       if (this.globalDamping > 0.0) {
         const decay = Math.max(0.0, 1.0 - this.globalDamping * h);
@@ -1287,6 +1410,7 @@ export class World {
 
       this.time += h;
     }
+    this.updatePerformanceSleep();
     this.sanitize();
     this.stepCount++;
   }
@@ -1448,7 +1572,12 @@ export class World {
     return q;
   }
 
-  energy(): { ke: number; pe: number; total: number } {
+  private energyBodies: Body[] = [];
+
+  /** Exact energy by default. A finite pair budget is an intentionally
+   * approximate Performance-mode diagnostic: it samples deterministic body
+   * pairs and scales their mean instead of adding another O(n^2) pass. */
+  energy(pairBudget = Infinity): { ke: number; pe: number; total: number } {
     let ke = 0.0;
     let peG = 0.0;
     for (const b of this.bodies) {
@@ -1465,6 +1594,43 @@ export class World {
       // softened potential, consistent with the softened force
       const bodies = this.bodies;
       const eps2 = this.softening * this.softening;
+      if (Number.isFinite(pairBudget)) {
+        const active = this.energyBodies;
+        active.length = 0;
+        for (const body of bodies) if (!body.isAnchor) active.push(body);
+        const n = active.length;
+        const totalPairs = (n * (n - 1)) / 2;
+        const samples = Math.min(totalPairs, Math.max(1, Math.floor(pairBudget)));
+        if (samples < totalPairs) {
+          let sampled = 0.0;
+          let seed = (0x9e3779b9 ^ n) | 0;
+          for (let s = 0; s < samples; s++) {
+            seed = (Math.imul(seed, 1664525) + 1013904223) | 0;
+            const i = (seed >>> 0) % n;
+            seed = (Math.imul(seed, 1664525) + 1013904223) | 0;
+            let j = (seed >>> 0) % (n - 1);
+            if (j >= i) j++;
+            const bi = active[i];
+            const bj = active[j];
+            const dx = bj.pos.x - bi.pos.x;
+            const dy = bj.pos.y - bi.pos.y;
+            const r2 = dx * dx + dy * dy;
+            const R = bi.radius + bj.radius;
+            if (!this.pointGravity && r2 < R * R) {
+              const D2 = R * R + eps2;
+              const D = Math.sqrt(D2);
+              sampled -= this.G * bi.mass * bj.mass *
+                (1.0 / D + (R * R - r2) / (2.0 * D2 * D));
+            } else {
+              sampled -= this.G * bi.mass * bj.mass / Math.sqrt(r2 + eps2);
+            }
+          }
+          peN = sampled * (totalPairs / samples);
+          active.length = 0;
+          return { ke, pe: peG + peS + peN, total: ke + peG + peS + peN };
+        }
+        active.length = 0;
+      }
       for (let i = 0; i < bodies.length; i++) {
         const bi = bodies[i];
         if (bi.isAnchor) continue; // consistent with the force: no anchor PE

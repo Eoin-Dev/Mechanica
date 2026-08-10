@@ -188,11 +188,25 @@ export class App {
   // free accuracy rather than a source of nondeterminism.
   trailQuality = 1.0;
   private renderMs = 4.0; // EMA of measured render cost, ms
+  private physicsMs = 0.0;
   // Aim to leave the rest of a 60 Hz frame alone. Trails are the only part
   // of rendering that can be scaled, so this is the whole render budget.
   private static RENDER_TARGET_MS = 6.0;
   private static TRAIL_QUALITY_MIN = 0.35;
   private static TRAIL_QUALITY_MAX = 6.0;
+
+  /** Adaptive, machine-load-selected approximation level. Zero is the
+   * highest-quality Performance profile; three spends the least work. */
+  performanceLevel = 0;
+  private performanceBadSince: number | null = null;
+  private performanceGoodSince: number | null = null;
+  private performanceTuneAt = 0.0;
+  private lastPanelRefresh = -Infinity;
+  private frameCallback: FrameRequestCallback | null = null;
+  private frameRequest = 0;
+  private idleFrameTimer: number | null = null;
+  private insideFrame = false;
+  private performanceRenderPhase = 0;
 
   // Canvas drawing is retained by the browser until something visible
   // changes. Keep a generation rather than repainting the full high-DPI
@@ -231,6 +245,7 @@ export class App {
   settings: Settings = {};
   private autofitRatio = 1.0; // user zoom-out factor while auto-fitting
   private history = new snap.RewindBuffer(); // per-frame rewind (rolling)
+  private lastRewindSampleT = -Infinity;
   private rewindUnavailable = false;
   private overloadSince: number | null = null;
   private overloadHintAt = 0.0;
@@ -258,7 +273,9 @@ export class App {
     this.controller = new CanvasController(this);
     this.controller.attach(canvas);
     this.settings = this.loadSettings();
+    this.performanceLevel = this.perfMode ? 1 : 0;
     this.adaptiveDt = this.settings.adaptive_dt ?? true;
+    this.applySolverMode(this.world);
     this.applyUiSettings();
   }
 
@@ -340,14 +357,59 @@ export class App {
 
   setPerfMode(on: boolean): void {
     this.settings.perf_mode = on;
+    this.performanceLevel = on ? 1 : 0;
+    this.performanceBadSince = null;
+    this.performanceGoodSince = null;
     this.saveSettings();
     this.applySolverMode(this.world);
+    this.invalidateEnergy();
+    this.resizeCanvas();
   }
 
   /** Point a world at the current solver mode. Called on every world the app
    * steps, so no path can forget it. */
   applySolverMode(world: World): void {
+    const changed = world.performance !== this.perfMode ||
+      world.performanceLevel !== this.performanceLevel;
     world.performance = this.perfMode;
+    world.performanceLevel = this.performanceLevel;
+    if (changed) world.wakePerformanceBodies();
+  }
+
+  /** Current user-visible approximation description. */
+  get performanceQualityLabel(): string {
+    return ["high", "fast", "faster", "maximum"][this.performanceLevel];
+  }
+
+  /** Read-only live counters for the development benchmark harness. The
+   * timings are exponential moving averages, not persisted simulation state. */
+  performanceSnapshot(): {
+    fps: number;
+    physicsMs: number;
+    renderMs: number;
+    level: number;
+    bodies: number;
+    contacts: number;
+    canvasPixels: number;
+  } {
+    return {
+      fps: this.fpsNow,
+      physicsMs: this.physicsMs,
+      renderMs: this.renderMs,
+      level: this.performanceLevel,
+      bodies: this.world.bodies.length,
+      contacts: this.world.contacts.length,
+      canvasPixels: this.canvas.width * this.canvas.height,
+    };
+  }
+
+  /** Effective backing-store ratio. CSS geometry and input coordinates stay
+   * unchanged; only Performance mode is allowed to trade pixel density. */
+  get renderPixelRatio(): number {
+    const native = window.devicePixelRatio || 1;
+    if (!this.perfMode) return native;
+    const cap = [1.5, 1.25, 1.0, 1.0][this.performanceLevel];
+    return Math.min(native, cap);
   }
 
   /** How far a body must stray before it counts as gone: several times
@@ -395,7 +457,7 @@ export class App {
   }
 
   resizeCanvas(): void {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = this.renderPixelRatio;
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
     if (w === 0 || h === 0) return;
@@ -419,12 +481,15 @@ export class App {
     if (this.canvasGeneration === this.renderedCanvasGeneration) {
       this.canvasGeneration++;
     }
+    if (!this.insideFrame) this.scheduleDisplayFrame(true);
   }
 
   // --------------------------------------------------------------- playback
   togglePlay(): void {
     this.ensureInitial();
     this.playing = !this.playing;
+    if (this.playing) this.fpsSmoothed = 0.0;
+    this.scheduleDisplayFrame(true);
   }
 
   /** Run one engine step and preserve its diagnostic before a later step can
@@ -432,6 +497,7 @@ export class App {
   private safeStep(world: World, dt: number): PhysicsFailure | null {
     try {
       world.performance = this.perfMode; // every stepping path, no exceptions
+      world.performanceLevel = this.performanceLevel;
       world.step(dt);
       if (world.diverged.length === 0) return null;
       return { names: [...new Set(world.diverged)], exception: false };
@@ -489,6 +555,15 @@ export class App {
     this.world.traceSpacing = this.view.trails ? 0.5 / this.camera.zoom : 0.0;
   }
 
+  /** Performance mode may halve the physics cadence under sustained load.
+   * A larger fixed quantum advances the same simulated time with fewer force,
+   * constraint and collision passes. */
+  private activePhysicsQuantum(): number {
+    return this.perfMode && this.performanceLevel >= 2
+      ? PHYSICS_DT * 2
+      : PHYSICS_DT;
+  }
+
   stepOnce(): void {
     this.ensureInitial();
     this.playing = false;
@@ -505,9 +580,11 @@ export class App {
     // exact thing anyone steps frame by frame to study - integrated more
     // coarsely than just watching it, and the two disagreed.
     let failure: PhysicsFailure | null = null;
-    for (let q = 0; q < 2 && failure === null; q++) {
-      const n = this.pickResolution(PHYSICS_DT);
-      const h = PHYSICS_DT / n;
+    const quantum = this.activePhysicsQuantum();
+    const frameQuanta = Math.max(1, Math.round((2 * PHYSICS_DT) / quantum));
+    for (let q = 0; q < frameQuanta && failure === null; q++) {
+      const n = this.pickResolution(quantum);
+      const h = quantum / n;
       failure = this.runPhysicsBatch(
         this.world, n, h, () => this.recordTrails()).failure;
     }
@@ -609,7 +686,8 @@ export class App {
     // The engine advances fixed quanta, so the closest representable clock
     // is used. This keeps a jump deterministic and at most half a quantum
     // from the requested value.
-    const steps = Math.max(0, Math.round((target - world.time) / PHYSICS_DT));
+    const quantum = this.activePhysicsQuantum();
+    const steps = Math.max(0, Math.round((target - world.time) / quantum));
     const t0 = performance.now();
     let ran = 0;
     let failure: PhysicsFailure | null = null;
@@ -618,7 +696,7 @@ export class App {
       // Check wall time once per small deterministic block instead of once
       // per engine step. The batch still stops on the first failure.
       const block = Math.min(64, allowed - ran);
-      const result = this.runPhysicsBatch(world, block, PHYSICS_DT);
+      const result = this.runPhysicsBatch(world, block, quantum);
       ran += result.completed;
       failure = result.failure;
       if (performance.now() - t0 > App.TIME_JUMP_BUDGET_MS) break;
@@ -652,6 +730,7 @@ export class App {
   replaceWorld(world: World, keepInitial = false, preserveEdit = false): void {
     if (!preserveEdit) this.cancelEdit();
     this.world = world;
+    this.applySolverMode(world);
     // any world swap (undo, reset, clear, load) disarms the soft-body drag
     // hint; loadPreset re-arms it afterwards only for soft-body presets, so
     // clearing the scene can never surface it
@@ -696,6 +775,7 @@ export class App {
   /** Capture the exact live state before an immediate or continuous edit. */
   beginEdit(): void {
     if (this.editBefore === null) this.editBefore = snap.snapshot(this.world);
+    this.world.wakePerformanceBodies();
     // Continuous controls call beginEdit for each live input even though the
     // transaction snapshot is captured only once. Each input may have changed
     // a rendered property, so keep the canvas live throughout the gesture.
@@ -902,28 +982,30 @@ export class App {
   // ------------------------------------------------------------ view helpers
   /** [min_x, max_x, min_y, max_y] enclosing every body and wall. */
   private sceneBounds(): [number, number, number, number] | null {
-    const pts: Array<[number, number, number]> = []; // (x, y, pad radius)
-    for (const b of this.world.bodies) {
-      if (Number.isFinite(b.pos.x) && Number.isFinite(b.pos.y)) {
-        pts.push([b.pos.x, b.pos.y, b.radius]);
-      }
-    }
-    for (const w of this.world.walls) {
-      const half = w.thickness * 0.5;
-      pts.push([w.a.x, w.a.y, half]);
-      pts.push([w.b.x, w.b.y, half]);
-    }
-    if (pts.length === 0) return null;
     let minX = Infinity;
     let maxX = -Infinity;
     let minY = Infinity;
     let maxY = -Infinity;
-    for (const [x, y, r] of pts) {
-      if (x - r < minX) minX = x - r;
-      if (x + r > maxX) maxX = x + r;
-      if (y - r < minY) minY = y - r;
-      if (y + r > maxY) maxY = y + r;
+    for (const b of this.world.bodies) {
+      if (Number.isFinite(b.pos.x) && Number.isFinite(b.pos.y)) {
+        if (b.pos.x - b.radius < minX) minX = b.pos.x - b.radius;
+        if (b.pos.x + b.radius > maxX) maxX = b.pos.x + b.radius;
+        if (b.pos.y - b.radius < minY) minY = b.pos.y - b.radius;
+        if (b.pos.y + b.radius > maxY) maxY = b.pos.y + b.radius;
+      }
     }
+    for (const w of this.world.walls) {
+      const half = w.thickness * 0.5;
+      if (w.a.x - half < minX) minX = w.a.x - half;
+      if (w.a.x + half > maxX) maxX = w.a.x + half;
+      if (w.a.y - half < minY) minY = w.a.y - half;
+      if (w.a.y + half > maxY) maxY = w.a.y + half;
+      if (w.b.x - half < minX) minX = w.b.x - half;
+      if (w.b.x + half > maxX) maxX = w.b.x + half;
+      if (w.b.y - half < minY) minY = w.b.y - half;
+      if (w.b.y + half > maxY) maxY = w.b.y + half;
+    }
+    if (minX === Infinity) return null;
     return [minX, maxX, minY, maxY];
   }
 
@@ -1097,7 +1179,10 @@ export class App {
   energyNow(): { ke: number; pe: number; total: number } {
     if (this.energyCached === null ||
         this.energyCachedRevision !== this.energyRevision) {
-      this.energyCached = this.world.energy();
+      const pairBudget = this.perfMode
+        ? [12_000, 8_000, 4_000, 2_000][this.performanceLevel]
+        : Infinity;
+      this.energyCached = this.world.energy(pairBudget);
       this.energyCachedRevision = this.energyRevision;
     }
     return this.energyCached;
@@ -1105,14 +1190,15 @@ export class App {
 
   energyDriftText(): string {
     if (this.baselineEnergy === null) return "";
+    const prefix = this.perfMode ? "~dE" : "dE";
     const e = this.energyNow().total;
     const base = this.baselineEnergy;
     if (Math.abs(base) < 1e-9) {
       const d = e - base;
-      return `dE ${d >= 0 ? "+" : ""}${parseFloat(d.toPrecision(3))} J`;
+      return `${prefix} ${d >= 0 ? "+" : ""}${parseFloat(d.toPrecision(3))} J`;
     }
     const pct = (100 * (e - base)) / Math.abs(base);
-    return `dE ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+    return `${prefix} ${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
   }
 
   setTrails(on: boolean): void {
@@ -1189,23 +1275,55 @@ export class App {
       (this.physicsContactsBefore > 0 || this.world.contacts.length > 0);
   }
 
+  private scheduleDisplayFrame(immediate: boolean): void {
+    if (this.frameCallback === null || this.frameRequest !== 0) return;
+    if (immediate && this.idleFrameTimer !== null) {
+      window.clearTimeout(this.idleFrameTimer);
+      this.idleFrameTimer = null;
+    }
+    if (this.idleFrameTimer !== null) return;
+    const request = () => {
+      this.idleFrameTimer = null;
+      if (this.frameCallback !== null && this.frameRequest === 0) {
+        this.frameRequest = requestAnimationFrame(this.frameCallback);
+      }
+    };
+    if (immediate) request();
+    else this.idleFrameTimer = window.setTimeout(request, 50);
+  }
+
   start(): void {
+    if (this.frameCallback !== null) return;
     this.lastFrame = performance.now();
-    const frame = (now: number) => {
+    this.frameCallback = (now: number) => {
+      this.frameRequest = 0;
+      this.insideFrame = true;
       const dtFrame = Math.min(0.25, (now - this.lastFrame) / 1000);
       this.lastFrame = now;
       if (dtFrame > 0) {
         const inst = 1 / dtFrame;
-        this.fpsSmoothed = this.fpsSmoothed * 0.9 + inst * 0.1;
+        this.fpsSmoothed = this.fpsSmoothed > 0
+          ? this.fpsSmoothed * 0.9 + inst * 0.1 : inst;
         this.fpsNow = this.fpsSmoothed;
       }
       this.controller.updateDrag(); // keep held bodies pinned while parked
       this.update(dtFrame);
+      // Adapt before drawing. A profile change may resize the backing store,
+      // which clears it; rendering in the same callback prevents a blank
+      // flash between the old and new Performance resolutions.
+      this.tunePerformance(now);
       this.render();
-      for (const p of this.panels) p.refresh();
-      requestAnimationFrame(frame);
+      // Graphs and numeric controls do not need monitor-rate polling. Keep
+      // them responsive while playing and nearly idle while paused.
+      const panelInterval = this.playing ? 1000 / 30 : 50;
+      if (now - this.lastPanelRefresh >= panelInterval) {
+        this.lastPanelRefresh = now;
+        for (const p of this.panels) p.refresh();
+      }
+      this.insideFrame = false;
+      this.scheduleDisplayFrame(this.playing);
     };
-    requestAnimationFrame(frame);
+    this.scheduleDisplayFrame(true);
   }
 
   private update(dtFrame: number): void {
@@ -1214,7 +1332,8 @@ export class App {
       // with a proportionally smaller dt: slow motion then produces a
       // fresh state every frame (glassy smooth, and *more* accurate)
       // instead of one full-size step every few frames (choppy).
-      const effDt = PHYSICS_DT * Math.min(this.speed, 1.0);
+      const quantum = this.activePhysicsQuantum();
+      const effDt = quantum * Math.min(this.speed, 1.0);
       this.syncTraceSpacing();
       // Clamp the catch-up so a slow frame cannot buy itself more work than
       // it can afford (see MAX_CATCHUP_FRAMES). Measured against the frame
@@ -1226,6 +1345,7 @@ export class App {
       let quanta = 0;
       let qUsed = 1;
       let failure: PhysicsFailure | null = null;
+      let advanced = false;
       let capturedVisualState = false;
       const t0 = performance.now();
       while (this.accumulator >= effDt && quanta < MAX_STEPS_PER_FRAME &&
@@ -1240,8 +1360,10 @@ export class App {
         const q = this.pickResolution(effDt);
         if (q > qUsed) qUsed = q;
         const h = effDt / q;
-        failure = this.runPhysicsBatch(
-          this.world, q, h, () => this.recordTrails()).failure;
+        const result = this.runPhysicsBatch(
+          this.world, q, h, () => this.recordTrails());
+        failure = result.failure;
+        if (result.completed > 0) advanced = true;
         if (failure !== null) break;
         this.accumulator -= effDt;
         quanta++;
@@ -1258,10 +1380,15 @@ export class App {
         this.checkSustainedOverload();
         this.cullEscaped();
       }
-      this.afterPhysics();
+      if (advanced) this.afterPhysics();
+      const physicsCost = performance.now() - t0;
+      this.physicsMs = this.physicsMs * 0.85 + physicsCost * 0.15;
       if (capturedVisualState && this.physicsVisualStateChanged()) {
         this.invalidateCanvas();
       }
+    } else {
+      this.physicsMs *= 0.85;
+      if (this.physicsMs < 0.01) this.physicsMs = 0;
     }
 
     // A camera that glides is decoration on top of the simulation, and
@@ -1309,11 +1436,10 @@ export class App {
    * differently from run to run: the same setup, reset and replayed,
    * could ring on one attempt and sit still on the next.
    *
-   * Performance is handled without touching the physics: a frame that
-   * runs out of budget simply advances less simulated time (the
-   * MAX_STEPS_PER_FRAME / PHYSICS_BUDGET_S ceilings in update()), so a
-   * slow machine runs the same simulation slower rather than a different
-   * simulation at speed. */
+   * Normal mode handles overload without changing physics: a frame that runs
+   * out of budget advances less simulated time. Performance mode is the
+   * explicit exception selected by the user; its separate load controller
+   * chooses a deterministic approximation profile for later steps. */
   private pickResolution(effDt: number): number {
     // Performance mode gives up adaptive resolution outright. It is the
     // largest single multiplier in the engine - it reached 16x on the
@@ -1321,6 +1447,57 @@ export class App {
     // this mode exists to stop paying for.
     if (!this.adaptiveDt || this.perfMode) return 1;
     return this.world.subdivisionNeed(effDt, 16);
+  }
+
+  /** Let Performance mode spend accuracy according to actual machine load.
+   * The engine remains timing-agnostic: the browser chooses an explicit
+   * level, and `World` applies that level deterministically to each step. */
+  private tunePerformance(nowMs: number): void {
+    if (!this.perfMode) return;
+    if (nowMs - this.performanceTuneAt < 250) return;
+    this.performanceTuneAt = nowMs;
+    if (typeof document !== "undefined" && document.hidden) return;
+
+    const frameMs = this.fpsNow > 1 ? 1000 / this.fpsNow : 0;
+    const totalCost = this.physicsMs + this.renderMs;
+    const severe = this.overloaded || frameMs > 28 || totalCost > 25;
+    const struggling = severe || frameMs > 19 || totalCost > 15;
+    const comfortable = !this.overloaded && frameMs > 0 && frameMs < 18 &&
+      totalCost < 10;
+
+    if (struggling) {
+      this.performanceGoodSince = null;
+      if (this.performanceBadSince === null) this.performanceBadSince = nowMs;
+      const waited = nowMs - this.performanceBadSince;
+      const threshold = severe ? 250 : 750;
+      if (waited >= threshold && this.performanceLevel < 3) {
+        this.setPerformanceLevel(this.performanceLevel + 1);
+        this.performanceBadSince = nowMs;
+      }
+      return;
+    }
+
+    this.performanceBadSince = null;
+    if (!comfortable || this.performanceLevel === 0) {
+      this.performanceGoodSince = null;
+      return;
+    }
+    if (this.performanceGoodSince === null) this.performanceGoodSince = nowMs;
+    if (nowMs - this.performanceGoodSince >= 5000) {
+      this.setPerformanceLevel(this.performanceLevel - 1);
+      this.performanceGoodSince = nowMs;
+    }
+  }
+
+  private setPerformanceLevel(level: number): void {
+    const next = Math.max(0, Math.min(3, Math.round(level)));
+    if (next === this.performanceLevel) return;
+    const previousRatio = this.renderPixelRatio;
+    this.performanceLevel = next;
+    this.applySolverMode(this.world);
+    this.invalidateEnergy();
+    if (this.renderPixelRatio !== previousRatio) this.resizeCanvas();
+    this.invalidateCanvas();
   }
 
   /** Why the app cannot hold real time, or null when it can.
@@ -1335,6 +1512,11 @@ export class App {
    */
   slowReason(): "physics" | "render" | null {
     if (!this.playing) return null;
+    // A lower Performance profile is expected to miss briefly while the
+    // controller moves down its quality ladder. Warn only when maximum mode
+    // is still slow; before then the message flashes without an action for the
+    // user to take and disappears as soon as adaptation does its job.
+    if (this.perfMode && !this.maximumPressureSustained()) return null;
     // Render-bound: the frame is genuinely bad AND drawing owns most of it.
     // Judged against a 40 Hz frame so an ordinary 50 Hz display, or a single
     // hitch, never trips it.
@@ -1343,6 +1525,11 @@ export class App {
     // Physics-bound: the accumulator could not be drained inside the
     // wall-clock budget even with the catch-up clamped.
     return this.overloaded ? "physics" : null;
+  }
+
+  private maximumPressureSustained(nowMs = performance.now()): boolean {
+    return this.performanceLevel >= 3 && this.performanceBadSince !== null &&
+      nowMs - this.performanceBadSince >= 750;
   }
 
   /** After several seconds of continuous overload the lag clearly won't
@@ -1363,6 +1550,9 @@ export class App {
       if (this.speed > 1.0) {
         this.speed = 1.0;
         this.toast("Physics can't keep up - speed reset to 1x");
+      } else if (this.perfMode) {
+        this.setPerformanceLevel(3);
+        this.toast("Performance mode is at maximum speed; simulated time may run slowly");
       } else {
         this.toast("Scene too heavy for real time (running in slow motion). " +
                    "Fewer substeps, iterations or bodies will speed it up.");
@@ -1466,17 +1656,26 @@ export class App {
 
   private afterPhysics(): void {
     this.sweepTrails();
-    // rolling per-frame history so the user can step backwards (,)
-    const rewindResult = this.history.push(this.world);
-    if (rewindResult === "too-large" && !this.rewindUnavailable) {
-      this.rewindUnavailable = true;
-      this.toast("This scene is too large to keep frame-rewind history");
+    // Normal mode records every displayed state. Performance mode samples a
+    // progressively coarser rewind timeline so a large world does not spend
+    // its recovered frame time serialising duplicate-nearby states.
+    const rewindInterval = this.perfMode
+      ? [1 / 60, 1 / 30, 1 / 15, 1 / 8][this.performanceLevel]
+      : 0;
+    if (this.world.time - this.lastRewindSampleT >= rewindInterval - 1e-12) {
+      this.lastRewindSampleT = this.world.time;
+      const rewindResult = this.history.push(this.world);
+      if (rewindResult === "too-large" && !this.rewindUnavailable) {
+        this.rewindUnavailable = true;
+        this.toast("This scene is too large to keep frame-rewind history");
+      }
     }
     this.recordGraphSample();
   }
 
   private clearHistory(): void {
     this.history.clear();
+    this.lastRewindSampleT = -Infinity;
   }
 
   private lastGraphSampleT = -Infinity;
@@ -1545,7 +1744,7 @@ export class App {
     p[2] = cam.zoom;
     p[3] = cam.screenW;
     p[4] = cam.screenH;
-    p[5] = window.devicePixelRatio || 1;
+    p[5] = this.renderPixelRatio;
     p[6] = Number(view.grid);
     p[7] = Number(view.snap);
     p[8] = Number(view.velVectors);
@@ -1595,18 +1794,32 @@ export class App {
       if (this.renderMs < 0.01) this.renderMs = 0;
       return;
     }
+    // When maximum approximation still cannot keep real time, alternate
+    // simulation draws. Physics and input keep running every display tick;
+    // presenting at roughly 30 Hz is preferable to spending every frame on
+    // raster work while simulated time falls ever further behind.
+    if (this.perfMode && this.maximumPressureSustained() && this.playing &&
+        (this.overloaded || this.renderMs > 12)) {
+      this.performanceRenderPhase ^= 1;
+      if (this.performanceRenderPhase !== 0) return;
+    } else {
+      this.performanceRenderPhase = 0;
+    }
     const t0 = performance.now();
     const ctx = this.ctx;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = this.renderPixelRatio;
     const w = this.camera.screenW;
     const h = this.camera.screenH;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = css(theme.BG);
     ctx.fillRect(0, 0, w, h);
-    if (this.view.grid) drawGrid(ctx, this.camera, w, h);
+    if (this.view.grid) {
+      drawGrid(ctx, this.camera, w, h,
+               this.perfMode && this.performanceLevel >= 3);
+    }
     drawWorld(ctx, this.camera, this.world, this.view, this.selection,
               this.controller.hover, this.trails, w, h, this.trailQuality,
-              this.perfMode);
+              this.perfMode, this.perfMode && this.performanceLevel >= 3);
     this.controller.drawOverlays(ctx);
     drawScaleBar(ctx, this.camera, w, h);
     this.renderMs = 0.85 * this.renderMs + 0.15 * (performance.now() - t0);

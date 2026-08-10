@@ -27,6 +27,7 @@ npm test           # verification suite (physics, rendering, robustness)
 npm run build      # production build into web/dist/
 npx playwright install chromium  # one-time browser-test prerequisite
 npm run test:e2e   # production-preview Chromium and axe checks
+npm run benchmark:performance -- --quick  # comparative browser performance smoke matrix
 ```
 
 The test badge is a lower bound enforced in CI by
