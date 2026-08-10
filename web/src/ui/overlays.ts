@@ -549,8 +549,11 @@ export class SettingsPanel {
       (v) => app.setPerfMode(v),
       "Trade physical accuracy for frame rate across the whole app."));
     note("Off by default. Sacrifices physical accuracy heavily for speed, " +
-         "and overrides the scene's own solver settings. Don't use it to " +
-         "model anything accurately or to read numbers off.");
+         "and overrides the scene's own solver settings. It automatically " +
+         "reduces canvas sharpness, physics frequency, collision/constraint " +
+         "work and gravity accuracy until the machine can keep up. Resting " +
+         "unlinked bodies may sleep. Don't use it to model anything " +
+         "accurately or to read numbers off.");
 
     add(checkbox("Adaptive resolution",
       () => app.adaptiveDt,

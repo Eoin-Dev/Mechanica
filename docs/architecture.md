@@ -87,8 +87,11 @@ split appears in [data, formulas, and scenes](data-formulas-scenes.md).
 
 ## Frame lifecycle
 
-`App.start()` creates a self-scheduling `requestAnimationFrame` callback. Each
-frame has a stable ordering:
+`App.start()` creates a self-scheduling display callback. Active playback uses
+`requestAnimationFrame`; paused state waits on a 50 ms idle timer and then
+requests a frame. Canvas invalidation or playback wakes the loop immediately,
+so pointer/camera edits retain low latency without polling an unchanged scene
+at monitor rate. Each callback has a stable ordering:
 
 ```mermaid
 sequenceDiagram
@@ -110,23 +113,23 @@ sequenceDiagram
     end
     A->>A: stop on first failure; record rewind and graphs
     A->>R: render current state when visually dirty
-    A->>P: refresh each panel
-    A->>RAF: request next frame
+    A->>P: refresh panels when their cadence is due
+    A->>RAF: request active frame or schedule paused wake
 ```
 
 Calling `updateDrag()` before physics keeps a held body under a stationary
 pointer even when no pointer-move event fires. A retained canvas image is
-redrawn only after visual invalidation; panel refresh still runs every frame so
-clock and control readouts observe the same post-physics world. DOM controls do
-not drive their own timers; their `refresh` functions are polled by the panel
-layer. The energy readout is revision-cached against physical state rather than
-display frames, so an unchanged paused mutual-gravity scene does not repeat its
-quadratic pair-energy pass at the monitor refresh rate.
+redrawn only after visual invalidation. Panels are polled at 30 Hz while
+playing and 20 Hz while paused; their readouts still observe post-physics
+state. The energy readout is revision-cached against physical state rather
+than display frames, so an unchanged paused mutual-gravity scene does not
+repeat its quadratic pair-energy pass.
 
 ## Fixed-timestep scheduling
 
-The base physics quantum is `PHYSICS_DT = 1/120 s`. The frame scheduler
-separates simulated time from display timing:
+The Normal-mode physics quantum is `PHYSICS_DT = 1/120 s`. Performance levels
+2 and 3 use `1/60 s`; this is an explicit accuracy trade selected by the user.
+The frame scheduler separates simulated time from display timing:
 
 - Real frame duration is capped at 0.25 s so returning from a suspended tab
   does not request an enormous catch-up.
@@ -142,6 +145,15 @@ separates simulated time from display timing:
 - `overloaded` means the accumulator could not be drained. Sustained overload
   resets a fast-forward multiplier to 1x or explains how to reduce solver
   cost.
+
+Performance mode separately samples frame, physics, and render moving averages
+every 250 ms. Sustained pressure raises its transient approximation level after
+250-750 ms; five seconds of comfortable headroom relaxes one level. The chosen
+level is then passed explicitly to `World`, so every completed step at that
+level has a defined algorithm even though the browser's level selection is
+machine-load-dependent. Adaptation runs before drawing, so a DPR-changing level
+transition clears and repaints the backing store in the same callback rather
+than exposing a blank intermediate frame.
 
 This budget policy keeps the UI responsive while preserving deterministic
 physics: measured wall-clock cost decides how much simulated time a frame
@@ -166,9 +178,10 @@ There are two distinct refinement systems:
    change, is bounded by a scene-derived work budget, and can refine up to the
    engine ceiling.
 
-Both decisions depend on simulation state, never measured frame time.
-Performance mode disables both refinements because they are the largest work
-multipliers.
+Both Normal-mode refinement decisions depend on simulation state, never
+measured frame time. Performance mode disables both because they are the
+largest work multipliers, then uses its explicitly approximate load-selected
+profile instead.
 
 ## One world step
 
@@ -183,15 +196,16 @@ per-step caches, and repeats this pipeline for every substep:
    back into velocity.
 5. Rebuild contacts for the current positions, warm start them, resolve
    impacts and resting velocity constraints, project penetration, and apply
-   static-friction anchoring.
+   static-friction anchoring. Maximum approximation retains only normal
+   bounce/separation and penetration work.
 6. Apply global velocity damping, interaction speed caps, and the performance
    mode speed ceiling.
 7. Advance the world clock.
 
-After all substeps, non-finite or extreme bodies are restored to their prior
-position and frozen, and `stepCount` advances. Contacts stored on `World` are
-only the latest substep's contacts, which is what the renderer and status bar
-display.
+After all substeps, eligible settled bodies may enter Performance-mode sleep,
+non-finite or extreme bodies are restored to their prior position and frozen,
+and `stepCount` advances. Contacts stored on `World` are only the latest
+substep's contacts, which is what the renderer and status bar display.
 
 ## Rendering lifecycle
 
@@ -207,14 +221,23 @@ values. If the generation is unchanged it retains the existing pixels, decays
 the measured render-cost average toward zero, and skips all Canvas calls. A
 dirty render measures cost independently from physics cost and:
 
-1. Applies the device-pixel-ratio transform and paints the current theme
-   background.
-2. Draws the optional world grid.
+1. Applies the effective device-pixel-ratio transform and paints the current
+   theme background. Normal mode uses native DPR; Performance levels 0-3 cap
+   it at `1.5`, `1.25`, `1`, and `1` without changing CSS/input geometry.
+2. Draws the optional world grid; maximum level omits minor lines.
 3. Calls `drawWorld()` with world, camera, view settings, selection, hover,
    trails, viewport dimensions, adaptive trail quality, and performance mode.
 4. Draws interaction previews and the scale bar.
 5. Updates an exponential moving average of draw cost and tunes only the trail
    vertex budget.
+
+Maximum level also limits trails to at most 64 retained vertices each, shows
+labels/vectors only for the hovered or selected body, suppresses contact and
+spatial-grid diagnostics, and—only after at least 750 ms of continuing maximum-
+level overload or excess render cost—presents alternate simulation frames.
+Physics and input continue each display tick; the visual fallback is
+approximately 30 Hz rather than allowing raster work to make simulated time
+fall indefinitely behind.
 
 Changing trail detail based on measured render time is safe because it changes
 only how an already-computed path is displayed. No simulation state reads the
@@ -225,15 +248,18 @@ paints the entire background. Resize handling writes canvas backing dimensions
 only when their device-pixel dimensions change, while CSS-size changes still
 update the camera and invalidate drawing.
 
-Trail stroke batches are cached by colour. Every draw removes colour groups
-that are absent from the current world and ignores stale body IDs; world and
-history replacement also clear the application's per-body trail buffers. The
-cache therefore cannot retain colours or paths from deleted, recoloured, or
-replaced scenes indefinitely.
+Sparse Normal-mode trail stroke batches are cached by colour. Dense scenes and
+all Performance profiles instead draw each trail as one bounded current path,
+avoiding viewport-sized disjoint `Path2D` raster bounds. Every draw removes
+colour groups absent from the current world and ignores stale body IDs; world
+and history replacement also clear per-body trail buffers.
 
 The overload warning distinguishes a render-bound frame from a physics-bound
-one. A slow display where drawing owns most of the frame suggests reducing
-trail/display work; an undrained accumulator suggests reducing physical work.
+one. Lower Performance profiles suppress it while the adaptive controller can
+still respond; it appears in Performance mode only after maximum approximation
+remains slow for at least 750 ms. A slow display where drawing owns most of the frame suggests
+reducing trail/display work; an undrained accumulator suggests reducing
+physical work.
 
 ## UI refresh architecture
 
@@ -314,7 +340,9 @@ instead of retaining a partial transaction.
 - After a displayed physics update, `RewindBuffer` records a keyframe or compact
   dynamic delta under its 48,000,000-byte and 3,000-frame ceilings, and graph
   series receive a throttled sample. An individual frame that cannot fit
-  clears rewind state and returns `too-large`.
+  clears rewind state and returns `too-large`. Normal mode records each
+  displayed update; Performance levels 0-3 cap rewind capture at 60, 30, 15,
+  and 8 samples per simulated second.
 - Frame rewind pops the current recorded frame, reconstructs the previous one,
   truncates energy, momentum, and timestamped phase data to its clock, and
   pauses playback.
@@ -385,7 +413,7 @@ answer from choices that affect only responsiveness or presentation:
 
 | State-derived and deterministic | Machine/display-derived and presentational |
 | --- | --- |
-| Integrator, authored substeps/iterations, App subdivision need, encounter slicing, solver work ceilings derived from scene structure, fixed-step sequence. | Number of quanta completed before a frame-time budget, trail drawing quality, DOM culling, canvas device-pixel ratio, camera easing, graph redraw skipping. |
+| Normal-mode integrator, authored substeps/iterations, App subdivision need, encounter slicing, solver work ceilings derived from scene structure, fixed-step sequence. A selected Performance level also has a deterministic engine algorithm. | Number of quanta completed before a frame-time budget, Performance-level selection, Performance-mode quantum/DPR/render cadence, trail drawing quality, DOM culling, camera easing, graph redraw skipping. |
 
 Performance mode is user-selected and intentionally changes accuracy. It is a
 browser preference rather than scene data, so sharing a scene does not impose

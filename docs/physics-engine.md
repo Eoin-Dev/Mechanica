@@ -108,12 +108,14 @@ force, so damping cannot make a closing string push.
 It also owns transient contacts, step count, divergence names, trail samples,
 warm-start caches, packed scratch arrays, and the performance solver.
 
-Performance mode does not overwrite authored settings. The effective getters
-produce runtime overrides:
-
-- substeps are capped by `PERF_SUBSTEPS`;
-- solver iterations are capped by `PERF_ITERATIONS`;
-- the integrator becomes Symplectic Euler.
+Performance mode does not overwrite authored settings. Its transient adaptive
+level is also absent from scene JSON. Effective substep/iteration caps for
+levels 0 through 3 are respectively `2/4`, `2/3`, `1/2`, and `1/1`; the
+integrator is Symplectic Euler at every level. The browser starts the setting
+at level 1, raises it when measured physics/render load cannot sustain smooth
+play, and relaxes after sustained headroom. A headless caller can set
+`World.performanceLevel` explicitly, so the engine performs a fixed,
+deterministic algorithm for each chosen level.
 
 This distinction ensures exporting a scene still writes the accurate settings
 chosen by its author.
@@ -386,7 +388,8 @@ pair. The broadphase derives a size split once per world step:
   not make every grid cell planet-sized.
 
 Body-wall detection computes an expanded wall bounding box from the largest
-moving radius before running circle-capsule narrowphase tests.
+moving radius before running circle-capsule narrowphase tests. Performance
+profiles use an x-sorted mover sweep when the body-wall product is large.
 
 ### Narrowphase
 
@@ -429,6 +432,13 @@ Under heavy contact load, the iteration count is capped so manifold count
 times iterations stays bounded. Warm starting carries the converged support
 impulses between substeps.
 
+At maximum approximation, contacts retain broadphase/narrowphase, restitution,
+one normal-impulse sweep, and one penetration pass so objects still separate
+and bounce. Tangential friction, rotational response, warm-start persistence,
+and the static-support graph are omitted. This intentionally makes ramps slide
+instead of roll and can make piles softer, but removes work that is invisible
+in particle-gas scenes.
+
 The contact cache key is independent of body detection order. Body-wall keys
 use a negative wall ID namespace. Each typed `ContactCacheEntry` holds normal
 and tangent impulses, anchor coordinates, whether an anchor exists, and
@@ -454,18 +464,32 @@ Performance mode is applied to every stepping path through
 `App.applySolverMode`/`safeStep`. It changes the following effective behavior:
 
 - Symplectic Euler replaces the authored integrator.
-- Substeps and iterations are capped.
+- Substeps, constraint passes, impact passes, contact work, and iterations
+  decrease progressively across four transient approximation levels.
 - application-level adaptive refinement and in-world encounter slicing are
   disabled;
 - springs use the packed XPBD projection path;
 - spring endpoint contact mass can be increased up to parity with a heavier
   collider, allowing a coarse projected lattice to resist a heavy body;
+- large mutual-gravity systems use a reusable uniform-grid approximation. The
+  own and eight neighboring cells remain pairwise-exact; farther occupied
+  cells act through aggregate mass and centre of mass. Threshold/grid pairs
+  for levels 1 through 3 are `384/16`, `256/12`, and `128/8`;
+- unlinked, force-free resting bodies sleep after 45 still contact frames at
+  level 2 or 20 at level 3. Edits, mode/quality changes, and impacts wake them;
 - per-body linear speed and surface spin speed have a hard ceiling;
-- rendering draws springs more simply and omits body spin markers.
+- levels 2 and 3 use a `1/60 s` application quantum instead of `1/120 s`;
+- maximum level drops friction, angular motion, contact persistence and some
+  analytical rendering, and records rewind state at eight samples per
+  simulated second.
 
 The projection also bounds per-substep movement, spring stretch/compression,
 and damping fraction. These are catastrophe bounds, not intended material
 properties. No blanket damping is added to spring-connected bodies.
+
+Energy diagnostics remain exact in Normal mode. Performance mode samples a
+deterministic bounded subset of mutual-gravity pairs for drift readouts; the
+`~dE` prefix marks that approximation. This diagnostic never feeds forces.
 
 ## Diagnostics
 

@@ -23,6 +23,7 @@ npm test
 npm run test:watch
 npm run build
 npm run test:e2e
+npm run benchmark:performance -- --quick
 npm run preview
 npm audit
 ```
@@ -34,7 +35,14 @@ npm audit
   `web/dist/`.
 - `test:e2e` starts a production preview of the existing `web/dist/`, runs the
   serial Chromium/axe acceptance suite, then closes the preview. Run `build`
-  first so the tested output is current.
+  first.
+- `benchmark:performance` starts a development server and bundled headless
+  Chromium, then prints frame-time, physics-time, render-time, contact, body,
+  canvas, and active-profile measurements. The full matrix covers DPR 1/2,
+  Normal/maximum mode, empty/simple/ramp/stack scenes, gases from 50 to 2,000,
+  a spring lattice, rope, and mutual gravity. `--quick` runs empty, two-body,
+  and 200-particle gas smoke comparisons at DPR 1. Benchmark values describe
+  the current machine and are intentionally not a flaky CI threshold.
 - `preview` serves that production output locally.
 - `audit` asks the configured npm registry for known dependency
   vulnerabilities. Keep certificate validation enabled; fix the local trust
@@ -120,7 +128,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`anchor.test.ts`](../web/tests/anchor.test.ts) | Anchor locking, gravity exclusion, naming/counting, link use, and serialization. |
 | [`adaptive-quality.test.ts`](../web/tests/adaptive-quality.test.ts) | State-derived App subdivision quality and the boundaries that keep it independent of scheduling load. |
 | [`slice-cost.test.ts`](../web/tests/slice-cost.test.ts) | Encounter slicing catches close motion while respecting the work budget for added/dense bodies. |
-| [`perf-mode.test.ts`](../web/tests/perf-mode.test.ts) | Effective solver overrides without scene mutation, cheap stepping, stable projected springs over full control ranges, compliance behavior, strain/movement/speed bounds, mixed contacts, lifecycle changes, and neutral performance-mode UI styling. |
+| [`perf-mode.test.ts`](../web/tests/perf-mode.test.ts) | Four effective solver profiles without scene mutation, approximate large-cloud gravity, deterministic bounded energy, sleep/wake, maximum friction/spin omission, stable projected springs over full control ranges, compliance behavior, strain/movement/speed bounds, mixed contacts, lifecycle changes, and neutral UI styling. |
 | [`engine-safety.test.ts`](../web/tests/engine-safety.test.ts) | Fixed-support friction chains and common translation, held-support exclusion, final performance-spring displacement bounds, spring/string endpoint collision, strict timestep contracts, numeric import/runtime caps, and velocity-dependent Verlet convergence/conservative arithmetic. |
 
 ### Presets, determinism, stress, and long runs
@@ -144,7 +152,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`scene-storage.test.ts`](../web/tests/scene-storage.test.ts) | Unicode name normalization, millisecond/suffix save collisions, save/load/list, discriminated cancellation/invalid/oversize/storage outcomes, upload and collection limits, quota reporting, metadata, damaged payload handling, rollback/error semantics, rename behavior, orphan metadata, and deletion. |
 | [`settings-guards.test.ts`](../web/tests/settings-guards.test.ts) | `sanitizeSettings` type filtering, enum/hex validation, collection limits, and layout/font clamping. |
 | [`rewind.test.ts`](../web/tests/rewind.test.ts) | Digest-prefiltered structural keyframes versus exactly verified dynamic deltas, forced digest collisions, exact reconstruction including evolved angles, 48 MB/entry bounds and oversize rejection, changing structures, key reclamation, and frame-back behavior. |
-| [`app-lifecycle.test.ts`](../web/tests/app-lifecycle.test.ts) | Exact pre-edit transactions after simulation, undoable replacement routes and atomic failures, history byte limits, first-failure physics batching, strict time jumps, phase/trail rewind cleanup, playback/reset, persisted-settings guards, energy baselines, live-state energy-cache invalidation, and graph sampling. |
+| [`app-lifecycle.test.ts`](../web/tests/app-lifecycle.test.ts) | Exact pre-edit transactions after simulation, undoable replacement routes and atomic failures, history byte limits, first-failure physics batching, strict time jumps, phase/trail rewind cleanup, playback/reset, persisted-settings guards, energy baselines, live-state energy-cache invalidation, graph sampling, and paused-loop energy behavior. |
 
 ### Expressions and math editing
 
@@ -165,9 +173,9 @@ with the behavior it protects rather than an exact assertion count.
 | [`camera.test.ts`](../web/tests/camera.test.ts) | World/screen inverse transforms, panning, cursor-anchored zoom/clamps, visible bounds, and nice scale-bar formatting. |
 | [`body-culling.test.ts`](../web/tests/body-culling.test.ts) | Scene-centred runaway classification, outward-motion requirement, orbit/furniture/held protections, and non-finite cleanup. |
 | [`trail.test.ts`](../web/tests/trail.test.ts) | Ring-buffer order/capacity, timestamps, expiration, resize, serial continuity, and conservative bounds. |
-| [`trail-render.test.ts`](../web/tests/trail-render.test.ts) | Narrow non-`Path2D` world-grid and spatial-debug strokes plus visible/off-screen trail drawing, budgets, fading, stable decimation, endpoint/corner retention, and curve fidelity. |
+| [`trail-render.test.ts`](../web/tests/trail-render.test.ts) | Narrow non-`Path2D` full/coarse world-grid, spatial-debug and disjoint-body strokes plus visible/off-screen trail drawing, bounded performance paths, budgets, fading, stable decimation, endpoint/corner retention, and curve fidelity. |
 | [`timeseries-render.test.ts`](../web/tests/timeseries-render.test.ts) | Visible-window selection, scrolling/zoom ranges, legends, axis labels, single points, hidden channels, autoscale, history retention, redraw state, and easing termination for non-plottable data. |
-| [`render-invalidation.test.ts`](../web/tests/render-invalidation.test.ts) | Opaque 2D context creation, idempotent backing-store resize, retained unchanged/empty-playback frames, render-cost decay, and redraws for resize, view, camera, edit, dynamic physics, selection, and pointer changes. |
+| [`render-invalidation.test.ts`](../web/tests/render-invalidation.test.ts) | Opaque 2D context creation, idempotent and Performance-DPR backing resize, retained unchanged/empty-playback frames, paused 20 Hz scheduling with immediate invalidation wake, adaptive maximum level, overloaded alternate presentation, render-cost decay, and every redraw route. |
 
 ### DOM, shortcuts, accessibility, and responsive UI
 
@@ -223,12 +231,14 @@ contract, not merely replay one bug report.
 
 Performance work must preserve these boundaries:
 
-- Physical results may depend on scene state and authored/user-selected solver
-  modes, never measured frame duration or CPU speed.
+- Normal-mode physical results may depend on scene state and authored solver
+  controls, never measured frame duration or CPU speed. Performance mode is an
+  explicit exception: measured load selects a documented approximation level;
+  the engine result is deterministic for that selected level.
 - A slow frame may advance less simulated time, but each completed step uses
   the same state-derived resolution and force/constraint order.
-- Presentation-only quality, such as trail vertex count or DOM refresh culling,
-  may react to measured cost because it does not feed simulation state.
+- Presentation-only quality, such as trail vertex count, Performance DPR/frame
+  cadence, or DOM refresh culling, may react to measured cost.
 - The full opaque canvas is retained while its visual generation is unchanged;
   clock-only empty/settled steps must not repaint, while every visible model,
   camera, view, trail, selection, theme, resize, or interaction change must.

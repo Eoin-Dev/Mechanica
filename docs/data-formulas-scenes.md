@@ -59,8 +59,9 @@ case field names shared with the earlier desktop application.
 | `iterations` | `iterations` | Integer `1..64`, default `8`. |
 | `time` | `time` | `0`, finite, clamped to `[-1e12, 1e12]`. |
 
-Performance mode, adaptive resolution, camera/view settings, contacts, caches,
-and diagnostics are not scene settings.
+Performance mode, its transient adaptive level/sleep state, adaptive
+resolution, camera/view settings, contacts, caches, and diagnostics are not
+scene settings.
 
 ## Body documents
 
@@ -346,7 +347,7 @@ prevent startup.
 | `theme` | `original`, `dark`, `void`, or `light`; default dark when applied. |
 | `dyslexic_font` | Boolean body-font preference. |
 | `cull` | Boolean runaway-culling preference, default on. |
-| `perf_mode` | Boolean performance solver/render preference, default off. |
+| `perf_mode` | Boolean adaptive performance solver/render preference, default off. The chosen runtime level is not persisted. |
 | `drag_hits_walls` | Boolean kinematic wall-sweep preference, default off. |
 | `accent` | `#rrggbb` string. Absent uses the theme default. |
 | `custom_accents` | Up to six valid `#rrggbb` strings. |

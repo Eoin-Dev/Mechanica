@@ -541,7 +541,7 @@ label.checkbox input {
 .row input.val:hover { border-color: var(--outline); }
 .row input.val:focus { border-color: var(--focus); background: var(--bg); }
 .row input.val.error { border-color: var(--bad); }
-/* "Performance mode is on" banner above the disabled Solver controls.
+/* Adaptive Performance-mode banner above the disabled Solver controls.
    Warning-coloured rather than accent-coloured on purpose: the accent means
    "active/yours" and the user can change it to anything, so this must not
    depend on it. The filled pill, tinted block and left bar carry the signal

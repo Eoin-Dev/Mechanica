@@ -2,6 +2,10 @@
  * shortcuts and toasts, and starts the main loop. */
 import "./style.css";
 import { App, PRESETS } from "./app";
+import { Vec2 } from "./core/vec";
+import { Body } from "./engine/body";
+import { World } from "./engine/world";
+import { Preset, gasWorld } from "./scene/presets";
 import { Inspector } from "./ui/inspector";
 import { FormulaGuide } from "./ui/guide";
 import { Help, Library, SettingsPanel } from "./ui/overlays";
@@ -118,6 +122,43 @@ if (app.settings.tour_done === true) {
 
 // dev-only hook for driving the app from tests/tooling
 if (import.meta.env.DEV) {
+  const benchmark = {
+    loadEmpty(): void {
+      app.replaceWorld(new World());
+    },
+    loadSimpleCollision(): void {
+      const world = new World();
+      world.gravity = 0;
+      const left = new Body(new Vec2(-1, 0), 0.25, 1);
+      const right = new Body(new Vec2(1, 0), 0.25, 1);
+      left.vel.x = 0.6;
+      right.vel.x = -0.6;
+      left.restitution = right.restitution = 1;
+      world.bodies.push(left, right);
+      app.replaceWorld(world);
+    },
+    loadPreset(name: string): void {
+      const preset = PRESETS.find((candidate) => candidate.name === name);
+      if (preset === undefined) throw new Error(`Unknown benchmark preset: ${name}`);
+      app.loadPreset(preset, false);
+    },
+    loadGas(count: number): void {
+      const n = Math.max(1, Math.min(2000, Math.round(count)));
+      const half = Math.max(2, 6 * Math.sqrt(n / 200));
+      const zoom = Math.max(14, Math.min(130, 540 / (2 * half)));
+      app.loadPreset(new Preset(`Benchmark gas (${n})`, "Benchmark", "",
+        () => gasWorld(n, half, 0x4d454348), { zoom }), false);
+    },
+    forcePerformanceLevel(level: number): void {
+      if (!app.perfMode) app.setPerfMode(true);
+      app.performanceLevel = Math.max(0, Math.min(3, Math.round(level)));
+      app.world.performanceLevel = app.performanceLevel;
+      app.invalidateEnergy();
+      app.resizeCanvas();
+      app.invalidateCanvas();
+    },
+    snapshot: () => app.performanceSnapshot(),
+  };
   (window as unknown as Record<string, unknown>).__mechanica =
-    { app, library, help, inspector, tour, settingsPanel };
+    { app, library, help, inspector, tour, settingsPanel, benchmark };
 }

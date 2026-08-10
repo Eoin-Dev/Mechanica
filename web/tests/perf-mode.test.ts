@@ -162,6 +162,119 @@ describe("effective solver settings", () => {
     w.performance = true;
     expect(w.effectiveSubsteps).toBeGreaterThanOrEqual(1);
   });
+
+  it("spends progressively less work at adaptive approximate levels", () => {
+    const w = authored();
+    w.performance = true;
+    const seen: Array<[number, number]> = [];
+    for (const level of [0, 1, 2, 3]) {
+      w.performanceLevel = level;
+      seen.push([w.effectiveSubsteps, w.effectiveIterations]);
+    }
+    expect(seen).toEqual([[2, 4], [2, 3], [1, 2], [1, 1]]);
+    expect(w.toDict().settings).not.toHaveProperty("performanceLevel");
+  });
+});
+
+describe("maximum adaptive approximations", () => {
+  it("uses a finite believable aggregate-gravity field for a large cloud", () => {
+    const build = (): World => {
+      const w = new World();
+      w.gravity = 0;
+      w.mutualGravity = true;
+      w.pointGravity = true;
+      w.G = 0.02;
+      w.softening = 0.05;
+      w.substeps = 1;
+      for (let i = 0; i < 500; i++) {
+        const a = i * 2.399963229728653;
+        const r = 0.15 * Math.sqrt(i + 1);
+        const b = new Body(new Vec2(Math.cos(a) * r, Math.sin(a) * r), 0.02, 1);
+        b.collides = false;
+        w.bodies.push(b);
+      }
+      return w;
+    };
+    const exact = build();
+    const fast = build();
+    fast.performance = true;
+    fast.performanceLevel = 3;
+    exact.step(DT);
+    fast.step(DT);
+    let directional = 0;
+    let different = 0;
+    for (let i = 0; i < fast.bodies.length; i++) {
+      const b = fast.bodies[i];
+      expect(Number.isFinite(b.acc.x + b.acc.y)).toBe(true);
+      if (b.acc.x * -b.pos.x + b.acc.y * -b.pos.y > 0) directional++;
+      if (b.acc.x !== exact.bodies[i].acc.x || b.acc.y !== exact.bodies[i].acc.y) {
+        different++;
+      }
+    }
+    expect(directional).toBeGreaterThan(450);
+    expect(different).toBeGreaterThan(400);
+  });
+
+  it("sleeps settled unlinked bodies and wakes them on impact", () => {
+    const w = new World();
+    w.performance = true;
+    w.performanceLevel = 3;
+    w.walls.push(new Wall(new Vec2(-5, 0), new Vec2(5, 0), 0.2));
+    const sleeper = new Body(new Vec2(0, 0.2), 0.1, 1);
+    sleeper.restitution = 0;
+    w.bodies.push(sleeper);
+    for (let i = 0; i < 80 && !sleeper.perfSleeping; i++) w.step(DT);
+    expect(sleeper.perfSleeping).toBe(true);
+
+    const striker = new Body(new Vec2(-0.18, sleeper.pos.y), 0.1, 1);
+    striker.vel.x = 2;
+    w.bodies.push(striker);
+    w.step(DT);
+    expect(sleeper.perfSleeping).toBe(false);
+    expect(sleeper.vel.x).toBeGreaterThan(0);
+  });
+
+  it("bounds diagnostic mutual-energy work with deterministic sampling", () => {
+    const w = new World();
+    w.gravity = 0;
+    w.mutualGravity = true;
+    for (let i = 0; i < 300; i++) {
+      w.bodies.push(new Body(new Vec2(i % 30, Math.floor(i / 30)), 0.05, 1));
+    }
+    const a = w.energy(512);
+    const b = w.energy(512);
+    expect(a).toEqual(b);
+    expect(Number.isFinite(a.total)).toBe(true);
+    expect(a.total).not.toBe(w.energy().total);
+  });
+
+  it("omits friction and angular work only at the maximum level", () => {
+    const build = (level: number): { world: World; body: Body } => {
+      const world = new World();
+      world.performance = true;
+      world.performanceLevel = level;
+      world.gravity = 9.81;
+      const floor = new Wall(new Vec2(-5, 0), new Vec2(5, 0), 0.2);
+      floor.friction = 1;
+      const body = new Body(new Vec2(0, 0.205), 0.1, 1);
+      body.friction = 1;
+      body.restitution = 0;
+      body.vel.x = 1;
+      body.omega = 4;
+      world.walls.push(floor);
+      world.bodies.push(body);
+      return { world, body };
+    };
+    const detailed = build(2);
+    const maximum = build(3);
+    for (let i = 0; i < 30; i++) {
+      detailed.world.step(DT);
+      maximum.world.step(DT);
+    }
+    expect(Math.abs(detailed.body.vel.x)).toBeLessThan(0.8);
+    expect(Math.abs(maximum.body.vel.x)).toBeGreaterThan(0.95);
+    expect(maximum.body.omega).toBe(0);
+  });
 });
 
 describe("the scene's own data is untouched", () => {

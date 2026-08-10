@@ -56,7 +56,16 @@ export interface ContactStatic {
   movers?: Body[];
   small?: Body[];
   large?: Body[];
+  radii?: number[];
   cell?: number;
+  workBudget?: number;
+  positionIterations?: number;
+  impactIterations?: number;
+  contactPool?: Contact[];
+  wallSweep?: boolean;
+  /** Maximum approximation: keep separating/bounce impulses but omit
+   * friction, support anchoring, and persistent impulse bookkeeping. */
+  simplified?: boolean;
 }
 
 /** Closest point to `p` on the segment a-b.
@@ -255,7 +264,8 @@ class Manifold {
   key: string;
 
   constructor(a: Body, b: Body | null, nx: number, ny: number,
-              pen: number, px: number, py: number, e: number, mu: number) {
+              pen: number, px: number, py: number, e: number, mu: number,
+              makeKey = true) {
     this.a = a;
     this.b = b;
     this.nx = nx;
@@ -319,13 +329,21 @@ class Manifold {
     this.raXn = raXn;
     this.rbXn = rbXn;
     this.kN = this.invMSum + raXn * raXn * invIa + rbXn * rbXn * invIb;
-    const tx = -ny;
-    const ty = nx;
-    const raXt = rax * ty - ray * tx;
-    const rbXt = rbx * ty - rby * tx;
-    this.raXt = raXt;
-    this.rbXt = rbXt;
-    this.kT = this.invMSum + raXt * raXt * invIa + rbXt * rbXt * invIb;
+    if (mu > 0.0) {
+      const tx = -ny;
+      const ty = nx;
+      const raXt = rax * ty - ray * tx;
+      const rbXt = rbx * ty - rby * tx;
+      this.raXt = raXt;
+      this.rbXt = rbXt;
+      this.kT = this.invMSum + raXt * raXt * invIa + rbXt * rbXt * invIb;
+    } else {
+      // Ideal-gas contacts have no tangent impulse. Avoid computing the
+      // rotational effective mass for the common particle-heavy case.
+      this.raXt = 0.0;
+      this.rbXt = 0.0;
+      this.kT = 0.0;
+    }
 
     // restitution bias from the pre-solve approach speed (it can rise
     // during the velocity solve as impulse chains propagate - see
@@ -334,7 +352,7 @@ class Manifold {
     const vn0 = this.normalVelocity();
     this.targetVn = vn0 < -RESTING_SPEED ? -e * vn0 : 0.0;
     // wall manifolds overwrite this with the wall's own key (see wallManifold)
-    this.key = b !== null ? pairKey(a.id, b.id) : "";
+    this.key = makeKey && b !== null ? pairKey(a.id, b.id) : "";
     // separation along n measured from current positions, so the position
     // pass can track how much overlap remains as bodies get pushed apart:
     // pen_now = pen + sepBase - ((b - a) . n)
@@ -383,8 +401,8 @@ class Manifold {
  * two-body collision, so energy is conserved (e=1) or dissipated (e<1),
  * never created. The contact's persistent bias is then zeroed: its bounce
  * has happened, and the clamped sweeps treat it as a resting contact. */
-function solveImpacts(manifolds: Manifold[]): void {
-  const passes = Math.min(32, manifolds.length + 4);
+function solveImpacts(manifolds: Manifold[], passLimit = 32): void {
+  const passes = Math.min(passLimit, manifolds.length + 4);
   for (let pass = 0; pass < passes; pass++) {
     let any = false;
     for (const m of manifolds) {
@@ -409,7 +427,8 @@ function solveImpacts(manifolds: Manifold[]): void {
   }
 }
 
-function solveVelocity(manifolds: Manifold[], iterations: number): void {
+function solveVelocity(manifolds: Manifold[], iterations: number,
+                       friction = true): void {
   let worst0 = 0.0;
   for (let sweep = 0; sweep < iterations; sweep++) {
     let worst = 0.0;
@@ -456,7 +475,7 @@ function solveVelocity(manifolds: Manifold[], iterations: number): void {
       }
 
       // --- friction impulse --------------------------------------------
-      if (m.mu > 0.0) {
+      if (friction && m.mu > 0.0) {
         vax = a.vel.x - a.omega * ray;
         vay = a.vel.y + a.omega * rax;
         if (b !== null) {
@@ -497,8 +516,8 @@ function solveVelocity(manifolds: Manifold[], iterations: number): void {
 
 /** Split-impulse projection: push overlapping bodies apart without
  * touching velocities. Iterated so stacks resolve mutual overlap. */
-function solvePosition(manifolds: Manifold[]): void {
-  for (let pass = 0; pass < POSITION_ITERATIONS; pass++) {
+function solvePosition(manifolds: Manifold[], passes = POSITION_ITERATIONS): void {
+  for (let pass = 0; pass < passes; pass++) {
     let done = true;
     for (const m of manifolds) {
       const a = m.a;
@@ -651,7 +670,7 @@ function markFixedSupport(manifolds: Manifold[]): void {
 }
 
 function pairManifold(a: Body, b: Body, out: Manifold[],
-                      excl: Set<string> | null): void {
+                      excl: Set<string> | null, makeKey: boolean): void {
   if (excl !== null && excl.size > 0 && excl.has(pairKey(a.id, b.id))) {
     return; // directly linked: the link governs their separation
   }
@@ -660,6 +679,17 @@ function pairManifold(a: Body, b: Body, out: Manifold[],
   const rSum = a.radius + b.radius;
   const d2 = dx * dx + dy * dy;
   if (d2 >= rSum * rSum) return;
+  // Aggressive Performance-mode sleeping makes a settled body temporarily
+  // immovable. A live body reaching it is the wake-up signal; do this before
+  // inverse masses are captured by the manifold.
+  if (a.perfSleeping && !b.perfSleeping && b.invMass !== 0.0) {
+    a.perfSleeping = false;
+    a.perfSleepFrames = 0;
+  }
+  if (b.perfSleeping && !a.perfSleeping && a.invMass !== 0.0) {
+    b.perfSleeping = false;
+    b.perfSleepFrames = 0;
+  }
   if (a.invMass === 0.0 && b.invMass === 0.0) return;
   const d = Math.sqrt(d2);
   let nx: number;
@@ -676,7 +706,8 @@ function pairManifold(a: Body, b: Body, out: Manifold[],
   const py = a.pos.y + ny * (a.radius - penetration * 0.5);
   const e = a.restitution < b.restitution ? a.restitution : b.restitution;
   const mu = Math.sqrt(a.friction * b.friction);
-  out.push(new Manifold(a, b, nx, ny, penetration, px, py, e, mu));
+  out.push(new Manifold(a, b, nx, ny, penetration, px, py, e,
+                        makeKey ? mu : 0.0, makeKey));
 }
 
 /** A body whose position the broadphase can safely compare.
@@ -817,10 +848,12 @@ function detectBodies(bodies: Body[], out: Manifold[],
                       staticState: ContactStatic): void {
   let colliders = staticState.colliders;
   if (colliders === undefined) {
-    staticState.colliders = colliders = bodies.filter((b) => b.collides);
+    staticState.colliders = colliders = [];
+    for (const body of bodies) if (body.collides) colliders.push(body);
   }
   if (colliders.length < 2) return;
   const excl = staticState.noCollide ?? null;
+  const makeKey = !staticState.simplified;
   const n = colliders.length;
   if (n <= 6) {
     for (let i = 0; i < n; i++) {
@@ -828,7 +861,7 @@ function detectBodies(bodies: Body[], out: Manifold[],
       if (!placed(a)) continue;
       for (let j = i + 1; j < n; j++) {
         const b = colliders[j];
-        if (placed(b)) pairManifold(a, b, out, excl);
+        if (placed(b)) pairManifold(a, b, out, excl, makeKey);
       }
     }
     return;
@@ -841,10 +874,15 @@ function detectBodies(bodies: Body[], out: Manifold[],
   let large = staticState.large;
   let cell = staticState.cell;
   if (small === undefined || large === undefined || cell === undefined) {
-    const radii = colliders.map((b) => b.radius).sort((x, y) => x - y);
+    const radii = staticState.radii ?? (staticState.radii = []);
+    radii.length = 0;
+    for (const body of colliders) radii.push(body.radius);
+    radii.sort((x, y) => x - y);
     const bigCut = 3.0 * radii[n >> 1];
-    small = [];
-    large = [];
+    small = staticState.small ?? [];
+    large = staticState.large ?? [];
+    small.length = 0;
+    large.length = 0;
     for (const b of colliders) (b.radius > bigCut ? large : small).push(b);
     let maxR = 0.0;
     for (const b of small) if (b.radius > maxR) maxR = b.radius;
@@ -859,10 +897,10 @@ function detectBodies(bodies: Body[], out: Manifold[],
     if (!placed(a)) continue;
     for (let j = i + 1; j < large.length; j++) {
       const b = large[j];
-      if (placed(b)) pairManifold(a, b, out, excl);
+      if (placed(b)) pairManifold(a, b, out, excl, makeKey);
     }
     for (const b of small) {
-      if (placed(b)) pairManifold(a, b, out, excl);
+      if (placed(b)) pairManifold(a, b, out, excl, makeKey);
     }
   }
 
@@ -875,7 +913,7 @@ function detectBodies(bodies: Body[], out: Manifold[],
     for (let i = lo; i < hi; i++) {
       const a = small[items[i]];
       for (let j = i + 1; j < hi; j++) {
-        pairManifold(a, small[items[j]], out, excl);
+        pairManifold(a, small[items[j]], out, excl, makeKey);
       }
     }
     const gx = cellGx[c];
@@ -888,7 +926,7 @@ function detectBodies(bodies: Body[], out: Manifold[],
       for (let i = lo; i < hi; i++) {
         const a = small[items[i]];
         for (let j = olo; j < ohi; j++) {
-          pairManifold(a, small[items[j]], out, excl);
+          pairManifold(a, small[items[j]], out, excl, makeKey);
         }
       }
     }
@@ -898,7 +936,7 @@ function detectBodies(bodies: Body[], out: Manifold[],
 /** Narrowphase circle-vs-capsule test; appends a manifold on overlap. */
 function wallManifold(body: Body, w: Wall, ax: number, ay: number,
                       sx: number, sy: number, segLen2: number,
-                      halfT: number, out: Manifold[]): void {
+                      halfT: number, out: Manifold[], makeKey: boolean): void {
   const px = body.pos.x;
   const py = body.pos.y;
   // closest point on the segment to the body centre
@@ -935,8 +973,9 @@ function wallManifold(body: Body, w: Wall, ax: number, ay: number,
   const e = body.restitution < w.restitution ? body.restitution : w.restitution;
   const mu = Math.sqrt(body.friction * w.friction);
   // manifold normal points from the body (a) into the wall
-  const m = new Manifold(body, null, -nx, -ny, penetration, cpx, cpy, e, mu);
-  m.key = `${body.id},${-w.id}`;
+  const m = new Manifold(body, null, -nx, -ny, penetration, cpx, cpy, e,
+                         makeKey ? mu : 0.0, makeKey);
+  if (makeKey) m.key = `${body.id},${-w.id}`;
   out.push(m);
 }
 
@@ -946,13 +985,18 @@ function detectWalls(bodies: Body[], walls: Wall[], out: Manifold[],
   let movers = staticState.movers;
   if (movers === undefined) {
     // NaN positions drop out of the box comparisons on their own
-    staticState.movers = movers =
-      bodies.filter((b) => b.collides && b.invMass !== 0.0);
+    staticState.movers = movers = [];
+    for (const body of bodies) {
+      if (body.collides && body.invMass !== 0.0) movers.push(body);
+    }
   }
   if (movers.length === 0) return;
 
   let maxR = 0.0;
   for (const b of movers) if (b.radius > maxR) maxR = b.radius;
+  if (staticState.wallSweep && movers.length * walls.length > 4096) {
+    movers.sort((a, b) => a.pos.x - b.pos.x);
+  }
   for (const w of walls) {
     const ax = w.a.x;
     const ay = w.a.y;
@@ -967,11 +1011,33 @@ function detectWalls(bodies: Body[], walls: Wall[], out: Manifold[],
     const hiX = (ax > bx ? ax : bx) + reachMax;
     const loY = (ay < by ? ay : by) - reachMax;
     const hiY = (ay > by ? ay : by) + reachMax;
-    for (const body of movers) {
+    let start = 0;
+    let end = movers.length;
+    if (staticState.wallSweep && movers.length * walls.length > 4096) {
+      let lo = 0;
+      let hi = movers.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (movers[mid].pos.x < loX) lo = mid + 1;
+        else hi = mid;
+      }
+      start = lo;
+      lo = start;
+      hi = movers.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (movers[mid].pos.x <= hiX) lo = mid + 1;
+        else hi = mid;
+      }
+      end = lo;
+    }
+    for (let i = start; i < end; i++) {
+      const body = movers[i];
       const px = body.pos.x;
       const py = body.pos.y;
       if (loX <= px && px <= hiX && loY <= py && py <= hiY) {
-        wallManifold(body, w, ax, ay, sx, sy, segLen2, halfT, out);
+        wallManifold(body, w, ax, ay, sx, sy, segLen2, halfT, out,
+                     !staticState.simplified);
       }
     }
   }
@@ -1024,6 +1090,7 @@ export function solveContacts(bodies: Body[], walls: Wall[],
                               contacts: Contact[], iterations: number,
                               cache: ContactCache | null = null,
                               staticState: ContactStatic = {}): void {
+  contacts.length = 0;
   const manifolds: Manifold[] = [];
   detectBodies(bodies, manifolds, staticState);
   detectWalls(bodies, walls, manifolds, staticState);
@@ -1042,16 +1109,40 @@ export function solveContacts(bodies: Body[], walls: Wall[],
   // under very heavy contact load (collapsed lattices, dense piles) trade
   // iterations for speed: warm starting carries the converged impulses
   // between substeps, so a few polish sweeps are enough to stay stable
-  if (manifolds.length * iterations > 400) {
-    iterations = Math.max(4, Math.floor(400 / manifolds.length));
+  const workBudget = staticState.workBudget ?? 400;
+  if (manifolds.length * iterations > workBudget) {
+    const capped = Math.max(1, Math.floor(workBudget / manifolds.length));
+    // Preserve Normal mode's established four-sweep floor. Approximate
+    // Performance profiles explicitly provide their lower work budget and
+    // may spend as little as one sweep.
+    iterations = staticState.workBudget === undefined
+      ? Math.max(4, capped)
+      : Math.min(iterations, capped);
   }
-  solveImpacts(manifolds);
-  solveVelocity(manifolds, iterations);
-  solvePosition(manifolds);
-  markFixedSupport(manifolds);
-  solveStaticFriction(manifolds);
+  solveImpacts(manifolds, staticState.impactIterations ?? 32);
+  const simplified = staticState.simplified === true;
+  solveVelocity(manifolds, iterations, !simplified);
+  solvePosition(manifolds, staticState.positionIterations ?? POSITION_ITERATIONS);
+  if (!simplified) {
+    markFixedSupport(manifolds);
+    solveStaticFriction(manifolds);
+  }
+  const contactPool = staticState.contactPool ?? (staticState.contactPool = []);
+  let contactCount = 0;
   for (const m of manifolds) {
-    contacts.push(new Contact(m.px, m.py, m.nx, m.ny, m.pn + m.pnBounce));
+    let contact = contactPool[contactCount];
+    if (contact === undefined) {
+      contact = new Contact(m.px, m.py, m.nx, m.ny, m.pn + m.pnBounce);
+      contactPool.push(contact);
+    } else {
+      contact.px = m.px;
+      contact.py = m.py;
+      contact.nx = m.nx;
+      contact.ny = m.ny;
+      contact.impulse = m.pn + m.pnBounce;
+    }
+    contacts.push(contact);
+    contactCount++;
     if (cache === null) continue;
     const aFix = m.a.invInertia === 0.0 && m.a.invMass > 0.0;
     const bFix = m.b !== null && m.b.invInertia === 0.0 && m.b.invMass > 0.0;

@@ -289,7 +289,8 @@ already evenly spaced and produce explanatory feedback.
 The world tab edits uniform/mutual gravity, point-mass mode, softening, drag,
 global damping, integrator, substeps, iterations, custom force fields, and
 drivers. Performance mode disables authored solver controls without overwriting
-their values and shows an explanation banner. A preset whose substeps were
+their values and shows an adaptive-approximation banner; the hint bar reports
+the current `high`, `fast`, `faster`, or `maximum` profile. A preset whose substeps were
 centrally cost-capped receives a transient explanatory note until the value is
 edited.
 
@@ -336,8 +337,9 @@ Major behavior includes:
 - allowing empty or visually settled playback to advance simulation time and
   DOM readouts without repainting the full high-DPI canvas;
 - visible-bounds culling for bodies, walls, links, and whole trails;
-- style batching through reusable `Path2D` groups so objects sharing colour and
-  width use few draw calls;
+- reusable numeric-keyed `Path2D` batches for connected link and vector
+  geometry, while each disjoint body uses one bounded current fill/stroke so
+  Chromium does not raster a viewport-sized multi-body path;
 - reused selection, label, and trail-index scratch collections so a displayed
   frame does not allocate replacement lookup containers for the same pass;
 - optional minor/major/axis grid and spatial-hash overlay, each skipped if zoom
@@ -351,6 +353,15 @@ Major behavior includes:
 - velocity, acceleration, and net-force arrows at configurable scale;
 - centre-of-mass marker and contact normals/impulses;
 - scale bar drawn after interaction overlays.
+
+Performance rendering progressively caps backing density without changing CSS
+coordinates or pointer alignment: levels 0-3 use at most `1.5`, `1.25`, `1`,
+and `1` device pixels per CSS pixel. Maximum level draws only major/axis grid
+lines, caps each trail at 64 retained vertices, limits labels/vectors to the
+hovered or selected body, and suppresses contact/spatial-grid diagnostics. If
+that profile remains overloaded or above 12 ms draw cost for at least 750 ms,
+it presents every other simulation frame while physics and input continue at
+display cadence.
 
 `ViewSettings` defaults to grid on and all analytical overlays off. View state
 is not serialized with the world; preset hints and user controls set it.
@@ -378,11 +389,14 @@ x/y/time samples.
 
 Rendering decimates using a serial-based stride so the same physical samples
 remain selected as the ring rotates. Corners and endpoints are preserved,
-vertices are split into fading bands, and global/per-trail budgets limit draw
-work. App trail quality rises slowly during cheap frames and falls quickly when
-render cost exceeds its target. The renderer also prunes reusable colour groups
-to colours present in the current world and ignores stale trails without a live
-body, so repeated recolouring and scene replacement cannot grow that cache.
+vertices are split into fading bands for sparse Normal scenes, and global/per-
+trail budgets limit work. Dense scenes and all Performance profiles use one
+bounded gradient current path per trail instead of a disjoint colour-wide
+`Path2D`. App trail quality rises slowly during cheap frames and falls quickly
+when render cost exceeds its target. The renderer also prunes reusable colour
+groups to colours present in the current world and ignores stale trails without
+a live body, so repeated recolouring and scene replacement cannot grow that
+cache.
 
 ## Graphs
 
@@ -456,12 +470,15 @@ constant `ICONS` table, not user input.
 ### Persistent panels
 
 - **Toolbar:** playback, rewind/step/reset, speed, editable clock, undo/redo,
-  clear, fit/auto-fit, library, settings, and FPS. The play toggle exposes
+  clear, fit/auto-fit, library, settings, and active-play FPS. Paused state
+  says `Idle` because its intentional 20 Hz wake cadence is not a capacity
+  measurement. The play toggle exposes
   `aria-pressed` and changes its accessible name between Start and Pause.
 - **Palette:** grouped tool buttons, programmatic pressed state, visually shown
   but accessibility-hidden shortcut badges, and tool descriptions.
 - **Hint bar:** active gesture hint plus current time, body/contact counts,
-  adaptive factor, energy drift, and pointer coordinates where appropriate.
+  adaptive factor, active Performance quality label, exact `dE` or approximate
+  `~dE`, and pointer coordinates where appropriate.
 - **Graph dock:** graph mode, view controls, canvas rendering, legend hit
   testing, splitter, and contextual gesture hint.
 - **Inspector:** object/world/view editing described above.

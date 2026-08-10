@@ -157,6 +157,11 @@ export class Body {
   // per substep without allocating a set to answer it. Never serialized.
   perfSlot = 0;
   perfStamp = 0;
+  // Maximum-performance sleeping state. Resting unlinked bodies can present
+  // zero inverse mass until disturbed; the state is transient and is always
+  // cleared outside the aggressive browser-selected Performance levels.
+  perfSleeping = false;
+  perfSleepFrames = 0;
   // acceleration at the previous adaptive slice boundary, and nothing else:
   // the in-substep slicer sizes its slices from how fast the acceleration
   // is CHANGING along the trajectory (see World.maxAccelChangeRate), which
@@ -179,7 +184,8 @@ export class Body {
 
   // --- derived quantities ---------------------------------------------------
   get invMass(): number {
-    return this.locked || this.held || this.mass <= 0.0 ? 0.0 : 1.0 / this.mass;
+    return this.locked || this.held || this.perfSleeping || this.mass <= 0.0
+      ? 0.0 : 1.0 / this.mass;
   }
 
   /** Moment of inertia of a uniform disc: I = mr^2/2. */
@@ -199,7 +205,7 @@ export class Body {
    * exists to not make. (Found by mutating the formula: the whole suite
    * still passed.) */
   get invInertia(): number {
-    if (this.locked || this.held || this.noRotation ||
+    if (this.locked || this.held || this.perfSleeping || this.noRotation ||
         this.mass <= 0.0 || this.radius <= 0.0) return 0.0;
     return 1.0 / this.inertia;
   }
