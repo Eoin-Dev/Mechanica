@@ -27,7 +27,7 @@ describe("zoom stays inside the simulation and graph", () => {
     expect(css).toMatch(/#canvas[^{}]*\{[^}]*touch-action:\s*none/);
   });
 
-  it("uses the original stronger accent colour for heading treatments", () => {
+  it("uses the stronger accent colour for heading treatments", () => {
     for (const selector of [".section", ".guide-h", ".tour-step", ".help-heading"]) {
       const escaped = selector.replace(".", "\\.");
       expect(css).toMatch(new RegExp(`${escaped}\\s*\\{[^}]*color:\\s*var\\(--accent\\)`));

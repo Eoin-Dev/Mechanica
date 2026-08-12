@@ -11,9 +11,9 @@ import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
 import { Selectable } from "../render/draw";
 import { isMathRenderable } from "../core/mathfmt";
 import { INSPECTOR_W_MAX, INSPECTOR_W_MIN, PHONE_QUERY, RefreshGroup, button,
-         checkbox, colourEdit, el, fmt3dp, halfRow, isPhone, isTouch, numEdit,
-         onMediaChange, refreshTabs, section, segmented, slider, splitterDrag,
-         textEdit, wireTabs } from "./dom";
+         checkbox, colourEdit, countNoun, el, fmt3dp, halfRow, isPhone, isTouch,
+         numEdit, onMediaChange, pluralNoun, refreshTabs, section, segmented,
+         slider, splitterDrag, textEdit, wireTabs } from "./dom";
 import { ICONS } from "./icons";
 import { mathEdit } from "./mathedit";
 import { overlayToggles } from "./panels";
@@ -424,12 +424,12 @@ export class Inspector implements Panel {
           "Object types included when you drag a selection box"));
       }
       const world = app.world;
-      const groups: Array<[Selectable[], string]> = [
-        [world.bodies.filter((b) => !b.isAnchor), "bodies"],
-        [world.bodies.filter((b) => b.isAnchor), "anchors"],
-        [world.walls, "walls"],
-        [world.links.filter((l) => l instanceof SpringLink), "springs & strings"],
-        [world.links.filter((l) => l instanceof DistanceLink), "rods"],
+      const groups: Array<[Selectable[], string, string]> = [
+        [world.bodies.filter((b) => !b.isAnchor), "body", "bodies"],
+        [world.bodies.filter((b) => b.isAnchor), "anchor", "anchors"],
+        [world.walls, "wall", "walls"],
+        [world.links.filter((l) => l instanceof SpringLink), "spring/string", "springs & strings"],
+        [world.links.filter((l) => l instanceof DistanceLink), "rod", "rods"],
       ];
       const nonEmpty = groups.filter(([g]) => g.length > 0);
       if (nonEmpty.length > 0) {
@@ -439,11 +439,13 @@ export class Inspector implements Panel {
         // that difference and only made the two panels look unrelated - the
         // buttons already say what they delete and how many.
         this.body.append(section("Delete ..."));
-        for (const [grp, lbl] of nonEmpty) {
-          this.add(button(`All ${lbl} (${grp.length})`,
-            () => this.deleteObjs([...grp], lbl),
+        for (const [grp, singular, plural] of nonEmpty) {
+          const counted = countNoun(grp.length, singular, plural);
+          this.add(button(grp.length === 1 ? `Delete ${counted}` : `Delete all ${counted}`,
+            () => this.deleteObjs([...grp], singular, plural),
             { style: "danger",
-              tooltip: `Remove every ${lbl} in the scene. Ctrl+Z restores them.` }));
+              tooltip: `Remove ${counted} from the scene. Ctrl+Z restores ` +
+                       `${grp.length === 1 ? "it" : "them"}.` }));
         }
       }
       return;
@@ -618,17 +620,17 @@ export class Inspector implements Panel {
     const springs = sel.filter((o): o is SpringLink => o instanceof SpringLink);
     const rods = sel.filter((o): o is DistanceLink => o instanceof DistanceLink);
     const parts: string[] = [];
-    if (bodies.length) parts.push(`${bodies.length} ${bodies.length !== 1 ? "bodies" : "body"}`);
-    if (anchors.length) parts.push(`${anchors.length} anchor${anchors.length !== 1 ? "s" : ""}`);
-    if (walls.length) parts.push(`${walls.length} wall${walls.length !== 1 ? "s" : ""}`);
-    if (springs.length) parts.push(`${springs.length} spring/string${springs.length !== 1 ? "s" : ""}`);
-    if (rods.length) parts.push(`${rods.length} rod${rods.length !== 1 ? "s" : ""}`);
+    if (bodies.length) parts.push(countNoun(bodies.length, "body", "bodies"));
+    if (anchors.length) parts.push(countNoun(anchors.length, "anchor"));
+    if (walls.length) parts.push(countNoun(walls.length, "wall"));
+    if (springs.length) parts.push(countNoun(springs.length, "spring/string", "springs/strings"));
+    if (rods.length) parts.push(countNoun(rods.length, "rod"));
     this.body.append(el("div", { text: parts.join(", ") + " selected",
       style: "font-weight:600;margin-bottom:6px" }));
 
     if (bodies.length > 0) {
       const first = bodies[0];
-      this.typeGroup("Bodies", bodies.length, "body");
+      this.typeGroup(pluralNoun(bodies.length, "Body", "Bodies"), bodies.length, "body");
       this.add(slider("Mass", () => first.mass,
         (v) => bodies.forEach((b) => { b.mass = v; }), 0.001, 10000.0,
         { unit: "kg", log: true, onCommit: this.commit }));
@@ -684,7 +686,7 @@ export class Inspector implements Panel {
 
     if (anchors.length > 0) {
       const af = anchors[0];
-      this.typeGroup("Anchors", anchors.length, "anchor");
+      this.typeGroup(pluralNoun(anchors.length, "Anchor"), anchors.length, "anchor");
       this.add(slider("Radius", () => af.radius,
         (v) => anchors.forEach((a) => { a.radius = v; }), 0.01, 10.0,
         { unit: "m", log: true, onCommit: this.commit,
@@ -709,7 +711,7 @@ export class Inspector implements Panel {
 
     if (walls.length > 0) {
       const wf = walls[0];
-      this.typeGroup("Walls", walls.length, "wall");
+      this.typeGroup(pluralNoun(walls.length, "Wall"), walls.length, "wall");
       this.add(slider("Thickness", () => wf.thickness,
         (v) => walls.forEach((w) => { w.thickness = v; }), 0.01, 2.0,
         { unit: "m", log: true, fmt: (v) => v.toFixed(2), onCommit: this.commit }));
@@ -725,7 +727,8 @@ export class Inspector implements Panel {
 
     if (springs.length > 0) {
       const sf = springs[0];
-      this.typeGroup("Springs & strings", springs.length, "spring");
+      this.typeGroup(pluralNoun(springs.length, "Spring/string", "Springs & strings"),
+                     springs.length, "spring");
       this.add(slider("Stiffness", () => sf.stiffness,
         (v) => springs.forEach((s) => { s.stiffness = v; }), 0.01, 100000.0,
         { unit: "N/m", log: true, onCommit: this.commit,
@@ -739,7 +742,7 @@ export class Inspector implements Panel {
 
     if (rods.length > 0) {
       const rf = rods[0];
-      this.typeGroup("Rods", rods.length, "rod");
+      this.typeGroup(pluralNoun(rods.length, "Rod"), rods.length, "rod");
       this.add(slider("Length", () => rf.length,
         (v) => rods.forEach((r) => { r.length = v; }), 0.01, 100.0,
         { unit: "m", log: true, onCommit: this.commit,
@@ -749,19 +752,21 @@ export class Inspector implements Panel {
     this.endGroups();
     this.actionButtons();
     // selective deletion: remove just one kind of thing from the selection
-    const groups: Array<[Selectable[], string]> = [
-      [bodies, "bodies"], [anchors, "anchors"], [walls, "walls"],
-      [springs, "springs"], [rods, "rods"],
+    const groups: Array<[Selectable[], string, string]> = [
+      [bodies, "body", "bodies"], [anchors, "anchor", "anchors"],
+      [walls, "wall", "walls"], [springs, "spring", "springs"],
+      [rods, "rod", "rods"],
     ];
     const nonEmpty = groups.filter(([g]) => g.length > 0);
     if (nonEmpty.length >= 2) {
       this.body.append(section("Delete ..."));
       const grid = el("div", { class: "btn-grid-2" });
-      for (const [grp, lbl] of nonEmpty) {
-        grid.append(button(`${lbl[0].toUpperCase()}${lbl.slice(1)} (${grp.length})`,
-          () => this.deleteObjs([...grp], lbl),
+      for (const [grp, singular, plural] of nonEmpty) {
+        const counted = countNoun(grp.length, singular, plural);
+        grid.append(button(`Delete ${counted}`,
+          () => this.deleteObjs([...grp], singular, plural),
           { style: "danger",
-            tooltip: `Delete only the selected ${lbl}, keeping the rest of the ` +
+            tooltip: `Delete only the selected ${pluralNoun(grp.length, singular, plural)}, keeping the rest of the ` +
                      "selection." }).root);
       }
       this.body.append(grid);
@@ -804,13 +809,15 @@ export class Inspector implements Panel {
     this.target.append(grid);
   }
 
-  private deleteObjs(objs: Selectable[], label: string): void {
+  private deleteObjs(objs: Selectable[], singular: string,
+                     plural = `${singular}s`): void {
     // These buttons are the bulk path by definition ("Delete every body
     // (500)"), so they take the batched route rather than paying the
     // per-object world edit and reconciliation scan.
     this.app.controller.deleteObjects(objs);
     this.app.pushUndo();
-    this.app.toast(`Deleted ${objs.length} ${label} - Ctrl+Z restores them`);
+    this.app.toast(`Deleted ${countNoun(objs.length, singular, plural)} - ` +
+                   `Ctrl+Z restores ${objs.length === 1 ? "it" : "them"}`);
     this.markDirty();
   }
 

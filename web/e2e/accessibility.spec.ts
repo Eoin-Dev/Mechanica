@@ -83,13 +83,13 @@ test("scene replacement is recoverable with undo", async ({ page }) => {
   const pendulumCard = page.locator('[data-preset-name="Simple pendulum"]');
   await pendulumCard.click({ position: { x: 18, y: 18 } });
   await expect(page.locator("#toasts")).toContainText("Ctrl+Z restores the previous scene");
-  await expect(page.locator("#status-text")).toContainText("1 bodies");
+  await expect(page.locator("#status-text")).toContainText("1 body");
   await page.keyboard.press("Control+z");
   await expect(page.locator("#status-text")).toContainText("2 bodies");
 });
 
 test("canvas pointer coordinates select the rendered body", async ({ page }) => {
-  await skipFirstRunTour(page);
+  await skipFirstRunTour(page, { theme: "studio" });
   await page.goto("/");
   const canvas = page.locator("#canvas");
   const box = await canvas.boundingBox();
@@ -103,8 +103,9 @@ test("canvas pointer coordinates select the rendered body", async ({ page }) => 
 
 test("phone inspector is transient and desktop preference survives", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await skipFirstRunTour(page, { inspector_visible: true });
+  await skipFirstRunTour(page, { inspector_visible: true, theme: "studio" });
   await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "studio");
 
   const handle = page.getByRole("button", { name: "Open Inspector" });
   await expect(handle).toBeVisible();
@@ -148,7 +149,7 @@ test("guided tour is modal, traps focus, and restores its opener", async ({ page
 
 test("320 CSS pixels and 200% application text remain contained", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 844 });
-  await skipFirstRunTour(page);
+  await skipFirstRunTour(page, { theme: "studio" });
   await page.goto("/");
   await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
 

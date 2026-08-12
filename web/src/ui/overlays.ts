@@ -322,8 +322,8 @@ export class Library {
 
 // ----------------------------------------------------------------- settings
 const THEME_LABELS: Array<[string, ThemeName]> = [
-  ["Void", "void"], ["Dark", "dark"], ["Light", "light"],
-  ["Original", "original"],
+  ["Studio", "studio"], ["Void", "void"], ["Dark", "dark"],
+  ["Light", "light"],
 ];
 
 /** Hand-picked UI accents (a good purple included, per popular demand).

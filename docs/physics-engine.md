@@ -38,7 +38,7 @@ by the headless test suite.
 | Contact material | `restitution` and `friction`; body colour is visual only. |
 | External force | `constForce`, applied in newtons on every force evaluation. |
 | Modes | `locked`, `collides`, `noRotation`, and `isAnchor`. |
-| Interaction transient | `held` makes the body infinite-mass during direct manipulation; `speedCap` bounds a dragged connected assembly. |
+| Interaction transient | `held` makes the body infinite-mass during direct manipulation; `kinematicCorrectionRate` carries the pointer-derived rod feedback rate; `speedCap` bounds a dragged connected assembly in Performance mode. |
 | Solver transient | acceleration, previous position, position-correction totals, contact/spring flags, performance-solver slots, contact mass gain, and prior acceleration samples. |
 
 An anchor is represented by a body because links need the same endpoint shape.
@@ -340,9 +340,14 @@ deltaLambda = (-constraint - alpha*lambda) /
 ```
 
 Position corrections are mass-weighted and accumulated per body. After the
-iterative passes, total correction divided by `h` is added to velocity. This
-makes the corrected motion consistent with the final position. The solve exits
-early once correction is negligible.
+iterative passes, total correction divided by `h` is normally added to
+velocity, making integration corrections consistent with the final position.
+When a rigid component contains a directly held endpoint, its corrections use
+the controller's reduced pointer-time correction rate instead. This prevents a
+once-per-display-frame hand displacement from being reinterpreted as motion
+that occurred in one much shorter solver substep. The rate propagates through
+the rigid component in O(rows); untouched constraints retain the ordinary fast
+path. The solve exits early once correction is negligible.
 
 ### Performance-mode spring projection
 

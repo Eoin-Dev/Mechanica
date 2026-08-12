@@ -135,13 +135,13 @@ describe("Inspector structure key", () => {
     app.world.bodies.push(a, b, c);
     app.world.links.push(new DistanceLink(a, b), new DistanceLink(b, c));
     inspector.refresh();
-    expect(rendered(panel)).toContain("All bodies (3)");
+    expect(rendered(panel)).toContain("Delete all 3 bodies");
 
     // Removing b also removes its two attached rods: three total objects go,
     // but the body counter must fall by exactly one.
     app.controller.deleteObjects([b]);
     inspector.refresh();
-    expect(rendered(panel)).toContain("All bodies (2)");
+    expect(rendered(panel)).toContain("Delete all 2 bodies");
     expect(app.world.bodies).toHaveLength(2);
     expect(app.world.links).toHaveLength(0);
   });

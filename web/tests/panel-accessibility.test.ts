@@ -86,7 +86,7 @@ describe("toolbar and palette semantics", () => {
 });
 
 describe("status readouts", () => {
-  it("hides Normal-mode trail quality while Performance mode suppresses trails", () => {
+  it("removes technical quality readouts and separates grammatical status items", () => {
     const hint = document.createElement("div");
     const status = document.createElement("div");
     const stub = {
@@ -104,12 +104,25 @@ describe("status readouts", () => {
     const app = stub as unknown as App;
     const bar = new HintBar(app, hint, status);
     bar.refresh();
-    expect(status.textContent).toContain("trail 6.0x");
+    expect(status.textContent).not.toContain("trail");
+    expect(status.textContent).not.toContain("dt/");
+    expect(status.textContent).toContain("0 bodies");
+    expect(status.querySelectorAll(".status-item")).toHaveLength(5);
 
     stub.perfMode = true;
     bar.refresh();
     expect(status.textContent).not.toContain("trail");
     expect(status.textContent).toContain("perf Maximum");
+    expect(status.querySelectorAll(".status-item")).toHaveLength(6);
+
+    stub.world.bodies = [{ isAnchor: false }] as never[];
+    stub.world.links = [{}] as never[];
+    stub.world.contacts = [{}] as never[];
+    bar.refresh();
+    expect(status.textContent).toContain("1 body");
+    expect(status.textContent).not.toContain("1 bodies");
+    expect(status.textContent).toContain("1 link");
+    expect(status.textContent).toContain("1 contact");
   });
 });
 

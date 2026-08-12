@@ -38,6 +38,7 @@ describe("sanitizeSettings", () => {
     expect(sanitizeSettings({ theme: "midnight" }).theme).toBeUndefined();
     expect(sanitizeSettings({ theme: 7 }).theme).toBeUndefined();
     expect(sanitizeSettings({ theme: null }).theme).toBeUndefined();
+    expect(sanitizeSettings({ theme: "original" }).theme).toBeUndefined();
   });
 
   it("keeps every theme this build does have", () => {

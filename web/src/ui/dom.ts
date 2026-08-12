@@ -274,6 +274,18 @@ export function splitterDrag(splitter: HTMLElement,
   return syncAria;
 }
 
+/** Choose and format a counted noun without leaking English plural edge
+ * cases into every panel that displays an inventory. */
+export function pluralNoun(count: number, singular: string,
+                           plural = `${singular}s`): string {
+  return count === 1 ? singular : plural;
+}
+
+export function countNoun(count: number, singular: string,
+                          plural = `${singular}s`): string {
+  return `${count} ${pluralNoun(count, singular, plural)}`;
+}
+
 // ---------------------------------------------------------------------- tabs
 /** Install the WAI-ARIA tab keyboard model on a stable set of buttons.
  * Selection follows focus for Left/Right and Home/End, and only the selected

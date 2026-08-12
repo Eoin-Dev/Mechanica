@@ -1,15 +1,15 @@
 /** Visual theme shared by canvas drawing and (via CSS custom properties)
  * the DOM chrome.
  *
- * Three palettes: "dark" (neutral dark greys, the default), "light", and
- * "original" (the desktop app's blue-tinted dark palette). setTheme swaps
+ * Four palettes: "dark" (neutral dark greys, the default), "void", "light",
+ * and "studio" (quiet modern productivity chrome). setTheme swaps
  * every exported binding in place - importers read them per draw, so the
  * next frame picks the new palette up - and mirrors the chrome colours
  * into CSS variables.
  */
 import { Color } from "../engine/body";
 
-export type ThemeName = "original" | "dark" | "void" | "light";
+export type ThemeName = "dark" | "void" | "light" | "studio";
 
 interface Palette {
   BG: Color; PANEL: Color; PANEL_LIGHT: Color; PANEL_HOVER: Color;
@@ -19,17 +19,6 @@ interface Palette {
   GRID: Color; GRID_MAJOR: Color; AXIS: Color; SELECTION: Color;
   VEL_COLOR: Color; ACC_COLOR: Color; FORCE_COLOR: Color;
 }
-
-const ORIGINAL: Palette = {
-  BG: [24, 26, 31], PANEL: [33, 36, 43], PANEL_LIGHT: [43, 47, 56],
-  PANEL_HOVER: [52, 57, 68], OUTLINE: [58, 63, 74], ACCENT: [86, 156, 214],
-  ACCENT_HOT: [120, 180, 235], ACCENT_DARK: [50, 90, 125],
-  TEXT: [226, 229, 234], TEXT_DIM: [152, 158, 168], TEXT_FAINT: [145, 151, 161],
-  GOOD: [120, 190, 120], WARN: [230, 200, 90], BAD: [230, 110, 110],
-  GRID: [33, 36, 42], GRID_MAJOR: [44, 48, 56], AXIS: [66, 72, 84],
-  SELECTION: [110, 180, 240], VEL_COLOR: [120, 210, 130],
-  ACC_COLOR: [235, 170, 90], FORCE_COLOR: [235, 110, 110],
-};
 
 // Every surface/text grey is exactly neutral (equal RGB): no blue cast
 // anywhere - only the accent and semantic colours carry hue.
@@ -69,8 +58,23 @@ const LIGHT: Palette = {
   ACC_COLOR: [205, 125, 25], FORCE_COLOR: [200, 55, 55],
 };
 
+// Studio: a quiet, tool-first workspace. Near-neutral layered surfaces,
+// low-contrast dividers and restrained monochrome selection states follow the
+// modern desktop productivity language without borrowing product branding.
+// Physics vectors retain semantic hues so the simulator remains legible.
+const STUDIO: Palette = {
+  BG: [20, 20, 20], PANEL: [29, 29, 29], PANEL_LIGHT: [41, 41, 41],
+  PANEL_HOVER: [52, 52, 52], OUTLINE: [53, 53, 53], ACCENT: [205, 205, 205],
+  ACCENT_HOT: [235, 235, 235], ACCENT_DARK: [58, 58, 58],
+  TEXT: [235, 235, 235], TEXT_DIM: [171, 171, 171], TEXT_FAINT: [151, 151, 151],
+  GOOD: [117, 190, 130], WARN: [226, 190, 92], BAD: [226, 108, 108],
+  GRID: [28, 28, 28], GRID_MAJOR: [39, 39, 39], AXIS: [66, 66, 66],
+  SELECTION: [215, 215, 215], VEL_COLOR: [120, 210, 130],
+  ACC_COLOR: [235, 170, 90], FORCE_COLOR: [235, 110, 110],
+};
+
 const PALETTES: Record<ThemeName, Palette> = {
-  original: ORIGINAL, dark: DARK, void: VOID, light: LIGHT,
+  dark: DARK, void: VOID, light: LIGHT, studio: STUDIO,
 };
 
 export const THEME_NAMES = Object.keys(PALETTES) as ThemeName[];
@@ -91,38 +95,37 @@ export function asThemeName(name: unknown): ThemeName {
     ? (name as ThemeName) : "dark";
 }
 
-// live bindings, swapped by setTheme; defaults match the "original"
-// palette so nothing changes until the app applies a theme
-export let BG = ORIGINAL.BG;
-export let PANEL = ORIGINAL.PANEL;
-export let PANEL_LIGHT = ORIGINAL.PANEL_LIGHT;
-export let PANEL_HOVER = ORIGINAL.PANEL_HOVER;
-export let OUTLINE = ORIGINAL.OUTLINE;
-export let ACCENT = ORIGINAL.ACCENT;
-export let ACCENT_HOT = ORIGINAL.ACCENT_HOT;
-export let ACCENT_DARK = ORIGINAL.ACCENT_DARK;
+// live bindings, swapped by setTheme; pre-bootstrap defaults match Dark.
+export let BG = DARK.BG;
+export let PANEL = DARK.PANEL;
+export let PANEL_LIGHT = DARK.PANEL_LIGHT;
+export let PANEL_HOVER = DARK.PANEL_HOVER;
+export let OUTLINE = DARK.OUTLINE;
+export let ACCENT = DARK.ACCENT;
+export let ACCENT_HOT = DARK.ACCENT_HOT;
+export let ACCENT_DARK = DARK.ACCENT_DARK;
 /** Accent-derived colours reserved for small text and keyboard focus. They
  * are adjusted toward black or white when a custom accent would disappear
  * against the current surfaces. */
-export let ACCENT_TEXT = ORIGINAL.ACCENT;
-export let FOCUS = ORIGINAL.ACCENT;
+export let ACCENT_TEXT = DARK.ACCENT;
+export let FOCUS = DARK.ACCENT;
 export let ACCENT_INK: Color = [0, 0, 0];
 export let ACCENT_DARK_INK: Color = [255, 255, 255];
-export let TEXT = ORIGINAL.TEXT;
-export let TEXT_DIM = ORIGINAL.TEXT_DIM;
-export let TEXT_FAINT = ORIGINAL.TEXT_FAINT;
-export let GOOD = ORIGINAL.GOOD;
-export let WARN = ORIGINAL.WARN;
-export let BAD = ORIGINAL.BAD;
-export let GRID = ORIGINAL.GRID;
-export let GRID_MAJOR = ORIGINAL.GRID_MAJOR;
-export let AXIS = ORIGINAL.AXIS;
-export let SELECTION = ORIGINAL.SELECTION;
-export let VEL_COLOR = ORIGINAL.VEL_COLOR;
-export let ACC_COLOR = ORIGINAL.ACC_COLOR;
-export let FORCE_COLOR = ORIGINAL.FORCE_COLOR;
+export let TEXT = DARK.TEXT;
+export let TEXT_DIM = DARK.TEXT_DIM;
+export let TEXT_FAINT = DARK.TEXT_FAINT;
+export let GOOD = DARK.GOOD;
+export let WARN = DARK.WARN;
+export let BAD = DARK.BAD;
+export let GRID = DARK.GRID;
+export let GRID_MAJOR = DARK.GRID_MAJOR;
+export let AXIS = DARK.AXIS;
+export let SELECTION = DARK.SELECTION;
+export let VEL_COLOR = DARK.VEL_COLOR;
+export let ACC_COLOR = DARK.ACC_COLOR;
+export let FORCE_COLOR = DARK.FORCE_COLOR;
 
-export let themeName: ThemeName = "original";
+export let themeName: ThemeName = "dark";
 /** Monotonic palette identity for retained Canvas consumers. */
 export let paletteRevision = 0;
 

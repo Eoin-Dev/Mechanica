@@ -95,12 +95,6 @@ export function drawGrid(ctx: CanvasRenderingContext2D, cam: Camera,
  * Vector overlays draw one arrow per body per enabled quantity, so a
  * 200-particle gas with velocity arrows on issued 400 calls; batched it is
  * two, because every arrow of a kind shares one colour and width. */
-function addArrow(strokes: StyleBatch, fills: StyleBatch,
-                  start: [number, number], end: [number, number],
-                  color: Color, width = 2): void {
-  addArrowXY(strokes, fills, start[0], start[1], end[0], end[1], color, width);
-}
-
 function addArrowXY(strokes: StyleBatch, fills: StyleBatch,
                     sx: number, sy: number, ex: number, ey: number,
                     color: Color, width = 2): void {
@@ -127,7 +121,7 @@ function addArrowXY(strokes: StyleBatch, fills: StyleBatch,
 export function drawArrow(ctx: CanvasRenderingContext2D,
                           start: [number, number], end: [number, number],
                           color: Color, width = 2): void {
-  addArrow(STROKES, FILLS, start, end, color, width);
+  addArrowXY(STROKES, FILLS, start[0], start[1], end[0], end[1], color, width);
   STROKES.strokeAll(ctx);
   FILLS.fillAll(ctx);
 }
@@ -177,16 +171,6 @@ function addSpringCoil(batch: StyleBatch,
   }
   path.lineTo(bx - ux * lead, by - uy * lead);
   path.lineTo(bx, by);
-}
-
-function line(ctx: CanvasRenderingContext2D, a: [number, number],
-              b: [number, number], color: Color, width: number): void {
-  ctx.strokeStyle = css(color);
-  ctx.lineWidth = width;
-  ctx.beginPath();
-  ctx.moveTo(a[0], a[1]);
-  ctx.lineTo(b[0], b[1]);
-  ctx.stroke();
 }
 
 function fillCircle(ctx: CanvasRenderingContext2D, cx: number, cy: number,
@@ -707,7 +691,10 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     if (link instanceof SpringLink) {
       if (link.tensionOnly) {
         // elastic string: a plain line, thinner while slack
-        const slack = link.a.pos.distTo(link.b.pos) < link.restLength;
+        // Squared comparison avoids one square root per visible elastic
+        // string on every rendered frame; restLength is non-negative.
+        const dx = ax - bx, dy = ay - by;
+        const slack = dx * dx + dy * dy < link.restLength * link.restLength;
         const color = selected ? theme.SELECTION
           : hovered ? STRING_HOVER : slack ? STRING_SLACK : STRING_TAUT;
         addLine(STROKES.path(color, slack ? 1 : 2), pax, pay, pbx, pby);
@@ -720,7 +707,10 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
       }
     } else if (link.isRope) {
       // inelastic string: rigid in tension, free when slack
-      const slack = link.a.pos.distTo(link.b.pos) < link.length - 1e-9;
+      const dx = ax - bx, dy = ay - by;
+      const slackLimit = link.length - 1e-9;
+      const slack = slackLimit > 0 &&
+        dx * dx + dy * dy < slackLimit * slackLimit;
       const color = selected ? theme.SELECTION
         : hovered ? STRING_HOVER : slack ? STRING_SLACK : STRING_TAUT;
       addLine(STROKES.path(color, slack ? 1 : 2), pax, pay, pbx, pby);
@@ -873,8 +863,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     if (com !== null) {
       const [sx, sy] = cam.toScreen(com);
       ringCircle(ctx, sx, sy, 7, 1, [255, 255, 255]);
-      line(ctx, [sx - 9, sy], [sx + 9, sy], [255, 255, 255], 1);
-      line(ctx, [sx, sy - 9], [sx, sy + 9], [255, 255, 255], 1);
+      lineXY(ctx, sx - 9, sy, sx + 9, sy, [255, 255, 255], 1);
+      lineXY(ctx, sx, sy - 9, sx, sy + 9, [255, 255, 255], 1);
       ctx.fillStyle = css(theme.TEXT_DIM);
       ctx.fillText("COM", sx + 10, sy + 14);
     }
@@ -927,12 +917,17 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
 export function drawVelocityHandle(ctx: CanvasRenderingContext2D, cam: Camera,
                                    body: Body, view: ViewSettings): void {
   const s = VEL_ARROW_SCALE * view.vectorScale;
-  const tipWorld = new Vec2(body.pos.x + body.vel.x * s, body.pos.y + body.vel.y * s);
-  const start = cam.toScreen(body.pos);
-  const tip = cam.toScreen(tipWorld);
-  drawArrow(ctx, start, tip, theme.VEL_COLOR, 2);
+  const startX = (body.pos.x - cam.centre.x) * cam.zoom + cam.screenW * 0.5;
+  const startY = (cam.centre.y - body.pos.y) * cam.zoom + cam.screenH * 0.5;
+  const tipX = (body.pos.x + body.vel.x * s - cam.centre.x) * cam.zoom +
+    cam.screenW * 0.5;
+  const tipY = (cam.centre.y - body.pos.y - body.vel.y * s) * cam.zoom +
+    cam.screenH * 0.5;
+  addArrowXY(STROKES, FILLS, startX, startY, tipX, tipY, theme.VEL_COLOR, 2);
+  STROKES.strokeAll(ctx);
+  FILLS.fillAll(ctx);
   ctx.beginPath();
-  ctx.roundRect(tip[0] - 6, tip[1] - 6, 12, 12, 3);
+  ctx.roundRect(tipX - 6, tipY - 6, 12, 12, 3);
   ctx.fillStyle = css(theme.VEL_COLOR);
   ctx.fill();
   ctx.strokeStyle = css([20, 40, 20]);
@@ -948,9 +943,9 @@ export function drawScaleBar(ctx: CanvasRenderingContext2D, cam: Camera,
   const x0 = x1 - px;
   const y = areaH - 20;
   const c = theme.TEXT_DIM;
-  line(ctx, [x0, y], [x1, y], c, 2);
-  line(ctx, [x0, y - 4], [x0, y + 4], c, 2);
-  line(ctx, [x1, y - 4], [x1, y + 4], c, 2);
+  lineXY(ctx, x0, y, x1, y, c, 2);
+  lineXY(ctx, x0, y - 4, x0, y + 4, c, 2);
+  lineXY(ctx, x1, y - 4, x1, y + 4, c, 2);
   ctx.font = "11px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.fillStyle = css(c);

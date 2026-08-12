@@ -45,7 +45,7 @@ describe("guided tour modality", () => {
     const progress = document.querySelector(".tour-step")!.textContent!;
     const count = Number(/of (\d+)/.exec(progress)![1]);
     expect(document.querySelector(".tour-card p")!.textContent)
-      .toContain(`${count} quick stops`);
+      .toContain(`${count} quick ${count === 1 ? "stop" : "stops"}`);
     tour.finish();
   });
 });

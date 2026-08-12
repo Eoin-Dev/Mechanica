@@ -39,6 +39,26 @@ describe("accent swatch semantics", () => {
   });
 });
 
+describe("appearance choices", () => {
+  it("offers Studio and has no obsolete Original appearance", () => {
+    const app = appStub();
+    const root = document.createElement("div");
+    document.body.replaceChildren(root);
+    const settings = new SettingsPanel(app, root, () => {}, () => {});
+    settings.open();
+
+    const themeGroup = root.querySelector<HTMLElement>(
+      '.settings-group:first-child .segmented')!;
+    const choices = [...themeGroup.querySelectorAll<HTMLButtonElement>("button")];
+    expect(choices.map((choice) => choice.textContent)).toEqual(
+      ["Studio", "Void", "Dark", "Light"]);
+    expect(root.textContent).not.toContain("Original");
+
+    choices[0].click();
+    expect(app.settings.theme).toBe("studio");
+  });
+});
+
 describe("built-in preset cards", () => {
   it("uses a visually label-free native button as the whole-card hit target", () => {
     const app = appStub();
@@ -151,6 +171,8 @@ describe("compact checkbox and preset-card styling", () => {
       /button\.preset-card-hit\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;/s);
     expect(css).toMatch(
       /\.card-more\s*\{[^}]*position:\s*absolute;[^}]*right:\s*6px;[^}]*bottom:\s*6px;/s);
+    expect(css).toMatch(
+      /\[data-theme="studio"\]\s+button\.preset-card-hit[^}]*\{[^}]*background:\s*transparent;/s);
   });
 });
 

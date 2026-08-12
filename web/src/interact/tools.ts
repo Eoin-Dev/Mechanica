@@ -94,16 +94,15 @@ function makeAnchor(b: Body): Body {
 
 // How hard user dragging may hit the physics.
 //
-// A grabbed body follows the cursor EXACTLY. While it is held it reports its
-// TRUE per-frame displacement as its velocity, because the contact and
-// constraint solvers read relative velocities: without that, a dragged body
-// shoved into a pile would push nothing and a dragged pendulum anchor would
-// not carry its bob. That reported velocity is capped at DRAG_VEL_CAP so a
-// fast flick cannot inject a huge amount of energy, and everything
-// link-connected to a grab is additionally speed-clamped each substep at
-// DRAG_CHASE_CAP in Performance mode as a blow-up guard. Normal mode leaves
-// the real constraint/contact response uncapped so a pendulum or chain keeps
-// up with the hand instead of trailing behind an artificial speed ceiling.
+// A grabbed body follows the cursor EXACTLY, but physics sees the hand moving
+// five times more slowly. Constraint/contact forces still receive a velocity
+// consistent with distance / pointer time, including for locked anchors, but
+// the deliberate 0.2 response scale makes ordinary placement inject about
+// 1/25 as much velocity-squared energy. The matching kinematic correction
+// rate is consumed by the rod projection pass: without it, that pass divided
+// a once-per-display-frame cursor jump by a tiny physics substep and created a
+// second, much larger artificial impulse. Performance mode additionally caps
+// link-connected followers; Normal mode has no hidden velocity ceiling.
 //
 // The reported velocity is a means to an end and never survives the drag:
 // releasing restores whatever the body had when it was grabbed (see
@@ -114,7 +113,8 @@ function makeAnchor(b: Body): Body {
 // the "hold it still to pin it" gesture the only way to move anything
 // without changing its motion. Aiming a velocity deliberately is the
 // right-drag / green-arrow gesture, which is untouched.
-const DRAG_VEL_CAP = 14.0;   // m/s - the grabbed body's reported speed
+const DRAG_RESPONSE_SCALE = 0.2; // formulas see five times more pointer time
+const DRAG_SCAFFOLD_CAP = 14.0;  // catastrophic bound after response scaling
 const DRAG_CHASE_CAP = 20.0; // m/s - per-substep clamp on linked bodies
 
 interface DragItem {
@@ -202,8 +202,11 @@ export class CanvasController {
     this.clearChaseCaps();
     for (const { body, vel0 } of this.dragItems) {
       body.held = false;
-      // a locked body or anchor never had a velocity written (see updateDrag)
-      if (!body.locked) body.vel.setVec(vel0);
+      body.kinematicCorrectionRate = Infinity;
+      // Locked anchors also borrow velocity while held so rods and damped
+      // springs can see their motion. It is always restored here, so it can
+      // never remain stored and fire if the anchor is later unlocked.
+      body.vel.setVec(vel0);
     }
     this.dragItems = [];
     this.dragActive = false;
@@ -240,16 +243,12 @@ export class CanvasController {
   /** Refresh the drag every frame (pointer-move events stop while the
    * cursor is parked, but the simulation keeps running).
    *
-   * Grabbed bodies follow the cursor EXACTLY - the position is never
-   * limited, so the body is always under the pointer. The velocity each
-   * reports to the physics while held is its TRUE per-frame displacement
-   * (consistent with the move, so the contact and constraint solvers read
-   * correct relative velocities and links carry momentum - a stopped anchor
-   * lets a pendulum lunge on), capped at DRAG_VEL_CAP so a fast flick can't
-   * inject a huge amount of energy. Everything link-connected keeps
-   * simulating with real link physics. Performance mode adds a per-substep
-   * chase-speed cap as an intentional stability/performance tradeoff; Normal
-   * mode does not distort the constraint response.
+   * Grabbed bodies follow the cursor EXACTLY - the position is never limited.
+   * The solver-facing velocity is measured from the true per-frame distance
+   * and time, then reduced by DRAG_RESPONSE_SCALE. Rod position corrections
+   * use the same scaled pointer interval instead of the solver substep, so
+   * both paths describe one gentle kinematic motion rather than double-counting
+   * it. Performance mode adds a follower speed cap; Normal mode does not.
    *
    * None of that velocity outlives the drag: release restores what the body
    * was grabbed with (see releaseDragged), so a drag moves a body without
@@ -284,6 +283,7 @@ export class CanvasController {
           t = new Vec2(cx, cy);
         }
         body.pos.setVec(t);
+        body.kinematicCorrectionRate = Infinity;
       }
       return;
     }
@@ -307,30 +307,27 @@ export class CanvasController {
           sweepClearOfWalls(this.app.world.walls, body.pos, t, body.radius);
         t = new Vec2(cx, cy);
       }
-      if (body.locked) {
-        // A locked body or anchor is being repositioned, not thrown: it
-        // never integrates, so a "velocity" written here would just sit in
-        // its state - showing a moving anchor in the inspector, and firing
-        // it off the moment anyone unlocked it.
-        body.pos.setVec(t);
-        continue;
-      }
-      // true displacement velocity: exactly how far the body moves this
-      // frame, so position and velocity stay consistent for the solver.
-      // Capped to tone the energy way down on fast flicks; zero on the
-      // very first frame so the click-to-activate jump is not a spike.
+      // Solver-facing hand velocity: exact cursor displacement / elapsed
+      // pointer time, deliberately slowed fivefold. The first activation
+      // frame contributes no impulse because its displacement includes the
+      // click-to-drag threshold rather than a timed motion sample.
       let vx = 0.0;
       let vy = 0.0;
       if (!firstFrame) {
-        vx = (t.x - body.pos.x) / dt;
-        vy = (t.y - body.pos.y) / dt;
-        const sp = Math.hypot(vx, vy);
-        if (sp > DRAG_VEL_CAP) {
-          vx *= DRAG_VEL_CAP / sp;
-          vy *= DRAG_VEL_CAP / sp;
+        vx = DRAG_RESPONSE_SCALE * (t.x - body.pos.x) / dt;
+        vy = DRAG_RESPONSE_SCALE * (t.y - body.pos.y) / dt;
+        // This is not the feel curve: ordinary motion was already slowed by
+        // the scale above. It is only a catastrophic bound for synthetic or
+        // lost-event jumps spanning many metres in one frame.
+        const speed = Math.hypot(vx, vy);
+        if (speed > DRAG_SCAFFOLD_CAP) {
+          vx *= DRAG_SCAFFOLD_CAP / speed;
+          vy *= DRAG_SCAFFOLD_CAP / speed;
         }
       }
       body.vel.set(vx, vy);
+      body.kinematicCorrectionRate = firstFrame
+        ? 0.0 : DRAG_RESPONSE_SCALE / dt;
       body.pos.setVec(t);
     }
     this.applyChaseCaps();

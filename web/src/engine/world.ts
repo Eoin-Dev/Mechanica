@@ -1483,10 +1483,57 @@ export class World {
       }
       if (worst < 1e-10) break; // converged: links are exact to sub-nanometre
     }
+    // Direct manipulation moves a held endpoint once per display frame. The
+    // ordinary corr/h feedback below is correct for integration drift, but h
+    // may be dozens of times shorter than that pointer interval; using it for
+    // the kinematic jump manufactured a large extra velocity. When a rigid
+    // component contains a held endpoint, propagate the controller's measured
+    // correction rate through that component and use it for all corrections.
+    let kinematicRates: Map<number, number> | null = null;
+    const seeds: Body[] = [];
+    for (const body of touched.values()) {
+      if (body.held && Number.isFinite(body.kinematicCorrectionRate)) {
+        seeds.push(body);
+      }
+    }
+    if (seeds.length > 0) {
+      const neighbours = new Map<number, Body[]>();
+      const addNeighbour = (from: Body, to: Body): void => {
+        const list = neighbours.get(from.id);
+        if (list === undefined) neighbours.set(from.id, [to]);
+        else list.push(to);
+      };
+      for (const { a, b } of rows) {
+        addNeighbour(a, b);
+        addNeighbour(b, a);
+      }
+      kinematicRates = new Map<number, number>();
+      const queue: Body[] = [];
+      for (const seed of seeds) {
+        const rate = Math.min(invH, seed.kinematicCorrectionRate);
+        const old = kinematicRates.get(seed.id);
+        if (old === undefined || rate < old) {
+          kinematicRates.set(seed.id, rate);
+          queue.push(seed);
+        }
+      }
+      for (let head = 0; head < queue.length; head++) {
+        const body = queue[head];
+        const rate = kinematicRates.get(body.id)!;
+        for (const next of neighbours.get(body.id) ?? []) {
+          const old = kinematicRates.get(next.id);
+          if (old === undefined || rate < old) {
+            kinematicRates.set(next.id, rate);
+            queue.push(next);
+          }
+        }
+      }
+    }
     for (const body of touched.values()) {
       if (body.corrX !== 0.0 || body.corrY !== 0.0) {
-        body.vel.x += body.corrX * invH;
-        body.vel.y += body.corrY * invH;
+        const rate = kinematicRates?.get(body.id) ?? invH;
+        body.vel.x += body.corrX * rate;
+        body.vel.y += body.corrY * rate;
       }
     }
   }
