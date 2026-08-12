@@ -93,6 +93,13 @@ document.addEventListener("click", (e) => {
 // The map itself lives in ui/shortcuts.ts so it can be tested without
 // standing up the whole app against a real DOM.
 document.addEventListener("keydown", (e) => {
+  // The simulation and graph canvases own the application's zoom. Suppress
+  // the browser page-zoom shortcuts before shortcut dispatch so Ctrl/Cmd +,
+  // -, and 0 cannot change the CSS/input coordinate system underneath them.
+  if ((e.ctrlKey || e.metaKey) && ["+", "=", "-", "_", "0"].includes(e.key)) {
+    e.preventDefault();
+    return;
+  }
   handleShortcut(e, {
     app,
     tour,
@@ -102,6 +109,17 @@ document.addEventListener("keydown", (e) => {
     toggleInspector: () => inspector.toggleCollapsed(),
   });
 });
+
+// Trackpad pinch is delivered as a modified wheel in Chromium/Firefox and as
+// gesture events in Safari. Neither may page-zoom the application; ordinary
+// wheel/pinch input over the simulation and graph remains locally handled by
+// those canvases.
+document.addEventListener("wheel", (e) => {
+  if (e.ctrlKey || e.metaKey) e.preventDefault();
+}, { passive: false });
+const suppressPageGesture = (e: Event): void => e.preventDefault();
+document.addEventListener("gesturestart", suppressPageGesture, { passive: false });
+document.addEventListener("gesturechange", suppressPageGesture, { passive: false });
 
 // ---------------------------------------------------------------- resizing
 const resize = () => app.resizeCanvas();

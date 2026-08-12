@@ -295,6 +295,9 @@ describe("left-drag preserves velocity", () => {
       controller.updateDrag();
       world.step(1 / 120);
     }
+    // Normal mode has no artificial chase ceiling: the rod solver supplies
+    // the complete response instead of leaving the bob ghosting behind.
+    expect(bob.speedCap).toBe(Infinity);
     const heldEnd = held.pos.x;
     c.release([600, 0]);
     // the bob was carried most of the way along with the body it is tied to
@@ -307,5 +310,61 @@ describe("left-drag preserves velocity", () => {
     // and the bob was NOT restored to anything: it is free, uncapped physics
     expect(bob.speedCap).toBe(Infinity);
     expect(bob.held).toBe(false);
+  });
+
+  it("keeps the linked-body chase cap as a Performance-mode tradeoff", () => {
+    const { app, world, controller } = makeApp(true);
+    (app as unknown as { perfMode: boolean }).perfMode = true;
+    const held = new Body(new Vec2(0, 0), 0.1, 1.0);
+    const bob = new Body(new Vec2(0, -1), 0.1, 1.0);
+    world.bodies.push(held, bob);
+    world.links.push(new DistanceLink(held, bob));
+    app.setSelection([held]);
+    const c = controller as unknown as {
+      press(m: [number, number]): void; motion(m: [number, number]): void;
+      release(m: [number, number]): void;
+    };
+    c.press([0, 0]);
+    controller.mouse = [40, 0];
+    c.motion([40, 0]);
+    controller.updateDrag();
+    expect(bob.speedCap).toBe(20);
+    c.release([40, 0]);
+    expect(bob.speedCap).toBe(Infinity);
+  });
+
+  it("moves a Normal-mode triple pendulum through the real rod response", () => {
+    const { app, world, controller } = makeApp(true);
+    const anchor = new Body(new Vec2(0, 0), 0.1, 1.0);
+    anchor.locked = true;
+    anchor.isAnchor = true;
+    const bobs = [1, 2, 3].map((i) => new Body(new Vec2(0, -i), 0.1, 1.0));
+    world.bodies.push(anchor, ...bobs);
+    const chain = [anchor, ...bobs];
+    for (let i = 0; i < chain.length - 1; i++) {
+      world.links.push(new DistanceLink(chain[i], chain[i + 1], 1));
+    }
+    app.setSelection([anchor]);
+    const c = controller as unknown as {
+      press(m: [number, number]): void; motion(m: [number, number]): void;
+      release(m: [number, number]): void;
+    };
+    c.press([0, 0]);
+    let maxRodError = 0;
+    for (let i = 1; i <= 60; i++) {
+      const m: [number, number] = [i * 5, 20 * Math.sin(i / 10)];
+      controller.mouse = m;
+      c.motion(m);
+      controller.updateDrag();
+      world.step(1 / 120);
+      for (const link of world.links as DistanceLink[]) {
+        maxRodError = Math.max(maxRodError,
+          Math.abs(link.a.pos.distTo(link.b.pos) - link.length));
+      }
+      expect(bobs.every((body) => body.speedCap === Infinity)).toBe(true);
+    }
+    c.release([300, 20 * Math.sin(6)]);
+    expect(maxRodError).toBeLessThan(2e-3);
+    expect(bobs[2].pos.x).toBeGreaterThan(0.5);
   });
 });

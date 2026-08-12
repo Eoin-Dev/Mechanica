@@ -121,6 +121,40 @@ describe("a slider announces the quantity, not its track position", () => {
     const range = c.root.querySelector("input[type=range]")!;
     expect(range.getAttribute("aria-valuetext")).toBe("8");
   });
+
+  it("gives zero its own stop before a positive logarithmic range", () => {
+    let v = 0;
+    const c = slider("Friction", () => v, (x) => { v = x; }, 0, 10,
+                     { log: true, logFloor: 0.01, fmt: (x) => x.toFixed(2) });
+    const range = c.root.querySelector<HTMLInputElement>("input[type=range]")!;
+    expect(range.value).toBe("0");
+    range.value = "1";
+    range.dispatchEvent(new Event("input"));
+    expect(v).toBeCloseTo(0.01, 12);
+    range.value = "0";
+    range.dispatchEvent(new Event("input"));
+    expect(v).toBe(0);
+  });
+
+  it("can soften a logarithmic track without changing its endpoints", () => {
+    let full = 1;
+    let soft = 1;
+    const fullControl = slider("Full", () => full, (x) => { full = x; },
+                               0.01, 16, { log: true });
+    const softControl = slider("Soft", () => soft, (x) => { soft = x; },
+                               0.01, 16, { log: true, logBlend: 0.6 });
+    const fullRange = fullControl.root.querySelector<HTMLInputElement>(
+      "input[type=range]")!;
+    const softRange = softControl.root.querySelector<HTMLInputElement>(
+      "input[type=range]")!;
+    expect(Number(softRange.value)).toBeLessThan(Number(fullRange.value));
+    softRange.value = "0";
+    softRange.dispatchEvent(new Event("input"));
+    expect(soft).toBeCloseTo(0.01, 12);
+    softRange.value = "2000";
+    softRange.dispatchEvent(new Event("input"));
+    expect(soft).toBeCloseTo(16, 9);
+  });
 });
 
 describe("selected state is exposed, not only styled", () => {

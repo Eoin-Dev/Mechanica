@@ -57,10 +57,9 @@ Startup proceeds in this order:
    settings, help, formula guide, and guided tour.
 5. Register overlay toggle callbacks, then assign all per-frame `Panel`
    objects to `app.panels`.
-6. Install document-level focus cleanup, keyboard shortcuts, canvas resizing,
-   and window resize handling. Browser zoom shortcuts and modified-wheel input
-   remain browser-owned; simulation wheel and touch gestures are scoped to the
-   canvas and graph surfaces.
+6. Install document-level focus cleanup, keyboard shortcuts, page-zoom input
+   suppression, canvas resizing, and window resize handling. Unmodified wheel
+   and touch zoom remain scoped to the simulation and graph surfaces.
 7. Install the first preset through `initializePreset()` without a toast, call
    `app.start()`, and either start the first-visit tour or show the
    returning-user welcome toast. This startup call is the only scene load that

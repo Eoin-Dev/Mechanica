@@ -48,7 +48,7 @@ export class Toolbar implements Panel {
     const speedWrap = el("div", { class: "speed-ctrl", style: "width:200px;flex:none;" });
     speedWrap.append(g.add(slider("Speed", () => app.speed,
       (v) => { app.speed = v; }, 0.01, 16.0,
-      { unit: "x", log: true, fmt: (v) => v.toFixed(2),
+      { unit: "x", log: true, logBlend: 0.6, fmt: (v) => v.toFixed(2),
         tooltip: "How fast simulated time runs against real time. " +
                  "+ and - double or halve it, 0 resets." })).root);
     root.append(speedWrap);
@@ -230,7 +230,7 @@ export class HintBar implements Panel {
     // struggling machine looks like a rendering fault rather than the
     // deliberate trade it is. Only shown once it is off 1x.
     const q = app.trailQuality;
-    const trail = app.view.trails && (q < 0.95 || q > 1.05)
+    const trail = app.view.trails && !app.perfMode && (q < 0.95 || q > 1.05)
       ? `trail ${q.toFixed(1)}x   ` : "";
     // Performance mode changes what the numbers beside it MEAN - the drift
     // readout will wander, and the substeps in the inspector are not what is
@@ -348,7 +348,7 @@ export class GraphDock implements Panel {
     const spanFor = (px: number): number => this.viewSpan * (px / Math.max(1, this.canvas.clientWidth));
 
     this.canvas.addEventListener("wheel", (e) => {
-      if (e.ctrlKey || e.metaKey) return; // browser page zoom / trackpad pinch
+      if (e.ctrlKey || e.metaKey) return; // reserved; document blocks page zoom
       const series = this.activeSeries();
       if (series === undefined || series.count === 0) return;
       e.preventDefault();

@@ -66,7 +66,8 @@ change:
 4. Run `npm run test:e2e` after a current build for application, interaction,
    accessibility, responsive, dependency, or delivery changes.
 5. Verify affected behavior manually when automated browser tests cannot
-   exercise real browser zoom, assistive technology, or touch hardware.
+   exercise browser-chrome zoom overrides, assistive technology, or touch
+   hardware.
 6. Check links in `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, and `docs/*.md`
    when documentation paths change.
 7. Update the current-behavior handbook page in the same change whenever its
@@ -135,9 +136,9 @@ with the behavior it protects rather than an exact assertion count.
 
 | Test file | Protected behavior |
 | --- | --- |
-| [`presets.test.ts`](../web/tests/presets.test.ts) | Central solver affordability, shipped-scene survival/coherence, trampoline response, dense containment, penetration bounds, and contact iteration ceilings. |
+| [`presets.test.ts`](../web/tests/presets.test.ts) | Central solver affordability, shipped-scene survival/coherence, dynamic Sun/Earth/Moon barycentre and hierarchy bounds, trampoline response, dense containment, penetration bounds, and contact iteration ceilings. |
 | [`preset-invariants.test.ts`](../web/tests/preset-invariants.test.ts) | Catalogue uniqueness/completeness, finite sane structures, link identity, deterministic builders/steps, and exact save/load continuation. |
-| [`preset-descriptions.test.ts`](../web/tests/preset-descriptions.test.ts) | Educational card claims agree with measured scene properties and every preset is covered by the description audit. |
+| [`preset-descriptions.test.ts`](../web/tests/preset-descriptions.test.ts) | Educational card claims agree with measured scene properties, including Friction ramp non-rotation/spacing and Trampoline anchor/suspension/ball geometry, and every preset is covered by the description audit. |
 | [`determinism.test.ts`](../web/tests/determinism.test.ts) | Bit-identical repeated runs and independence from performance scheduling for demanding scenes. |
 | [`lifecycle-stress.test.ts`](../web/tests/lifecycle-stress.test.ts) | Continuous create/delete, integrator switching, repeated preset loads, violent reset, and sustained high-body-count consistency without cost drift. |
 | [`operation-fuzz.test.ts`](../web/tests/operation-fuzz.test.ts) | Seeded random application operations, running interleavings, and gestures that outlive deleted/replaced targets. |
@@ -167,8 +168,8 @@ with the behavior it protects rather than an exact assertion count.
 
 | Test file | Protected behavior |
 | --- | --- |
-| [`drag-velocity.test.ts`](../web/tests/drag-velocity.test.ts) | Primary drag preserves pre-grab velocity across paused/running/release/abort paths while temporary motion remains solver-visible and capped. |
-| [`interaction-behaviour.test.ts`](../web/tests/interaction-behaviour.test.ts) | Click activation threshold, bounded drag energy, filtered box select, pick ordering/tolerance, distance-based trail sampling, plot restart/non-finite rejection, auto-fit guarantees, and deleted gesture targets. |
+| [`drag-velocity.test.ts`](../web/tests/drag-velocity.test.ts) | Primary drag preserves pre-grab velocity across paused/running/release/abort paths while temporary motion remains solver-visible; linked response is uncapped in Normal mode and chase-capped only in Performance mode. |
+| [`interaction-behaviour.test.ts`](../web/tests/interaction-behaviour.test.ts) | Click activation threshold, bounded drag energy, continuously maintained parked velocity aims, filtered box select, pick ordering/tolerance, distance-based trail sampling, plot restart/non-finite rejection, auto-fit guarantees, and deleted gesture targets. |
 | [`selection-delete.test.ts`](../web/tests/selection-delete.test.ts) | Selection/hover/pending-state reconciliation after removal, linear batched deletion with cascades, and duplication of bodies/walls/links/drivers. |
 | [`camera.test.ts`](../web/tests/camera.test.ts) | World/screen inverse transforms, panning, cursor-anchored zoom/clamps, visible bounds, and nice scale-bar formatting. |
 | [`body-culling.test.ts`](../web/tests/body-culling.test.ts) | Scene-centred runaway classification, outward-motion requirement, orbit/furniture/held protections, and non-finite cleanup. |
@@ -181,25 +182,25 @@ with the behavior it protects rather than an exact assertion count.
 
 | Test file | Protected behavior |
 | --- | --- |
-| [`accessibility.test.ts`](../web/tests/accessibility.test.ts) | Accessible control names, shortcut-name isolation, play state, value/selected semantics, tab helpers, and refresh behavior that avoids redundant ARIA/DOM updates. |
+| [`accessibility.test.ts`](../web/tests/accessibility.test.ts) | Accessible control names, shortcut-name isolation, play state, value/selected semantics, zero-preserving and softened-log slider mappings, tab helpers, and refresh behavior that avoids redundant ARIA/DOM updates. |
 | [`focus-ring.test.ts`](../web/tests/focus-ring.test.ts) | Stylesheet cascade retains keyboard focus visibility and the TypeScript/CSS phone breakpoints agree. |
 | [`shortcuts.test.ts`](../web/tests/shortcuts.test.ts) | Focused-control ownership, modifier edits, tool keys, playback/view commands, modal/tour/Escape precedence, and unusual event targets. |
 | [`splitter-drag.test.ts`](../web/tests/splitter-drag.test.ts) | Pointer capture plus keyboard 10/32-pixel steps and Home/End limits, separator orientation/value metadata and reveal-time resynchronization, size direction, min/max clamps, commit behavior, and cancellation for inspector/dock resizing. |
 | [`refresh-culling.test.ts`](../web/tests/refresh-culling.test.ts) | Scrolled controls skip refresh while hidden zero-rect controls remain eligible to reveal themselves. |
-| [`inspector-rebuild.test.ts`](../web/tests/inspector-rebuild.test.ts) | Inspector structure keys and stable refreshes, semantic tabs/reopen/splitter metadata, desktop visibility persistence, accessible driver removal, Performance-mode solver/trail disabled states and banner copy, and exact delayed-input transactions after intervening simulation. |
+| [`inspector-rebuild.test.ts`](../web/tests/inspector-rebuild.test.ts) | Inspector structure keys and stable refreshes, body counts independent from cascading link deletion, semantic tabs/reopen/splitter metadata, desktop visibility persistence, accessible driver removal, Performance-mode solver/trail disabled states and banner copy, and exact delayed-input transactions after intervening simulation. |
 | [`tour.test.ts`](../web/tests/tour.test.ts) | Tour construction, first-visit behavior, progress/finish, settings persistence, and cleanup. |
 | [`tour-spotlight.test.ts`](../web/tests/tour-spotlight.test.ts) | Multi-target spotlight tiling, clipping, rings, viewport placement, and responsive target geometry. |
-| [`panel-accessibility.test.ts`](../web/tests/panel-accessibility.test.ts) | Toolbar/graph icon names, play state labels, unchanged-clock write suppression, revealed/dynamically bounded graph-splitter metadata, retained-graph palette invalidation, and shortcut badges excluded from name computation. |
+| [`panel-accessibility.test.ts`](../web/tests/panel-accessibility.test.ts) | Toolbar/graph icon names, play state labels, unchanged-clock write suppression, Performance-mode suppression of the Normal-mode trail-quality status, revealed/dynamically bounded graph-splitter metadata, retained-graph palette invalidation, and shortcut badges excluded from name computation. |
 | [`settings-accessibility.test.ts`](../web/tests/settings-accessibility.test.ts) | Accent-swatch selection/focus, built-in preset full-card activation and independent description expansion, persistent single-flight scene import across rerenders, compact checkbox sizing, and safe new-tab third-party notice behavior. |
 | [`theme-contrast.test.ts`](../web/tests/theme-contrast.test.ts) | Every theme surface/text combination and black, white, and intermediate custom accents meet text, neutral-focus, accent/accent-dark ink, and filled-control focus-cue thresholds. |
 | [`tour-modal.test.ts`](../web/tests/tour-modal.test.ts) | App-shell inertness, pointer blocking, focus trapping/restoration, active-step progress, live announcements, and modal cleanup. |
-| [`zoom-accessibility.test.ts`](../web/tests/zoom-accessibility.test.ts) | Zoom-permissive viewport metadata, browser-owned modified wheel/keyboard/gesture input, canvas-only unmodified wheel/touch zoom, mobile heading presence, and selectable reference content. |
+| [`zoom-accessibility.test.ts`](../web/tests/zoom-accessibility.test.ts) | Page-zoom-restricting viewport metadata, global modified wheel/keyboard/gesture suppression, canvas-only unmodified wheel/touch zoom, restored strong heading accents, mobile heading presence, and selectable reference content. |
 
 ### Real-browser acceptance
 
 | Test file | Protected behavior |
 | --- | --- |
-| [`e2e/accessibility.spec.ts`](../web/e2e/accessibility.spec.ts) | Production boot without console/page errors; axe WCAG A/AA scan; keyboard play/tabs/splitters/full-card library activation; undo after scene replacement; rendered-canvas pointer alignment; 390 x 844 transient inspector behavior; modal-tour focus/inertness/restoration; and contained 320-CSS-pixel/200%-text layout. |
+| [`e2e/accessibility.spec.ts`](../web/e2e/accessibility.spec.ts) | Production boot without console/page errors; axe WCAG A/AA scan with only the deliberate browser-page-zoom `meta-viewport` exception waived; keyboard play/tabs/splitters/full-card library activation; undo after scene replacement; rendered-canvas pointer alignment; 390 x 844 transient inspector behavior; modal-tour focus/inertness/restoration; and contained 320-CSS-pixel/200%-text layout. |
 
 ## Verification philosophy
 
@@ -324,8 +325,9 @@ unrelated edits:
   recoverable and lazy loading fallback is usable.
 - Keyboard-navigate controls and overlays; verify focus rings, Escape order,
   live status output, and no shortcut fires while typing.
-- Check browser zoom at 200% and 400%, including pointer alignment and a
-  320-CSS-pixel viewport; modified wheel/keyboard zoom must remain browser-owned.
+- Confirm Ctrl/Cmd-wheel, trackpad page pinch, and Ctrl/Cmd `+`, `-`, and `0`
+  do not page-zoom, while unmodified simulation/graph wheels and their scoped
+  touch gestures still zoom at the pointer.
 - Check phone layout, real touch pan/pinch gestures, 200% text scaling, reduced
   motion, dyslexic font, light/dark themes, and extreme custom accents.
 

@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { App } from "../src/app";
 import { PhasePlot, TimeSeries } from "../src/ui/plots";
-import { GraphDock, Palette, Toolbar } from "../src/ui/panels";
+import { GraphDock, HintBar, Palette, Toolbar } from "../src/ui/panels";
 import * as theme from "../src/ui/theme";
 
 function appStub(): App {
@@ -82,6 +82,34 @@ describe("toolbar and palette semantics", () => {
     toolbar.refresh();
     expect(clock.value).toBe("1.25");
     expect(writes).toBe(2);
+  });
+});
+
+describe("status readouts", () => {
+  it("hides Normal-mode trail quality while Performance mode suppresses trails", () => {
+    const hint = document.createElement("div");
+    const status = document.createElement("div");
+    const stub = {
+      controller: { hint: () => "", mouse: [0, 0] },
+      world: { bodies: [], links: [], contacts: [] },
+      camera: { toWorld: () => ({ x: 0, y: 0 }) },
+      energyDriftText: () => "",
+      playing: false,
+      qNow: 1,
+      view: { trails: true },
+      trailQuality: 6,
+      perfMode: false,
+      performanceQualityLabel: "Maximum",
+    };
+    const app = stub as unknown as App;
+    const bar = new HintBar(app, hint, status);
+    bar.refresh();
+    expect(status.textContent).toContain("trail 6.0x");
+
+    stub.perfMode = true;
+    bar.refresh();
+    expect(status.textContent).not.toContain("trail");
+    expect(status.textContent).toContain("perf Maximum");
   });
 });
 

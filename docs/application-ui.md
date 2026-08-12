@@ -169,12 +169,15 @@ zoom so objects remain usable at different scales.
 ### Mouse and pen
 
 - Primary button drives the active tool.
-- Right-drag on a movable body sets velocity; right-drag elsewhere pans.
+- Right-drag on a movable body sets velocity; while the button remains held,
+  the target is recomputed every display frame and after every physics step so
+  a parked pointer remains authoritative. Right-drag elsewhere pans.
 - Middle-drag pans.
 - An unmodified mouse wheel over the simulation canvas zooms around the cursor;
   the world point under the cursor is kept fixed.
-- Ctrl/Cmd-wheel and trackpad page-zoom gestures are not consumed by the
-  canvas. They remain browser-owned, like Ctrl/Cmd `+`, `-`, and `0`.
+- Ctrl/Cmd-wheel, trackpad page-pinch, and Ctrl/Cmd `+`, `-`, and `0` are
+  suppressed at document level. Modified wheels are ignored by both local
+  canvas handlers so they cannot also alter a simulation or graph camera.
 - A selected wall exposes endpoint/whole-wall dragging.
 - The green velocity arrow tip is another route to exact velocity editing.
 
@@ -191,7 +194,8 @@ combine zoom and pan. Only touch pointers enter the pinch map, preventing a
 lost mouse pointer from creating a false two-finger gesture.
 
 Custom `touch-action: none` behavior is scoped to the simulation/graph canvases
-and splitters. The rest of the page retains native browser zoom and scrolling.
+and splitters. The viewport disables browser page scaling; the rest of the page
+retains native scrolling and selectable reference text.
 
 Touch-first detection uses `(pointer: coarse)`; phone layout separately uses
 the CSS breakpoint `(max-width: 760px)`. A tablet can therefore receive touch
@@ -211,8 +215,11 @@ does not mark a body held or touch its motion. Once active:
 - the temporary velocity equals actual per-frame displacement divided by
   elapsed pointer time, capped at `DRAG_VEL_CAP`, so contacts and constraints
   see consistent relative motion;
-- transitively link-connected movable bodies receive a per-substep chase speed
-  cap to prevent interaction-driven runaway energy;
+- in Normal mode, transitively link-connected bodies receive the solver's full
+  constraint/contact response, so pendulums and chains do not trail behind an
+  artificial chase-speed ceiling;
+- in Performance mode, those linked bodies receive a per-substep chase speed
+  cap as an intentional stability and throughput tradeoff;
 - on release or abort, held flags and chase caps clear and every dragged body
   recovers the velocity it had when the drag began.
 
@@ -234,8 +241,13 @@ construction behavior.
 
 Right-dragging a movable body or dragging its green handle sets `vel` from the
 body centre to the world point using the renderer's velocity-arrow scale. This
-is a real property edit and persists after release. The handle is hidden during
-a primary position drag so the two gestures are not visually conflated.
+is a real property edit and persists after release. While the gesture is held,
+`CanvasController.maintainVelocityDrag()` recalculates the requested velocity
+from the body's latest centre to the parked pointer before display work and
+after every live solver step. Gravity, contacts, and constraints therefore
+cannot leave an integrated intermediate velocity on screen or make the arrow
+flicker between pointer events. The handle is hidden during a primary position
+drag so the two gestures are not visually conflated.
 
 ### Walls, links, and pending references
 
@@ -437,8 +449,9 @@ current state, even while paused. Its timestamps let rewind truncate future
 phase points in the same way as the energy and momentum series.
 
 The graph dock supports live following, scroll-back, unmodified-wheel zoom,
-pan, reset, legend toggles, and a resizable splitter. Modified wheel events stay
-browser-owned. The dock avoids redrawing unchanged data unless autoscale easing
+pan, reset, legend toggles, and a resizable splitter. Modified wheel events are
+reserved for document-level page-zoom suppression. The dock avoids redrawing
+unchanged data unless autoscale easing
 is still active. Empty, undersized, or all-hidden plots cancel easing, and the
 retained draw signature includes the live palette revision so a theme/accent
 change repaints a paused graph exactly once.
@@ -451,7 +464,11 @@ change repaints a paused graph exactly once.
   children without templating.
 - `button`, `slider`, numeric/text edits, checkbox, segmented control, colour
   editor, section, and half-row return `{ root, refresh? }` controls.
-- sliders map a fixed internal range to linear or logarithmic values; paired
+- sliders map a fixed internal range to linear, logarithmic, or blended
+  linear/logarithmic values; a zero-preserving log option gives `0` its own
+  track stop before a configurable positive floor. Friction uses that mapping
+  from exact `0` through `0.01..10`, while the toolbar Speed control uses a
+  60% logarithmic blend so ordinary rates are less compressed. Paired
   numeric input allows exact edits and commit/revert behavior.
 - `RefreshGroup` polls controls and optionally culls scrolled-out refresh work.
 - `wireTabs` and `refreshTabs` implement the roving-focus ARIA tab pattern with
@@ -486,8 +503,10 @@ constant `ICONS` table, not user input.
 - **Palette:** grouped tool buttons, programmatic pressed state, visually shown
   but accessibility-hidden shortcut badges, and tool descriptions.
 - **Hint bar:** active gesture hint plus current time, body/contact counts,
-  adaptive factor, active Performance quality label, exact `dE` or approximate
-  `~dE`, and pointer coordinates where appropriate.
+  Normal-mode trail-quality factor when it is meaningfully away from `1x`,
+  active Performance quality label, exact `dE` or approximate `~dE`, and
+  pointer coordinates where appropriate. Performance mode suppresses both
+  trail drawing and the saved Normal-mode trail-factor readout.
 - **Graph dock:** graph mode, view controls, canvas rendering, legend hit
   testing, splitter, and contextual gesture hint.
 - **Inspector:** object/world/view editing described above.
@@ -541,13 +560,14 @@ testable without constructing the whole app. It:
 3. Applies modifier edit commands (undo, redo, save, duplicate, copy/paste,
    reset).
 4. Applies tool keys and view/playback commands.
-5. Prevents browser defaults only for a command the app actually consumed.
+5. Prevents browser defaults only for a command the app actually consumed,
+   except for the intentionally global page-zoom suppression in `main.ts`.
 
 The toolbar clock and formula editors also stop key propagation while editing.
-Browser page zoom remains browser-owned: the viewport does not prohibit zoom,
-global wheel/gesture/keyboard suppression is absent, and Ctrl/Cmd-wheel plus
-Ctrl/Cmd `+`, `-`, and `0` are not consumed. Unmodified wheels over the
-simulation canvas or graph continue to control those views.
+Browser page zoom is disabled by the viewport and by global modified-wheel,
+gesture, and Ctrl/Cmd zoom-key guards. Unmodified wheels over the simulation
+canvas or graph continue to zoom only those views; their custom touch gestures
+remain scoped to the canvases.
 
 ## Themes and responsive behavior
 
@@ -562,7 +582,11 @@ the background and neutral button surfaces, and black-or-white `ACCENT_INK`
 and `ACCENT_DARK_INK` at 4.5:1 against their matching fills. Accent-filled
 controls use those ink tokens for text and an inset focus stroke while the
 outer focus ring contrasts with the surrounding panel. Extreme black, white,
-and mid-grey custom accents are therefore still readable and focus-visible.
+and mid-grey custom accents therefore retain safe normal text, filled-control
+ink, and focus cues. Section, guide, preset-category, tour-step, and Help
+headings deliberately use the stronger selected `ACCENT` treatment rather
+than the softened contrast-adjusted text variant; those headings do not claim
+the `ACCENT_TEXT` guarantee for an extreme custom accent.
 Canvas colour strings are memoized by packed colour/alpha value with a bounded
 cache.
 
@@ -591,6 +615,12 @@ application text scaling.
 
 Accessibility behavior is part of the implementation contract:
 
+The product requirement that browser page zoom remain disabled is a deliberate
+WCAG 1.4.4 exception: restrictive viewport metadata and page-level input
+guards prevent native magnification. The persisted application text-size
+control and its 200% reflow coverage remain available, but they are not a full
+substitute for browser zoom.
+
 - the canvas has an explanatory label;
 - the toolbar brand provides the page's level-one heading, including while
   visually hidden on phones;
@@ -617,8 +647,8 @@ Accessibility behavior is part of the implementation contract:
 - mouse-activated non-text controls are blurred to prevent a stale focused
   button/slider from swallowing the next global shortcut, while keyboard
   activation retains focus;
-- browser zoom and native text selection remain available outside the scoped
-  simulation interaction surfaces;
+- browser page zoom is suppressed so zoom remains local to the simulation and
+  graph, while native text selection remains available in reference content;
 - help/hints switch to touch wording where mouse/keyboard actions are
   unavailable;
 - reduced motion affects decorative UI/camera/axis movement, not the physical
@@ -626,7 +656,7 @@ Accessibility behavior is part of the implementation contract:
 - the dyslexia-friendly font and font scale are persisted preferences.
 
 Tests protect focus rings, names/states, tab and splitter keyboard behavior,
-theme/custom-accent contrast, browser zoom ownership, modal-tour inertness and
+theme/custom-accent contrast, page-zoom suppression, modal-tour inertness and
 focus restoration, device wording, responsive inspector state, 320 px/200%
 reflow, pointer alignment, scene-replacement undo, tour spotlights, and
 shortcut ownership. Chromium axe checks cover WCAG A/AA rules. See [testing

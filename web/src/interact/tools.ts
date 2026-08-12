@@ -101,7 +101,9 @@ function makeAnchor(b: Body): Body {
 // not carry its bob. That reported velocity is capped at DRAG_VEL_CAP so a
 // fast flick cannot inject a huge amount of energy, and everything
 // link-connected to a grab is additionally speed-clamped each substep at
-// DRAG_CHASE_CAP as a blow-up guard.
+// DRAG_CHASE_CAP in Performance mode as a blow-up guard. Normal mode leaves
+// the real constraint/contact response uncapped so a pendulum or chain keeps
+// up with the hand instead of trailing behind an artificial speed ceiling.
 //
 // The reported velocity is a means to an end and never survives the drag:
 // releasing restores whatever the body had when it was grabbed (see
@@ -218,6 +220,23 @@ export class CanvasController {
     this.app.invalidateCanvas();
   }
 
+  /** Keep an active velocity edit aimed at the parked pointer.
+   *
+   * Pointer-move events are not a clock: once the mouse stops, the solver can
+   * still run many steps before another event arrives. Recomputing the target
+   * from the body's current centre keeps the arrow under the pointer and
+   * prevents gravity, contacts or constraints from making the displayed
+   * velocity flicker between the requested and integrated values. */
+  maintainVelocityDrag(): boolean {
+    const body = this.velDrag;
+    if (body === null || !this.dragMoved || body.locked ||
+        !this.app.world.bodies.includes(body)) return false;
+    const worldP = this.app.camera.toWorld(this.mouse[0], this.mouse[1]);
+    const s = VEL_ARROW_SCALE * this.app.view.vectorScale;
+    body.vel.set((worldP.x - body.pos.x) / s, (worldP.y - body.pos.y) / s);
+    return true;
+  }
+
   /** Refresh the drag every frame (pointer-move events stop while the
    * cursor is parked, but the simulation keeps running).
    *
@@ -228,13 +247,18 @@ export class CanvasController {
    * correct relative velocities and links carry momentum - a stopped anchor
    * lets a pendulum lunge on), capped at DRAG_VEL_CAP so a fast flick can't
    * inject a huge amount of energy. Everything link-connected keeps
-   * simulating with real link physics under a per-substep speed clamp, a
-   * blow-up guard that a normal drag never touches.
+   * simulating with real link physics. Performance mode adds a per-substep
+   * chase-speed cap as an intentional stability/performance tradeoff; Normal
+   * mode does not distort the constraint response.
    *
    * None of that velocity outlives the drag: release restores what the body
    * was grabbed with (see releaseDragged), so a drag moves a body without
    * also throwing it. */
   updateDrag(): void {
+    if (this.maintainVelocityDrag()) {
+      this.app.invalidateCanvas();
+      this.app.invalidateEnergy();
+    }
     if (this.dragItems.length === 0 || !this.dragActive) return;
     // A held object and its hidden/shown velocity handle are live interaction
     // feedback even when the pointer is parked between DOM events.
@@ -316,6 +340,10 @@ export class CanvasController {
    * (transitively; anchors and locked bodies excepted). Recomputed every
    * frame so links added or deleted mid-drag are always honoured. */
   private applyChaseCaps(): void {
+    if (!this.app.perfMode) {
+      this.clearChaseCaps();
+      return;
+    }
     const world = this.app.world;
     const inGroup = new Set<Body>(this.dragItems.map((it) => it.body));
     const queue = [...inGroup];
@@ -555,10 +583,8 @@ export class CanvasController {
     });
 
     canvas.addEventListener("wheel", (e) => {
-      // Modified wheel gestures belong to the browser's page zoom. Keeping
-      // them here made Ctrl-wheel and trackpad pinch silently zoom the
-      // simulation instead, leaving people who rely on magnification with
-      // no way to enlarge the interface.
+      // Modified wheel gestures are reserved and suppressed at document
+      // level; they must not also alter the simulation camera.
       if (e.ctrlKey || e.metaKey) return;
       e.preventDefault();
       const pos = this.local(canvas, e);
@@ -758,11 +784,9 @@ export class CanvasController {
     const worldP = app.camera.toWorld(mouse[0], mouse[1]);
     if (this.velDrag !== null) {
       if (!this.dragMoved) app.beginEdit();
-      const body = this.velDrag;
-      const s = VEL_ARROW_SCALE * app.view.vectorScale;
-      body.vel.set((worldP.x - body.pos.x) / s, (worldP.y - body.pos.y) / s);
-      app.invalidateEnergy();
       this.dragMoved = true;
+      this.maintainVelocityDrag();
+      app.invalidateEnergy();
       return;
     }
     if (this.wallDrag !== null) {

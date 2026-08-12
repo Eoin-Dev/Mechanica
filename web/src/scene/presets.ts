@@ -358,17 +358,37 @@ function buildTrojans(): World {
  * strips it away. */
 function buildSunEarthMoon(): World {
   const w = spaceWorld(10);
-  const sun = addBody(w, 0, 0, { r: 0.4, m: 2000.0, locked: true,
-                                 color: [235, 200, 90], name: "Sun" });
-  const aE = 4.0;
-  const vE = Math.sqrt((w.G * sun.mass) / aE);
+  const sunMass = 2000.0;
+  const earthMass = 20.0;
+  const moonMass = 0.02;
+  const pairMass = earthMass + moonMass;
+  const totalMass = sunMass + pairMass;
+  const outerSeparation = 4.0; // Sun to Earth-Moon barycentre
+  const moonSeparation = 0.24;
+
+  // Jacobi/barycentric initial conditions. The Sun and the Earth-Moon pair
+  // orbit their shared barycentre, while Earth and Moon simultaneously orbit
+  // their own local barycentre. Both position and momentum sums are exactly
+  // zero, so unlocking the Sun produces a real hierarchical three-body orbit
+  // rather than translating the whole scene across the canvas.
+  const sunX = -outerSeparation * pairMass / totalMass;
+  const pairX = outerSeparation * sunMass / totalMass;
+  const outerV = Math.sqrt(w.G * totalMass / outerSeparation);
+  const sunVy = -outerV * pairMass / totalMass;
+  const pairVy = outerV * sunMass / totalMass;
+  const earthX = pairX - moonSeparation * moonMass / pairMass;
+  const moonX = pairX + moonSeparation * earthMass / pairMass;
+  const innerV = Math.sqrt(w.G * pairMass / moonSeparation);
+  const earthVy = pairVy - innerV * moonMass / pairMass;
+  const moonVy = pairVy + innerV * earthMass / pairMass;
+
+  addBody(w, sunX, 0, { r: 0.4, m: sunMass, vy: sunVy,
+                         color: [235, 200, 90], name: "Sun" });
   // small drawn radii: the moon's orbit (0.24) must read as clear space
   // between the two discs, not as the moon scraping the earth
-  const earth = addBody(w, aE, 0, { r: 0.09, m: 20.0, vy: vE,
-                                    color: [86, 156, 214], name: "Earth" });
-  const aM = 0.24;
-  const vM = Math.sqrt((w.G * earth.mass) / aM);
-  const moon = addBody(w, aE + aM, 0, { r: 0.03, m: 0.02, vy: vE + vM,
+  addBody(w, earthX, 0, { r: 0.09, m: earthMass, vy: earthVy,
+                          color: [86, 156, 214], name: "Earth" });
+  const moon = addBody(w, moonX, 0, { r: 0.03, m: moonMass, vy: moonVy,
                                         color: [190, 190, 200], name: "Moon" });
   moon.collides = false;
   return w;
@@ -699,18 +719,19 @@ function buildFrictionRamp(): World {
   runOut.restitution = 0.05;
   w.walls.push(runOut);
   const rows: Array<[number, Color, string]> = [
-    [0.0, [110, 200, 210], "Frictionless (slides)"],
-    [0.25, [120, 190, 120], "mu = 0.25 (rolls)"],
-    [0.8, [220, 130, 90], "mu = 0.8 (rolls)"],
+    [0.0, [110, 200, 210], "mu = 0 (slides fastest)"],
+    [0.25, [120, 190, 120], "mu = 0.25 (slides slower)"],
+    [0.8, [220, 130, 90], "mu = 0.8 (holds)"],
   ];
   for (let i = 0; i < rows.length; i++) {
     const [mu, col, label] = rows[i];
     const n = new Vec2(-Math.sin(ang), Math.cos(ang));
-    const along = 0.5 + i * 0.8;
+    const along = 0.6 + i * 1.5;
     const pos = new Vec2(along * Math.cos(ang), along * Math.sin(ang))
       .add(n.mul(0.06 + 0.16));
     const b = addBody(w, pos.x, pos.y, { r: 0.16, m: 1.0, e: 0.05, mu,
                                          color: col, name: label });
+    b.noRotation = true;
     b.collides = true;
   }
   return w;
@@ -1063,6 +1084,7 @@ function buildTrampoline(): World {
   const C = 250.0;     // half the maximum damping (slider max 500)
   const wallX = 3.2;
   const wallBot = -0.6;
+  const wallTop = 3.2;
   // anchors sit at the bottom of each side bumper wall
   const left = addBody(w, -wallX, wallBot, { r: 0.07, m: 1.0, anchor: true });
   const right = addBody(w, wallX, wallBot, { r: 0.07, m: 1.0, anchor: true });
@@ -1084,14 +1106,25 @@ function buildTrampoline(): World {
   }
   // side bumpers keep the bouncer over the bed
   for (const x of [-wallX, wallX]) {
-    const side = new Wall(new Vec2(x, wallBot), new Vec2(x, 3.2), 0.12);
+    const side = new Wall(new Vec2(x, wallBot), new Vec2(x, wallTop), 0.12);
     side.restitution = 0.5;
     w.walls.push(side);
   }
+  // The upper anchors coincide exactly with the top endpoints of the bumper
+  // walls. Their long suspension springs attach three sheet particles in
+  // from either edge, matching the supported-shoulder shape of a real
+  // trampoline rather than adding another spring directly over each wall.
+  const leftTop = addBody(w, -wallX, wallTop,
+                          { r: 0.07, m: 1.0, anchor: true });
+  const rightTop = addBody(w, wallX, wallTop,
+                           { r: 0.07, m: 1.0, anchor: true });
+  const leftSuspension = new SpringLink(leftTop, sheet[2], null, K, C);
+  const rightSuspension = new SpringLink(rightTop, sheet[n - 3], null, K, C);
+  w.links.push(leftSuspension, rightSuspension);
   // The gymnast is added BEFORE the bed is relaxed, even though it takes no
   // part in the relaxation, because it changes the body count and therefore
   // the substep count the cost ceiling picks - see below.
-  addBody(w, 0.0, 2.6, { r: 0.3, m: 64.0, e: 1.0, mu: 0.0, color: [220, 130, 90],
+  addBody(w, 0.0, 2.6, { r: 0.36, m: 64.0, e: 1.0, mu: 0.0, color: [220, 130, 90],
                          name: "Gymnast" });
 
   // Settle the bed into its rest shape under the new stiffness and anchor
@@ -1111,7 +1144,11 @@ function buildTrampoline(): World {
   // would sag the moment the scene loaded.
   capSolverCost(w);
   const hSub = 1 / 120 / w.substeps;
-  const springs = w.links.filter((l): l is SpringLink => l instanceof SpringLink);
+  // The two suspension springs count toward the authored solver cost above,
+  // but do not bias the bed relaxation: their final natural lengths are set
+  // from the relaxed endpoints below, making both exactly force-free at t=0.
+  const springs = w.links.filter((l): l is SpringLink =>
+    l instanceof SpringLink && l !== leftSuspension && l !== rightSuspension);
   const kEff = springs.map((s) =>
     Math.min(s.stiffness, 1 / (hSub * hSub * (s.a.invMass + s.b.invMass))));
   const hRelax = 2e-4;
@@ -1142,6 +1179,8 @@ function buildTrampoline(): World {
     b.vel.set(0, 0);
     b.acc.set(0, 0);
   }
+  leftSuspension.restLength = leftSuspension.a.pos.distTo(leftSuspension.b.pos);
+  rightSuspension.restLength = rightSuspension.a.pos.distTo(rightSuspension.b.pos);
   return w;
 }
 
@@ -1301,9 +1340,9 @@ export const PRESETS: Preset[] = [
   // ---- the three-body problem, from stability to chaos -------------
   new Preset("Sun, Earth & Moon", "Three-Body Problem",
     "The one arrangement of three bodies that IS stable: a " +
-    "hierarchy. The Moon circles the Earth while both circle the " +
-    "Sun, safe because the Moon sits deep inside Earth's Hill " +
-    "sphere, where Earth's pull dominates.",
+    "hierarchy. All three move around their shared barycentre while " +
+    "the Moon circles Earth, safe because it sits deep inside Earth's " +
+    "Hill sphere, where Earth's pull dominates.",
     buildSunEarthMoon, { zoom: 95, centre: [0, 0], trails: true }),
   new Preset("Three-body figure-8", "Three-Body Problem",
     "The celebrated Chenciner-Montgomery choreography: three equal " +
@@ -1421,8 +1460,9 @@ export const PRESETS: Preset[] = [
     "steepens the descent.",
     buildDragRace, { zoom: 42, trails: true, vectors: true }),
   new Preset("Friction ramp", "Projectiles & Friction",
-    "Three balls on a 25 degree ramp. With no friction a ball slides; " +
-    "with friction it rolls - contact torque sets it spinning.",
+    "Three non-rotating balls spread along a 25 degree ramp. The " +
+    "frictionless ball slides fastest, moderate friction slows the next, " +
+    "and high static friction holds the last in place.",
     buildFrictionRamp, { zoom: 70 }),
   new Preset("Galileo's drop", "Projectiles & Friction",
     "A 10 kg ball and a 0.5 kg ball fall the same distance and land " +
@@ -1471,7 +1511,8 @@ export const PRESETS: Preset[] = [
     "so it keeps its round shape - mostly.",
     buildSquishyBall, { zoom: 85, centre: [0, 2.0] }),
   new Preset("Trampoline", "Soft Bodies",
-    "A springy bed of particles strung between two anchors. The " +
+    "A springy bed held by two lower anchors and two wall-top anchors, " +
+    "with damped side springs lifting its shoulders. The " +
     "ball's energy trades between gravity and spring tension every " +
     "bounce. Try changing the ball's mass!",
     buildTrampoline, { zoom: 110, centre: [0, 1.0], graph: "energy" }),

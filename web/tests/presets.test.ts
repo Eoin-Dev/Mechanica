@@ -69,6 +69,27 @@ describe("preset behaviour at the shipped settings", () => {
     expect(speeds[1]).toBeLessThan(speeds[0] * 0.1);
   });
 
+  it("Sun, Earth & Moon remains a moving barycentric hierarchy", () => {
+    const w = find("Sun, Earth & Moon").build();
+    const sun = w.bodies.find((b) => b.name === "Sun")!;
+    const earth = w.bodies.find((b) => b.name === "Earth")!;
+    const moon = w.bodies.find((b) => b.name === "Moon")!;
+    expect(w.bodies.every((b) => !b.locked)).toBe(true);
+    const sunStart = sun.pos.copy();
+    for (let i = 0; i < 1200; i++) w.step(DT);
+
+    const totalMass = w.bodies.reduce((sum, b) => sum + b.mass, 0);
+    const cx = w.bodies.reduce((sum, b) => sum + b.mass * b.pos.x, 0) / totalMass;
+    const cy = w.bodies.reduce((sum, b) => sum + b.mass * b.pos.y, 0) / totalMass;
+    expect(Math.hypot(cx, cy)).toBeLessThan(1e-8);
+    expect(w.momentum().length()).toBeLessThan(1e-7);
+    expect(sun.pos.distTo(sunStart)).toBeGreaterThan(0.01);
+    expect(sun.pos.distTo(earth.pos)).toBeGreaterThan(3.5);
+    expect(sun.pos.distTo(earth.pos)).toBeLessThan(4.5);
+    expect(earth.pos.distTo(moon.pos)).toBeGreaterThan(0.1);
+    expect(earth.pos.distTo(moon.pos)).toBeLessThan(0.4);
+  });
+
   it("the wrecking ball still demolishes the tower", () => {
     const w = find("Wrecking ball").build();
     const bricks = w.bodies.filter((b) => b.mass === 0.4);
