@@ -430,8 +430,11 @@ cache.
 The graph dock shows:
 
 - energy: kinetic, potential, total;
-- momentum: magnitude, x/y components, and angular momentum;
-- phase space: x-vx or y-vy for the selected body.
+- momentum: magnitude and x/y linear components beside angular momentum in a
+  separate small multiple, so unlike units never share a scale;
+- phase space: x-vx and y-vy for the selected body; and
+- energy drift: numerical change from the scene baseline in percent or joules,
+  with current, maximum magnitude, and five-second mean magnitude readouts.
 
 `App.recordGraphSample()` records every time-series family regardless of which
 one is displayed, so switching modes does not create gaps. Sampling cadence is
@@ -441,12 +444,22 @@ graph sampling and the status-bar drift readout. Physics, edits, direct drags,
 rewind, culling, and whole-world replacement invalidate the revision; camera,
 selection, pointer-preview, and unchanged paused frames retain the result.
 
+The absolute and percentage drift series are sampled from that same cached
+energy result. Percentage drift is unavailable for a near-zero baseline because
+no meaningful relative denominator exists; the dock selects joules in that
+case.
+
 `TimeSeries` keeps named channel arrays with a logical head index. Expired
 history advances the head in O(1); backing arrays are compacted only in blocks.
 It retains a bounded time window and hard point cap, updates an equal-time
 sample in place, clears on backward time, rejects non-finite samples, and lets
-legend clicks hide channels. Rendering uses binary search to find the visible
-range and smooths only shrinking y-axis bounds. Reduced motion snaps the range.
+explicit DOM controls hide channels. Rendering uses binary search to find the
+visible range, places value labels in a dedicated gutter, draws responsive time
+and value grid ticks, and smooths only shrinking y-axis bounds. Each channel
+subset has an independent autoscale, which keeps linear and angular momentum
+dimensionally and visually independent. Reduced motion snaps the range. Exact
+nearest-sample lookup and bounded rolling statistics feed the measurement UI
+without exposing backing-array compaction.
 
 `PhasePlot` stores bounded time/x/vx/y/vy tuples, compacts in blocks, draws one
 axis pair in a square region, and marks the latest point. Selecting a different
@@ -455,12 +468,17 @@ current state, even while paused. Its timestamps let rewind truncate future
 phase points in the same way as the energy and momentum series.
 
 The graph dock supports live following, scroll-back, unmodified-wheel zoom,
-pan, reset, legend toggles, and a resizable splitter. Modified wheel events are
-reserved for document-level page-zoom suppression. The dock avoids redrawing
-unchanged data unless autoscale easing
+pan, reset, explicit pressed channel controls, percent/joule drift units, and a
+resizable splitter. Hovering a time-series graph shows its nearest exact sample;
+clicking or choosing **Pin point** records A and B, then reports time and visible
+channel deltas. The canvas is keyboard focusable: Left/Right and Home/End move
+through samples, Enter pins, and Escape clears measurements. Modified wheel
+events are reserved for document-level page-zoom suppression. The dock avoids
+redrawing unchanged data unless autoscale easing
 is still active. Empty, undersized, or all-hidden plots cancel easing, and the
-retained draw signature includes the live palette revision so a theme/accent
-change repaints a paused graph exactly once.
+retained draw signature includes channel, unit, measurement, view, data, size,
+and live-palette state so each relevant change repaints a paused graph exactly
+once.
 
 ## DOM control system
 
@@ -513,8 +531,9 @@ constant `ICONS` table, not user input.
   active Performance quality label, exact `dE` or approximate `~dE`, and
   pointer coordinates where appropriate. Performance mode suppresses both
   trail drawing and the saved Normal-mode trail-factor readout.
-- **Graph dock:** graph mode, view controls, canvas rendering, legend hit
-  testing, splitter, and contextual gesture hint.
+- **Graph dock:** graph mode, explicit channel/unit controls, exact-sample and
+  two-point measurement, responsive canvas rendering, splitter, and contextual
+  gesture hint.
 - **Inspector:** object/world/view editing described above.
 
 `main.ts` adds a lightweight panel for the physics/render overload message.
@@ -590,20 +609,21 @@ controls use those ink tokens for text and an inset focus stroke while the
 outer focus ring contrasts with the surrounding panel. Extreme black, white,
 and mid-grey custom accents therefore retain safe normal text, filled-control
 ink, and focus cues. Section, guide, preset-category, tour-step, and Help
-headings use the stronger selected `ACCENT` treatment in the colour-led themes;
-Studio instead uses its neutral primary text so the complete interface retains
-one restrained hierarchy. Those headings do not claim the `ACCENT_TEXT`
-guarantee for an extreme custom accent.
+headings use the selected contrast-safe accent treatment and remain readable
+with extreme custom accents.
 Canvas colour strings are memoized by packed colour/alpha value with a bounded
 cache.
 
-Studio is a complete workspace treatment rather than a palette-only swap. It
-uses layered charcoal surfaces, one-pixel boundaries, compact neutral buttons,
-inset selected states, rounded cards and dialogs, quieter tabs/chips, and denser
-panel spacing across the toolbar, palette, Inspector, graph dock, Library,
-Settings, Help, formula guide, tour, and transient messages. Physics-object
-colours remain scene controlled. Dark is the fallback for an absent or invalid
-stored theme.
+Studio is a complete Mechanica instrument-workbench treatment rather than a
+palette-only swap. Cool graphite canvas, toolbar, panel, card, dock, and overlay
+layers remain visibly distinct. A luminous measurement-blue accent marks the
+brand, active-tool rail, selected tabs/segments, range thumbs, live channels,
+focus and hover edges. Rounded compact controls and precise edge highlights
+retain the modern workspace feel without flattening the interface into one
+neutral surface. The treatment spans the toolbar, palette, Inspector, graph
+dock, Library, Settings, Help, formula guide, tour, and transient messages.
+Physics-object colours remain scene controlled. Dark is the fallback for an
+absent or invalid stored theme.
 
 The bottom status row renders each item in its own separated segment. It shows
 grammatical body, anchor, link, and contact counts, the active Performance

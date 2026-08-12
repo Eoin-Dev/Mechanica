@@ -12,6 +12,11 @@ describe("theme contrast invariants", () => {
     expect(theme.THEME_NAMES).toContain("studio");
     expect(theme.THEME_NAMES).not.toContain("original");
     expect(css).toContain(':root[data-theme="studio"]');
+    theme.setTheme("studio");
+    expect(Math.max(...theme.ACCENT) - Math.min(...theme.ACCENT)).toBeGreaterThan(80);
+    expect(theme.PANEL).not.toEqual(theme.PANEL_LIGHT);
+    expect(theme.PANEL_LIGHT).not.toEqual(theme.PANEL_HOVER);
+    expect(css).toMatch(/\[data-theme="studio"\] \.tool-btn\.active[^}]*inset 3px 0 var\(--accent\)/s);
   });
   it("keeps faint normal text readable on both panel surfaces", () => {
     for (const name of theme.THEME_NAMES) {

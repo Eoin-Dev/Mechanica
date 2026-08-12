@@ -152,10 +152,13 @@ describe("graph dock retained state", () => {
         },
         energySeries: new TimeSeries(["KE", "PE", "Total"]),
         momentumSeries: new TimeSeries(["|p|", "px", "py", "L"]),
+        energyDriftPercentSeries: new TimeSeries(["dE"]),
+        energyDriftAbsoluteSeries: new TimeSeries(["dE"]),
         phasePlot: new PhasePlot(),
         resizeCanvas() {}, saveSettings() {}, toast() {}, setGraphMode() {},
       } as unknown as App;
       app.energySeries.add(0, { KE: 1, PE: 2, Total: 3 });
+      app.energySeries.add(1, { KE: 2, PE: 3, Total: 5 });
 
       const main = document.createElement("div");
       const splitter = document.createElement("div");
@@ -190,6 +193,21 @@ describe("graph dock retained state", () => {
       theme.setTheme(originalTheme === "light" ? "dark" : "light");
       dock.refresh();
       expect(clears).toBeGreaterThan(firstDraw);
+
+      const ke = root.querySelector<HTMLButtonElement>('[data-channel="KE"]')!;
+      expect(ke.getAttribute("aria-pressed")).toBe("true");
+      ke.click();
+      expect(ke.getAttribute("aria-pressed")).toBe("false");
+
+      canvas.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowLeft", bubbles: true,
+      }));
+      canvas.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter", bubbles: true,
+      }));
+      expect(root.querySelector(".graph-readout")?.textContent).toContain("A:");
+      expect(root.querySelector<HTMLButtonElement>(".graph-pin-btn")?.disabled)
+        .toBe(false);
     } finally {
       theme.setTheme(originalTheme);
       getContext.mockRestore();

@@ -2,7 +2,7 @@
  * the DOM chrome.
  *
  * Four palettes: "dark" (neutral dark greys, the default), "void", "light",
- * and "studio" (quiet modern productivity chrome). setTheme swaps
+ * and "studio" (Mechanica's instrument-workbench chrome). setTheme swaps
  * every exported binding in place - importers read them per draw, so the
  * next frame picks the new palette up - and mirrors the chrome colours
  * into CSS variables.
@@ -58,18 +58,18 @@ const LIGHT: Palette = {
   ACC_COLOR: [205, 125, 25], FORCE_COLOR: [200, 55, 55],
 };
 
-// Studio: a quiet, tool-first workspace. Near-neutral layered surfaces,
-// low-contrast dividers and restrained monochrome selection states follow the
-// modern desktop productivity language without borrowing product branding.
-// Physics vectors retain semantic hues so the simulator remains legible.
+// Studio: Mechanica's instrument workbench. Cool graphite layers create clear
+// depth while a luminous measurement-blue accent identifies active tools,
+// selected controls, focus, and live data. Physics vectors retain their own
+// semantic hues so the stronger interface identity never muddies the scene.
 const STUDIO: Palette = {
-  BG: [20, 20, 20], PANEL: [29, 29, 29], PANEL_LIGHT: [41, 41, 41],
-  PANEL_HOVER: [52, 52, 52], OUTLINE: [53, 53, 53], ACCENT: [205, 205, 205],
-  ACCENT_HOT: [235, 235, 235], ACCENT_DARK: [58, 58, 58],
-  TEXT: [235, 235, 235], TEXT_DIM: [171, 171, 171], TEXT_FAINT: [151, 151, 151],
-  GOOD: [117, 190, 130], WARN: [226, 190, 92], BAD: [226, 108, 108],
-  GRID: [28, 28, 28], GRID_MAJOR: [39, 39, 39], AXIS: [66, 66, 66],
-  SELECTION: [215, 215, 215], VEL_COLOR: [120, 210, 130],
+  BG: [13, 16, 21], PANEL: [23, 27, 34], PANEL_LIGHT: [34, 40, 49],
+  PANEL_HOVER: [46, 54, 65], OUTLINE: [57, 66, 79], ACCENT: [91, 169, 255],
+  ACCENT_HOT: [135, 197, 255], ACCENT_DARK: [32, 72, 116],
+  TEXT: [238, 242, 247], TEXT_DIM: [171, 181, 194], TEXT_FAINT: [151, 163, 178],
+  GOOD: [105, 205, 145], WARN: [241, 192, 84], BAD: [239, 107, 117],
+  GRID: [24, 29, 37], GRID_MAJOR: [38, 46, 57], AXIS: [70, 83, 99],
+  SELECTION: [112, 190, 255], VEL_COLOR: [112, 220, 151],
   ACC_COLOR: [235, 170, 90], FORCE_COLOR: [235, 110, 110],
 };
 
