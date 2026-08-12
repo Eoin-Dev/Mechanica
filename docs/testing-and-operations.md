@@ -151,7 +151,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`scene-guards.test.ts`](../web/tests/scene-guards.test.ts) | Numeric/boolean/colour/name/ID guards and limits, collection-resource caps, duplicate object-ID repair within each identity namespace, anchor normalization, settings and link ranges, malformed container shapes, field/driver defaults, missing/self link rejection, and stepping after damaged input. |
 | [`robustness.test.ts`](../web/tests/robustness.test.ts) | Scene deserialization defaults, divergence reporting, object colours, closest-point geometry, and kinematic dragged-body wall sweeping. |
 | [`scene-storage.test.ts`](../web/tests/scene-storage.test.ts) | Unicode name normalization, millisecond/suffix save collisions, save/load/list, discriminated cancellation/invalid/oversize/storage outcomes, upload and collection limits, quota reporting, metadata, damaged payload handling, rollback/error semantics, rename behavior, orphan metadata, and deletion. |
-| [`settings-guards.test.ts`](../web/tests/settings-guards.test.ts) | `sanitizeSettings` type filtering, enum/hex validation, collection limits, and layout/font clamping. |
+| [`settings-guards.test.ts`](../web/tests/settings-guards.test.ts) | `sanitizeSettings` type filtering, base-theme and legacy-Studio handling, enum/hex validation, collection limits, and layout/font clamping. |
 | [`rewind.test.ts`](../web/tests/rewind.test.ts) | Digest-prefiltered structural keyframes versus exactly verified dynamic deltas, forced digest collisions, exact reconstruction including evolved angles, 48 MB/entry bounds and oversize rejection, changing structures, key reclamation, and frame-back behavior. |
 | [`app-lifecycle.test.ts`](../web/tests/app-lifecycle.test.ts) | Exact pre-edit transactions after simulation, undoable replacement routes and atomic failures, history byte limits, first-failure physics batching, strict time jumps, phase/trail rewind cleanup, playback/reset, persisted-settings guards, Performance-mode trail suppression/restoration, energy baselines, live-state energy-cache invalidation, graph sampling, and paused-loop energy behavior. |
 
@@ -191,8 +191,8 @@ with the behavior it protects rather than an exact assertion count.
 | [`tour.test.ts`](../web/tests/tour.test.ts) | Tour construction, first-visit behavior, progress/finish, settings persistence, and cleanup. |
 | [`tour-spotlight.test.ts`](../web/tests/tour-spotlight.test.ts) | Multi-target spotlight tiling, clipping, rings, viewport placement, and responsive target geometry. |
 | [`panel-accessibility.test.ts`](../web/tests/panel-accessibility.test.ts) | Toolbar/graph icon names, play state labels, unchanged-clock write suppression, separated grammatical status counts with internal trail/subdivision indicators absent, revealed/dynamically bounded graph-splitter metadata, retained-graph palette invalidation, and shortcut badges excluded from name computation. |
-| [`settings-accessibility.test.ts`](../web/tests/settings-accessibility.test.ts) | Studio appearance choice and obsolete-choice absence, circular accent-swatch styling plus selection/focus behavior, built-in preset full-card activation and independent description expansion, persistent single-flight scene import across rerenders, compact checkbox sizing, and safe new-tab third-party notice behavior. |
-| [`theme-contrast.test.ts`](../web/tests/theme-contrast.test.ts) | Complete Studio/Dark/Void/Light surface/text combinations, Studio's distinct monochrome layers, and black, white, and intermediate custom accents meet text, neutral-focus, accent/accent-dark ink, and filled-control focus-cue thresholds. |
+| [`settings-accessibility.test.ts`](../web/tests/settings-accessibility.test.ts) | Three base-theme choices followed by the independent Studio toggle, globally circular accent-swatch styling plus selection/focus behavior, built-in preset full-card activation and independent description expansion, persistent single-flight scene import across rerenders, compact checkbox sizing, and safe new-tab third-party notice behavior. |
+| [`theme-contrast.test.ts`](../web/tests/theme-contrast.test.ts) | Complete Dark/Void/Light surface/text combinations, Studio-layer selector/border invariants, and black, white, and intermediate custom accents meet text, neutral-focus, accent/accent-dark ink, and filled-control focus-cue thresholds. |
 | [`tour-modal.test.ts`](../web/tests/tour-modal.test.ts) | App-shell inertness, pointer blocking, focus trapping/restoration, active-step progress, live announcements, and modal cleanup. |
 | [`zoom-accessibility.test.ts`](../web/tests/zoom-accessibility.test.ts) | Page-zoom-restricting viewport metadata, global modified wheel/keyboard/gesture suppression, canvas-only unmodified wheel/touch zoom, restored strong heading accents, mobile heading presence, and selectable reference content. |
 
@@ -329,8 +329,8 @@ unrelated edits:
   do not page-zoom, while unmodified simulation/graph wheels and their scoped
   touch gestures still zoom at the pointer.
 - Check phone layout, real touch pan/pinch gestures, 200% text scaling, reduced
-  motion, dyslexic font, Studio/Dark/Void/Light themes, and extreme custom
-  accents.
+  motion, dyslexic font, Void/Dark/Light with Studio mode both off and on, and
+  extreme custom accents.
 
 Document any resulting behavior change in present tense in the appropriate
 handbook page; do not append a release history to these pages.

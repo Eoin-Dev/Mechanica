@@ -41,6 +41,15 @@ describe("sanitizeSettings", () => {
     expect(sanitizeSettings({ theme: "original" }).theme).toBeUndefined();
   });
 
+  it("migrates the former Studio palette to Dark plus Studio mode", () => {
+    expect(sanitizeSettings({ theme: "studio" })).toEqual({
+      theme: "dark", studio_mode: true,
+    });
+    expect(sanitizeSettings({ theme: "studio", studio_mode: false })).toEqual({
+      studio_mode: false, theme: "dark",
+    });
+  });
+
   it("keeps every theme this build does have", () => {
     for (const name of THEME_NAMES) {
       expect(sanitizeSettings({ theme: name }).theme).toBe(name);
@@ -114,6 +123,8 @@ describe("sanitizeSettings", () => {
     expect(sanitizeSettings({ perf_mode: false }).perf_mode).toBe(false);
     expect(sanitizeSettings({ perf_mode: "yes" }).perf_mode).toBeUndefined();
     expect(sanitizeSettings({ cull: 1 }).cull).toBeUndefined();
+    expect(sanitizeSettings({ studio_mode: true }).studio_mode).toBe(true);
+    expect(sanitizeSettings({ studio_mode: "yes" }).studio_mode).toBeUndefined();
   });
 
   it("ignores fields it does not know about", () => {
@@ -126,7 +137,7 @@ describe("sanitizeSettings", () => {
     const full = {
       adaptive_dt: true, inspector_visible: false, inspector_w: 320,
       dock_h: 200, tour_done: true, theme: "light", dyslexic_font: false,
-      cull: true, perf_mode: false, drag_hits_walls: true,
+      cull: true, perf_mode: false, drag_hits_walls: true, studio_mode: true,
       accent: "#24427c", custom_accents: ["#b81f1f"], font_scale: 1.1,
     };
     expect(sanitizeSettings(JSON.parse(JSON.stringify(full)))).toEqual(full);

@@ -72,9 +72,13 @@ describe("App construction", () => {
   });
 
   it("keeps a valid persisted setting", () => {
-    localStorage.setItem("mechanica.settings", '{"theme":"light","cull":false}');
+    localStorage.setItem("mechanica.settings",
+      '{"theme":"light","studio_mode":true,"cull":false}');
     const app = makeApp();
     expect(app.settings.theme).toBe("light");
+    expect(app.settings.studio_mode).toBe(true);
+    expect(document.documentElement.dataset.theme).toBe("light");
+    expect(document.documentElement.dataset.studio).toBe("true");
     expect(app.cullEnabled).toBe(false);
   });
 });

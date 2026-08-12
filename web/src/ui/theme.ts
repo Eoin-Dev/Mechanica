@@ -1,15 +1,15 @@
 /** Visual theme shared by canvas drawing and (via CSS custom properties)
  * the DOM chrome.
  *
- * Four palettes: "dark" (neutral dark greys, the default), "void", "light",
- * and "studio" (layered monochrome workspace chrome). setTheme swaps
- * every exported binding in place - importers read them per draw, so the
- * next frame picks the new palette up - and mirrors the chrome colours
- * into CSS variables.
+ * Three palettes: "dark" (neutral dark greys, the default), "void", and
+ * "light". Studio is deliberately not a palette: it is a CSS presentation
+ * layer that can sit over any of these base colours. setTheme swaps every
+ * exported binding in place - importers read them per draw, so the next frame
+ * picks the new palette up - and mirrors the chrome colours into CSS variables.
  */
 import { Color } from "../engine/body";
 
-export type ThemeName = "dark" | "void" | "light" | "studio";
+export type ThemeName = "dark" | "void" | "light";
 
 interface Palette {
   BG: Color; PANEL: Color; PANEL_LIGHT: Color; PANEL_HOVER: Color;
@@ -58,22 +58,8 @@ const LIGHT: Palette = {
   ACC_COLOR: [205, 125, 25], FORCE_COLOR: [200, 55, 55],
 };
 
-// Studio: a layered monochrome workspace. Charcoal, graphite, warm slate,
-// pewter and silver create depth without turning every surface into the same
-// grey. Physics vectors retain their semantic hues for simulator legibility.
-const STUDIO: Palette = {
-  BG: [15, 15, 16], PANEL: [27, 28, 30], PANEL_LIGHT: [43, 42, 41],
-  PANEL_HOVER: [59, 60, 63], OUTLINE: [75, 74, 72], ACCENT: [196, 194, 189],
-  ACCENT_HOT: [238, 236, 231], ACCENT_DARK: [77, 76, 74],
-  TEXT: [239, 239, 238], TEXT_DIM: [177, 177, 175], TEXT_FAINT: [158, 158, 157],
-  GOOD: [117, 190, 130], WARN: [226, 190, 92], BAD: [226, 108, 108],
-  GRID: [27, 27, 28], GRID_MAJOR: [42, 42, 43], AXIS: [76, 76, 78],
-  SELECTION: [215, 213, 208], VEL_COLOR: [120, 210, 130],
-  ACC_COLOR: [235, 170, 90], FORCE_COLOR: [235, 110, 110],
-};
-
 const PALETTES: Record<ThemeName, Palette> = {
-  dark: DARK, void: VOID, light: LIGHT, studio: STUDIO,
+  dark: DARK, void: VOID, light: LIGHT,
 };
 
 export const THEME_NAMES = Object.keys(PALETTES) as ThemeName[];

@@ -38,14 +38,16 @@ describe("accent swatch semantics", () => {
     expect(document.activeElement).toBe(replacement);
   });
 
-  it("keeps Studio accent choices circular despite its button treatment", () => {
+  it("keeps accent choices circular in every appearance", () => {
+    expect(css).toMatch(/button\.swatch\s*\{[^}]*border-radius:\s*50%/s);
+    expect(css).toMatch(/button\.swatch-add\s*\{[^}]*border-radius:\s*50%/s);
     expect(css).toMatch(
-      /\[data-theme="studio"\] button\.swatch,[\s\S]*?\[data-theme="studio"\] button\.swatch-add\s*\{[^}]*border-radius:\s*50%/s);
+      /\[data-studio="true"\] button\.swatch,[\s\S]*?\[data-studio="true"\] button\.swatch-add\s*\{[^}]*border-radius:\s*50%/s);
   });
 });
 
 describe("appearance choices", () => {
-  it("offers Studio and has no obsolete Original appearance", () => {
+  it("offers three base themes with Studio as a following toggle", () => {
     const app = appStub();
     const root = document.createElement("div");
     document.body.replaceChildren(root);
@@ -56,11 +58,20 @@ describe("appearance choices", () => {
       '.settings-group:first-child .segmented')!;
     const choices = [...themeGroup.querySelectorAll<HTMLButtonElement>("button")];
     expect(choices.map((choice) => choice.textContent)).toEqual(
-      ["Studio", "Void", "Dark", "Light"]);
+      ["Void", "Dark", "Light"]);
     expect(root.textContent).not.toContain("Original");
 
-    choices[0].click();
-    expect(app.settings.theme).toBe("studio");
+    choices[2].click();
+    expect(app.settings.theme).toBe("light");
+
+    const studioLabel = [...root.querySelectorAll<HTMLLabelElement>("label.checkbox")]
+      .find((candidate) => candidate.textContent?.includes("Studio mode"))!;
+    const studioToggle = studioLabel.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]')!;
+    expect(themeGroup.compareDocumentPosition(studioLabel) &
+      Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    studioToggle.click();
+    expect(app.settings.studio_mode).toBe(true);
   });
 });
 
@@ -177,7 +188,7 @@ describe("compact checkbox and preset-card styling", () => {
     expect(css).toMatch(
       /\.card-more\s*\{[^}]*position:\s*absolute;[^}]*right:\s*6px;[^}]*bottom:\s*6px;/s);
     expect(css).toMatch(
-      /\[data-theme="studio"\]\s+button\.preset-card-hit[^}]*\{[^}]*background:\s*transparent;/s);
+      /\[data-studio="true"\]\s+button\.preset-card-hit[^}]*\{[^}]*background:\s*transparent;/s);
   });
 });
 

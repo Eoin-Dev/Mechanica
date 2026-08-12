@@ -576,8 +576,8 @@ remain scoped to the canvases.
 
 ## Themes and responsive behavior
 
-`theme.ts` defines named semantic palettes (`studio`, `dark`, `void`, and
-`light`) and exports live colour bindings consumed by canvas renderers. Theme
+`theme.ts` defines three named semantic palettes (`dark`, `void`, and `light`)
+and exports live colour bindings consumed by canvas renderers. Theme
 application updates those bindings, a monotonic palette revision for retained
 Canvas consumers, and CSS custom properties. An optional
 hex accent derives hot/dark variants. Every palette's `TEXT_FAINT` has at least
@@ -594,15 +594,14 @@ with extreme custom accents.
 Canvas colour strings are memoized by packed colour/alpha value with a bounded
 cache.
 
-Studio is a complete monochrome workspace treatment rather than a palette-only
-swap. Charcoal, graphite, warm slate, pewter, and silver give the canvas,
-toolbar, panels, cards, dock, and overlays visibly different depths. Its bright
-silver accent identifies active tools, selected tabs/segments, range thumbs,
-focus, and hover edges without introducing a coloured glow. Rounded compact
-controls, circular accent-colour choices, and precise boundaries retain the
-modern workspace feel across the toolbar, palette, Inspector, graph dock,
-Library, Settings, Help, formula guide, tour, and transient messages.
-Physics-object colours remain scene controlled.
+Studio mode is an independent presentation layer over the selected base
+palette. It adds gradients, layered surface treatments, rounded compact
+controls, stronger visible button/card boundaries, and workspace spacing while
+leaving the background, panel, text, grid, semantic, and default accent colours
+owned by Void, Dark, or Light. Changing the base theme while Studio mode is on
+therefore immediately restyles the same Studio layout with that palette.
+Accent-colour choices remain circular in every appearance. Physics-object
+colours remain scene controlled.
 Dark is the fallback for an absent or invalid stored theme.
 
 The bottom status row renders each item in its own separated segment. It shows
