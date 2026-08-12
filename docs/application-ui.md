@@ -213,11 +213,10 @@ does not mark a body held or touch its motion. Once active:
 - while playing, position follows the cursor exactly and `held` makes the body
   infinite-mass to the solvers;
 - the temporary solver-facing velocity is the actual per-frame displacement
-  divided by elapsed pointer time and reduced to one fifth, so ordinary hand
-  motion transfers a controlled amount of energy instead of launching linked
-  systems;
-- a 14 m/s catastrophic bound applies only after that response reduction to
-  contain lost-event or synthetic multi-metre jumps;
+  divided by elapsed pointer time and passed through a smooth speed-sensitive
+  response. Slow positioning stays close to one fifth of hand speed, while
+  faster motion is damped progressively more and approaches a 0.4 m/s solver-
+  facing ceiling, so quick drags cannot proportionally energize linked systems;
 - rod correction feedback across the held rigid component uses the same
   pointer-derived correction rate, rather than dividing a once-per-display-
   frame hand movement by a much shorter solver substep;
@@ -600,9 +599,10 @@ swap. Charcoal, graphite, warm slate, pewter, and silver give the canvas,
 toolbar, panels, cards, dock, and overlays visibly different depths. Its bright
 silver accent identifies active tools, selected tabs/segments, range thumbs,
 focus, and hover edges without introducing a coloured glow. Rounded compact
-controls and precise boundaries retain the modern workspace feel across the
-toolbar, palette, Inspector, graph dock, Library, Settings, Help, formula guide,
-tour, and transient messages. Physics-object colours remain scene controlled.
+controls, circular accent-colour choices, and precise boundaries retain the
+modern workspace feel across the toolbar, palette, Inspector, graph dock,
+Library, Settings, Help, formula guide, tour, and transient messages.
+Physics-object colours remain scene controlled.
 Dark is the fallback for an absent or invalid stored theme.
 
 The bottom status row renders each item in its own separated segment. It shows

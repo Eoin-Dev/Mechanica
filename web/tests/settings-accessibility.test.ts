@@ -37,6 +37,11 @@ describe("accent swatch semantics", () => {
     expect(replacement.getAttribute("aria-pressed")).toBe("true");
     expect(document.activeElement).toBe(replacement);
   });
+
+  it("keeps Studio accent choices circular despite its button treatment", () => {
+    expect(css).toMatch(
+      /\[data-theme="studio"\] button\.swatch,[\s\S]*?\[data-theme="studio"\] button\.swatch-add\s*\{[^}]*border-radius:\s*50%/s);
+  });
 });
 
 describe("appearance choices", () => {

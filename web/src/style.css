@@ -1172,6 +1172,10 @@ kbd {
   border-radius: var(--radius);
   padding: 6px 10px;
 }
+:root[data-theme="studio"] button.swatch,
+:root[data-theme="studio"] button.swatch-add {
+  border-radius: 50%;
+}
 :root[data-theme="studio"] button:hover:not(:disabled):not(.active) {
   background: var(--panel-hover);
 }

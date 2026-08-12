@@ -336,16 +336,18 @@ describe("left-drag preserves velocity", () => {
       controller.updateDrag();
       world.step(1 / 120);
 
-      // The cursor covers 0.1 m in 0.1 s. The deliberate fivefold gentling
-      // therefore presents 0.2 m/s to BOTH the anchor and its rod-connected
-      // bob; the 1/120 s solver substep must not manufacture a 12 m/s lunge.
+      // The cursor covers 0.1 m in 0.1 s. At this gentle 1 m/s hand speed the
+      // speed-sensitive response stays close to the familiar one-fifth value
+      // and is shared by the anchor and its rod-connected bob; the 1/120 s
+      // solver substep must not manufacture a 12 m/s lunge.
       clock.mockReturnValue(100);
       controller.mouse = [20, 0];
       c.motion([20, 0]);
       controller.updateDrag();
       world.step(1 / 120);
 
-      expect(anchor.vel.x).toBeCloseTo(0.2, 10);
+      const expected = 0.2 / Math.hypot(1, 1 / 2);
+      expect(anchor.vel.x).toBeCloseTo(expected, 10);
       expect(Math.abs(bob.vel.x)).toBeLessThan(0.5);
       expect(Math.abs(bob.vel.x)).toBeGreaterThan(0.001);
       expect(anchor.pos.distTo(bob.pos)).toBeCloseTo(1, 4);
@@ -353,6 +355,54 @@ describe("left-drag preserves velocity", () => {
       c.release([20, 0]);
       expect(anchor.vel.length()).toBe(0);
       expect(anchor.kinematicCorrectionRate).toBe(Infinity);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("gentles fast linked-system drags progressively more than slow ones", () => {
+    const clock = vi.spyOn(performance, "now");
+    try {
+      const sample = (rawSpeed: number): { velocity: number; rate: number } => {
+        const { app, world, controller } = makeApp(true);
+        const anchor = new Body(new Vec2(0, 0), 0.1, 1.0);
+        anchor.locked = true;
+        anchor.isAnchor = true;
+        const bob = new Body(new Vec2(0, -1), 0.1, 1.0);
+        world.bodies.push(anchor, bob);
+        world.links.push(new DistanceLink(anchor, bob, 1));
+        app.setSelection([anchor]);
+        const c = controller as unknown as {
+          press(m: [number, number]): void; motion(m: [number, number]): void;
+        };
+
+        clock.mockReturnValue(0);
+        c.press([0, 0]);
+        controller.mouse = [10, 0];
+        c.motion([10, 0]);
+        controller.updateDrag();
+
+        // The next sample is 0.1 s later. At 100 px/m, rawSpeed * 10 pixels
+        // is exactly the requested metres-per-second hand motion.
+        const x = 10 + rawSpeed * 10;
+        clock.mockReturnValue(100);
+        controller.mouse = [x, 0];
+        c.motion([x, 0]);
+        controller.updateDrag();
+        return { velocity: anchor.vel.x, rate: anchor.kinematicCorrectionRate };
+      };
+
+      const slow = sample(0.5);
+      const fast = sample(10);
+      const slowScale = slow.velocity / 0.5;
+      const fastScale = fast.velocity / 10;
+
+      expect(slow.velocity).toBeCloseTo(0.2 * 0.5 / Math.hypot(1, 0.5 / 2), 10);
+      expect(fast.velocity).toBeCloseTo(0.2 * 10 / Math.hypot(1, 10 / 2), 10);
+      expect(fastScale).toBeLessThan(slowScale / 4);
+      expect(fast.velocity).toBeLessThan(0.4);
+      expect(slow.rate * 0.05).toBeCloseTo(slow.velocity, 10);
+      expect(fast.rate * 1.0).toBeCloseTo(fast.velocity, 10);
     } finally {
       clock.mockRestore();
     }
