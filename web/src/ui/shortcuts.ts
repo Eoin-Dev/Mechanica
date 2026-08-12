@@ -167,6 +167,8 @@ export function handleShortcut(e: KeyboardEvent, host: ShortcutHost): boolean {
         app.toggleGraph("Mom." as GraphMode);
       } else if (key === "3") {
         app.toggleGraph("Phase" as GraphMode);
+      } else if (key === "4") {
+        app.toggleGraph("Drift" as GraphMode);
       } else if (key === "-") {
         app.bumpSpeed(0.5);
       } else if (key === "=" || key === "+") {

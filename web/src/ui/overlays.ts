@@ -648,7 +648,7 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
     ["T", "Motion trails"],
     ["D", "Velocity vectors"],
     ["G", "Broadphase debug grid"],
-    ["1 / 2 / 3", "Energy / momentum / phase graph"],
+    ["1 / 2 / 3 / 4", "Energy / momentum / phase / energy-drift graph"],
     ["Scroll / right-drag", "Zoom at cursor / pan"],
     ["\\", "Hide / show the inspector"],
     ["Tab", "Move between controls"],
@@ -687,7 +687,7 @@ const GETTING_STARTED: Array<[string, string, string]> = [
    "custom force fields you write as formulas."],
   ["5", "Measure it",
    "The View tab turns on velocity and force arrows, motion trails, the " +
-   "centre of mass, and live energy, momentum and phase-space graphs. The " +
+   "centre of mass, and live energy, momentum, phase-space and energy-drift graphs. The " +
    "status bar tracks total energy drift so you can see the solver working."],
   ["6", "Keep it",
    "Ctrl+S saves to this browser; the Library exports and imports .json, " +

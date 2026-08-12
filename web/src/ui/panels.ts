@@ -4,9 +4,10 @@ import { Body } from "../engine/body";
 import { SpringLink } from "../engine/links";
 import { TOOL_INFO, TOOL_KEYS, Tool } from "../interact/tools";
 import { DOCK_H_MAX, DOCK_H_MIN, RefreshGroup, button, countNoun, el, isTouch,
-         segmented, slider, splitterDrag } from "./dom";
+         fmt3g, segmented, slider, splitterDrag } from "./dom";
 import { ICONS } from "./icons";
-import { GRAPH_HISTORY_S, GRAPH_WINDOW_S, TimeSeries } from "./plots";
+import { GRAPH_HISTORY_S, GRAPH_WINDOW_S, SeriesSample, TimeSeries,
+         seriesColor } from "./plots";
 import * as theme from "./theme";
 import { css } from "./theme";
 
@@ -269,11 +270,19 @@ export class GraphDock implements Panel {
   private ctx: CanvasRenderingContext2D;
   private hintEl: HTMLElement;
   private liveBtn: HTMLButtonElement;
+  private channelBar: HTMLElement;
+  private readoutEl: HTMLElement;
+  private pinBtn: HTMLButtonElement;
+  private clearPinsBtn: HTMLButtonElement;
   private group = new RefreshGroup();
   private syncSplitterAria: () => void = () => {};
   // time-axis view: zoom (span) and scroll-back position (end; null=live)
   private viewSpan = GRAPH_WINDOW_S;
   private viewEnd: number | null = null;
+  private driftPercent = true;
+  private cursor: SeriesSample | null = null;
+  private pins: number[] = [];
+  private lastMode: GraphMode = "Off";
 
   constructor(app: App, root: HTMLElement, splitter: HTMLElement) {
     this.app = app;
@@ -281,10 +290,10 @@ export class GraphDock implements Panel {
     this.splitter = splitter;
 
     const header = el("div", { class: "dock-header" });
-    header.append(this.group.add(segmented(["Energy", "Mom.", "Phase"],
+    header.append(this.group.add(segmented(["Energy", "Mom.", "Phase", "Drift"],
       () => app.graphMode,
       (v) => app.setGraphMode(v as GraphMode),
-      "Which live graph to display (keys 1, 2, 3)")).root);
+      "Which live graph to display (keys 1, 2, 3, 4)")).root);
     this.hintEl = el("span", { class: "dock-hint" });
     header.append(this.hintEl);
     this.liveBtn = el("button", { class: "primary", text: "Live" });
@@ -299,10 +308,28 @@ export class GraphDock implements Panel {
       { icon: ICONS.close, style: "ghost",
         tooltip: "Close the graph dock." })).root);
 
-    this.canvas = el("canvas");
-    const wrap = el("div", { class: "dock-canvas-wrap" }, this.canvas);
+    this.channelBar = el("div", { class: "graph-controls",
+      "aria-label": "Graph channels and units" });
+    this.buildChannelControls();
+
+    this.canvas = el("canvas", { tabindex: "0", role: "img",
+      "aria-label": "Interactive live graph. Use Left and Right arrows to inspect samples, Enter to pin a point, and Escape to clear measurements." });
+    this.readoutEl = el("div", { class: "graph-readout", role: "status",
+      "aria-live": "polite", "aria-atomic": "true" });
+    this.pinBtn = el("button", { class: "graph-pin-btn", text: "Pin point" });
+    this.pinBtn.type = "button";
+    this.pinBtn.disabled = true;
+    this.pinBtn.addEventListener("click", () => this.pinCursor());
+    this.clearPinsBtn = el("button", { class: "graph-pin-btn", text: "Clear points" });
+    this.clearPinsBtn.type = "button";
+    this.clearPinsBtn.disabled = true;
+    this.clearPinsBtn.addEventListener("click", () => this.clearMeasurements());
+    const tools = el("div", { class: "graph-measure-tools" },
+      this.pinBtn, this.clearPinsBtn);
+    const wrap = el("div", { class: "dock-canvas-wrap" }, this.canvas,
+      this.readoutEl, tools);
     this.ctx = this.canvas.getContext("2d")!;
-    root.append(header, wrap);
+    root.append(header, this.channelBar, wrap);
 
     this.attachViewControls();
 
@@ -338,8 +365,78 @@ export class GraphDock implements Panel {
     });
   }
 
-  /** Wheel = zoom the time axis, drag = scroll back through the retained
-   * history (detaching from the live edge), plain click = legend toggle. */
+  /** Real DOM channel controls replace the old click-only canvas legend.
+   * They expose state to assistive technology and remain usable when the
+   * graph is too narrow to paint a readable legend. */
+  private buildChannelControls(): void {
+    const addSeries = (mode: GraphMode, series: TimeSeries,
+                       channels: readonly string[], label?: string): void => {
+      const group = el("div", { class: "graph-channel-group", "data-mode": mode });
+      if (label !== undefined) group.append(el("span", {
+        class: "graph-channel-label", text: label,
+      }));
+      channels.forEach((channel) => {
+        const index = series.channels.indexOf(channel);
+        const swatch = el("span", { class: "graph-channel-swatch",
+          "aria-hidden": "true" });
+        swatch.style.background = css(seriesColor(index));
+        const control = el("button", { class: "graph-channel", type: "button",
+          "data-channel": channel, "aria-pressed": "true",
+          "aria-label": `Hide ${channel} channel` }, swatch,
+          el("span", { text: channel }));
+        control.addEventListener("click", () => {
+          series.toggleChannel(channel);
+          this.updateChannelControls();
+        });
+        group.append(control);
+      });
+      this.channelBar.append(group);
+    };
+    addSeries("Energy", this.app.energySeries, ["KE", "PE", "Total"]);
+    addSeries("Mom.", this.app.momentumSeries, ["|p|", "px", "py"], "Linear");
+    addSeries("Mom.", this.app.momentumSeries, ["L"], "Angular");
+
+    const unitGroup = el("div", { class: "graph-channel-group graph-unit-group",
+      "data-mode": "Drift" }, el("span", {
+        class: "graph-channel-label", text: "Units",
+      }));
+    for (const [label, percent] of [["%", true], ["J", false]] as const) {
+      const control = el("button", { class: "graph-channel graph-unit",
+        type: "button", text: label, "data-unit": percent ? "percent" : "joules" });
+      control.addEventListener("click", () => {
+        this.driftPercent = percent;
+        this.cursor = null;
+        this.pins = [];
+        this.lastDrawSig = "";
+        this.updateChannelControls();
+      });
+      unitGroup.append(control);
+    }
+    this.channelBar.append(unitGroup);
+  }
+
+  private updateChannelControls(): void {
+    for (const group of this.channelBar.querySelectorAll<HTMLElement>("[data-mode]")) {
+      group.hidden = group.dataset.mode !== this.app.graphMode;
+    }
+    for (const control of this.channelBar.querySelectorAll<HTMLButtonElement>(
+      ".graph-channel[data-channel]")) {
+      const channel = control.dataset.channel!;
+      const series = control.closest<HTMLElement>("[data-mode]")?.dataset.mode === "Energy"
+        ? this.app.energySeries : this.app.momentumSeries;
+      const visible = series.isChannelVisible(channel);
+      control.setAttribute("aria-pressed", String(visible));
+      control.setAttribute("aria-label", `${visible ? "Hide" : "Show"} ${channel} channel`);
+    }
+    for (const control of this.channelBar.querySelectorAll<HTMLButtonElement>(".graph-unit")) {
+      const active = (control.dataset.unit === "percent") === this.driftPercent;
+      control.classList.toggle("active", active);
+      control.setAttribute("aria-pressed", String(active));
+    }
+  }
+
+  /** Wheel zooms the time axis, drag scrolls retained history, hover/focus
+   * inspects exact samples, and click/Enter pins a two-point measurement. */
   private attachViewControls(): void {
     const spanFor = (px: number): number => this.viewSpan * (px / Math.max(1, this.canvas.clientWidth));
 
@@ -376,7 +473,10 @@ export class GraphDock implements Panel {
       }
     });
     this.canvas.addEventListener("pointermove", (e) => {
-      if (dragId !== e.pointerId) return;
+      if (dragId !== e.pointerId) {
+        this.setCursorFromClientX(e.clientX);
+        return;
+      }
       const dx = e.clientX - lastX;
       if (!moved && Math.abs(dx) < 4) return; // not a drag yet
       const series = this.activeSeries();
@@ -389,13 +489,113 @@ export class GraphDock implements Panel {
       if (dragId !== e.pointerId) return;
       dragId = null;
       if (!moved) {
-        // a plain click: toggle legend channels
-        const r = this.canvas.getBoundingClientRect();
-        this.activeSeries()?.legendClick(e.clientX - r.left, e.clientY - r.top);
+        this.setCursorFromClientX(e.clientX);
+        this.pinCursor();
       }
     };
     this.canvas.addEventListener("pointerup", endDrag);
     this.canvas.addEventListener("pointercancel", () => { dragId = null; });
+    this.canvas.addEventListener("pointerleave", () => {
+      if (document.activeElement !== this.canvas) this.setCursor(null);
+    });
+    this.canvas.addEventListener("keydown", (e) => {
+      const series = this.activeSeries();
+      if (series === undefined || series.count === 0) return;
+      if (e.key === "Escape") {
+        this.clearMeasurements();
+        e.preventDefault();
+        return;
+      }
+      if (e.key === "Enter") {
+        this.pinCursor();
+        e.preventDefault();
+        return;
+      }
+      let index = this.cursor?.index ?? series.count - 1;
+      if (e.key === "ArrowLeft") index--;
+      else if (e.key === "ArrowRight") index++;
+      else if (e.key === "Home") index = 0;
+      else if (e.key === "End") index = series.count - 1;
+      else return;
+      index = Math.max(0, Math.min(series.count - 1, index));
+      this.setCursor(series.nearest(series.timeAt(index), this.activeChannels()));
+      e.preventDefault();
+    });
+  }
+
+  private graphView() { return { end: this.viewEnd, span: this.viewSpan }; }
+
+  private activeChannels(): string[] {
+    if (this.app.graphMode === "Energy") return ["KE", "PE", "Total"];
+    if (this.app.graphMode === "Mom.") return ["|p|", "px", "py", "L"];
+    if (this.app.graphMode === "Drift") return ["dE"];
+    return [];
+  }
+
+  private setCursorFromClientX(clientX: number): void {
+    const series = this.activeSeries();
+    if (series === undefined || series.count === 0) {
+      this.setCursor(null);
+      return;
+    }
+    const r = this.canvas.getBoundingClientRect();
+    let localX = clientX - r.left;
+    let localW = r.width;
+    if (this.app.graphMode === "Mom." && r.width >= 620) {
+      const panelW = (r.width - 8) / 2;
+      if (localX > panelW + 8) localX -= panelW + 8;
+      localW = panelW;
+    }
+    const left = localW < 360 ? 42 : 52;
+    const frac = (localX - left) / Math.max(1, localW - left - 10);
+    this.setCursor(series.nearestAtFraction(frac, this.graphView(), this.activeChannels()));
+  }
+
+  private setCursor(sample: SeriesSample | null): void {
+    if (this.cursor?.t === sample?.t && this.cursor?.index === sample?.index) return;
+    this.cursor = sample;
+    this.lastDrawSig = "";
+    this.updateMeasurementReadout();
+  }
+
+  private pinCursor(): void {
+    if (this.cursor === null) return;
+    if (this.pins.length >= 2) this.pins = [];
+    this.pins.push(this.cursor.t);
+    this.lastDrawSig = "";
+    this.updateMeasurementReadout();
+  }
+
+  private clearMeasurements(): void {
+    this.cursor = null;
+    this.pins = [];
+    this.lastDrawSig = "";
+    this.updateMeasurementReadout();
+  }
+
+  private updateMeasurementReadout(): void {
+    const series = this.activeSeries();
+    this.pinBtn.disabled = this.cursor === null;
+    this.clearPinsBtn.disabled = this.pins.length === 0 && this.cursor === null;
+    if (series === undefined) {
+      this.readoutEl.textContent = "";
+      return;
+    }
+    const channels = this.activeChannels().filter((c) => series.isChannelVisible(c));
+    const sampleText = (sample: SeriesSample): string => {
+      const values = channels.map((c) => `${c} ${fmt3g(sample.values[c])}`).join(" · ");
+      return `t ${fmt3g(sample.t)} s${values ? ` · ${values}` : ""}`;
+    };
+    const parts: string[] = [];
+    if (this.cursor !== null) parts.push(sampleText(this.cursor));
+    const a = this.pins[0] === undefined ? null : series.nearest(this.pins[0], channels);
+    const b = this.pins[1] === undefined ? null : series.nearest(this.pins[1], channels);
+    if (a !== null && b === null) parts.push(`A: ${sampleText(a)}`);
+    if (a !== null && b !== null) {
+      const deltas = channels.map((c) => `Delta ${c} ${fmt3g(b.values[c] - a.values[c])}`).join(" · ");
+      parts.push(`A-B: Delta t ${fmt3g(b.t - a.t)} s${deltas ? ` · ${deltas}` : ""}`);
+    }
+    this.readoutEl.textContent = parts.join("   |   ");
   }
 
   /** Clamp a requested right-edge time to the retained history and snap
@@ -410,14 +610,21 @@ export class GraphDock implements Panel {
   private clearData(): void {
     this.app.energySeries.clear();
     this.app.momentumSeries.clear();
+    this.app.energyDriftPercentSeries.clear();
+    this.app.energyDriftAbsoluteSeries.clear();
     this.app.phasePlot.clear();
     this.viewEnd = null;
+    this.clearMeasurements();
   }
 
   /** The time series the current mode plots, or undefined for Phase/Off. */
   private activeSeries(): TimeSeries | undefined {
     if (this.app.graphMode === "Energy") return this.app.energySeries;
     if (this.app.graphMode === "Mom.") return this.app.momentumSeries;
+    if (this.app.graphMode === "Drift") {
+      return this.driftPercent
+        ? this.app.energyDriftPercentSeries : this.app.energyDriftAbsoluteSeries;
+    }
     return undefined;
   }
 
@@ -449,6 +656,20 @@ export class GraphDock implements Panel {
       }
       if (lossy.length > 0) return "Energy is removed by " + lossy.join(", ");
     }
+    if (app.graphMode === "Drift") {
+      const drift = this.driftPercent
+        ? app.energyDriftPercentSeries : app.energyDriftAbsoluteSeries;
+      const stats = drift.stats("dE");
+      if (stats !== null) {
+        const unit = this.driftPercent ? "%" : " J";
+        return `${app.perfMode ? "Approx. · " : ""}` +
+          `Current ${fmt3g(stats.current)}${unit} · max |dE| ` +
+          `${fmt3g(stats.maxAbs)}${unit} · 5 s mean |dE| ` +
+          `${fmt3g(stats.rollingAbs)}${unit}`;
+      }
+      return app.perfMode ? "Performance mode uses approximate energy diagnostics"
+        : "Numerical energy change relative to this scene's starting state";
+    }
     return "";
   }
 
@@ -466,6 +687,19 @@ export class GraphDock implements Panel {
       if (visible) this.syncSplitterAria();
     }
     if (!visible) return;
+    if (this.lastMode !== app.graphMode) {
+      this.lastMode = app.graphMode;
+      this.cursor = null;
+      this.pins = [];
+      this.viewEnd = null;
+      this.lastDrawSig = "";
+    }
+    // A zero-energy baseline has no meaningful percentage denominator.
+    if (app.graphMode === "Drift" && this.driftPercent &&
+        Math.abs(app.baselineEnergy ?? 0) < 1e-9) {
+      this.driftPercent = false;
+    }
+    this.updateChannelControls();
     // The dock maximum follows its parent height. Attribute writes are
     // internally guarded, so this cheap poll also keeps metadata current after
     // viewport/layout changes without creating DOM churn on stable frames.
@@ -497,6 +731,7 @@ export class GraphDock implements Panel {
       app.toast("That part of the graph history has expired - back to live");
     }
     this.liveBtn.hidden = this.viewEnd === null || series === undefined;
+    this.updateMeasurementReadout();
 
     // redraw only when something it depends on changed - between throttled
     // samples and while paused the canvas is already correct. An easing
@@ -505,7 +740,8 @@ export class GraphDock implements Panel {
     const rev = series !== undefined ? series.rev
       : `${app.phasePlot.rev}:${phaseBody?.name ?? ""}`;
     const sig = `${app.graphMode}:${bw}x${bh}:${rev}:p${theme.paletteRevision}:` +
-                 `${this.viewEnd ?? "live"}:${this.viewSpan}`;
+                 `${this.viewEnd ?? "live"}:${this.viewSpan}:u${this.driftPercent}:` +
+                 `c${this.cursor?.t ?? "-"}:m${this.pins.join(",")}`;
     if (sig === this.lastDrawSig && !(series?.easing ?? false)) return;
     this.lastDrawSig = sig;
 
@@ -514,10 +750,47 @@ export class GraphDock implements Panel {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     if (app.graphMode === "Energy") {
-      app.energySeries.draw(ctx, w, h, "Energy (J)", graphView);
+      app.energySeries.draw(ctx, w, h, "Energy (J)", graphView,
+        ["KE", "PE", "Total"], false);
     } else if (app.graphMode === "Mom.") {
-      app.momentumSeries.draw(ctx, w, h,
-        "Momentum p (kg m/s) and angular momentum L", graphView);
+      // Linear and angular momentum have different dimensions and normally
+      // very different magnitudes. Small multiples prevent either from
+      // flattening the other against a shared, physically meaningless scale.
+      const gap = 8;
+      if (w >= 620) {
+        const leftW = Math.floor((w - gap) / 2);
+        const rightW = w - leftW - gap;
+        ctx.save();
+        ctx.beginPath(); ctx.rect(0, 0, leftW, h); ctx.clip();
+        app.momentumSeries.draw(ctx, leftW, h, "Linear momentum (kg m/s)",
+          graphView, ["|p|", "px", "py"], false, false);
+        ctx.restore();
+        ctx.save();
+        ctx.translate(leftW + gap, 0);
+        ctx.beginPath(); ctx.rect(0, 0, rightW, h); ctx.clip();
+        app.momentumSeries.draw(ctx, rightW, h, "Angular momentum (kg m2/s)",
+          graphView, ["L"], false, true);
+        ctx.restore();
+      } else {
+        const topH = Math.max(1, Math.floor((h - gap) / 2));
+        const bottomH = Math.max(1, h - topH - gap);
+        ctx.save();
+        ctx.beginPath(); ctx.rect(0, 0, w, topH); ctx.clip();
+        app.momentumSeries.draw(ctx, w, topH, "Linear momentum (kg m/s)",
+          graphView, ["|p|", "px", "py"], false, false);
+        ctx.restore();
+        ctx.save();
+        ctx.translate(0, topH + gap);
+        ctx.beginPath(); ctx.rect(0, 0, w, bottomH); ctx.clip();
+        app.momentumSeries.draw(ctx, w, bottomH, "Angular momentum (kg m2/s)",
+          graphView, ["L"], false, true);
+        ctx.restore();
+      }
+    } else if (app.graphMode === "Drift") {
+      const drift = this.driftPercent
+        ? app.energyDriftPercentSeries : app.energyDriftAbsoluteSeries;
+      drift.draw(ctx, w, h, this.driftPercent ? "Energy drift (%)" : "Energy drift (J)",
+        graphView, ["dE"], false, false, true);
     } else if (app.graphMode === "Phase") {
       const name = phaseBody ? phaseBody.name : "select a body";
       // the body name once, centred above both plots (not repeated in each)
@@ -533,5 +806,47 @@ export class GraphDock implements Panel {
       app.phasePlot.draw(ctx, x0, top, side, side, "x");
       app.phasePlot.draw(ctx, x0 + side + 12, top, side, side, "y");
     }
+    this.drawMeasurementLines(ctx, w, h, series, graphView);
+  }
+
+  private drawMeasurementLines(ctx: CanvasRenderingContext2D, w: number, h: number,
+                               series: TimeSeries | undefined,
+                               view: { end: number | null; span: number }): void {
+    if (series === undefined || series.count === 0) return;
+    const t1 = view.end ?? series.lastT;
+    const t0 = view.end === null
+      ? Math.max(series.firstT, t1 - view.span) : t1 - view.span;
+    const ranges: Array<[number, number]> = [];
+    if (this.app.graphMode === "Mom." && w >= 620) {
+      const panelW = Math.floor((w - 8) / 2);
+      const left = panelW < 360 ? 42 : 52;
+      ranges.push([left, panelW - 10], [panelW + 8 + left, w - 10]);
+    } else {
+      const left = w < 360 ? 42 : 52;
+      ranges.push([left, w - 10]);
+    }
+    const xFor = (t: number, range: [number, number]): number => range[0] +
+      ((t - t0) / Math.max(1e-9, t1 - t0)) * (range[1] - range[0]);
+    ctx.save();
+    ctx.lineWidth = 1;
+    for (let i = 0; i < this.pins.length; i++) {
+      for (const range of ranges) {
+        const x = xFor(this.pins[i], range);
+        if (x < range[0] || x > range[1]) continue;
+        ctx.strokeStyle = css(i === 0 ? theme.WARN : theme.ACCENT);
+        ctx.setLineDash([5, 3]);
+        ctx.beginPath(); ctx.moveTo(x, 20); ctx.lineTo(x, h - 18); ctx.stroke();
+      }
+    }
+    if (this.cursor !== null) {
+      for (const range of ranges) {
+        const x = xFor(this.cursor.t, range);
+        if (x < range[0] || x > range[1]) continue;
+        ctx.strokeStyle = css(theme.TEXT_DIM);
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath(); ctx.moveTo(x, 20); ctx.lineTo(x, h - 18); ctx.stroke();
+      }
+    }
+    ctx.restore();
   }
 }

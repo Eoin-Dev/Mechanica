@@ -1206,8 +1206,8 @@ export class Inspector implements Panel {
         "Show the cells collision detection uses to find candidate pairs (G).");
 
     this.body.append(section("Graph dock"));
-    this.add(segmented(["Off", "Energy", "Mom.", "Phase"], () => app.graphMode,
+    this.add(segmented(["Off", "Energy", "Mom.", "Phase", "Drift"], () => app.graphMode,
       (v) => app.setGraphMode(v as GraphMode),
-      "Live plot shown along the bottom of the screen (keys 1, 2, 3)."));
+      "Live plot shown along the bottom of the screen (keys 1, 2, 3, 4)."));
   }
 }
