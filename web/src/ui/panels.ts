@@ -3,8 +3,8 @@ import { App, GraphMode, Panel } from "../app";
 import { Body } from "../engine/body";
 import { SpringLink } from "../engine/links";
 import { TOOL_INFO, TOOL_KEYS, Tool } from "../interact/tools";
-import { DOCK_H_MAX, DOCK_H_MIN, RefreshGroup, button, el, isTouch, segmented,
-         slider, splitterDrag } from "./dom";
+import { DOCK_H_MAX, DOCK_H_MIN, RefreshGroup, button, countNoun, el, isTouch,
+         segmented, slider, splitterDrag } from "./dom";
 import { ICONS } from "./icons";
 import { GRAPH_HISTORY_S, GRAPH_WINDOW_S, TimeSeries } from "./plots";
 import * as theme from "./theme";
@@ -224,34 +224,30 @@ export class HintBar implements Panel {
     for (const b of app.world.bodies) b.isAnchor ? nAnchors++ : nBodies++;
     const nLinks = app.world.links.length;
     const drift = app.energyDriftText();
-    const res = app.playing && app.qNow > 1 ? `dt/${app.qNow}   ` : "";
-    // The trail vertex budget moves itself with the frame rate, so say so
-    // when it has moved: otherwise a trail quietly getting coarser on a
-    // struggling machine looks like a rendering fault rather than the
-    // deliberate trade it is. Only shown once it is off 1x.
-    const q = app.trailQuality;
-    const trail = app.view.trails && !app.perfMode && (q < 0.95 || q > 1.05)
-      ? `trail ${q.toFixed(1)}x   ` : "";
     // Performance mode changes what the numbers beside it MEAN - the drift
     // readout will wander, and the substeps in the inspector are not what is
     // running - so it says so rather than leaving that a mystery.
-    const perf = app.perfMode ? `perf ${app.performanceQualityLabel}   ` : "";
-    const stats = `${nBodies} bodies   ${nAnchors} anchors   ${nLinks} links   ` +
-                  `${app.world.contacts.length} contacts   ` +
-                  `${res}${trail}${perf}${drift}`;
+    const items = [countNoun(nBodies, "body", "bodies"),
+                   countNoun(nAnchors, "anchor"),
+                   countNoun(nLinks, "link"),
+                   countNoun(app.world.contacts.length, "contact")];
+    if (app.perfMode) items.push(`perf ${app.performanceQualityLabel}`);
+    if (drift.trim() !== "") items.push(drift.trim());
     // the cursor position is a hover readout - meaningless on any touch
     // device, and the room is better spent on the counts
-    let status = stats;
     if (!isTouch()) {
       const [mx, my] = app.controller.mouse;
       const wp = app.camera.toWorld(mx, my);
-      status = `${wp.x.toFixed(2)}, ${wp.y.toFixed(2)} m   |   ${stats}`;
+      items.unshift(`${wp.x.toFixed(2)}, ${wp.y.toFixed(2)} m`);
     }
     // only touch the DOM when the text actually changed - a paused scene
     // rewrote this identical string sixty times a second
-    if (status !== this.lastStatus) {
-      this.lastStatus = status;
-      this.status.textContent = status;
+    const signature = items.join("\u0000");
+    if (signature !== this.lastStatus) {
+      this.lastStatus = signature;
+      this.status.replaceChildren(...items.map((text, index) =>
+        el("span", { class: `status-item${index === 0 ? " status-first" : ""}`,
+                     text })));
     }
     const barW = this.hint.parentElement?.clientWidth ?? 0;
     if (hint !== this.lastHint || barW !== this.lastBarW) {

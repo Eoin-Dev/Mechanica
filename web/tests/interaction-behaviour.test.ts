@@ -106,7 +106,9 @@ describe("dragging cannot inject unbounded energy", () => {
     // a violent flick right across the canvas in one frame
     send(canvas, "pointermove", sx + 5000, sy);
     app.controller.updateDrag();
-    expect(b.vel.length()).toBeCloseTo(14, 6); // exactly DRAG_VEL_CAP
+    // The response curve has already reduced ordinary motion; this is the
+    // catastrophic lost-event bound that remains afterward.
+    expect(b.vel.length()).toBeCloseTo(14, 6);
     send(canvas, "pointerup", sx + 5000, sy);
   });
 

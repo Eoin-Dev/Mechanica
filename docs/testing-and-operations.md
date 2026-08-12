@@ -168,13 +168,13 @@ with the behavior it protects rather than an exact assertion count.
 
 | Test file | Protected behavior |
 | --- | --- |
-| [`drag-velocity.test.ts`](../web/tests/drag-velocity.test.ts) | Primary drag preserves pre-grab velocity across paused/running/release/abort paths while temporary motion remains solver-visible; linked response is uncapped in Normal mode and chase-capped only in Performance mode. |
+| [`drag-velocity.test.ts`](../web/tests/drag-velocity.test.ts) | Primary drag preserves pre-grab velocity across paused/running/release/abort paths while temporary motion remains solver-visible; its one-fifth hand response and pointer-time rod correction avoid substep-amplified anchor lunges, while linked response is chase-capped only in Performance mode. |
 | [`interaction-behaviour.test.ts`](../web/tests/interaction-behaviour.test.ts) | Click activation threshold, bounded drag energy, continuously maintained parked velocity aims, filtered box select, pick ordering/tolerance, distance-based trail sampling, plot restart/non-finite rejection, auto-fit guarantees, and deleted gesture targets. |
 | [`selection-delete.test.ts`](../web/tests/selection-delete.test.ts) | Selection/hover/pending-state reconciliation after removal, linear batched deletion with cascades, and duplication of bodies/walls/links/drivers. |
 | [`camera.test.ts`](../web/tests/camera.test.ts) | World/screen inverse transforms, panning, cursor-anchored zoom/clamps, visible bounds, and nice scale-bar formatting. |
 | [`body-culling.test.ts`](../web/tests/body-culling.test.ts) | Scene-centred runaway classification, outward-motion requirement, orbit/furniture/held protections, and non-finite cleanup. |
 | [`trail.test.ts`](../web/tests/trail.test.ts) | Ring-buffer order/capacity, timestamps, expiration, resize, serial continuity, and conservative bounds. |
-| [`trail-render.test.ts`](../web/tests/trail-render.test.ts) | Narrow non-`Path2D` full/coarse world-grid, spatial-debug and disjoint-body strokes plus Performance-mode trail omission, visible/off-screen Normal-mode trail drawing, bounded dense paths, budgets, fading, stable decimation, endpoint/corner retention, and curve fidelity. |
+| [`trail-render.test.ts`](../web/tests/trail-render.test.ts) | Narrow non-`Path2D` full/coarse world-grid, spatial-debug and disjoint-body strokes, square-root-free link slack classification, Performance-mode trail omission, visible/off-screen Normal-mode trail drawing, bounded dense paths, budgets, fading, stable decimation, endpoint/corner retention, and curve fidelity. |
 | [`timeseries-render.test.ts`](../web/tests/timeseries-render.test.ts) | Visible-window selection, scrolling/zoom ranges, legends, axis labels, single points, hidden channels, autoscale, history retention, redraw state, and easing termination for non-plottable data. |
 | [`render-invalidation.test.ts`](../web/tests/render-invalidation.test.ts) | Opaque 2D context creation, idempotent and Performance-DPR backing resize, retained unchanged/empty-playback frames, paused 20 Hz scheduling with immediate invalidation wake, adaptive maximum level, overloaded alternate presentation, render-cost decay, and every redraw route. |
 
@@ -190,9 +190,9 @@ with the behavior it protects rather than an exact assertion count.
 | [`inspector-rebuild.test.ts`](../web/tests/inspector-rebuild.test.ts) | Inspector structure keys and stable refreshes, body counts independent from cascading link deletion, semantic tabs/reopen/splitter metadata, desktop visibility persistence, accessible driver removal, Performance-mode solver/trail disabled states and banner copy, and exact delayed-input transactions after intervening simulation. |
 | [`tour.test.ts`](../web/tests/tour.test.ts) | Tour construction, first-visit behavior, progress/finish, settings persistence, and cleanup. |
 | [`tour-spotlight.test.ts`](../web/tests/tour-spotlight.test.ts) | Multi-target spotlight tiling, clipping, rings, viewport placement, and responsive target geometry. |
-| [`panel-accessibility.test.ts`](../web/tests/panel-accessibility.test.ts) | Toolbar/graph icon names, play state labels, unchanged-clock write suppression, Performance-mode suppression of the Normal-mode trail-quality status, revealed/dynamically bounded graph-splitter metadata, retained-graph palette invalidation, and shortcut badges excluded from name computation. |
-| [`settings-accessibility.test.ts`](../web/tests/settings-accessibility.test.ts) | Accent-swatch selection/focus, built-in preset full-card activation and independent description expansion, persistent single-flight scene import across rerenders, compact checkbox sizing, and safe new-tab third-party notice behavior. |
-| [`theme-contrast.test.ts`](../web/tests/theme-contrast.test.ts) | Every theme surface/text combination and black, white, and intermediate custom accents meet text, neutral-focus, accent/accent-dark ink, and filled-control focus-cue thresholds. |
+| [`panel-accessibility.test.ts`](../web/tests/panel-accessibility.test.ts) | Toolbar/graph icon names, play state labels, unchanged-clock write suppression, separated grammatical status counts with internal trail/subdivision indicators absent, revealed/dynamically bounded graph-splitter metadata, retained-graph palette invalidation, and shortcut badges excluded from name computation. |
+| [`settings-accessibility.test.ts`](../web/tests/settings-accessibility.test.ts) | Studio appearance choice and obsolete-choice absence, accent-swatch selection/focus, built-in preset full-card activation and independent description expansion, persistent single-flight scene import across rerenders, compact checkbox sizing, and safe new-tab third-party notice behavior. |
+| [`theme-contrast.test.ts`](../web/tests/theme-contrast.test.ts) | Complete Studio/Dark/Void/Light surface/text combinations and black, white, and intermediate custom accents meet text, neutral-focus, accent/accent-dark ink, and filled-control focus-cue thresholds. |
 | [`tour-modal.test.ts`](../web/tests/tour-modal.test.ts) | App-shell inertness, pointer blocking, focus trapping/restoration, active-step progress, live announcements, and modal cleanup. |
 | [`zoom-accessibility.test.ts`](../web/tests/zoom-accessibility.test.ts) | Page-zoom-restricting viewport metadata, global modified wheel/keyboard/gesture suppression, canvas-only unmodified wheel/touch zoom, restored strong heading accents, mobile heading presence, and selectable reference content. |
 
@@ -329,7 +329,8 @@ unrelated edits:
   do not page-zoom, while unmodified simulation/graph wheels and their scoped
   touch gestures still zoom at the pointer.
 - Check phone layout, real touch pan/pinch gestures, 200% text scaling, reduced
-  motion, dyslexic font, light/dark themes, and extreme custom accents.
+  motion, dyslexic font, Studio/Dark/Void/Light themes, and extreme custom
+  accents.
 
 Document any resulting behavior change in present tense in the appropriate
 handbook page; do not append a release history to these pages.

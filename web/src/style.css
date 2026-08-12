@@ -1,20 +1,20 @@
 /* Mechanica web UI — the desktop app's dark theme as CSS. */
 :root {
-  --bg: rgb(24, 26, 31);
-  --panel: rgb(33, 36, 43);
-  --panel-light: rgb(43, 47, 56);
-  --panel-hover: rgb(52, 57, 68);
-  --outline: rgb(58, 63, 74);
-  --accent: rgb(86, 156, 214);
-  --accent-hot: rgb(120, 180, 235);
-  --accent-dark: rgb(50, 90, 125);
-  --accent-text: rgb(86, 156, 214);
-  --focus: rgb(86, 156, 214);
+  --bg: rgb(18, 18, 18);
+  --panel: rgb(28, 28, 28);
+  --panel-light: rgb(38, 38, 38);
+  --panel-hover: rgb(49, 49, 49);
+  --outline: rgb(58, 58, 58);
+  --accent: rgb(92, 156, 214);
+  --accent-hot: rgb(125, 180, 235);
+  --accent-dark: rgb(52, 88, 122);
+  --accent-text: rgb(92, 156, 214);
+  --focus: rgb(92, 156, 214);
   --accent-ink: rgb(0, 0, 0);
   --accent-dark-ink: rgb(255, 255, 255);
-  --text: rgb(226, 229, 234);
-  --text-dim: rgb(152, 158, 168);
-  --text-faint: rgb(145, 151, 161);
+  --text: rgb(229, 229, 229);
+  --text-dim: rgb(156, 156, 156);
+  --text-faint: rgb(145, 145, 145);
   --good: rgb(120, 190, 120);
   --warn: rgb(230, 200, 90);
   /* --warn at low alpha, for banner fills. Set alongside --warn by
@@ -218,7 +218,17 @@ body {
 /* the tool hint yields (shrinks, then ellipsizes) so the stats never get
    pushed offscreen; the stats keep their size */
 #hint-text { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-#status-text { flex: none; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+#status-text {
+  flex: none;
+  display: flex;
+  align-items: center;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.status-item { padding: 0 7px; line-height: 16px; }
+.status-item:first-child { padding-left: 0; }
+.status-item + .status-item { border-left: 1px solid var(--outline); }
+.status-item:last-child { padding-right: 0; }
 
 /* ------------------------------------------------------------- controls */
 button {
@@ -1100,6 +1110,191 @@ kbd {
   font-size: calc(11px * var(--fs, 1));
 }
 
+/* --------------------------------------------------------- Studio theme
+   A complete workspace treatment rather than a colour swap: restrained
+   charcoal layers, quiet one-pixel boundaries, soft rounded controls and
+   inset active states. It applies to every chrome surface while canvas
+   object/vector colours remain semantic and user-controlled. */
+:root[data-theme="studio"] { --radius: 9px; }
+:root[data-theme="studio"] #toolbar {
+  height: 50px;
+  gap: 8px;
+  padding: 0 12px;
+}
+:root[data-theme="studio"] .brand {
+  font-size: calc(15px * var(--fs, 1));
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin-right: 12px;
+}
+:root[data-theme="studio"] #palette {
+  width: 58px;
+  gap: 4px;
+  padding-top: 8px;
+}
+:root[data-theme="studio"] #palette hr { width: 34px; margin: 4px 0; }
+:root[data-theme="studio"] #inspector,
+:root[data-theme="studio"] #dock,
+:root[data-theme="studio"] #hintbar,
+:root[data-theme="studio"] #palette,
+:root[data-theme="studio"] #toolbar { background: var(--panel); }
+:root[data-theme="studio"] #dock { padding: 9px 12px 10px; gap: 7px; }
+:root[data-theme="studio"] #hintbar {
+  height: 32px;
+  padding: 0 12px;
+}
+:root[data-theme="studio"] .status-item { padding-inline: 9px; }
+
+:root[data-theme="studio"] button {
+  background: var(--panel-light);
+  border-color: transparent;
+  border-radius: var(--radius);
+  padding: 6px 10px;
+}
+:root[data-theme="studio"] button:hover:not(:disabled):not(.active) {
+  background: var(--panel-hover);
+}
+:root[data-theme="studio"] button.primary,
+:root[data-theme="studio"] button.active {
+  border-color: var(--outline);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.035);
+}
+:root[data-theme="studio"] button.icon { width: 34px; height: 34px; padding: 7px; }
+:root[data-theme="studio"] .tool-btn {
+  width: 42px;
+  height: 40px;
+  color: var(--text-dim);
+  background: transparent;
+}
+:root[data-theme="studio"] .tool-btn:hover:not(:disabled):not(.active) {
+  color: var(--text);
+  background: var(--panel-light);
+}
+:root[data-theme="studio"] .tool-btn.active { color: var(--text); }
+
+:root[data-theme="studio"] input[type="text"],
+:root[data-theme="studio"] input[type="number"],
+:root[data-theme="studio"] .math-edit math-field,
+:root[data-theme="studio"] .accent-popover {
+  background: var(--panel-light);
+  border-color: var(--outline);
+}
+:root[data-theme="studio"] input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--panel-hover);
+  border-color: transparent;
+}
+:root[data-theme="studio"] input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: var(--panel-hover);
+  border-color: transparent;
+}
+:root[data-theme="studio"] input[type="range"]::-webkit-slider-thumb {
+  background: var(--text);
+  border-color: var(--panel);
+  box-shadow: 0 0 0 1px var(--outline);
+}
+:root[data-theme="studio"] input[type="range"]::-moz-range-thumb {
+  background: var(--text);
+  border-color: var(--panel);
+  box-shadow: 0 0 0 1px var(--outline);
+}
+:root[data-theme="studio"] label.checkbox { gap: 8px; }
+
+:root[data-theme="studio"] .segmented {
+  gap: 2px;
+  padding: 3px;
+  overflow: visible;
+  background: var(--bg);
+  border-color: var(--outline);
+}
+:root[data-theme="studio"] .segmented button {
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 8px;
+}
+:root[data-theme="studio"] .segmented button + button { border-left: 0; }
+
+:root[data-theme="studio"] .tabs {
+  gap: 4px;
+  padding: 6px;
+  background: var(--panel);
+  border-bottom-color: var(--outline);
+}
+:root[data-theme="studio"] .tabs .tab-list { gap: 3px; }
+:root[data-theme="studio"] .tabs button {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 7px 5px;
+  color: var(--text-dim);
+}
+:root[data-theme="studio"] .tabs button.active {
+  color: var(--text);
+  background: var(--panel-light);
+  border-color: var(--outline);
+}
+:root[data-theme="studio"] .tabs button.collapse-btn { width: 32px; }
+:root[data-theme="studio"] .inspector-body { padding: 12px 14px 22px; }
+:root[data-theme="studio"] .section {
+  color: var(--text-dim);
+  font-size: calc(10.5px * var(--fs, 1));
+  font-weight: 650;
+  letter-spacing: 0.055em;
+}
+:root[data-theme="studio"] .type-group,
+:root[data-theme="studio"] .guide-example,
+:root[data-theme="studio"] .preset-card,
+:root[data-theme="studio"] .settings-group {
+  border-radius: 12px;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.025);
+}
+:root[data-theme="studio"] .type-group { background: var(--panel-light); }
+
+:root[data-theme="studio"] .overlay { background: rgba(0, 0, 0, 0.72); }
+:root[data-theme="studio"] .overlay-panel {
+  border-radius: 16px;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.48);
+}
+:root[data-theme="studio"] .overlay-header { padding: 14px 18px; }
+:root[data-theme="studio"] .overlay-header h2 {
+  font-size: calc(15px * var(--fs, 1));
+  letter-spacing: -0.01em;
+}
+:root[data-theme="studio"] .overlay-body { padding: 16px 18px; }
+:root[data-theme="studio"] .cat-chips { gap: 5px; }
+:root[data-theme="studio"] .cat-chips button {
+  border-radius: 9px;
+  color: var(--text-dim);
+}
+:root[data-theme="studio"] .cat-chips button.active { color: var(--text); }
+:root[data-theme="studio"] .card-grid { gap: 12px; }
+:root[data-theme="studio"] .preset-card { padding: 12px 14px; }
+:root[data-theme="studio"] button.preset-card-hit,
+:root[data-theme="studio"] button.preset-card-hit:hover:not(:disabled) {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+:root[data-theme="studio"] .preset-card:hover {
+  border-color: var(--outline);
+  box-shadow: inset 0 0 0 1px var(--outline);
+}
+:root[data-theme="studio"] .preset-card .cat,
+:root[data-theme="studio"] .guide-h,
+:root[data-theme="studio"] .help-heading,
+:root[data-theme="studio"] .help-cols h3 { color: var(--text); }
+:root[data-theme="studio"] .settings-group { padding: 5px 14px 13px; }
+:root[data-theme="studio"] .toast,
+:root[data-theme="studio"] .tour-card {
+  border-radius: 14px;
+  box-shadow: 0 14px 42px rgba(0, 0, 0, 0.46);
+}
+:root[data-theme="studio"] kbd {
+  background: var(--panel-light);
+  border-color: var(--outline);
+  border-radius: 6px;
+}
+
 /* --------------------------------------------------------------- mobile */
 /* drawer handle: the only way into the inspector on phones (shown by the
    inspector itself while the drawer is closed; hidden elsewhere) */
@@ -1164,6 +1359,10 @@ kbd {
   #toolbar { gap: 4px; padding: 0 6px; }
   .speed-ctrl { width: 132px !important; }
   #hintbar { gap: 8px; padding: 0 8px; }
+  :root[data-theme="studio"] #inspector.mobile-open {
+    top: 50px;
+    bottom: 32px;
+  }
 }
 
 /* keyboard shortcut badges mean nothing on touch-first devices (phones

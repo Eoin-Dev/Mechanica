@@ -112,6 +112,13 @@ export class Body {
   // body acts as infinite mass (it stays pinned under the cursor) but
   // everything else still collides with it. Never serialized.
   held = false;
+  // transient: rate used to convert rod position corrections back into
+  // velocity while this body is moved kinematically by a pointer. A finite
+  // value is measured from the pointer interval, not the much shorter solver
+  // substep, preventing a display-frame position jump from becoming a huge
+  // artificial impulse. Propagated across its rigid-link component. Never
+  // serialized.
+  kinematicCorrectionRate = Infinity;
   // transient: speed limit (m/s) enforced at the end of every substep
   // while finite. The drag controller sets it on everything link-connected
   // to a grabbed body so user interaction - which is not physical anyway -

@@ -344,7 +344,7 @@ prevent startup.
 | `inspector_w` | Finite number clamped to `240..620` CSS pixels. |
 | `dock_h` | Finite number clamped to `110..1200` CSS pixels. |
 | `tour_done` | Boolean first-visit marker. |
-| `theme` | `original`, `dark`, `void`, or `light`; default dark when applied. |
+| `theme` | `studio`, `dark`, `void`, or `light`; default dark when applied. |
 | `dyslexic_font` | Boolean body-font preference. |
 | `cull` | Boolean runaway-culling preference, default on. |
 | `perf_mode` | Boolean adaptive performance solver/render preference, default off. The chosen runtime level is not persisted. |

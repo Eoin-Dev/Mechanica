@@ -13,7 +13,7 @@
  * simulation to show motion, and restores the play state it found.
  */
 import type { App } from "../app";
-import { ModalFocus, el, isTouch } from "./dom";
+import { ModalFocus, countNoun, el, isTouch } from "./dom";
 
 /** One stop on the tour.
  *
@@ -258,7 +258,7 @@ export class Tour {
     const last = this.index === this.steps.length - 1;
     let text = (isTouch() && step.touchBody) || step.body;
     if (this.index === 0) {
-      text += ` ${this.steps.length} quick stops and you are done.`;
+      text += ` ${countNoun(this.steps.length, "quick stop")} and you are done.`;
     }
 
     this.card.replaceChildren();

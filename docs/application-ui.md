@@ -212,9 +212,15 @@ does not mark a body held or touch its motion. Once active:
 - while paused, position changes only and the original velocity is untouched;
 - while playing, position follows the cursor exactly and `held` makes the body
   infinite-mass to the solvers;
-- the temporary velocity equals actual per-frame displacement divided by
-  elapsed pointer time, capped at `DRAG_VEL_CAP`, so contacts and constraints
-  see consistent relative motion;
+- the temporary solver-facing velocity is the actual per-frame displacement
+  divided by elapsed pointer time and reduced to one fifth, so ordinary hand
+  motion transfers a controlled amount of energy instead of launching linked
+  systems;
+- a 14 m/s catastrophic bound applies only after that response reduction to
+  contain lost-event or synthetic multi-metre jumps;
+- rod correction feedback across the held rigid component uses the same
+  pointer-derived correction rate, rather than dividing a once-per-display-
+  frame hand movement by a much shorter solver substep;
 - in Normal mode, transitively link-connected bodies receive the solver's full
   constraint/contact response, so pendulums and chains do not trail behind an
   artificial chase-speed ceiling;
@@ -571,7 +577,7 @@ remain scoped to the canvases.
 
 ## Themes and responsive behavior
 
-`theme.ts` defines named semantic palettes (`original`, `dark`, `void`, and
+`theme.ts` defines named semantic palettes (`studio`, `dark`, `void`, and
 `light`) and exports live colour bindings consumed by canvas renderers. Theme
 application updates those bindings, a monotonic palette revision for retained
 Canvas consumers, and CSS custom properties. An optional
@@ -584,11 +590,26 @@ controls use those ink tokens for text and an inset focus stroke while the
 outer focus ring contrasts with the surrounding panel. Extreme black, white,
 and mid-grey custom accents therefore retain safe normal text, filled-control
 ink, and focus cues. Section, guide, preset-category, tour-step, and Help
-headings deliberately use the stronger selected `ACCENT` treatment rather
-than the softened contrast-adjusted text variant; those headings do not claim
-the `ACCENT_TEXT` guarantee for an extreme custom accent.
+headings use the stronger selected `ACCENT` treatment in the colour-led themes;
+Studio instead uses its neutral primary text so the complete interface retains
+one restrained hierarchy. Those headings do not claim the `ACCENT_TEXT`
+guarantee for an extreme custom accent.
 Canvas colour strings are memoized by packed colour/alpha value with a bounded
 cache.
+
+Studio is a complete workspace treatment rather than a palette-only swap. It
+uses layered charcoal surfaces, one-pixel boundaries, compact neutral buttons,
+inset selected states, rounded cards and dialogs, quieter tabs/chips, and denser
+panel spacing across the toolbar, palette, Inspector, graph dock, Library,
+Settings, Help, formula guide, tour, and transient messages. Physics-object
+colours remain scene controlled. Dark is the fallback for an absent or invalid
+stored theme.
+
+The bottom status row renders each item in its own separated segment. It shows
+grammatical body, anchor, link, and contact counts, the active Performance
+profile when applicable, energy drift, and the pointer coordinate on wider
+screens. Renderer trail quality and internal physics-step subdivision are not
+user-facing status items.
 
 The stylesheet owns:
 

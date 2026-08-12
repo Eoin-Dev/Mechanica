@@ -1,9 +1,10 @@
 /** Trail rendering: adaptive gradient bands, off-screen culling, vertex
  * decimation and unbroken continuity between bands. Driven through the real
  * drawWorld() with a recording canvas stub (no DOM canvas needed). */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";
+import { DistanceLink, SpringLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
 import { Camera } from "../src/render/camera";
 import { ViewSettings, drawGrid, drawWorld } from "../src/render/draw";
@@ -214,6 +215,29 @@ describe("body rendering", () => {
     expect(fillArgs.length).toBe(200);
     expect(strokeArgs.every((path) => path === undefined)).toBe(true);
     expect(fillArgs.every((path) => path === undefined)).toBe(true);
+  });
+});
+
+describe("link rendering", () => {
+  it("classifies slack links without per-link distance square roots", () => {
+    const distance = vi.spyOn(Vec2.prototype, "distTo");
+    try {
+      const a = new Body(new Vec2(-1, 0), 0.1, 1);
+      const b = new Body(new Vec2(0, 0), 0.1, 1);
+      const c = new Body(new Vec2(1, 0), 0.1, 1);
+      const world = worldWith(a, b, c);
+      world.links.push(new SpringLink(a, b, 10, 0, 2, true));
+      const rope = new DistanceLink(b, c, 2);
+      rope.isRope = true;
+      world.links.push(rope);
+      const noTrails = new ViewSettings();
+      noTrails.grid = false;
+      drawWorld(recCtx().ctx, new Camera(800, 600), world, noTrails, [], null,
+        new Map(), 800, 600);
+      expect(distance).not.toHaveBeenCalled();
+    } finally {
+      distance.mockRestore();
+    }
   });
 });
 

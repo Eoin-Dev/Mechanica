@@ -14,7 +14,7 @@ import { PRESETS, Preset } from "./scene/presets";
 import { CanvasController } from "./interact/tools";
 import { GRAPH_MAX_POINTS, GRAPH_WINDOW_S, PhasePlot, TimeSeries } from "./ui/plots";
 import { DOCK_H_MAX, DOCK_H_MIN, INSPECTOR_W_MAX, INSPECTOR_W_MIN,
-         reducedMotion } from "./ui/dom";
+         countNoun, reducedMotion } from "./ui/dom";
 import * as theme from "./ui/theme";
 import { THEME_NAMES, ThemeName, css, setAccent, setTheme } from "./ui/theme";
 
@@ -992,7 +992,7 @@ export class App {
       this.edit(() => {
         for (const b of bodies) Object.assign(b, this.clipboardProps);
       });
-      this.toast(`Pasted properties onto ${bodies.length} body(ies)`);
+      this.toast(`Pasted properties onto ${countNoun(bodies.length, "body", "bodies")}`);
     }
   }
 
@@ -1150,7 +1150,7 @@ export class App {
       for (const b of bodies) b.locked = target;
     });
     const n = bodies.length;
-    this.toast(`${target ? "Locked" : "Unlocked"} ${n} ${n !== 1 ? "bodies" : "body"}`);
+    this.toast(`${target ? "Locked" : "Unlocked"} ${countNoun(n, "body", "bodies")}`);
   }
 
   // ----------------------------------------------------------------- misc UI

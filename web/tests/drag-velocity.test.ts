@@ -8,7 +8,7 @@
  * somewhere does not also fling it. Setting a velocity on purpose is the
  * right-drag / green-arrow gesture, which is untouched.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";
 import { DistanceLink } from "../src/engine/links";
@@ -310,6 +310,52 @@ describe("left-drag preserves velocity", () => {
     // and the bob was NOT restored to anything: it is free, uncapped physics
     expect(bob.speedCap).toBe(Infinity);
     expect(bob.held).toBe(false);
+  });
+
+  it("uses pointer time, not the solver substep, for a dragged anchor's rod response", () => {
+    const clock = vi.spyOn(performance, "now");
+    try {
+      const { app, world, controller } = makeApp(true);
+      world.gravity = 0;
+      const anchor = new Body(new Vec2(0, 0), 0.1, 1.0);
+      anchor.locked = true;
+      anchor.isAnchor = true;
+      const bob = new Body(new Vec2(0, -1), 0.1, 1.0);
+      world.bodies.push(anchor, bob);
+      world.links.push(new DistanceLink(anchor, bob, 1));
+      app.setSelection([anchor]);
+      const c = controller as unknown as {
+        press(m: [number, number]): void; motion(m: [number, number]): void;
+        release(m: [number, number]): void;
+      };
+
+      clock.mockReturnValue(0);
+      c.press([0, 0]);
+      controller.mouse = [10, 0];
+      c.motion([10, 0]);
+      controller.updateDrag();
+      world.step(1 / 120);
+
+      // The cursor covers 0.1 m in 0.1 s. The deliberate fivefold gentling
+      // therefore presents 0.2 m/s to BOTH the anchor and its rod-connected
+      // bob; the 1/120 s solver substep must not manufacture a 12 m/s lunge.
+      clock.mockReturnValue(100);
+      controller.mouse = [20, 0];
+      c.motion([20, 0]);
+      controller.updateDrag();
+      world.step(1 / 120);
+
+      expect(anchor.vel.x).toBeCloseTo(0.2, 10);
+      expect(Math.abs(bob.vel.x)).toBeLessThan(0.5);
+      expect(Math.abs(bob.vel.x)).toBeGreaterThan(0.001);
+      expect(anchor.pos.distTo(bob.pos)).toBeCloseTo(1, 4);
+
+      c.release([20, 0]);
+      expect(anchor.vel.length()).toBe(0);
+      expect(anchor.kinematicCorrectionRate).toBe(Infinity);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("keeps the linked-body chase cap as a Performance-mode tradeoff", () => {

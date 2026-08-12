@@ -4,10 +4,15 @@ import css from "../src/style.css?raw";
 
 afterEach(() => {
   theme.setAccent(null);
-  theme.setTheme("original");
+  theme.setTheme("dark");
 });
 
 describe("theme contrast invariants", () => {
+  it("ships Studio as a complete theme and removes the obsolete Original palette", () => {
+    expect(theme.THEME_NAMES).toContain("studio");
+    expect(theme.THEME_NAMES).not.toContain("original");
+    expect(css).toContain(':root[data-theme="studio"]');
+  });
   it("keeps faint normal text readable on both panel surfaces", () => {
     for (const name of theme.THEME_NAMES) {
       theme.setAccent(null);
