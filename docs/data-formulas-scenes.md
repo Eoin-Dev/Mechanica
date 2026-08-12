@@ -328,8 +328,8 @@ the buffer clears and reports `too-large`; if a keyframe/delta pair cannot fit,
 it retains the latest state as a fresh keyframe when that snapshot fits.
 
 Rewind state is session-only and is not written to local storage or scene JSON.
-Energy, percentage/absolute energy-drift, momentum, and phase-portrait samples
-carry simulation time and truncate future samples when the world rewinds.
+Energy, momentum, and phase-portrait samples carry simulation time and truncate
+future samples when the world rewinds.
 
 ## Browser settings
 

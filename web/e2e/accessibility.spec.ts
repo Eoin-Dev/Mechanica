@@ -41,26 +41,9 @@ test("keyboard controls expose state, tabs, and splitter values", async ({ page 
   await page.keyboard.press("Enter");
   const pause = page.getByRole("button", { name: /Pause the simulation/ });
   await expect(pause).toHaveAttribute("aria-pressed", "true");
-  await page.waitForTimeout(100);
   await page.keyboard.press("Space");
   await expect(page.getByRole("button", { name: /Start the simulation/ }))
     .toHaveAttribute("aria-pressed", "false");
-
-  const viewTabForGraph = page.getByRole("tab", { name: "View" });
-  await viewTabForGraph.click();
-  await page.getByRole("tabpanel", { name: "View" })
-    .getByRole("button", { name: "Energy", exact: true }).click();
-  const graph = page.getByRole("img", { name: /Interactive live graph/ });
-  await expect(graph).toBeVisible();
-  const keChannel = page.getByRole("button", { name: "Hide KE channel" });
-  await expect(keChannel).toHaveAttribute("aria-pressed", "true");
-  await keChannel.click();
-  await expect(page.getByRole("button", { name: "Show KE channel" }))
-    .toHaveAttribute("aria-pressed", "false");
-  await graph.focus();
-  await page.keyboard.press("ArrowLeft");
-  await page.keyboard.press("Enter");
-  await expect(page.locator(".graph-readout")).toContainText("A:");
 
   const selectionTab = page.getByRole("tab", { name: "Selection" });
   await selectionTab.focus();
@@ -169,14 +152,8 @@ test("320 CSS pixels and 200% application text remain contained", async ({ page 
   await skipFirstRunTour(page, { theme: "studio" });
   await page.goto("/");
   await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
-  await page.getByRole("button", { name: "Open Inspector" }).click();
-  await page.getByRole("tab", { name: "View" }).click();
-  await page.getByRole("tabpanel", { name: "View" })
-    .getByRole("button", { name: "Energy", exact: true }).click();
-  await page.getByRole("button", { name: "Hide Inspector" }).click();
 
   await expect(page.locator("#canvas")).toBeVisible();
-  await expect(page.getByRole("img", { name: /Interactive live graph/ })).toBeVisible();
   const contained = await page.evaluate(() => ({
     documentFits: document.documentElement.scrollWidth <= window.innerWidth,
     canvasFits: (() => {

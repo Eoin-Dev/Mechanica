@@ -54,7 +54,7 @@ const PHYSICS_BUDGET_S = 0.045;
 const MAX_CATCHUP_FRAMES = 3.0;
 const SETTINGS_KEY = "mechanica.settings";
 
-export type GraphMode = "Off" | "Energy" | "Mom." | "Phase" | "Drift";
+export type GraphMode = "Off" | "Energy" | "Mom." | "Phase";
 
 export interface Settings {
   adaptive_dt?: boolean;
@@ -238,8 +238,6 @@ export class App {
   trails = new Map<number, Trail>();
   energySeries = new TimeSeries(["KE", "PE", "Total"]);
   momentumSeries = new TimeSeries(["|p|", "px", "py", "L"]);
-  energyDriftPercentSeries = new TimeSeries(["dE"]);
-  energyDriftAbsoluteSeries = new TimeSeries(["dE"]);
   phasePlot = new PhasePlot();
   private phaseBodyId: number | null = null;
   graphMode: GraphMode = "Off";
@@ -634,8 +632,6 @@ export class App {
     // trim graphs back to the rewound time instead of wiping them
     this.energySeries.truncate(world.time);
     this.momentumSeries.truncate(world.time);
-    this.energyDriftPercentSeries.truncate(world.time);
-    this.energyDriftAbsoluteSeries.truncate(world.time);
     this.phasePlot.truncate(world.time);
   }
 
@@ -765,8 +761,6 @@ export class App {
     this.trails.clear();
     this.energySeries.clear();
     this.momentumSeries.clear();
-    this.energyDriftPercentSeries.clear();
-    this.energyDriftAbsoluteSeries.clear();
     this.phasePlot.clear();
     this.clearHistory();
     this.rewindUnavailable = false;
@@ -830,14 +824,7 @@ export class App {
     if (this.world.time === 0.0) {
       this.initialSnapshot = after;
       this.baselineEnergy = this.energyNow().total;
-      this.energyDriftPercentSeries.clear();
-      this.energyDriftAbsoluteSeries.clear();
     }
-    // An edit can change plotted values without advancing simulated time.
-    // Force an equal-time replacement sample so an open graph never presents
-    // the pre-edit state under the current clock value.
-    this.lastGraphSampleT = -Infinity;
-    if (this.graphMode !== "Off") this.recordGraphSample();
     this.onSelectionChange(); // structure may have changed: rebuild inspector
     if (result === "too-large") {
       this.toast("This scene is too large to keep undo history");
@@ -1171,10 +1158,7 @@ export class App {
     this.graphMode = mode;
     // seed the plot with the current state so it draws immediately, even
     // before the simulation is started
-    if (mode !== "Off") {
-      this.lastGraphSampleT = -Infinity;
-      this.recordGraphSample();
-    }
+    if (mode !== "Off") this.recordGraphSample();
     this.onWorldReplaced(); // panels re-check dock visibility
   }
 
@@ -1757,15 +1741,6 @@ export class App {
     // switching graph views never leaves gaps in the data
     const e = this.energyNow();
     this.energySeries.add(this.world.time, { KE: e.ke, PE: e.pe, Total: e.total });
-    if (this.baselineEnergy !== null) {
-      const dE = e.total - this.baselineEnergy;
-      this.energyDriftAbsoluteSeries.add(this.world.time, { dE });
-      if (Math.abs(this.baselineEnergy) >= 1e-9) {
-        this.energyDriftPercentSeries.add(this.world.time, {
-          dE: (100 * dE) / Math.abs(this.baselineEnergy),
-        });
-      }
-    }
     const p = this.world.momentum();
     this.momentumSeries.add(this.world.time, {
       "|p|": p.length(), px: p.x, py: p.y, L: this.world.angularMomentum(),

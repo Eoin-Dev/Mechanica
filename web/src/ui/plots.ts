@@ -9,6 +9,14 @@ import { css } from "./theme";
 // runtime theme change is picked up by the next draw.
 const EXTRA_SERIES: readonly Color[] = [[170, 140, 230], [110, 200, 210]];
 
+interface LegendHit {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  channel: string;
+}
+
 /** Per-channel line colour. */
 export function seriesColor(i: number): Color {
   const k = i % (4 + EXTRA_SERIES.length);
@@ -52,24 +60,10 @@ export interface GraphView {
   span: number;
 }
 
-/** One exact retained sample, used by the graph dock's pointer and keyboard
- * readout without exposing the series' compacted backing arrays. */
-export interface SeriesSample {
-  index: number;
-  t: number;
-  values: Record<string, number>;
-}
-
-export interface SeriesStats {
-  current: number;
-  maxAbs: number;
-  rollingAbs: number;
-}
-
 /** Rolling window of named channels sampled against simulation time.
  *
- * Channel visibility is controlled by the graph dock's explicit DOM buttons;
- * hidden channels are excluded from autoscale so the visible ones fill the
+ * Channels can be toggled on/off by clicking their legend entries; hidden
+ * channels are excluded from the autoscale so the visible ones fill the
  * plot.
  */
 export class TimeSeries {
@@ -90,10 +84,8 @@ export class TimeSeries {
   easing = false;
   private historyS: number;
   private maxlen: number;
-  // Each channel subset owns its smoothed range. This matters for small
-  // multiples such as linear/angular momentum: sharing one autoscale would
-  // make the second plot inherit the first plot's incompatible units.
-  private views = new Map<string, [number, number]>();
+  private legendHits: LegendHit[] = [];
+  private view: [number, number] | null = null; // smoothed y-range
 
   constructor(channels: string[], historyS = GRAPH_HISTORY_S, maxlen = 10000) {
     this.channels = channels;
@@ -119,65 +111,6 @@ export class TimeSeries {
     return this.data.get(channel)!.slice(this.head);
   }
 
-  isChannelVisible(channel: string): boolean {
-    return this.data.has(channel) && !this.hidden.has(channel);
-  }
-
-  setChannelVisible(channel: string, visible: boolean): void {
-    if (!this.data.has(channel) || visible === !this.hidden.has(channel)) return;
-    if (visible) this.hidden.delete(channel);
-    else this.hidden.add(channel);
-    this.views.clear();
-    this.rev++;
-  }
-
-  toggleChannel(channel: string): void {
-    this.setChannelVisible(channel, !this.isChannelVisible(channel));
-  }
-
-  /** Nearest retained sample to an exact time. */
-  nearest(t: number, channels: readonly string[] = this.channels): SeriesSample | null {
-    if (this.count === 0 || !Number.isFinite(t)) return null;
-    const after = Math.min(this.count - 1, this.lowerBound(t));
-    const before = Math.max(0, after - 1);
-    const i = Math.abs(this.timeAt(before) - t) <= Math.abs(this.timeAt(after) - t)
-      ? before : after;
-    const values: Record<string, number> = {};
-    for (const channel of channels) values[channel] = this.valueAt(channel, i);
-    return { index: i, t: this.timeAt(i), values };
-  }
-
-  /** Map a horizontal plot fraction to the nearest sample in the current
-   * live or detached time window. */
-  nearestAtFraction(frac: number, view?: GraphView,
-                    channels: readonly string[] = this.channels): SeriesSample | null {
-    if (this.count === 0) return null;
-    const f = Math.max(0, Math.min(1, frac));
-    const t1 = view?.end ?? this.lastT;
-    const t0 = view?.end === null || view === undefined
-      ? Math.max(this.firstT, t1 - (view?.span ?? GRAPH_WINDOW_S))
-      : t1 - view.span;
-    return this.nearest(t0 + (t1 - t0) * f, channels);
-  }
-
-  /** Current, all-history maximum magnitude, and five-second moving mean
-   * magnitude for a channel. */
-  stats(channel: string, rollingSeconds = 5): SeriesStats | null {
-    const d = this.data.get(channel);
-    if (d === undefined || this.count === 0) return null;
-    let maxAbs = 0;
-    for (let i = this.head; i < d.length; i++) maxAbs = Math.max(maxAbs, Math.abs(d[i]));
-    const cutoff = this.lastT - rollingSeconds;
-    const start = this.head + this.lowerBound(cutoff);
-    let total = 0;
-    for (let i = start; i < d.length; i++) total += Math.abs(d[i]);
-    return {
-      current: d[d.length - 1],
-      maxAbs,
-      rollingAbs: total / Math.max(1, d.length - start),
-    };
-  }
-
   /** Live sample times, oldest first. */
   times(): number[] { return this.ts.slice(this.head); }
 
@@ -191,7 +124,7 @@ export class TimeSeries {
     this.ts.length = 0;
     for (const d of this.data.values()) d.length = 0;
     this.head = 0;
-    this.views.clear();
+    this.view = null;
     this.easing = false;
     this.rev++;
   }
@@ -263,7 +196,21 @@ export class TimeSeries {
     this.head = 0;
   }
 
+  /** Toggle a channel's visibility when its legend entry is clicked. */
+  legendClick(x: number, y: number): boolean {
+    for (const hit of this.legendHits) {
+      if (x >= hit.x && x <= hit.x + hit.w && y >= hit.y && y <= hit.y + hit.h) {
+        if (this.hidden.has(hit.channel)) this.hidden.delete(hit.channel);
+        else this.hidden.add(hit.channel);
+        this.rev++;
+        return true;
+      }
+    }
+    return false;
+  }
+
   private drawLegend(ctx: CanvasRenderingContext2D, w: number): void {
+    this.legendHits = [];
     ctx.font = "11px system-ui, sans-serif";
     let lx = w - 10;
     for (let ci = this.channels.length - 1; ci >= 0; ci--) {
@@ -279,6 +226,7 @@ export class TimeSeries {
       ctx.fillRect(lx, 9, 10, 3);
       ctx.fillStyle = css(off ? theme.TEXT_FAINT : theme.TEXT_DIM);
       ctx.fillText(lbl, lx + 14, 14);
+      this.legendHits.push({ x: lx - 4, y: 2, w: tw + 20, h: 16, channel: c });
     }
   }
 
@@ -295,14 +243,13 @@ export class TimeSeries {
   }
 
   draw(ctx: CanvasRenderingContext2D, w: number, h: number, title: string,
-       view?: GraphView, channels: readonly string[] = this.channels,
-       showLegend = true, combineEasing = false, includeZero = false): void {
+       view?: GraphView): void {
     ctx.clearRect(0, 0, w, h);
     ctx.font = "600 12px system-ui, sans-serif";
     ctx.fillStyle = css(theme.TEXT_DIM);
     ctx.fillText(title, 10, 15);
     ctx.font = "11px system-ui, sans-serif";
-    if (showLegend) this.drawLegend(ctx, w);
+    this.drawLegend(ctx, w);
     if (this.count === 0) {
       this.easing = false;
       ctx.fillStyle = css(theme.TEXT_FAINT);
@@ -311,25 +258,17 @@ export class TimeSeries {
       ctx.textAlign = "left";
       return;
     }
-    const visible = channels.filter((c) => !this.hidden.has(c));
+    const visible = this.channels.filter((c) => !this.hidden.has(c));
     if (visible.length === 0) {
       this.easing = false;
       ctx.fillStyle = css(theme.TEXT_FAINT);
       ctx.textAlign = "center";
-      ctx.fillText(`All channels hidden - ${isTouch() ? "tap" : "choose"} a ` +
-                   "channel to show one", w / 2, h / 2);
+      ctx.fillText(`All channels hidden - ${isTouch() ? "tap" : "click"} the ` +
+                   "legend to show one", w / 2, h / 2);
       ctx.textAlign = "left";
       return;
     }
-    // Leave a real gutter for value labels instead of painting them over the
-    // data. The narrower mobile layout retains a useful data area while its
-    // lower tick count prevents labels from colliding.
-    const left = w < 360 ? 42 : 52;
-    const compact = h < 90;
-    const plotTop = compact ? 18 : 24;
-    const plotBottomPad = compact ? 16 : 20;
-    const plot = { x: left, y: plotTop, w: w - left - 10,
-      h: h - plotTop - plotBottomPad };
+    const plot = { x: 8, y: 26, w: w - 16, h: h - 42 };
     if (plot.w < 20 || plot.h < 16) {
       this.easing = false;
       return;
@@ -365,10 +304,6 @@ export class TimeSeries {
       hi += 1;
       lo -= 1;
     }
-    if (includeZero) {
-      lo = Math.min(lo, 0);
-      hi = Math.max(hi, 0);
-    }
     const pad = (hi - lo) * 0.08;
     hi += pad;
     lo -= pad;
@@ -381,24 +316,21 @@ export class TimeSeries {
     // A viewer who asked for reduced motion gets the axis snapped to its
     // target instead of creeping toward it. The plotted data still moves -
     // that is the measurement - but the frame around it stops sliding.
-    const viewKey = channels.join("\u0000");
-    const priorView = this.views.get(viewKey);
-    if (priorView !== undefined && !reducedMotion()) {
-      let [vlo, vhi] = priorView;
+    if (this.view !== null && !reducedMotion()) {
+      let [vlo, vhi] = this.view;
       vlo = lo < vlo ? lo : vlo + (lo - vlo) * 0.04;
       vhi = hi > vhi ? hi : vhi + (hi - vhi) * 0.04;
       lo = vlo;
       hi = vhi;
     }
-    this.views.set(viewKey, [lo, hi]);
+    this.view = [lo, hi];
     // still easing toward the target range? renderers keep redrawing
     // static data until the animation settles, then stop
     const eps = 1e-3 * Math.max(1e-12, targetHi - targetLo);
-    const isEasing = Math.abs(lo - targetLo) > eps || Math.abs(hi - targetHi) > eps;
-    this.easing = combineEasing ? this.easing || isEasing : isEasing;
+    this.easing = Math.abs(lo - targetLo) > eps || Math.abs(hi - targetHi) > eps;
 
     // horizontal gridlines with value labels (count adapts to height)
-    const nSeg = plot.h < 55 ? 1 : plot.h < 110 ? 2 : 4;
+    const nSeg = plot.h < 70 ? 2 : plot.h < 130 ? 3 : 4;
     const plotBottom = plot.y + plot.h;
     ctx.strokeStyle = css(theme.GRID_MAJOR);
     ctx.lineWidth = 1;
@@ -412,39 +344,17 @@ export class TimeSeries {
       ctx.lineTo(plot.x + plot.w, y);
       ctx.stroke();
       // the topmost label sits below its line so it stays inside the plot
-      ctx.textAlign = "right";
-      ctx.fillText(fmt(lo + frac * (hi - lo)), plot.x - 5,
-                   i === nSeg ? y + 9 : y + 3);
+      ctx.fillText(fmt(lo + frac * (hi - lo)), plot.x + 2,
+                   i === nSeg ? y + 10 : y - 3);
     }
 
-    // Time ticks are true grid lines, so a value can be followed vertically
-    // without guessing where the label applies. Narrow docks use three ticks;
-    // wider ones use five.
-    const timeSegments = t1 - t0 < 1e-9 ? 0 : w < 440 ? 2 : 4;
-    for (let tick = 0; tick <= timeSegments; tick++) {
-      const frac = timeSegments === 0 ? 0 : tick / timeSegments;
+    // time axis labels along the bottom edge
+    for (const [frac, align] of [[0, "left"], [0.5, "center"], [1, "right"]] as const) {
       const tv = t0 + frac * (t1 - t0);
-      const x = plot.x + frac * plot.w;
-      ctx.beginPath();
-      ctx.moveTo(x, plot.y);
-      ctx.lineTo(x, plotBottom);
-      ctx.stroke();
-      ctx.textAlign = tick === 0 ? "left" : tick === timeSegments ? "right" : "center";
-      ctx.fillText(`${fmt(tv)} s`, x, plotBottom + 13);
+      ctx.textAlign = align;
+      ctx.fillText(`${fmt(tv)} s`, plot.x + frac * plot.w, plotBottom + 11);
     }
     ctx.textAlign = "left";
-
-    // Signed-error views need a stable reference: draw zero with the stronger
-    // axis token even when adaptive tick spacing does not land on it.
-    if (includeZero && lo <= 0 && hi >= 0) {
-      const zeroY = plotBottom - ((0 - lo) / (hi - lo)) * plot.h;
-      ctx.strokeStyle = css(theme.AXIS);
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(plot.x, zeroY);
-      ctx.lineTo(plot.x + plot.w, zeroY);
-      ctx.stroke();
-    }
 
     // Draw the exact polyline through every visible sample. Decimation is
     // tempting when samples outnumber pixels, but both flavours artefact:
