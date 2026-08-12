@@ -92,7 +92,7 @@ describe("a click is not a drag", () => {
 });
 
 describe("dragging cannot inject unbounded energy", () => {
-  it("caps the speed a flung body reports to the solver", () => {
+  it("asymptotically limits a violent flick's solver-facing speed", () => {
     const { app, canvas } = makeApp();
     app.playing = true;
     const b = new Body(new Vec2(0, 0), 0.3, 1);
@@ -106,16 +106,15 @@ describe("dragging cannot inject unbounded energy", () => {
     // a violent flick right across the canvas in one frame
     send(canvas, "pointermove", sx + 5000, sy);
     app.controller.updateDrag();
-    // The response curve has already reduced ordinary motion; this is the
-    // catastrophic lost-event bound that remains afterward.
-    expect(b.vel.length()).toBeCloseTo(14, 6);
+    // The smooth response has no discontinuous clamp: its effective hand
+    // speed approaches 0.4 m/s however large the raw lost-event jump becomes.
+    expect(b.vel.length()).toBeCloseTo(0.4, 6);
     send(canvas, "pointerup", sx + 5000, sy);
   });
 
-  it("caps a MODERATE flick too, not only an extreme one", () => {
-    // The interesting range is just above the cap, not far above it: a
-    // clamp that only engages at absurd speeds would let an ordinary fast
-    // drag through, and an extreme-flick test cannot tell the two apart.
+  it("gentles a moderate flick before the asymptote", () => {
+    // The response is a curve rather than an emergency-only clamp, so an
+    // ordinary fast drag is already softened before it reaches the ceiling.
     const { app, canvas } = makeApp();
     app.playing = true;
     const b = new Body(new Vec2(0, 0), 0.3, 1);
@@ -129,7 +128,8 @@ describe("dragging cannot inject unbounded energy", () => {
     // ~30 px at the default zoom, over one clamped frame: tens of m/s raw
     send(canvas, "pointermove", sx + 90, sy);
     app.controller.updateDrag();
-    expect(b.vel.length()).toBeLessThanOrEqual(14 + 1e-6);
+    expect(b.vel.length()).toBeGreaterThan(0);
+    expect(b.vel.length()).toBeLessThan(0.4);
     send(canvas, "pointerup", sx + 90, sy);
   });
 
