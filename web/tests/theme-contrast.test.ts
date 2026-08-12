@@ -8,19 +8,13 @@ afterEach(() => {
 });
 
 describe("theme contrast invariants", () => {
-  it("ships Studio as a complete theme and removes the obsolete Original palette", () => {
-    expect(theme.THEME_NAMES).toContain("studio");
+  it("layers Studio styling over the three base palettes", () => {
+    expect(theme.THEME_NAMES).toEqual(["dark", "void", "light"]);
     expect(theme.THEME_NAMES).not.toContain("original");
-    expect(css).toContain(':root[data-theme="studio"]');
-    theme.setTheme("studio");
-    expect(Math.max(...theme.ACCENT) - Math.min(...theme.ACCENT)).toBeLessThan(10);
-    expect(theme.PANEL).not.toEqual(theme.PANEL_LIGHT);
-    expect(theme.PANEL_LIGHT).not.toEqual(theme.PANEL_HOVER);
-    expect(theme.relativeLuminance(theme.PANEL_LIGHT))
-      .toBeGreaterThan(theme.relativeLuminance(theme.PANEL));
-    expect(theme.relativeLuminance(theme.PANEL_HOVER))
-      .toBeGreaterThan(theme.relativeLuminance(theme.PANEL_LIGHT));
-    expect(css).toMatch(/\[data-theme="studio"\] \.tool-btn\.active[^}]*inset 3px 0 var\(--accent\)/s);
+    expect(css).toContain(':root[data-studio="true"]');
+    expect(css).not.toContain(':root[data-theme="studio"]');
+    expect(css).toMatch(/\[data-studio="true"\] button\s*\{[^}]*border-color:\s*var\(--outline\)/s);
+    expect(css).toMatch(/\[data-studio="true"\] \.tool-btn\.active[^}]*inset 3px 0 var\(--accent\)/s);
   });
   it("keeps faint normal text readable on both panel surfaces", () => {
     for (const name of theme.THEME_NAMES) {

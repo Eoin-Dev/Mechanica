@@ -63,6 +63,7 @@ export interface Settings {
   dock_h?: number;
   tour_done?: boolean;
   theme?: ThemeName;
+  studio_mode?: boolean;       // layered workspace styling over the base theme
   dyslexic_font?: boolean;
   cull?: boolean;
   perf_mode?: boolean;       // cheap solver and simplified drawing
@@ -76,7 +77,7 @@ export interface Settings {
  * and a new one cannot be added to `Settings` and forgotten here. */
 const BOOL_SETTINGS = [
   "adaptive_dt", "inspector_visible", "tour_done", "dyslexic_font",
-  "cull", "perf_mode", "drag_hits_walls",
+  "cull", "perf_mode", "drag_hits_walls", "studio_mode",
 ] as const satisfies ReadonlyArray<keyof Settings>;
 
 /** A "#rrggbb" colour, the only shape the accent settings may hold. Values
@@ -124,7 +125,14 @@ export function sanitizeSettings(raw: unknown): Settings {
   if (typeof r.dock_h === "number" && Number.isFinite(r.dock_h)) {
     s.dock_h = Math.min(DOCK_H_MAX, Math.max(DOCK_H_MIN, r.dock_h));
   }
-  if (typeof r.theme === "string" && (THEME_NAMES as string[]).includes(r.theme)) {
+  // Studio used to be a fourth palette. Preserve that preference by mapping
+  // it to the closest former background (Dark) plus the independent Studio
+  // presentation layer. New settings always store the two choices separately.
+  if (r.theme === "studio") {
+    s.theme = "dark";
+    if (!Object.hasOwn(r, "studio_mode")) s.studio_mode = true;
+  } else if (typeof r.theme === "string" &&
+             (THEME_NAMES as string[]).includes(r.theme)) {
     s.theme = r.theme as ThemeName;
   }
   // The font scale multiplies every size in the stylesheet, so an
@@ -300,10 +308,12 @@ export class App {
     this.invalidateCanvas();
   }
 
-  /** Apply the persisted appearance settings (theme defaults to dark). */
+  /** Apply the base palette and optional Studio presentation layer. */
   applyUiSettings(): void {
     setAccent(this.settings.accent ?? null); // re-applies the theme too
     setTheme(this.settings.theme ?? "dark");
+    document.documentElement.dataset.studio =
+      String(this.settings.studio_mode ?? false);
     document.body.classList.toggle("dyslexic", this.settings.dyslexic_font ?? false);
     document.documentElement.style.setProperty(
       "--fs", String(this.settings.font_scale ?? 1));

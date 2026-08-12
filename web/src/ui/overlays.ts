@@ -322,8 +322,7 @@ export class Library {
 
 // ----------------------------------------------------------------- settings
 const THEME_LABELS: Array<[string, ThemeName]> = [
-  ["Studio", "studio"], ["Void", "void"], ["Dark", "dark"],
-  ["Light", "light"],
+  ["Void", "void"], ["Dark", "dark"], ["Light", "light"],
 ];
 
 /** Hand-picked UI accents (a good purple included, per popular demand).
@@ -399,6 +398,13 @@ export class SettingsPanel {
         app.saveSettings();
         app.applyUiSettings();
       }, "Colour theme for the interface and the canvas."));
+    add(checkbox("Studio mode",
+      () => app.settings.studio_mode ?? false,
+      (v) => {
+        app.settings.studio_mode = v;
+        app.saveSettings();
+        app.applyUiSettings();
+      }, "Add layered gradients, rounded workspace styling and stronger boundaries over the selected colour theme."));
 
     // accent colour: preset swatch circles + a custom picker. UI chrome
     // and highlights only - physics object colours are never touched.

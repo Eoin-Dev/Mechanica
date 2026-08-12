@@ -89,7 +89,7 @@ test("scene replacement is recoverable with undo", async ({ page }) => {
 });
 
 test("canvas pointer coordinates select the rendered body", async ({ page }) => {
-  await skipFirstRunTour(page, { theme: "studio" });
+  await skipFirstRunTour(page, { theme: "dark", studio_mode: true });
   await page.goto("/");
   const canvas = page.locator("#canvas");
   const box = await canvas.boundingBox();
@@ -103,9 +103,11 @@ test("canvas pointer coordinates select the rendered body", async ({ page }) => 
 
 test("phone inspector is transient and desktop preference survives", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await skipFirstRunTour(page, { inspector_visible: true, theme: "studio" });
+  await skipFirstRunTour(page,
+    { inspector_visible: true, theme: "dark", studio_mode: true });
   await page.goto("/");
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "studio");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator("html")).toHaveAttribute("data-studio", "true");
 
   const handle = page.getByRole("button", { name: "Open Inspector" });
   await expect(handle).toBeVisible();
@@ -149,7 +151,7 @@ test("guided tour is modal, traps focus, and restores its opener", async ({ page
 
 test("320 CSS pixels and 200% application text remain contained", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 844 });
-  await skipFirstRunTour(page, { theme: "studio" });
+  await skipFirstRunTour(page, { theme: "dark", studio_mode: true });
   await page.goto("/");
   await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
 
