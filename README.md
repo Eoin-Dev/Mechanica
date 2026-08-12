@@ -96,7 +96,8 @@ Drag a body while the simulation is running and it follows the cursor exactly,
 then resumes the motion it already had — moving something never throws it.
 Hold it still and it stays pinned under the cursor while everything else
 collides with it. Drag the green arrow tip of a selected body (or right-drag
-it) to set its velocity exactly.
+it) to set its velocity exactly; the target remains active even while the
+mouse is held still between pointer events.
 
 ## Units
 

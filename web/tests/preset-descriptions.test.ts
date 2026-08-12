@@ -149,10 +149,19 @@ const CARD_CLAIMS: Record<string, Claim[]> = {
   ],
 
   "Sun, Earth & Moon": [
-    ["three bodies", (w) => expect(w.bodies).toHaveLength(3)],
+    ["All three move around their shared barycentre", (w) => {
+      const bodies = movers(w);
+      expect(bodies).toHaveLength(3);
+      expect(fixed(w)).toHaveLength(0);
+      const mass = bodies.reduce((sum, b) => sum + b.mass, 0);
+      const cx = bodies.reduce((sum, b) => sum + b.mass * b.pos.x, 0) / mass;
+      const cy = bodies.reduce((sum, b) => sum + b.mass * b.pos.y, 0) / mass;
+      expect(cx).toBeCloseTo(0, 14);
+      expect(cy).toBeCloseTo(0, 14);
+      expect(w.momentum().length()).toBeLessThan(1e-12);
+    }],
     ["the Moon sits deep inside Earth's Hill sphere", (w) => {
-      const sun = fixed(w)[0];
-      const [earth, moon] = movers(w).sort((a, b) => b.mass - a.mass);
+      const [sun, earth, moon] = movers(w).sort((a, b) => b.mass - a.mass);
       const hill = earth.pos.distTo(sun.pos) * Math.cbrt(earth.mass / (3 * sun.mass));
       expect(earth.pos.distTo(moon.pos)).toBeLessThan(hill * 0.5);
     }],
@@ -420,11 +429,18 @@ const CARD_CLAIMS: Record<string, Claim[]> = {
       expect(Math.abs(deg(Math.atan2(r.b.y - r.a.y, r.b.x - r.a.x))))
         .toBeCloseTo(25, 1);
     }],
-    ["With no friction a ball slides; with friction it rolls", (w) => {
+    ["frictionless ball slides fastest, moderate friction slows ... high static friction holds", (w) => {
       const mus = movers(w).map((b) => b.friction).sort((a, b) => a - b);
       expect(mus[0]).toBe(0);
       expect(mus[1]).toBeGreaterThan(0);
       expect(mus[2]).toBeGreaterThan(0);
+    }],
+    ["Three non-rotating balls spread along", (w) => {
+      const balls = movers(w).sort((a, b) => a.pos.x - b.pos.x);
+      expect(balls.every((b) => b.noRotation)).toBe(true);
+      expect(balls.every((b) => b.omega === 0)).toBe(true);
+      const gaps = balls.slice(1).map((b, i) => b.pos.distTo(balls[i].pos));
+      expect(Math.min(...gaps)).toBeGreaterThan(1.4);
     }],
   ],
 
@@ -551,11 +567,32 @@ const CARD_CLAIMS: Record<string, Claim[]> = {
   ],
 
   Trampoline: [
-    ["strung between two anchors", (w) => expect(anchors(w)).toHaveLength(2)],
+    ["two lower anchors and two wall-top anchors", (w) => {
+      const fixed = anchors(w);
+      expect(fixed).toHaveLength(4);
+      for (const wall of w.walls) {
+        expect(fixed.some((a) => a.pos.distTo(wall.b) < 1e-12)).toBe(true);
+      }
+    }],
+    ["damped side springs lifting its shoulders", (w) => {
+      const topY = Math.max(...anchors(w).map((a) => a.pos.y));
+      const top = anchors(w).filter((a) => a.pos.y === topY);
+      const side = springs(w).filter((spring) =>
+        top.includes(spring.a) || top.includes(spring.b));
+      expect(side).toHaveLength(2);
+      for (const spring of side) {
+        expect(spring.damping).toBe(250); // half the Inspector's 500 maximum
+        expect(spring.stiffness).toBe(100000);
+        expect(spring.restLength).toBeCloseTo(
+          spring.a.pos.distTo(spring.b.pos), 12);
+      }
+    }],
     ["The ball's energy trades between gravity and spring tension", (w) => {
       const ball = heaviest(movers(w));
       expect(w.links.some((l) => l.a === ball || l.b === ball)).toBe(false);
-      expect(ball.pos.y).toBeGreaterThan(0); // starts above the bed
+      expect(ball.pos.x).toBe(0);
+      expect(ball.pos.y).toBe(2.6); // existing centre is intentionally unchanged
+      expect(ball.radius).toBe(0.36);
     }],
   ],
 

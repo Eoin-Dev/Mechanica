@@ -303,7 +303,28 @@ export class Inspector implements Panel {
     const sel = app.selection;
     const ids = sel.map(selectionKey).join(",");
     const drivers = app.world.drivers.map((d) => d.bodyId).join(",");
-    return `sel:${ids}:${drivers}`;
+    // With no selection the panel exposes one bulk-delete button per nonempty
+    // object kind, including its live count. A collection mutation can leave
+    // selection unchanged, so its kind counts must participate in the key or
+    // the Inspector can keep a stale "All bodies (N)" label indefinitely.
+    let inventory = "";
+    if (sel.length === 0) {
+      let bodies = 0;
+      let anchors = 0;
+      let springs = 0;
+      let rods = 0;
+      for (const body of app.world.bodies) {
+        if (body.isAnchor) anchors++;
+        else bodies++;
+      }
+      for (const link of app.world.links) {
+        if (link instanceof SpringLink) springs++;
+        else rods++;
+      }
+      inventory = `:${bodies}:${anchors}:${app.world.walls.length}:` +
+                  `${springs}:${rods}`;
+    }
+    return `sel:${ids}:${drivers}${inventory}`;
   }
 
   private refreshStructure(): void {
@@ -479,7 +500,8 @@ export class Inspector implements Panel {
         tooltip: "Fraction of approach speed kept after an impact. " +
                  "1 = perfectly elastic, 0 = no bounce at all." }));
     this.add(slider("Friction", () => b.friction, (v) => { b.friction = v; },
-      0.0, 10.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
+      0.0, 10.0, { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
+        onCommit: this.commit,
         tooltip: "Resistance to sliding at contact. 0 = frictionless." }));
     this.materialButtons([b]);
     this.colourRow([b]);
@@ -531,7 +553,8 @@ export class Inspector implements Panel {
         tooltip: "Fraction of approach speed a body keeps after hitting " +
                  "this anchor. 1 = perfectly elastic, 0 = no bounce at all." }));
     this.add(slider("Friction", () => b.friction, (v) => { b.friction = v; },
-      0.0, 10.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
+      0.0, 10.0, { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
+        onCommit: this.commit,
         tooltip: "Resistance to sliding against this anchor. " +
                  "0 = frictionless." }));
     this.materialButtons([b]);
@@ -619,7 +642,8 @@ export class Inspector implements Panel {
                    "1 = perfectly elastic, 0 = no bounce at all." }));
       this.add(slider("Friction", () => first.friction,
         (v) => bodies.forEach((b) => { b.friction = v; }), 0.0, 10.0,
-        { fmt: (v) => v.toFixed(2), onCommit: this.commit,
+        { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
+          onCommit: this.commit,
           tooltip: "Resistance to sliding at contact. 0 = frictionless." }));
       this.materialButtons(bodies);
       this.colourRow(bodies);
@@ -672,7 +696,8 @@ export class Inspector implements Panel {
                    "these anchors. 1 = perfectly elastic, 0 = no bounce." }));
       this.add(slider("Friction", () => af.friction,
         (v) => anchors.forEach((a) => { a.friction = v; }), 0.0, 10.0,
-        { fmt: (v) => v.toFixed(2), onCommit: this.commit,
+        { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
+          onCommit: this.commit,
           tooltip: "Resistance to sliding against these anchors. " +
                    "0 = frictionless." }));
       this.materialButtons(anchors);
@@ -693,7 +718,8 @@ export class Inspector implements Panel {
         { fmt: (v) => v.toFixed(2), onCommit: this.commit }));
       this.add(slider("Friction", () => wf.friction,
         (v) => walls.forEach((w) => { w.friction = v; }), 0.0, 10.0,
-        { fmt: (v) => v.toFixed(2), onCommit: this.commit }));
+        { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
+          onCommit: this.commit }));
       this.colourRow(walls);
     }
 
@@ -827,7 +853,8 @@ export class Inspector implements Panel {
         tooltip: "Fraction of approach speed a body keeps after hitting " +
                  "this wall. 1 = perfectly elastic, 0 = no bounce at all." }));
     this.add(slider("Friction", () => w.friction, (v) => { w.friction = v; },
-      0.0, 10.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
+      0.0, 10.0, { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
+        onCommit: this.commit,
         tooltip: "Resistance to sliding along this wall. 0 = frictionless." }));
     this.colourRow([w]);
     this.actionButtons();

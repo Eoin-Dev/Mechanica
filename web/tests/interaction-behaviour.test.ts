@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import { App } from "../src/app";
 import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";
+import { VEL_ARROW_SCALE } from "../src/render/draw";
 import { TimeSeries } from "../src/ui/plots";
 
 function stubCanvas(): HTMLCanvasElement {
@@ -148,6 +149,32 @@ describe("dragging cannot inject unbounded energy", () => {
     expect(b.vel.x).toBeCloseTo(1.75, 9);
     expect(b.vel.y).toBeCloseTo(-0.25, 9);
     expect(b.held).toBe(false);
+  });
+});
+
+describe("velocity aiming is continuous", () => {
+  it("keeps a parked right-drag aimed through every physics step", () => {
+    const { app, canvas } = makeApp();
+    const body = new Body(new Vec2(0, 0), 0.25, 1);
+    app.world.bodies.push(body);
+    app.ensureInitial();
+    app.controller.setTool("select");
+    const [sx, sy] = app.camera.toScreen(body.pos);
+    const target: [number, number] = [sx + 120, sy - 60];
+    send(canvas, "pointerdown", sx, sy, 2);
+    send(canvas, "pointermove", target[0], target[1], 2);
+    const targetWorld = app.camera.toWorld(target[0], target[1]);
+    const scale = VEL_ARROW_SCALE * app.view.vectorScale;
+
+    // No further pointermove events arrive. Gravity and integration still run,
+    // but the velocity arrow must remain exactly under the held pointer rather
+    // than flickering away between events.
+    for (let i = 0; i < 20; i++) {
+      app.stepOnce();
+      expect(body.pos.x + body.vel.x * scale).toBeCloseTo(targetWorld.x, 9);
+      expect(body.pos.y + body.vel.y * scale).toBeCloseTo(targetWorld.y, 9);
+    }
+    send(canvas, "pointerup", target[0], target[1], 2);
   });
 });
 

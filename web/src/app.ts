@@ -517,7 +517,14 @@ export class App {
     } finally {
       // Time jumps step a detached working copy; only the installed live world
       // participates in the App's derived-value cache.
-      if (world === this.world) this.invalidateEnergy();
+      if (world === this.world) {
+        // A parked right-drag remains an active velocity edit. Reassert it
+        // after every solver step so the renderer never observes an
+        // in-between gravity/contact result and later substeps start from the
+        // velocity still indicated by the pointer.
+        this.controller.maintainVelocityDrag();
+        this.invalidateEnergy();
+      }
     }
   }
 

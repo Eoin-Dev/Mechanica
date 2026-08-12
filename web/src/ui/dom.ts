@@ -444,6 +444,10 @@ export interface SliderOpts {
   unit?: string;
   fmt?: (v: number) => string;
   log?: boolean;
+  /** Blend between linear (0) and logarithmic (1) track placement. */
+  logBlend?: number;
+  /** Positive first nonzero value for a logarithmic slider whose min is 0. */
+  logFloor?: number;
   step?: number;         // value-space rounding (e.g. 1 for integers)
   onCommit?: () => void;
   tooltip?: string;
@@ -484,16 +488,49 @@ export function slider(label: string, get: () => number,
                  el("span", { class: "lbl", text: label }), input, val);
   if (opts.tooltip) row.title = opts.tooltip;
 
-  const useLog = (opts.log ?? false) && min > 0;
+  const zeroLogFloor = (opts.log ?? false) && min === 0 &&
+    Number.isFinite(opts.logFloor) && (opts.logFloor ?? 0) > 0 &&
+    (opts.logFloor ?? Infinity) < max ? opts.logFloor! : null;
+  const useLog = (opts.log ?? false) && (min > 0 || zeroLogFloor !== null);
+  const positiveMin = zeroLogFloor ?? min;
+  const logBlend = Math.max(0, Math.min(1, opts.logBlend ?? 1));
+  const valueFraction = (v: number): number => {
+    const clamped = Math.max(positiveMin, Math.min(max, v));
+    const linear = (clamped - positiveMin) / (max - positiveMin);
+    const logarithmic = Math.log(clamped / positiveMin) /
+                        Math.log(max / positiveMin);
+    return linear * (1 - logBlend) + logarithmic * logBlend;
+  };
   const toPos = (v: number): number => {
-    const f = useLog
-      ? Math.log(v / min) / Math.log(max / min)
-      : (v - min) / (max - min);
-    return Math.round(Math.max(0, Math.min(1, f)) * RESOLUTION);
+    if (zeroLogFloor !== null && v <= 0) return 0;
+    const f = useLog ? valueFraction(v) : (v - min) / (max - min);
+    const first = zeroLogFloor === null ? 0 : 1;
+    return first + Math.round(Math.max(0, Math.min(1, f)) *
+                              (RESOLUTION - first));
   };
   const toValue = (pos: number): number => {
-    const f = pos / RESOLUTION;
-    let v = useLog ? min * (max / min) ** f : min + (max - min) * f;
+    if (zeroLogFloor !== null && pos <= 0) return 0;
+    const first = zeroLogFloor === null ? 0 : 1;
+    const f = (pos - first) / (RESOLUTION - first);
+    if (f <= 0) return positiveMin;
+    if (f >= 1) return max;
+    let v: number;
+    if (!useLog) {
+      v = min + (max - min) * f;
+    } else if (logBlend === 1) {
+      v = positiveMin * (max / positiveMin) ** f;
+    } else {
+      // Invert the monotonic linear/log blend without adding a second
+      // approximation contract to the control's public behavior.
+      let lo = positiveMin;
+      let hi = max;
+      for (let i = 0; i < 32; i++) {
+        const mid = (lo + hi) / 2;
+        if (valueFraction(mid) < f) lo = mid;
+        else hi = mid;
+      }
+      v = (lo + hi) / 2;
+    }
     if (opts.step) v = Math.round(v / opts.step) * opts.step;
     return v;
   };

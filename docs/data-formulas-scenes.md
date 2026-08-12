@@ -581,6 +581,24 @@ The registry is ordered for the library and currently contains these groups:
 | Soft Bodies | Jelly block; Squishy ball; Trampoline; Soft wheel; Jelly smash |
 | Chaos | Butterfly effect; Orbit dance; Sinai billiard; Cyclone |
 
+The Friction ramp places three deliberately non-rotating balls 1.5 m apart
+along its 25-degree surface. Its friction levels demonstrate fast sliding,
+slower sliding, and static holding without rotational motion obscuring the
+comparison.
+
+The Trampoline has lower anchors at the wall bases and upper anchors exactly
+on both wall-top endpoints. Two maximum-stiffness side springs run from those
+upper anchors to the bed shoulders with damping `250 N s/m` (half the editor
+maximum); their natural lengths are measured only after the bed relaxation, so
+they begin unstretched. The gymnast keeps centre `(0, 2.6)` with radius
+`0.36 m`.
+
+Sun, Earth & Moon uses nested barycentric initial conditions. The dynamic Sun
+and Earth-Moon pair receive equal-and-opposite outer-orbit momentum; Earth and
+Moon receive equal-and-opposite internal-orbit momentum. The total centre of
+mass and linear momentum therefore start at zero while the Moon remains inside
+half of Earth's Hill radius.
+
 `CATEGORIES` is derived from first occurrence in the registry and prepends
 `All`. The library uses the registry directly for category chips/cards. Preset
 descriptions and hints are behavior-bearing content: changing a builder,

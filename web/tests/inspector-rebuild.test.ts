@@ -126,6 +126,25 @@ describe("Inspector structure key", () => {
     expect(() => inspector.refresh()).not.toThrow();
     expect(rendered(panel)).not.toBe("");
   });
+
+  it("counts deleted bodies independently from cascading links", () => {
+    const { app, panel, inspector } = makeInspector();
+    const a = new Body(new Vec2(-1, 0), 0.2, 1);
+    const b = new Body(new Vec2(0, 0), 0.2, 1);
+    const c = new Body(new Vec2(1, 0), 0.2, 1);
+    app.world.bodies.push(a, b, c);
+    app.world.links.push(new DistanceLink(a, b), new DistanceLink(b, c));
+    inspector.refresh();
+    expect(rendered(panel)).toContain("All bodies (3)");
+
+    // Removing b also removes its two attached rods: three total objects go,
+    // but the body counter must fall by exactly one.
+    app.controller.deleteObjects([b]);
+    inspector.refresh();
+    expect(rendered(panel)).toContain("All bodies (2)");
+    expect(app.world.bodies).toHaveLength(2);
+    expect(app.world.links).toHaveLength(0);
+  });
 });
 
 describe("Inspector accessibility and persisted visibility", () => {
