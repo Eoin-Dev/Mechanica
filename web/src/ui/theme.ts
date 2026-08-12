@@ -2,7 +2,7 @@
  * the DOM chrome.
  *
  * Four palettes: "dark" (neutral dark greys, the default), "void", "light",
- * and "studio" (Mechanica's instrument-workbench chrome). setTheme swaps
+ * and "studio" (layered monochrome workspace chrome). setTheme swaps
  * every exported binding in place - importers read them per draw, so the
  * next frame picks the new palette up - and mirrors the chrome colours
  * into CSS variables.
@@ -58,18 +58,17 @@ const LIGHT: Palette = {
   ACC_COLOR: [205, 125, 25], FORCE_COLOR: [200, 55, 55],
 };
 
-// Studio: Mechanica's instrument workbench. Cool graphite layers create clear
-// depth while a luminous measurement-blue accent identifies active tools,
-// selected controls, focus, and live data. Physics vectors retain their own
-// semantic hues so the stronger interface identity never muddies the scene.
+// Studio: a layered monochrome workspace. Charcoal, graphite, warm slate,
+// pewter and silver create depth without turning every surface into the same
+// grey. Physics vectors retain their semantic hues for simulator legibility.
 const STUDIO: Palette = {
-  BG: [13, 16, 21], PANEL: [23, 27, 34], PANEL_LIGHT: [34, 40, 49],
-  PANEL_HOVER: [46, 54, 65], OUTLINE: [57, 66, 79], ACCENT: [91, 169, 255],
-  ACCENT_HOT: [135, 197, 255], ACCENT_DARK: [32, 72, 116],
-  TEXT: [238, 242, 247], TEXT_DIM: [171, 181, 194], TEXT_FAINT: [151, 163, 178],
-  GOOD: [105, 205, 145], WARN: [241, 192, 84], BAD: [239, 107, 117],
-  GRID: [24, 29, 37], GRID_MAJOR: [38, 46, 57], AXIS: [70, 83, 99],
-  SELECTION: [112, 190, 255], VEL_COLOR: [112, 220, 151],
+  BG: [15, 15, 16], PANEL: [27, 28, 30], PANEL_LIGHT: [43, 42, 41],
+  PANEL_HOVER: [59, 60, 63], OUTLINE: [75, 74, 72], ACCENT: [196, 194, 189],
+  ACCENT_HOT: [238, 236, 231], ACCENT_DARK: [77, 76, 74],
+  TEXT: [239, 239, 238], TEXT_DIM: [177, 177, 175], TEXT_FAINT: [158, 158, 157],
+  GOOD: [117, 190, 130], WARN: [226, 190, 92], BAD: [226, 108, 108],
+  GRID: [27, 27, 28], GRID_MAJOR: [42, 42, 43], AXIS: [76, 76, 78],
+  SELECTION: [215, 213, 208], VEL_COLOR: [120, 210, 130],
   ACC_COLOR: [235, 170, 90], FORCE_COLOR: [235, 110, 110],
 };
 

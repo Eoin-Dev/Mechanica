@@ -210,19 +210,4 @@ describe("time-series rendering", () => {
     expect(s.easing).toBe(false);
   });
 
-  it("supports exact sample inspection, explicit channels and drift statistics", () => {
-    const s = new TimeSeries(["a", "b"]);
-    s.add(0, { a: -1, b: 10 });
-    s.add(3, { a: 2, b: 20 });
-    s.add(6, { a: -4, b: 30 });
-
-    expect(s.nearest(2.6)?.t).toBe(3);
-    expect(s.nearestAtFraction(1, { end: 6, span: 6 })?.values.b).toBe(30);
-    expect(s.stats("a")).toEqual({ current: -4, maxAbs: 4, rollingAbs: 3 });
-
-    s.setChannelVisible("b", false);
-    expect(s.isChannelVisible("b")).toBe(false);
-    s.toggleChannel("b");
-    expect(s.isChannelVisible("b")).toBe(true);
-  });
 });

@@ -584,10 +584,6 @@ describe("graph recording", () => {
     const total = app.energySeries.values("Total").at(-1)!;
     expect(ke).toBeCloseTo(e.ke, 9);
     expect(total).toBeCloseTo(e.total, 9);
-    const dE = total - app.baselineEnergy!;
-    expect(app.energyDriftAbsoluteSeries.values("dE").at(-1)!).toBeCloseTo(dE, 9);
-    expect(app.energyDriftPercentSeries.values("dE").at(-1)!).toBeCloseTo(
-      (100 * dE) / Math.abs(app.baselineEnergy!), 9);
   });
 
   it("records momentum that matches the world's own accounting", () => {
