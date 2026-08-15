@@ -377,11 +377,10 @@ Major behavior includes:
 Performance rendering progressively caps backing density without changing CSS
 coordinates or pointer alignment: levels 0-3 use at most `1.5`, `1.25`, `1`,
 and `1` device pixels per CSS pixel. Maximum level draws only major/axis grid
-lines, caps each trail at 64 retained vertices, limits labels/vectors to the
-hovered or selected body, and suppresses contact/spatial-grid diagnostics. If
-that profile remains overloaded or above 12 ms draw cost for at least 750 ms,
-it presents every other simulation frame while physics and input continue at
-display cadence.
+lines, limits labels/vectors to the hovered or selected body, and suppresses
+contact/spatial-grid diagnostics. If that profile remains overloaded or above
+12 ms draw cost for at least 750 ms, it presents every other simulation frame
+while physics and input continue at display cadence.
 
 `ViewSettings` defaults to grid on and all analytical overlays off. View state
 is not serialized with the world; preset hints and user controls set it.
@@ -523,17 +522,25 @@ constant `ICONS` table, not user input.
 - **Library:** category-filtered built-in presets and locally saved scenes.
   A built-in preset's transparent native button covers its entire card, so the
   card loads from any ordinary click or from Enter/Space without displaying a
-  separate Load control. Its independently operable Show more/less control is
-  pinned to the bottom-right and exposes `aria-expanded` and `aria-controls`.
+  separate Load control. Pointer hover and keyboard focus apply the same
+  selectable-card treatment. Its independently operable Show more/less control
+  is pinned to the bottom-right, has a minimum 24 by 24 CSS px target, and
+  exposes `aria-expanded` and `aria-controls`.
   Saved scenes retain explicit Load, rename, description, download, and delete
   buttons. Category filters expose `aria-pressed` and retain keyboard focus
   across a filtered rerender. Save, rename, description, and delete storage
   failures are caught and shown as toasts; a failed action does not trigger a
-  success re-render.
+  success re-render. The desktop header centres a dedicated rounded Library
+  tab switcher between the title and Close action. At the phone breakpoint the
+  title and Close action occupy the first row and the full-width tab switcher
+  occupies the second, keeping all controls reachable without horizontal
+  clipping. Category filters wrap within the dialog.
 - **Settings:** appearance, theme/accent/font, accessibility, interaction,
   adaptive resolution, performance mode, culling, help, and tour access. Accent
-  swatches form a named pressed-state group and restore focus after their DOM is
-  rebuilt; custom-colour removal is a sibling button rather than nested
+  swatches are full-bleed colour discs whose focus and selected rings sit around
+  the fill. They form a named pressed-state group and restore focus after their
+  DOM is rebuilt. Each custom-colour removal action is a separate sibling
+  button with a target of at least 24 by 24 CSS px rather than nested
   interactive content.
 - **Help:** getting-started steps, device-appropriate shortcut reference, and a
   production link to `THIRD_PARTY_NOTICES.txt` for MathLive and OpenDyslexic
@@ -588,20 +595,27 @@ and `ACCENT_DARK_INK` at 4.5:1 against their matching fills. Accent-filled
 controls use those ink tokens for text and an inset focus stroke while the
 outer focus ring contrasts with the surrounding panel. Extreme black, white,
 and mid-grey custom accents therefore retain safe normal text, filled-control
-ink, and focus cues. Section, guide, preset-category, tour-step, and Help
-headings use the selected contrast-safe accent treatment and remain readable
-with extreme custom accents.
+ink, and focus cues. Section, guide, preset-category, tour-step, Help, and
+active-control text on neutral or tinted surfaces use `ACCENT_TEXT`; raw accent
+tokens remain available for fills, borders, and decorative marks. These labels
+remain readable with extreme custom accents.
 Canvas colour strings are memoized by packed colour/alpha value with a bounded
 cache.
 
 Studio mode is an independent presentation layer over the selected base
 palette. It adds gradients, layered surface treatments, rounded compact
-controls, stronger visible button/card boundaries, and workspace spacing while
-leaving the background, panel, text, grid, semantic, and default accent colours
-owned by Void, Dark, or Light. Changing the base theme while Studio mode is on
+controls, stronger visible button/card boundaries, a rounded segmented Library
+switcher, elevated preset cards, and workspace spacing while leaving the
+background, panel, text, grid, semantic, and default accent colours owned by
+Void, Dark, or Light. Preset group names and selected Library controls use the
+contrast-safe selected accent. Changing the base theme while Studio mode is on
 therefore immediately restyles the same Studio layout with that palette.
-Accent-colour choices remain circular in every appearance. Physics-object
-colours remain scene controlled.
+Accent-colour choices remain circular full-colour discs in every appearance;
+selection is shown with an exterior ring rather than reducing the colour fill.
+Physics-object colours remain scene controlled. Studio's shared button surface
+treatment has lower selector specificity than component variants, so primary,
+danger, ghost, swatch, card, and compact-action geometry and states remain
+intact.
 Dark is the fallback for an absent or invalid stored theme.
 
 The bottom status row renders each item in its own separated segment. It shows
@@ -627,9 +641,11 @@ On phones, the inspector becomes a transiently closed drawer with a persistent
 handle; its open/closed state does not overwrite the desktop/tablet visibility
 preference. The toolbar brand becomes visually hidden but remains the level-one
 heading, toolbar content is trimmed/scrollable, and the graph/overlay layout
-adapts. Splitter sizes are clamped both while dragging and while sanitizing
-stored preferences. The layout is kept within a 320-CSS-pixel viewport at 200%
-application text scaling.
+adapts. Library and Help headers split across two rows, category controls wrap,
+Settings font-scale choices use a compact grid, and footer actions wrap rather
+than widening their dialogs. Splitter sizes are clamped both while dragging and
+while sanitizing stored preferences. Application and open-overlay content stay
+within a 320-CSS-pixel viewport at 200% application text scaling.
 
 ## Accessibility
 
@@ -650,10 +666,12 @@ substitute for browser zoom.
 - Inspector, Library, and formula-guide pages use connected tablists, tabs,
   and tabpanels with roving keyboard focus;
 - category filters, segmented choices, and colour swatches expose pressed
-  state and preserve focus across rerenders;
+  state and preserve focus across rerenders; accent swatches keep their full
+  circular colour fill beneath separate focus and selection rings;
 - built-in Library cards expose a visually integrated full-card native button,
+  show the same card-level selection cue for pointer hover and keyboard focus,
   recipe and saved-scene cards expose explicit actions, and description toggles
-  remain separate controls with expansion state;
+  remain separate controls with expansion state and a 24 CSS px target;
 - Inspector reopen handles are named buttons and both splitters are keyboard-
   operable ARIA separators with value metadata;
 - transient toasts and overload messages are polite live status regions;
@@ -677,7 +695,8 @@ substitute for browser zoom.
 
 Tests protect focus rings, names/states, tab and splitter keyboard behavior,
 theme/custom-accent contrast, page-zoom suppression, modal-tour inertness and
-focus restoration, device wording, responsive inspector state, 320 px/200%
-reflow, pointer alignment, scene-replacement undo, tour spotlights, and
-shortcut ownership. Chromium axe checks cover WCAG A/AA rules. See [testing
-and operations](testing-and-operations.md).
+focus restoration, device wording, responsive inspector state, Studio swatch
+geometry and Library contrast/containment, open-overlay 320 px/200% reflow,
+pointer alignment, scene-replacement undo, tour spotlights, and shortcut
+ownership. Chromium axe checks cover WCAG A/AA rules at boot and with the
+Library open. See [testing and operations](testing-and-operations.md).

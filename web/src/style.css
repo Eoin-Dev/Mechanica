@@ -467,7 +467,7 @@ label.checkbox.disabled input { cursor: default; }
 .inspector-body { flex: 1; overflow-y: auto; padding: 10px 12px 20px; }
 
 .section {
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: calc(11px * var(--fs, 1));
   font-weight: 600;
   text-transform: uppercase;
@@ -632,7 +632,7 @@ button.perf-banner-btn:hover:not(:disabled) {
   max-width: 72ch;
 }
 .guide-h {
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: calc(13px * var(--fs, 1));
   margin: 16px 0 6px;
 }
@@ -766,6 +766,19 @@ button.perf-banner-btn:hover:not(:disabled) {
   flex: none;
 }
 .overlay-header h2 { font-size: calc(16px * var(--fs, 1)); flex: 1; }
+.overlay-header h2 { min-width: 0; line-height: 1.2; }
+.library-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px) minmax(0, 1fr);
+  align-items: center;
+}
+.library-header h2 { justify-self: start; }
+.library-header .library-tabs {
+  width: 100%;
+  justify-self: center;
+  border: 0;
+}
+.library-header > button:last-child { justify-self: end; }
 .overlay-body { overflow-y: auto; padding: 14px 16px; }
 .overlay-body a { color: var(--accent-text); }
 /* Library: no top padding so the sticky category bar sits flush under the
@@ -817,7 +830,13 @@ button.preset-card-hit:hover:not(:disabled) { background: transparent; }
 .preset-card.has-more { padding-bottom: 34px; }
 .preset-card:hover { background: var(--panel-hover); border-color: var(--accent-dark); }
 .preset-card h3 { font-size: calc(13px * var(--fs, 1)); margin-bottom: 4px; }
-.preset-card .cat { color: var(--accent); font-size: calc(10px * var(--fs, 1)); text-transform: uppercase; letter-spacing: 0.05em; }
+.preset-card .cat {
+  color: var(--accent-text);
+  font-size: calc(10px * var(--fs, 1));
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.075em;
+}
 .preset-card p {
   color: var(--text-dim);
   font-size: calc(11px * var(--fs, 1));
@@ -835,6 +854,7 @@ button.preset-card-hit:hover:not(:disabled) { background: transparent; }
   bottom: 6px;
   z-index: 2;
   padding: 2px 6px;
+  min-height: 24px;
   font-size: calc(11px * var(--fs, 1));
   color: var(--accent-text);
   background: transparent;
@@ -845,7 +865,7 @@ button.preset-card-hit:hover:not(:disabled) { background: transparent; }
    so the link itself brightens and underlines to read as clickable */
 .card-more:hover:not(:disabled) {
   background: transparent;
-  color: var(--accent-hot);
+  color: var(--accent-text);
   text-decoration: underline;
 }
 .scene-card { display: flex; flex-direction: column; cursor: default; }
@@ -890,6 +910,7 @@ button.preset-card-hit:hover:not(:disabled) { background: transparent; }
 .settings-group > *:last-child { margin-bottom: 0; }
 .settings-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 16px;
@@ -902,41 +923,48 @@ button.preset-card-hit:hover:not(:disabled) { background: transparent; }
 .settings-label { margin: 10px 0 2px; }
 .swatch-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0 10px; }
 button.swatch {
-  width: 26px;
-  height: 26px;
-  padding: 2px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border-radius: 50%;
   background: transparent;
-  border: 2px solid transparent;
+  border: 0;
   position: relative;
   overflow: visible;
+  box-shadow: 0 0 0 1px var(--outline);
 }
 /* A saved custom colour has two sibling buttons: choose and remove. Keeping
    the remove control outside the swatch avoids nested interactive content. */
-.swatch-item { position: relative; display: inline-flex; }
+.swatch-item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 .swatch-remove {
-  position: absolute;
-  top: -7px;
-  right: -7px;
-  width: 15px;
-  height: 15px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   background: var(--panel-hover);
   border: 1px solid var(--outline);
   color: var(--text-dim);
   font-size: calc(11px * var(--fs, 1));
-  line-height: 13px;
+  line-height: 1;
   text-align: center;
   opacity: 0;
+  pointer-events: none;
   cursor: pointer;
   padding: 0;
   display: inline-flex;
 }
 .swatch-item:hover .swatch-remove,
-.swatch-item:focus-within .swatch-remove { opacity: 1; }
+.swatch-item:focus-within .swatch-remove {
+  opacity: 1;
+  pointer-events: auto;
+}
 .swatch-remove:hover { color: var(--text); background: var(--bad); }
 @media (pointer: coarse) {
-  .swatch-remove { opacity: 1; }
+  .swatch-remove { opacity: 1; pointer-events: auto; }
 }
 
 /* custom-colour popover: stage with the native picker, then Create */
@@ -960,18 +988,26 @@ button.swatch {
   background: var(--bg);
   cursor: pointer;
 }
-button.swatch:hover:not(:disabled) { background: transparent; border-color: var(--text-faint); }
-button.swatch.active { border-color: var(--text); }
+button.swatch:hover:not(:disabled):not(.active) {
+  background: transparent;
+  box-shadow: 0 0 0 2px var(--text-faint);
+}
+button.swatch.active {
+  background: transparent;
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--focus);
+}
+button.swatch:focus-visible { outline-offset: 4px; }
 .swatch .dot {
   display: block;
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  inset: 0;
   border-radius: 50%;
   border: 1px solid rgba(0, 0, 0, 0.3);
+  pointer-events: none;
 }
 button.swatch-add {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   border-radius: 50%;
   border: 1.5px dashed var(--text-faint);
@@ -1012,8 +1048,10 @@ button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--t
 }
 /* the palette chips sit under the well, indented to the control column */
 .colour-presets { margin: 5px 0 2px 76px; gap: 6px; }
-.colour-presets button.swatch { width: 18px; height: 18px; border-width: 2px; }
-.colour-presets button.swatch.active { border-color: var(--text); }
+.colour-presets button.swatch { width: 20px; height: 20px; }
+.colour-presets button.swatch.active {
+  box-shadow: 0 0 0 1px var(--panel), 0 0 0 3px var(--focus);
+}
 .settings-panel .segmented { margin: 4px 0; }
 
 /* ------------------------------------------------------------------ tour */
@@ -1053,7 +1091,7 @@ button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--t
   line-height: 1.55;
 }
 .tour-step {
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: calc(10px * var(--fs, 1));
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -1064,7 +1102,7 @@ button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--t
 /* Help: orientation above the reference tables. */
 .help-heading {
   font-size: calc(13px * var(--fs, 1));
-  color: var(--accent);
+  color: var(--accent-text);
   margin: 4px 0 10px;
 }
 .help-cols + .faint, .start-grid + .help-heading { margin-top: 18px; }
@@ -1097,7 +1135,7 @@ button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--t
 }
 
 .help-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
-.help-cols h3 { font-size: calc(13px * var(--fs, 1)); color: var(--accent); margin-bottom: 8px; }
+.help-cols h3 { font-size: calc(13px * var(--fs, 1)); color: var(--accent-text); margin-bottom: 8px; }
 .shortcut-row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; font-size: calc(12px * var(--fs, 1)); }
 .shortcut-row .keys { color: var(--text); font-family: Consolas, monospace; white-space: nowrap; }
 .shortcut-row .what { color: var(--text-dim); text-align: right; }
@@ -1166,7 +1204,7 @@ kbd {
 }
 :root[data-studio="true"] .status-item { padding-inline: 9px; }
 
-:root[data-studio="true"] button {
+:where(:root[data-studio="true"]) button {
   background: var(--panel-light);
   border-color: var(--outline);
   border-radius: var(--radius);
@@ -1176,13 +1214,15 @@ kbd {
 :root[data-studio="true"] button.swatch-add {
   border-radius: 50%;
 }
-:root[data-studio="true"] button:hover:not(:disabled):not(.active) {
-  background: var(--panel-hover);
-}
 :root[data-studio="true"] button.primary,
-:root[data-studio="true"] button.active {
+:root[data-studio="true"] button.active:not(.swatch) {
   border-color: color-mix(in srgb, var(--accent) 42%, var(--outline));
   box-shadow: inset 0 1px color-mix(in srgb, white 8%, transparent),
+              0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
+}
+:root[data-studio="true"] button.primary:focus-visible,
+:root[data-studio="true"] .cat-chips button.active:focus-visible {
+  box-shadow: inset 0 0 0 2px currentColor,
               0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
 }
 :root[data-studio="true"] button.icon { width: 34px; height: 34px; padding: 7px; }
@@ -1197,7 +1237,7 @@ kbd {
   background: var(--panel-light);
 }
 :root[data-studio="true"] .tool-btn.active {
-  color: var(--accent-hot);
+  color: var(--accent-text);
   background: color-mix(in srgb, var(--accent) 12%, var(--panel-light));
   border-color: color-mix(in srgb, var(--accent) 48%, transparent);
   box-shadow: inset 3px 0 var(--accent);
@@ -1246,7 +1286,7 @@ kbd {
 }
 :root[data-studio="true"] .segmented button + button { border-left: 0; }
 :root[data-studio="true"] .segmented button.active {
-  color: var(--accent-hot);
+  color: var(--accent-text);
   background: color-mix(in srgb, var(--accent) 11%, var(--panel-light));
   border-color: color-mix(in srgb, var(--accent) 38%, transparent);
 }
@@ -1265,7 +1305,7 @@ kbd {
   color: var(--text-dim);
 }
 :root[data-studio="true"] .tabs button.active {
-  color: var(--accent-hot);
+  color: var(--accent-text);
   background: color-mix(in srgb, var(--accent) 9%, var(--panel-light));
   border-color: color-mix(in srgb, var(--accent) 38%, var(--outline));
   box-shadow: inset 0 -2px var(--accent);
@@ -1310,29 +1350,77 @@ kbd {
   letter-spacing: -0.01em;
 }
 :root[data-studio="true"] .overlay-body { padding: 16px 18px; }
+:root[data-studio="true"] .library-tabs {
+  gap: 3px;
+  padding: 3px;
+  overflow: visible;
+  background: color-mix(in srgb, var(--bg) 68%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--outline));
+  border-radius: 12px;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.035);
+}
+:root[data-studio="true"] .library-tabs button {
+  padding: 6px 8px;
+  border-radius: 9px;
+}
+:root[data-studio="true"] .library-tabs button.active {
+  color: var(--accent-text);
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--accent) 14%, var(--panel-light)),
+    color-mix(in srgb, var(--accent) 7%, var(--panel-light)));
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--outline));
+  box-shadow: inset 0 -2px var(--accent), 0 1px 3px rgba(0, 0, 0, 0.16);
+}
 :root[data-studio="true"] .cat-chips { gap: 5px; }
 :root[data-studio="true"] .cat-chips button {
   border-radius: 9px;
   color: var(--text-dim);
 }
-:root[data-studio="true"] .cat-chips button.active { color: var(--text); }
+:root[data-studio="true"] .cat-chips button.active { color: var(--accent-dark-ink); }
+:root[data-studio="true"] #library .cat-chips {
+  box-shadow: 0 1px color-mix(in srgb, var(--accent) 14%, var(--outline));
+}
 :root[data-studio="true"] .card-grid { gap: 12px; }
-:root[data-studio="true"] .preset-card { padding: 12px 14px; }
+:root[data-studio="true"] .preset-card {
+  padding: 13px 14px 14px;
+  background: linear-gradient(145deg,
+    color-mix(in srgb, var(--accent) 4%, var(--panel-light)),
+    var(--panel-light) 58%,
+    color-mix(in srgb, var(--bg) 12%, var(--panel-light)));
+  border-color: color-mix(in srgb, var(--accent) 14%, var(--outline));
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.025),
+              0 1px 2px rgba(0, 0, 0, 0.12);
+}
+:root[data-studio="true"] .preset-card.has-more { padding-bottom: 40px; }
+:root[data-studio="true"] .preset-card h3 {
+  line-height: 1.25;
+  letter-spacing: -0.006em;
+}
 :root[data-studio="true"] button.preset-card-hit,
 :root[data-studio="true"] button.preset-card-hit:hover:not(:disabled) {
+  padding: 0;
   background: transparent;
   border: 0;
+  border-radius: inherit;
   box-shadow: none;
 }
-:root[data-studio="true"] .preset-card:hover {
+:root[data-studio="true"] button.preset-card-hit:focus-visible {
+  outline-offset: -3px;
+}
+:root[data-studio="true"] .preset-card:hover,
+:root[data-studio="true"] .preset-card:has(button.preset-card-hit:focus-visible) {
+  background: linear-gradient(145deg,
+    color-mix(in srgb, var(--accent) 8%, var(--panel-hover)),
+    color-mix(in srgb, var(--accent) 3%, var(--panel-hover)));
   border-color: color-mix(in srgb, var(--accent) 52%, var(--outline));
   box-shadow: inset 3px 0 var(--accent),
-              inset 0 0 0 1px color-mix(in srgb, var(--accent) 15%, transparent);
+              inset 0 0 0 1px color-mix(in srgb, var(--accent) 15%, transparent),
+              0 8px 22px rgba(0, 0, 0, 0.16);
 }
 :root[data-studio="true"] .preset-card .cat,
 :root[data-studio="true"] .guide-h,
 :root[data-studio="true"] .help-heading,
-:root[data-studio="true"] .help-cols h3 { color: var(--text); }
+:root[data-studio="true"] .help-cols h3 { color: var(--accent-text); }
 :root[data-studio="true"] .settings-group { padding: 5px 14px 13px; }
 :root[data-studio="true"] .toast,
 :root[data-studio="true"] .tour-card {
@@ -1351,6 +1439,55 @@ kbd {
 #inspector-handle { display: none; }
 
 @media (max-width: 760px) {
+  .overlay { padding: 12px; }
+  .library-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 10px;
+  }
+  .library-header h2 {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .library-header > .library-tabs {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    min-width: 0;
+  }
+  .library-header > button:last-child {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .library-tabs button {
+    min-width: 0;
+    padding-inline: 4px;
+    white-space: normal;
+    line-height: 1.2;
+  }
+  #library .cat-chips button {
+    min-width: 0;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.2;
+  }
+  .help-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    row-gap: 10px;
+  }
+  .help-header h2 {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .help-header > button:first-of-type {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+  }
+  .help-header > button:last-child {
+    grid-column: 2;
+    grid-row: 1;
+  }
   #inspector, #inspector-splitter { display: none; }
   #inspector.mobile-open {
     display: flex;
@@ -1413,6 +1550,18 @@ kbd {
     top: 50px;
     bottom: 32px;
   }
+}
+
+@media (max-width: 360px) {
+  .font-scale-options {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    padding: 1px;
+    background: var(--outline);
+  }
+  .font-scale-options button + button { border-left: 0; }
+  .settings-actions button { flex: 1 1 100%; }
 }
 
 /* keyboard shortcut badges mean nothing on touch-first devices (phones

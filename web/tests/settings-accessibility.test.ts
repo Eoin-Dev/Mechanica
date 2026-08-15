@@ -38,11 +38,15 @@ describe("accent swatch semantics", () => {
     expect(document.activeElement).toBe(replacement);
   });
 
-  it("keeps accent choices circular in every appearance", () => {
-    expect(css).toMatch(/button\.swatch\s*\{[^}]*border-radius:\s*50%/s);
+  it("keeps accent choices full-bleed and circular in every appearance", () => {
+    expect(css).toMatch(
+      /button\.swatch\s*\{[^}]*width:\s*28px;[^}]*height:\s*28px;[^}]*padding:\s*0;[^}]*border-radius:\s*50%/s);
+    expect(css).toMatch(
+      /\.swatch \.dot\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;[^}]*border-radius:\s*50%/s);
     expect(css).toMatch(/button\.swatch-add\s*\{[^}]*border-radius:\s*50%/s);
     expect(css).toMatch(
       /\[data-studio="true"\] button\.swatch,[\s\S]*?\[data-studio="true"\] button\.swatch-add\s*\{[^}]*border-radius:\s*50%/s);
+    expect(css).toMatch(/\.swatch-remove\s*\{[^}]*width:\s*24px;[^}]*height:\s*24px/s);
   });
 });
 
@@ -76,6 +80,23 @@ describe("appearance choices", () => {
 });
 
 describe("built-in preset cards", () => {
+  it("uses a dedicated responsive Library header without inline sizing", () => {
+    const root = document.createElement("div");
+    root.hidden = true;
+    document.body.replaceChildren(root);
+    const library = new Library(appStub(), root);
+    library.open();
+
+    const header = root.querySelector<HTMLElement>(".library-header")!;
+    const tabs = header.querySelector<HTMLElement>(".library-tabs")!;
+    expect(header).not.toBeNull();
+    expect(tabs.getAttribute("style")).toBeNull();
+    expect(tabs.getAttribute("role")).toBe("tablist");
+    expect(css).toMatch(/\.library-header\s*\{[^}]*display:\s*grid/s);
+    expect(css).toMatch(
+      /@media \(max-width:\s*760px\)[\s\S]*?\.library-header > \.library-tabs\s*\{[^}]*grid-column:\s*1 \/ -1/s);
+  });
+
   it("uses a visually label-free native button as the whole-card hit target", () => {
     const app = appStub();
     let loaded = "";
@@ -187,8 +208,11 @@ describe("compact checkbox and preset-card styling", () => {
       /button\.preset-card-hit\s*\{[^}]*position:\s*absolute;[^}]*inset:\s*0;/s);
     expect(css).toMatch(
       /\.card-more\s*\{[^}]*position:\s*absolute;[^}]*right:\s*6px;[^}]*bottom:\s*6px;/s);
+    expect(css).toMatch(/\.card-more\s*\{[^}]*min-height:\s*24px/s);
     expect(css).toMatch(
-      /\[data-studio="true"\]\s+button\.preset-card-hit[^}]*\{[^}]*background:\s*transparent;/s);
+      /\[data-studio="true"\]\s+button\.preset-card-hit[^}]*\{[^}]*padding:\s*0;[^}]*background:\s*transparent;[^}]*border-radius:\s*inherit/s);
+    expect(css).toMatch(
+      /\.preset-card:has\(button\.preset-card-hit:focus-visible\)/s);
   });
 });
 

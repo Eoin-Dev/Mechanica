@@ -51,9 +51,9 @@ export class Library {
   }
 
   private build(): void {
-    const header = el("div", { class: "overlay-header" },
+    const header = el("div", { class: "overlay-header library-header" },
       el("h2", { text: "Library" }));
-    const tabs = el("div", { class: "tabs", style: "border:none;flex:none;width:280px",
+    const tabs = el("div", { class: "tabs library-tabs",
                              "aria-label": "Library sections" });
     for (const t of ["Examples", "My scenes"] as const) {
       const b = el("button", { text: t, id: `library-tab-${t === "Examples" ? "examples" : "scenes"}`,
@@ -70,7 +70,6 @@ export class Library {
       this.render();
     });
     header.append(tabs);
-    header.append(el("div", { style: "flex:1" }));
     header.append(button("", () => this.close(),
       { icon: ICONS.close, style: "ghost", tooltip: "Close (Esc)" }).root);
 
@@ -531,13 +530,15 @@ export class SettingsPanel {
       }, "Use the OpenDyslexic typeface for interface text."));
 
     label("Font size");
-    add(segmented(["90%", "100%", "110%", "120%"],
+    const fontScale = segmented(["90%", "100%", "110%", "120%"],
       () => `${Math.round((app.settings.font_scale ?? 1) * 100)}%`,
       (v) => {
         app.settings.font_scale = parseInt(v, 10) / 100;
         app.saveSettings();
         app.applyUiSettings();
-      }, "Size of all interface text."));
+      }, "Size of all interface text.");
+    fontScale.root.classList.add("font-scale-options");
+    add(fontScale);
 
     group("Interaction");
     add(checkbox("Dragged objects collide with walls",
@@ -713,7 +714,7 @@ export class Help {
     // touch devices (phones and tablets) have no keyboard or mouse: hide
     // the shortcut sections and mouse-only rows, keep the touch gestures
     const touch = isTouch();
-    const header = el("div", { class: "overlay-header" },
+    const header = el("div", { class: "overlay-header help-header" },
       el("h2", { text: touch ? "Help" : "Help & shortcuts" }));
     header.append(button("Take the tour", () => {
       this.close();
