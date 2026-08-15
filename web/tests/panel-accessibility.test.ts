@@ -10,6 +10,8 @@ function appStub(): App {
     playing: false,
     speed: 1,
     fpsNow: 60,
+    displayFpsNow: 0,
+    displayActive: false,
     world: { time: 0 },
     undoStack: { canUndo: false, canRedo: false },
     view: { autoFit: false },
@@ -33,6 +35,11 @@ describe("toolbar and palette semantics", () => {
     expect(play.getAttribute("aria-label")).toMatch(/^Start the simulation/);
     expect(play.getAttribute("aria-pressed")).toBe("false");
     expect(root.querySelector("#fps")?.textContent).toBe("Idle");
+
+    app.displayActive = true;
+    app.displayFpsNow = 47;
+    toolbar.refresh();
+    expect(root.querySelector("#fps")?.textContent).toBe("47 fps");
 
     app.playing = true;
     toolbar.refresh();

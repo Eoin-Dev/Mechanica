@@ -105,6 +105,27 @@ test("canvas pointer coordinates select the rendered body", async ({ page }) => 
   await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("Earth");
 });
 
+test("paused Jelly zoom reports painted FPS without lowering physical quality", async ({ page }) => {
+  await skipFirstRunTour(page, { perf_mode: true });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Library" }).click();
+  await page.getByRole("button", { name: "Load Jelly block", exact: true }).click();
+
+  const fps = page.locator("#fps");
+  await expect(fps).toHaveText("Idle", { timeout: 1000 });
+  await expect(page.locator("#status-text")).toContainText("perf fast");
+
+  const canvas = page.locator("#canvas");
+  await canvas.hover();
+  for (let i = 0; i < 8; i++) {
+    await page.mouse.wheel(0, -80);
+    await page.waitForTimeout(16);
+  }
+  await expect(fps).toHaveText(/\d+ fps/);
+  await expect(fps).toHaveText("Idle", { timeout: 1000 });
+  await expect(page.locator("#status-text")).toContainText("perf fast");
+});
+
 test("phone inspector is transient and desktop preference survives", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await skipFirstRunTour(page,

@@ -102,7 +102,7 @@ sequenceDiagram
     participant P as Panels
 
     RAF->>A: frame(now)
-    A->>A: update FPS
+    A->>A: update playback FPS
     A->>C: updateDrag()
     A->>A: update(real-frame dt)
     loop available fixed physics quanta
@@ -112,6 +112,7 @@ sequenceDiagram
     end
     A->>A: stop on first failure; record rewind and graphs
     A->>R: render current state when visually dirty
+    A->>A: update paused paint FPS or return to Idle
     A->>P: refresh panels when their cadence is due
     A->>RAF: request active frame or schedule paused wake
 ```
@@ -123,6 +124,13 @@ playing and 20 Hz while paused; their readouts still observe post-physics
 state. The energy readout is revision-cached against physical state rather
 than display frames, so an unchanged paused mutual-gravity scene does not
 repeat its quadratic pair-energy pass.
+
+Playback FPS is sampled only while the simulation is running. Paused camera
+and editing gestures separately time frames that actually repaint the retained
+canvas; a first paint starts the sample, continued paints expose their measured
+cadence, and the readout returns to `Idle` shortly after painting stops. Skipped
+paused callbacks are excluded, so the power-saving timer is never presented as
+a rendering limit.
 
 ## Fixed-timestep scheduling
 
@@ -145,14 +153,17 @@ The frame scheduler separates simulated time from display timing:
   resets a fast-forward multiplier to 1x or explains how to reduce solver
   cost.
 
-Performance mode separately samples frame, physics, and render moving averages
-every 250 ms. Sustained pressure raises its transient approximation level after
-250-750 ms; five seconds of comfortable headroom relaxes one level. The chosen
+While playback is active, Performance mode separately samples frame, physics,
+and render moving averages every 250 ms. Sustained pressure raises its
+transient approximation level after 250-750 ms; five seconds of comfortable
+headroom relaxes one level. The chosen
 level is then passed explicitly to `World`, so every completed step at that
 level has a defined algorithm even though the browser's level selection is
 machine-load-dependent. Adaptation runs before drawing, so a DPR-changing level
 transition clears and repaints the backing store in the same callback rather
-than exposing a blank intermediate frame.
+than exposing a blank intermediate frame. Paused idle and interaction frames
+do not change the approximation level because no real-time simulation is being
+kept up.
 
 This budget policy keeps the UI responsive while preserving deterministic
 physics: measured wall-clock cost decides how much simulated time a frame

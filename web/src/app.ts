@@ -53,6 +53,12 @@ const PHYSICS_BUDGET_S = 0.045;
 // (a garbage collection, a tab switch) without any visible dilation.
 const MAX_CATCHUP_FRAMES = 3.0;
 const SETTINGS_KEY = "mechanica.settings";
+// A paused canvas renders only while something visual changes. Keep its FPS
+// readout live for a short tail after the last paint, then return to `Idle`.
+// The timeout is deliberately longer than the 50 ms paused wake cadence, so
+// the toolbar gets a chance to publish the transition after a wheel/pinch/pan
+// gesture ends without keeping the canvas itself repainting.
+const DISPLAY_ACTIVITY_MS = 250;
 
 export type GraphMode = "Off" | "Energy" | "Mom." | "Phase";
 
@@ -177,6 +183,8 @@ export class App {
   speed = 1.0;
   accumulator = 0.0;
   fpsNow = 0.0;
+  displayFpsNow = 0.0;
+  displayActive = false;
   overloaded = false;
   // Adaptive time resolution: extra, smaller physics steps during fast
   // close encounters. Chosen from the simulation state alone, so the
@@ -260,6 +268,9 @@ export class App {
   private divergeCooldown = -Infinity;
   private lastFrame = 0.0;
   private fpsSmoothed = 0.0;
+  private lastDisplayFrame = -Infinity;
+  private displayFpsSmoothed = 0.0;
+  private displayActiveUntil = -Infinity;
 
   // true while a soft-body preset is loaded and the user has not yet been
   // shown the "right-drag instead" hint; the controller consumes it on the
@@ -506,7 +517,12 @@ export class App {
   togglePlay(): void {
     this.ensureInitial();
     this.playing = !this.playing;
-    if (this.playing) this.fpsSmoothed = 0.0;
+    if (this.playing) {
+      this.fpsSmoothed = 0.0;
+      // Do not let the paused 50 ms wake interval become the first playback
+      // sample. The next rAF measures only the time since Play was pressed.
+      this.lastFrame = performance.now();
+    }
     this.scheduleDisplayFrame(true);
   }
 
@@ -1331,7 +1347,7 @@ export class App {
       this.insideFrame = true;
       const dtFrame = Math.min(0.25, (now - this.lastFrame) / 1000);
       this.lastFrame = now;
-      if (dtFrame > 0) {
+      if (this.playing && dtFrame > 0) {
         const inst = 1 / dtFrame;
         this.fpsSmoothed = this.fpsSmoothed > 0
           ? this.fpsSmoothed * 0.9 + inst * 0.1 : inst;
@@ -1343,7 +1359,8 @@ export class App {
       // which clears it; rendering in the same callback prevents a blank
       // flash between the old and new Performance resolutions.
       this.tunePerformance(now);
-      this.render();
+      const painted = this.render();
+      this.updateDisplayFps(now, painted);
       // Graphs and numeric controls do not need monitor-rate polling. Keep
       // them responsive while playing and nearly idle while paused.
       const panelInterval = this.playing ? 1000 / 30 : 50;
@@ -1484,7 +1501,16 @@ export class App {
    * The engine remains timing-agnostic: the browser chooses an explicit
    * level, and `World` applies that level deterministically to each step. */
   private tunePerformance(nowMs: number): void {
-    if (!this.perfMode) return;
+    // The paused loop intentionally wakes at 20 Hz. Treating that power-saving
+    // cadence as a missed 60 Hz frame drove an untouched paused scene all the
+    // way to the maximum approximation level. Performance adaptation is for
+    // keeping a running simulation real-time; paused interaction has its own
+    // measured display FPS and never changes physical fidelity.
+    if (!this.perfMode || !this.playing) {
+      this.performanceBadSince = null;
+      this.performanceGoodSince = null;
+      return;
+    }
     if (nowMs - this.performanceTuneAt < 250) return;
     this.performanceTuneAt = nowMs;
     if (typeof document !== "undefined" && document.hidden) return;
@@ -1815,7 +1841,43 @@ export class App {
     }
   }
 
-  private render(): void {
+  /** Track only frames that actually repainted the retained canvas.
+   *
+   * Paused timer callbacks that find an unchanged canvas are not frames the
+   * user can see and must not turn the meter into a misleading 20 fps. The
+   * first paint after an idle gap starts a new sample; the second and later
+   * paints report the real presentation cadence of zoom/pan/edit activity. */
+  private updateDisplayFps(nowMs: number, painted: boolean): void {
+    if (this.playing) {
+      this.displayActive = false;
+      this.displayFpsNow = 0;
+      this.displayFpsSmoothed = 0;
+      this.lastDisplayFrame = -Infinity;
+      return;
+    }
+    if (painted) {
+      const gap = nowMs - this.lastDisplayFrame;
+      if (gap > 0 && gap <= DISPLAY_ACTIVITY_MS) {
+        const instant = 1000 / gap;
+        this.displayFpsSmoothed = this.displayFpsSmoothed > 0
+          ? this.displayFpsSmoothed * 0.8 + instant * 0.2 : instant;
+        this.displayFpsNow = this.displayFpsSmoothed;
+      } else {
+        this.displayFpsSmoothed = 0;
+        this.displayFpsNow = 0;
+      }
+      this.lastDisplayFrame = nowMs;
+      this.displayActiveUntil = nowMs + DISPLAY_ACTIVITY_MS;
+      this.displayActive = true;
+    } else if (this.displayActive && nowMs >= this.displayActiveUntil) {
+      this.displayActive = false;
+      this.displayFpsNow = 0;
+      this.displayFpsSmoothed = 0;
+      this.lastDisplayFrame = -Infinity;
+    }
+  }
+
+  private render(): boolean {
     if (this.updatePresentationState()) this.invalidateCanvas();
     if (this.canvasGeneration === this.renderedCanvasGeneration) {
       // A prior expensive frame must not keep the overload diagnosis latched
@@ -1823,7 +1885,7 @@ export class App {
       // feeding a skipped frame into trail-quality tuning.
       this.renderMs *= 0.85;
       if (this.renderMs < 0.01) this.renderMs = 0;
-      return;
+      return false;
     }
     // When maximum approximation still cannot keep real time, alternate
     // simulation draws. Physics and input keep running every display tick;
@@ -1832,7 +1894,7 @@ export class App {
     if (this.perfMode && this.maximumPressureSustained() && this.playing &&
         (this.overloaded || this.renderMs > 12)) {
       this.performanceRenderPhase ^= 1;
-      if (this.performanceRenderPhase !== 0) return;
+      if (this.performanceRenderPhase !== 0) return false;
     } else {
       this.performanceRenderPhase = 0;
     }
@@ -1857,6 +1919,7 @@ export class App {
     this.tuneTrailQuality();
     this.renderedCanvasGeneration = this.canvasGeneration;
     this.renderedPresentation.set(this.currentPresentation);
+    return true;
   }
 }
 
