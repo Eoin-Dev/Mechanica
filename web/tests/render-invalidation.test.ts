@@ -83,9 +83,10 @@ function harness(): Harness {
 }
 
 type AppInternals = {
-  render(): void;
+  render(): boolean;
   update(dt: number): void;
   tunePerformance(now: number): void;
+  updateDisplayFps(now: number, painted: boolean): void;
   renderMs: number;
   physicsMs: number;
   performanceBadSince: number | null;
@@ -157,6 +158,7 @@ describe("retained App canvas", () => {
     expect(h.canvas.height).toBe(750);
 
     const raw = internals(h.app);
+    h.app.playing = true;
     h.app.fpsNow = 25;
     h.app.overloaded = true;
     raw.renderMs = 20;
@@ -184,6 +186,39 @@ describe("retained App canvas", () => {
     expect(h.fillCount()).toBe(0);
     raw.render();
     expect(h.fillCount()).toBe(1);
+  });
+
+  it("measures paused paints but lets unchanged paused callbacks return to Idle", () => {
+    const app = harness().app;
+    const raw = internals(app);
+
+    raw.updateDisplayFps(1000, true);
+    expect(app.displayActive).toBe(true);
+    expect(app.displayFpsNow).toBe(0); // first paint starts a fresh sample
+    raw.updateDisplayFps(1020, true);
+    expect(app.displayFpsNow).toBeCloseTo(50, 10);
+
+    raw.updateDisplayFps(1249, false);
+    expect(app.displayActive).toBe(true);
+    raw.updateDisplayFps(1270, false);
+    expect(app.displayActive).toBe(false);
+    expect(app.displayFpsNow).toBe(0);
+  });
+
+  it("does not treat the paused idle cadence as Performance-mode pressure", () => {
+    const app = harness().app;
+    const raw = internals(app);
+    app.setPerfMode(true);
+    app.fpsNow = 20; // the intentional paused timer frequency
+    raw.renderMs = 20;
+    raw.physicsMs = 0;
+
+    raw.tunePerformance(1000);
+    raw.tunePerformance(1400);
+    raw.tunePerformance(1800);
+
+    expect(app.playing).toBe(false);
+    expect(app.performanceLevel).toBe(1);
   });
 
   it("defers overload feedback until adaptive Performance mode reaches maximum", () => {

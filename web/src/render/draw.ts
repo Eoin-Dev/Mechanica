@@ -135,7 +135,8 @@ export function drawArrow(ctx: CanvasRenderingContext2D,
  */
 function addSpringCoil(batch: StyleBatch,
                        ax: number, ay: number, bx: number, by: number,
-                       color: Color, restPx: number): void {
+                       color: Color, restPx: number,
+                       maxCoils = 10): void {
   const dx = bx - ax;
   const dy = by - ay;
   const length = Math.sqrt(dx * dx + dy * dy);
@@ -153,7 +154,7 @@ function addSpringCoil(batch: StyleBatch,
   const inner = length - 2.0 * lead;
   let coils = Math.floor(restPx * 0.12); // one coil per ~8 px at rest
   if (coils < 2) coils = 2;
-  else if (coils > 10) coils = 10;
+  else if (coils > maxCoils) coils = maxCoils;
   let ratio = restPx / length; // >1 compressed, <1 stretched
   if (ratio > 1.8) ratio = 1.8;
   else if (ratio < 0.45) ratio = 0.45;
@@ -673,6 +674,19 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   const cy = cam.centre.y;
   const ox = cam.screenW * 0.5;
   const oy = cam.screenH * 0.5;
+  // A dense soft-body lattice can contain hundreds of short springs. Letting
+  // every one grow from two to ten decorative zigzags as the camera zooms in
+  // multiplied paused redraw work even though the physical scene was frozen.
+  // Two coils preserve the spring language and are already what these meshes
+  // show at their authored framing; only the zoom-driven excess is removed.
+  let denseSoftSprings = 0;
+  if (world.links.length >= 96) {
+    for (const link of world.links) {
+      if (link instanceof SpringLink && !link.tensionOnly &&
+          link.a.softBody && link.b.softBody && ++denseSoftSprings >= 96) break;
+    }
+  }
+  const denseSoftMesh = denseSoftSprings >= 96;
 
   // --- links -----------------------------------------------------------------
   for (const link of world.links) {
@@ -703,7 +717,9 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
           : hovered ? [200, 205, 215] : [135, 142, 152];
         if (simplify) addLine(STROKES.path(color, 2), pax, pay, pbx, pby);
         else addSpringCoil(STROKES, pax, pay, pbx, pby, color,
-                           link.restLength * cam.zoom);
+                           link.restLength * cam.zoom,
+                           denseSoftMesh && link.a.softBody && link.b.softBody
+                             ? 2 : 10);
       }
     } else if (link.isRope) {
       // inelastic string: rigid in tension, free when slack

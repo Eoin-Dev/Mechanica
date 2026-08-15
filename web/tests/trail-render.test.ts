@@ -239,6 +239,37 @@ describe("link rendering", () => {
       distance.mockRestore();
     }
   });
+
+  it("caps zoom-driven coil detail in dense spring lattices", () => {
+    const a = new Body(new Vec2(-0.1, 0), 0.02, 1);
+    const b = new Body(new Vec2(0.1, 0), 0.02, 1);
+    a.softBody = b.softBody = true;
+    const noTrails = new ViewSettings();
+    noTrails.grid = false;
+    const cam = new Camera(800, 600);
+    cam.zoom = 1000;
+
+    const detailed = worldWith(a, b);
+    detailed.links.push(new SpringLink(a, b, 0.2, 1000, 3));
+    const detailedRecorder = recCtx();
+    drawWorld(detailedRecorder.ctx, cam, detailed, noTrails, [], null,
+      new Map(), 800, 600);
+    const detailedSegments = detailedRecorder.ops
+      .filter((op) => op.op === "lineTo").length;
+
+    const dense = worldWith(a, b);
+    for (let i = 0; i < 96; i++) {
+      dense.links.push(new SpringLink(a, b, 0.2, 1000, 3));
+    }
+    const denseRecorder = recCtx();
+    drawWorld(denseRecorder.ctx, cam, dense, noTrails, [], null,
+      new Map(), 800, 600);
+    const denseSegments = denseRecorder.ops
+      .filter((op) => op.op === "lineTo").length;
+
+    expect(detailedSegments).toBeGreaterThan(6);
+    expect(denseSegments).toBe(96 * 6 + 2); // plus one spin marker per body
+  });
 });
 
 describe("trail rendering", () => {

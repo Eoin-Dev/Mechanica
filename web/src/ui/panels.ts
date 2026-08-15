@@ -133,10 +133,14 @@ export class Toolbar implements Panel {
       this.playBtn.title = action;
       this.playBtn.setAttribute("aria-label", action);
     }
-    // Paused state deliberately polls at 20 Hz and wakes on pointer events.
-    // Reporting that wake cadence as FPS makes an idle optimisation look like
-    // a performance failure (and makes the number follow mouse speed).
-    const fps = this.app.playing ? `${this.app.fpsNow.toFixed(0)} fps` : "Idle";
+    // Simulation playback and canvas presentation are separate. A paused,
+    // unchanged canvas is genuinely Idle; while zooming/panning/editing it
+    // reports the cadence of actual paints rather than the 20 Hz idle timer.
+    const measured = this.app.playing ? this.app.fpsNow : this.app.displayFpsNow;
+    const active = this.app.playing || this.app.displayActive;
+    const fps = active
+      ? measured > 0 ? `${measured.toFixed(0)} fps` : "Rendering"
+      : "Idle";
     if (fps !== this.lastFps) {
       this.lastFps = fps;
       this.fps.textContent = fps;

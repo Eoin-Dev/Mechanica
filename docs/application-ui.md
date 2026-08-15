@@ -367,6 +367,8 @@ Major behavior includes:
   paths instead of disjoint full-canvas `Path2D` batches, keeping raster cost
   from scaling path bounds across a high-DPI backing canvas;
 - spring coils in accurate mode and simplified lines in performance mode;
+  dense lattices keep their authored two-coil spring detail as the camera
+  zooms in instead of multiplying decorative segments per link;
 - distinct taut/slack string styling;
 - body fills/rings, anchor treatment, selection/hover outlines, labels, and
   spin markers;
@@ -500,9 +502,10 @@ constant `ICONS` table, not user input.
 ### Persistent panels
 
 - **Toolbar:** playback, rewind/step/reset, speed, editable clock, undo/redo,
-  clear, fit/auto-fit, library, settings, and active-play FPS. Paused state
-  says `Idle` because its intentional 20 Hz wake cadence is not a capacity
-  measurement. The play toggle exposes
+  clear, fit/auto-fit, library, settings, and FPS. Running state reports the
+  playback frame rate. A paused unchanged canvas says `Idle`; zoom, pan, hover,
+  and edit redraws report the cadence of actual canvas paints, never the
+  intentional 20 Hz paused wake timer. The play toggle exposes
   `aria-pressed` and changes its accessible name between Start and Pause.
 - **Palette:** grouped tool buttons, programmatic pressed state, visually shown
   but accessibility-hidden shortcut badges, and tool descriptions.

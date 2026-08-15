@@ -174,9 +174,9 @@ with the behavior it protects rather than an exact assertion count.
 | [`camera.test.ts`](../web/tests/camera.test.ts) | World/screen inverse transforms, panning, cursor-anchored zoom/clamps, visible bounds, and nice scale-bar formatting. |
 | [`body-culling.test.ts`](../web/tests/body-culling.test.ts) | Scene-centred runaway classification, outward-motion requirement, orbit/furniture/held protections, and non-finite cleanup. |
 | [`trail.test.ts`](../web/tests/trail.test.ts) | Ring-buffer order/capacity, timestamps, expiration, resize, serial continuity, and conservative bounds. |
-| [`trail-render.test.ts`](../web/tests/trail-render.test.ts) | Narrow non-`Path2D` full/coarse world-grid, spatial-debug and disjoint-body strokes, square-root-free link slack classification, Performance-mode trail omission, visible/off-screen Normal-mode trail drawing, bounded dense paths, budgets, fading, stable decimation, endpoint/corner retention, and curve fidelity. |
+| [`trail-render.test.ts`](../web/tests/trail-render.test.ts) | Narrow non-`Path2D` full/coarse world-grid, spatial-debug and disjoint-body strokes, square-root-free link slack classification, dense-lattice coil caps, Performance-mode trail omission, visible/off-screen Normal-mode trail drawing, bounded dense paths, budgets, fading, stable decimation, endpoint/corner retention, and curve fidelity. |
 | [`timeseries-render.test.ts`](../web/tests/timeseries-render.test.ts) | Visible-window selection, scrolling/zoom ranges, legends, axis labels, single points, hidden channels, autoscale, history retention, redraw state, and easing termination for non-plottable data. |
-| [`render-invalidation.test.ts`](../web/tests/render-invalidation.test.ts) | Opaque 2D context creation, idempotent and Performance-DPR backing resize, retained unchanged/empty-playback frames, paused 20 Hz scheduling with immediate invalidation wake, adaptive maximum level, overloaded alternate presentation, render-cost decay, and every redraw route. |
+| [`render-invalidation.test.ts`](../web/tests/render-invalidation.test.ts) | Opaque 2D context creation, idempotent and Performance-DPR backing resize, retained unchanged/empty-playback frames, paused 20 Hz scheduling with immediate invalidation wake, paused paint-FPS activity/idle transitions, paused Performance-level stability, adaptive maximum level, overloaded alternate presentation, render-cost decay, and every redraw route. |
 
 ### DOM, shortcuts, accessibility, and responsive UI
 
@@ -200,7 +200,7 @@ with the behavior it protects rather than an exact assertion count.
 
 | Test file | Protected behavior |
 | --- | --- |
-| [`e2e/accessibility.spec.ts`](../web/e2e/accessibility.spec.ts) | Production boot without console/page errors; axe WCAG A/AA scans at boot and with Library open, with only the deliberate browser-page-zoom `meta-viewport` exception waived; keyboard play/tabs/splitters/full-card library activation; undo after scene replacement; rendered-canvas pointer alignment; 390 x 844 transient inspector and Studio Library behavior; extreme-accent safe text/button states; full-disc swatch geometry; modal-tour focus/inertness/restoration; and contained Library/Settings layout at 320 CSS px with 200% application text. |
+| [`e2e/accessibility.spec.ts`](../web/e2e/accessibility.spec.ts) | Production boot without console/page errors; axe WCAG A/AA scans at boot and with Library open, with only the deliberate browser-page-zoom `meta-viewport` exception waived; keyboard play/tabs/splitters/full-card library activation; undo after scene replacement; rendered-canvas pointer alignment; paused Jelly zoom paint-FPS/idle reporting with stable Performance quality; 390 x 844 transient inspector and Studio Library behavior; extreme-accent safe text/button states; full-disc swatch geometry; modal-tour focus/inertness/restoration; and contained Library/Settings layout at 320 CSS px with 200% application text. |
 
 ## Verification philosophy
 
