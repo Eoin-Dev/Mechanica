@@ -13,8 +13,21 @@ describe("theme contrast invariants", () => {
     expect(theme.THEME_NAMES).not.toContain("original");
     expect(css).toContain(':root[data-studio="true"]');
     expect(css).not.toContain(':root[data-theme="studio"]');
-    expect(css).toMatch(/\[data-studio="true"\] button\s*\{[^}]*border-color:\s*var\(--outline\)/s);
+    expect(css).toMatch(
+      /:where\(:root\[data-studio="true"\]\) button\s*\{[^}]*border-color:\s*var\(--outline\)/s);
     expect(css).toMatch(/\[data-studio="true"\] \.tool-btn\.active[^}]*inset 3px 0 var\(--accent\)/s);
+  });
+
+  it("uses contrast-safe text tokens for Studio active controls", () => {
+    for (const selector of [
+      "\\.tool-btn\\.active",
+      "\\.segmented button\\.active",
+      "\\.tabs button\\.active",
+    ]) {
+      expect(css).toMatch(new RegExp(
+        `\\[data-studio="true"\\] ${selector}\\s*\\{[^}]*color:\\s*var\\(--accent-text\\)`,
+        "s"));
+    }
   });
   it("keeps faint normal text readable on both panel surfaces", () => {
     for (const name of theme.THEME_NAMES) {
