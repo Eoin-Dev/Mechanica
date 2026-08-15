@@ -1463,9 +1463,17 @@ kbd {
     white-space: normal;
     line-height: 1.2;
   }
-  #library .cat-chips button {
+  #library .cat-chips {
+    width: 100%;
     min-width: 0;
+    max-width: 100%;
+  }
+  #library .cat-chips button {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
     white-space: normal;
+    overflow-wrap: anywhere;
     text-align: center;
     line-height: 1.2;
   }

@@ -265,6 +265,10 @@ test("320 CSS pixels and 200% application text remain contained", async ({ page 
   const libraryLayout = await library.evaluate((dialog) => {
     const header = dialog.querySelector<HTMLElement>(".library-header")!;
     const chips = dialog.querySelector<HTMLElement>(".cat-chips")!;
+    const widths = (element: HTMLElement) => ({
+      client: element.clientWidth,
+      scroll: element.scrollWidth,
+    });
     const cards = [...dialog.querySelectorAll<HTMLElement>(".preset-card")]
       .slice(0, 2).map((card) => card.getBoundingClientRect());
     const controls = [
@@ -273,21 +277,19 @@ test("320 CSS pixels and 200% application text remain contained", async ({ page 
       dialog.querySelector<HTMLElement>("button[aria-label='Close (Esc)']")!,
     ].map((control) => control.getBoundingClientRect());
     return {
-      dialogFits: dialog.scrollWidth <= dialog.clientWidth,
-      headerFits: header.scrollWidth <= header.clientWidth,
-      chipsFit: chips.scrollWidth <= chips.clientWidth,
+      dialog: widths(dialog),
+      header: widths(header),
+      chips: widths(chips),
       controlsFit: controls.every((box) => box.left >= 0 && box.right <= innerWidth),
       cardsStack: cards.length === 2 && Math.abs(cards[0].left - cards[1].left) < 1 &&
         cards[1].top > cards[0].bottom,
     };
   });
-  expect(libraryLayout).toEqual({
-    dialogFits: true,
-    headerFits: true,
-    chipsFit: true,
-    controlsFit: true,
-    cardsStack: true,
-  });
+  expect(libraryLayout.dialog.scroll).toBeLessThanOrEqual(libraryLayout.dialog.client);
+  expect(libraryLayout.header.scroll).toBeLessThanOrEqual(libraryLayout.header.client);
+  expect(libraryLayout.chips.scroll).toBeLessThanOrEqual(libraryLayout.chips.client);
+  expect(libraryLayout.controlsFit).toBe(true);
+  expect(libraryLayout.cardsStack).toBe(true);
 
   await library.getByRole("button", { name: "Close (Esc)" }).click();
   await page.locator("#btn-settings").click();

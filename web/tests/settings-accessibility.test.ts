@@ -95,6 +95,8 @@ describe("built-in preset cards", () => {
     expect(css).toMatch(/\.library-header\s*\{[^}]*display:\s*grid/s);
     expect(css).toMatch(
       /@media \(max-width:\s*760px\)[\s\S]*?\.library-header > \.library-tabs\s*\{[^}]*grid-column:\s*1 \/ -1/s);
+    expect(css).toMatch(
+      /#library \.cat-chips button\s*\{[^}]*max-width:\s*100%;[^}]*overflow-wrap:\s*anywhere/s);
   });
 
   it("uses a visually label-free native button as the whole-card hit target", () => {
