@@ -84,6 +84,7 @@ Each `bodies` entry maps to `BodyDict`:
 | `collides` | Boolean, default `true`; other runtime types use the default. |
 | `no_rotation` | Optional boolean, default `false`; other runtime types use the default. |
 | `is_anchor` | Optional boolean, default `false`; other runtime types use the default. A true value forces `locked` true and the name `Anchor`. |
+| `is_pulley` | Optional boolean, default `false`. A true value identifies an internal pulley axle and forces `is_anchor`, `locked`, and `no_rotation` true; `collides` false; radius `0.22`; zero velocity, spin, and constant force; and the name `Pulley`. An axle without a valid `PulleyLink` is pruned after link loading. |
 | `color` | At least three numeric channels. Channels are rounded/clamped to `0..255`; malformed colours use the generated palette colour. |
 
 The loader constructs each body before applying the stored identity and
@@ -167,6 +168,42 @@ serialized.
 Effective stability-clamped `kEff` and `cEff` are recalculated and are not
 serialized.
 
+### Inextensible pulley string
+
+```json
+{
+  "type": "pulley",
+  "id": 1,
+  "a": 1,
+  "b": 2,
+  "pulley": 3,
+  "length": 3.2,
+  "compliance": 0,
+  "guide_a": [-0.22, 0],
+  "guide_b": [0.22, 0],
+  "wrap_sweep": -3.141592653589793,
+  "wall_id": null,
+  "wall_end": 0,
+  "wall_normal_sign": 1
+}
+```
+
+| Field | Behavior |
+| --- | --- |
+| `a`, `b` | Two distinct ordinary, non-anchor particle IDs. Both must resolve and must differ from the pulley ID. Missing, anchor, pulley, or repeated endpoints skip the link. |
+| `pulley` | ID of a body whose guarded `is_pulley` value is true. A missing, ordinary, endpoint, or already-claimed axle skips the link; one axle owns exactly one routed string. |
+| `length` | Total light-string length, including both live tangent legs and the finite wrapped arc; finite and clamped to `0..1e6`. Invalid data uses the current guide-leg lengths plus a half circumference. |
+| `compliance` | XPBD compliance, finite and clamped to `0..1e9`, default zero. The UI-created pulley keeps this zero for an inextensible string. |
+| `guide_a`, `guide_b` | Guarded fallback/topology offsets from the axle, each component clamped to `[-1e6, 1e6]`. Live tangent points are recomputed from current particle positions. |
+| `wrap_sweep` | Guarded signed wrap direction in `[-2*pi, 2*pi]`, default `-pi`; live arc magnitude follows the tangent contacts while the sign retains which way the string passes around the wheel. |
+| `wall_id` | Optional mounted-wall ID or `null`. A missing wall detaches the axle without deleting the assembly. |
+| `wall_end` | Mounted endpoint index `0` or `1`, default `0`. |
+| `wall_normal_sign` | Surface-side sign normalized to `-1` or `1`, default `1`. |
+| `id` | Guarded ID with a separate `PulleyLink` counter and duplicate-remapping namespace. |
+
+Force warm-start `mu`, position `lambda`, dynamic tangent contacts, and the
+active wheel-stop contact are transient and are not serialized.
+
 ## Force-field and driver documents
 
 ### Force fields
@@ -249,10 +286,16 @@ input within those limits:
    resolved to direct endpoint object references. Ambiguous references to a
    repeated imported body ID therefore resolve deterministically to the first
    body that carried it; drivers retain the same target ID.
-7. Links are separated by class; duplicate IDs within the rod/rope class or
-   within the spring class are remapped. Rod and spring counters are separate,
-   so the same numeric ID may occur once in each class.
-8. Fields and drivers are reconstructed.
+7. Links are separated by class; duplicate IDs within the rod/rope, spring, or
+   pulley-string class are remapped. Their counters are separate, so the same
+   numeric ID may occur once in each class. Ordinary links cannot target an
+   internal pulley body. Pulley records require two ordinary particles and one
+   distinct valid axle marked `is_pulley`; the first valid record claims that
+   axle and later shared-axle records are skipped.
+8. Internal pulley bodies not owned by a surviving pulley string are pruned;
+   valid wall mounts are synchronized and missing/degenerate mounts detach.
+9. Fields and drivers are reconstructed. A driver aimed at an internal pulley
+   axle is skipped because the axle has no editable motion or force state.
 
 `restore(text)` begins with `JSON.parse`, then uses the untrusted import path.
 Syntactically damaged JSON throws there; valid malformed shapes within the
@@ -578,7 +621,7 @@ The registry is ordered for the library and currently contains these groups:
 | Pendulums | Simple pendulum; Double pendulum; Triple pendulum; Swinging rope; Newton's cradle; Coupled pendulums |
 | Oscillators | Mass on a spring; Damping regimes; Driven resonance; Coupled oscillators; Spring pendulum |
 | Collisions & Gas | Billiard break; Restitution ladder; Elastic vs inelastic; Gas in a box (50); Gas in a box (200); Brownian motion |
-| Projectiles & Friction | Projectile drag race; Friction ramp; Galileo's drop; Which lands first?; Projectile angles; Terminal velocity; Wrecking ball; Chain bridge |
+| Projectiles & Friction | Projectile drag race; Friction ramp; Pulley on an incline; Galileo's drop; Which lands first?; Projectile angles; Terminal velocity; Wrecking ball; Chain bridge |
 | Soft Bodies | Jelly block; Squishy ball; Trampoline; Soft wheel; Jelly smash |
 | Chaos | Butterfly effect; Orbit dance; Sinai billiard; Cyclone |
 
@@ -586,6 +629,13 @@ The Friction ramp places three deliberately non-rotating balls 1.5 m apart
 along its 25-degree surface. Its friction levels demonstrate fast sliding,
 slower sliding, and static holding without rotational motion obscuring the
 comparison.
+
+Brownian motion starts with its motion-trail hint disabled so the dense gas is
+clear and inexpensive on first load. Pulley on an incline mounts a fixed axle
+at the upper endpoint of a sloped wall, places a `2 kg` non-rotating particle
+on the slope and a `1.1 kg` hanging particle on the other leg, and joins them
+with one inextensible `PulleyLink`; both particles retain ordinary friction and
+restitution behavior.
 
 The Trampoline has lower anchors at the wall bases and upper anchors exactly
 on both wall-top endpoints. Two maximum-stiffness side springs run from those

@@ -2,7 +2,7 @@
  *
  * The existing preset tests are per-scene and behavioural: does it blow up,
  * does it stay in its box, are its solver settings sane. What nothing
- * checked is whether each of the 47 scenes is STRUCTURALLY well formed -
+ * checked is whether each library scene is STRUCTURALLY well formed -
  * ids unique, links pointing at bodies that exist, drivers addressing
  * bodies that are still there, anchors actually anchored, formulas that
  * compile, camera hints inside the camera's own limits.
@@ -10,13 +10,13 @@
  * These are asserted over the whole library rather than scene by scene, so
  * a new preset is covered the moment it is added rather than when someone
  * remembers to write a test for it. The most valuable of them is the
- * snapshot round trip: it drives the entire serialization layer with 47
+ * snapshot round trip: it drives the entire serialization layer with all
  * real scenes instead of the hand-built ones the storage tests use.
  */
 import { describe, expect, it } from "vitest";
 import { compileExpr } from "../src/core/expr";
 import { Body } from "../src/engine/body";
-import { DistanceLink, SpringLink } from "../src/engine/links";
+import { SpringLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
 import { MAX_ZOOM, MIN_ZOOM } from "../src/render/camera";
 import { CATEGORIES, PRESETS } from "../src/scene/presets";
@@ -130,9 +130,21 @@ describe("every built scene is structurally sound", () => {
   it("keeps every anchor locked, named and grey", () => {
     for (const { name, w } of BUILT) {
       for (const b of w.bodies) {
-        if (!b.isAnchor) continue;
+        if (!b.isAnchor || b.isPulley) continue;
         expect(b.locked, `${name}: an unlocked anchor`).toBe(true);
         expect(b.name, name).toBe("Anchor");
+      }
+    }
+  });
+
+  it("keeps pulley axles fixed, named and non-colliding", () => {
+    for (const { name, w } of BUILT) {
+      for (const b of w.bodies) {
+        if (!b.isPulley) continue;
+        expect(b.isAnchor, name).toBe(true);
+        expect(b.locked, name).toBe(true);
+        expect(b.collides, name).toBe(false);
+        expect(b.name, name).toBe("Pulley");
       }
     }
   });
@@ -165,7 +177,7 @@ describe("every built scene is structurally sound", () => {
   it("gives every link a non-negative natural length", () => {
     for (const { name, w } of BUILT) {
       for (const ln of w.links) {
-        const len = ln instanceof DistanceLink ? ln.length : ln.restLength;
+        const len = "length" in ln ? ln.length : ln.restLength;
         expect(Number.isFinite(len), name).toBe(true);
         expect(len, name).toBeGreaterThanOrEqual(0);
         if (ln instanceof SpringLink) {
@@ -258,7 +270,7 @@ describe("every preset is reproducible", () => {
 
 describe("every preset survives the save/load round trip", () => {
   it("comes back structurally identical", () => {
-    // 47 real scenes through the serializer, against the handful of
+    // all real library scenes through the serializer, against the handful of
     // hand-built ones the storage tests use
     for (const { name, w } of BUILT) {
       const revived = restore(snapshot(w));

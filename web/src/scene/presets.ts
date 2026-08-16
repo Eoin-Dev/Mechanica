@@ -6,7 +6,7 @@
  */
 import { Vec2 } from "../core/vec";
 import { Body, Color, Wall } from "../engine/body";
-import { DistanceLink, SpringLink } from "../engine/links";
+import { DistanceLink, PULLEY_RADIUS, PulleyLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, World } from "../engine/world";
 
 export interface PresetHints {
@@ -737,6 +737,36 @@ function buildFrictionRamp(): World {
   return w;
 }
 
+function buildInclinePulley(): World {
+  const w = new World();
+  solver(w, 8, 10);
+  const ramp = new Wall(new Vec2(-3.2, -1.45), new Vec2(0.6, 0.75), 0.12);
+  ramp.friction = 0.05;
+  ramp.restitution = 0.05;
+  w.walls.push(ramp);
+
+  const wheel = new Body(ramp.b.copy(), PULLEY_RADIUS);
+  const onRamp = new Body(ramp.b.copy(), 0.15, 2.0, [86, 156, 214]);
+  const hanging = new Body(ramp.b.copy(), 0.15, 1.1, [220, 130, 90]);
+  onRamp.name = "2.0 kg on slope";
+  hanging.name = "1.1 kg hanging";
+  for (const body of [onRamp, hanging]) {
+    body.noRotation = true;
+    body.friction = 0.05;
+    body.restitution = 0.05;
+  }
+  const string = new PulleyLink(onRamp, hanging, wheel);
+  w.bodies.push(wheel, onRamp, hanging);
+  w.links.push(string);
+  w.mountPulley(string, ramp, 1);
+  const inward = ramp.a.sub(ramp.b);
+  const inwardUnit = inward.div(inward.length());
+  onRamp.pos = wheel.pos.add(string.guideAOffset).add(inwardUnit.mul(2.0));
+  hanging.pos = wheel.pos.add(string.guideBOffset).add(new Vec2(0, -1.55));
+  string.length = string.currentLength();
+  return w;
+}
+
 function buildGalileo(): World {
   const w = new World();
   solver(w, 4);
@@ -1452,7 +1482,7 @@ export const PRESETS: Preset[] = [
     "A heavy grain jostled by a swarm of light, fast particles - the " +
     "random walk Einstein explained in 1905, cementing the case that " +
     "atoms exist. Turn on trails.",
-    buildBrownian, { zoom: 105, trails: true }),
+    buildBrownian, { zoom: 105, trails: false }),
 
   new Preset("Projectile drag race", "Projectiles & Friction",
     "Two identical launches; a custom force field applies quadratic " +
@@ -1464,6 +1494,12 @@ export const PRESETS: Preset[] = [
     "frictionless ball slides fastest, moderate friction slows the next, " +
     "and high static friction holds the last in place.",
     buildFrictionRamp, { zoom: 70 }),
+  new Preset("Pulley on an incline", "Projectiles & Friction",
+    "Two particles share one light inextensible string over a smooth fixed " +
+    "pulley. The slope-side string begins parallel to the ramp, while both " +
+    "particles remain free to slide, collide or swing. Select the string to " +
+    "edit its total natural length.",
+    buildInclinePulley, { zoom: 115, centre: [-0.9, -0.2] }),
   new Preset("Galileo's drop", "Projectiles & Friction",
     "A 10 kg ball and a 0.5 kg ball fall the same distance and land " +
     "together - without air, gravitational acceleration doesn't " +

@@ -120,8 +120,9 @@ headless and testable.
 | --- | --- |
 | Body | A circular rigid body with translation and optional rotation. A locked or held body presents zero inverse mass to solvers. |
 | Anchor | A locked body used only as a link attachment. It does not produce or receive mutual gravity and is omitted from ordinary body counts. |
+| Pulley | A fixed, non-colliding internal axle plus two ordinary particle bodies joined by one routed inextensible string. The axle is position-draggable while editing but has no material or motion controls. |
 | Wall | A static capsule: a line segment expanded by half its thickness. |
-| Link | Either a `DistanceLink` (rod or inelastic string) or a `SpringLink` (spring or elastic string). |
+| Link | A `DistanceLink` (rod or inelastic string), `SpringLink` (spring or elastic string), or `PulleyLink` (one inextensible string routed over its owned axle). |
 | Rod | A bilateral distance constraint that resists both extension and compression. |
 | Rope / inelastic string | A `DistanceLink` with `isRope`; it enforces a maximum distance but is slack below it. |
 | Elastic string | A `SpringLink` with `tensionOnly`; it pulls while stretched and does nothing while slack. |

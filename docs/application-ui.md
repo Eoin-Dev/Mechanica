@@ -128,9 +128,18 @@ walls, and links, invokes batched world removals, drops body trails, removes
 body-dependent links/drivers through `World.removeBodies`, and reconciles
 hover, pending gestures, and selection once.
 
+Pulley assemblies refine the ordinary cascade rules. Deleting only the wheel
+replaces its routed string with one ordinary inelastic `DistanceLink` of the
+same total length. Deleting the pulley string removes its internal wheel but
+keeps both particles. Deleting either particle removes the routed string and
+wheel while leaving the other particle. When a bulk selection contains more
+than one part, explicit link deletion is applied before body cascades so it
+cannot accidentally create a replacement string the user also deleted.
+
 Duplication:
 
-- copies selected bodies with new IDs and a small positional offset;
+- copies selected ordinary bodies/anchors with new IDs and a small positional
+  offset; internal pulley wheels are not independently duplicated;
 - preserves anchor identity/name rules;
 - duplicates a link only when both endpoints were duplicated;
 - duplicates drivers that target duplicated bodies;
@@ -151,6 +160,7 @@ Duplication:
 | Rod | `R` | Select two endpoints and create a bilateral `DistanceLink`. |
 | String | `E` | Select two endpoints and create a tension-only `SpringLink`; the inspector can convert it to an inelastic rope. |
 | Spring | `S` | Select two endpoints and create a bilateral `SpringLink`. |
+| Pulley | `P` | Place a fixed, non-colliding pulley with two ordinary non-rotating particles and one inextensible `PulleyLink`. A click near a wall endpoint mounts it there and starts the wall-side string tangent parallel to the wall. |
 | Eraser | `X` | Delete the picked selectable through the common deletion path. |
 
 For link tools, clicking empty space for the first endpoint creates an anchor;
@@ -162,7 +172,8 @@ temporary anchor and cancels its uncommitted edit boundary.
 
 Picking is top-down by type and reverse draw/list order: bodies first, then
 links, then walls. Pick padding is expressed in pixels and converted by camera
-zoom so objects remain usable at different scales.
+zoom so objects remain usable at different scales. A pulley string is picked
+from either straight leg; the wheel body owns the wrapped-arc hit area.
 
 ## Pointer and touch gesture routing
 
@@ -257,7 +268,14 @@ drag so the two gestures are not visually conflated.
 ### Walls, links, and pending references
 
 Wall endpoint edits mutate `a` or `b`; whole-wall dragging preserves endpoint
-separation. A pending link holds a direct reference to its first body.
+separation. A mounted pulley follows its chosen endpoint; its wall-side tangent
+and wrapped arc are recomputed from the wall direction, while its particles
+remain free bodies governed only by string tension and ordinary contacts. The
+pulley wheel can be position-dragged even though it is physically fixed during
+simulation. Starting that drag detaches a mount; releasing within 22 screen
+pixels of any wall endpoint mounts and snaps it there. If the wall is deleted
+or becomes degenerate, the pulley detaches at its last valid position. A
+pending link holds a direct reference to its first body.
 `resetInteraction()` must therefore clear pending walls/links as well as drags,
 pans, pinches, and box selections whenever the world object graph is replaced.
 
@@ -267,8 +285,9 @@ Selection belongs to `App` as an array of `Selectable` references.
 
 - Plain selection replaces the array.
 - Shift selection adds/toggles.
-- Rubber-band selection uses configurable filters for bodies, anchors, walls,
-  springs, and rods.
+- Rubber-band selection uses configurable filters for bodies, anchors,
+  pulleys, walls, springs, and rods. A pulley string additionally requires its
+  wheel and both particles to lie inside the box.
 - Delete acts on the whole selection.
 - Object removal prunes references before a later frame can inspect a deleted
   object.
@@ -294,7 +313,11 @@ For a single object it exposes type-specific state:
 - anchor position and colour with anchor invariants preserved;
 - wall endpoints, thickness, material, colour, and actions;
 - spring/string natural length, stiffness, damping, one-sidedness/conversion;
-- rod/rope length, compliance where applicable, and rope conversion.
+- rod/rope length, compliance where applicable, and rope conversion;
+- pulley-string total natural length, including both straight legs and its
+  wrapped section; and
+- a read-only pulley-wheel explanation with position dragging and deletion as
+  its only editing actions.
 
 Multi-selection groups objects by type, provides common bulk property controls,
 driver operations, align/distribute operations for bodies, type-aware colours,
@@ -370,8 +393,10 @@ Major behavior includes:
   dense lattices keep their authored two-coil spring detail as the camera
   zooms in instead of multiplying decorative segments per link;
 - distinct taut/slack string styling;
+- routed pulley strings with two live tangent legs and a finite wrapped arc;
 - body fills/rings, anchor treatment, selection/hover outlines, labels, and
-  spin markers;
+  spin markers. A pulley has no permanent accent outline; selecting its wheel
+  draws one tight accent rim exactly on its circumference;
 - velocity, acceleration, and net-force arrows at configurable scale;
 - centre-of-mass marker and contact normals/impulses;
 - scale bar drawn after interaction overlays.
@@ -622,10 +647,10 @@ intact.
 Dark is the fallback for an absent or invalid stored theme.
 
 The bottom status row renders each item in its own separated segment. It shows
-grammatical body, anchor, link, and contact counts, the active Performance
-profile when applicable, energy drift, and the pointer coordinate on wider
-screens. Renderer trail quality and internal physics-step subdivision are not
-user-facing status items.
+grammatical body, anchor, link, and contact counts, a pulley count when the
+scene contains any, the active Performance profile when applicable, energy
+drift, and the pointer coordinate on wider screens. Renderer trail quality and
+internal physics-step subdivision are not user-facing status items.
 
 The stylesheet owns:
 

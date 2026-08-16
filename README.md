@@ -2,7 +2,7 @@
 
 An interactive physics sandbox that runs entirely in the browser: build and
 analyse mechanical systems — orbits, pendulums, oscillators, collisions,
-gases, friction, chaos and soft bodies.
+gases, friction, ideal pulleys, chaos and soft bodies.
 
 ![typescript](https://img.shields.io/badge/TypeScript-strict-blue) ![deps](https://img.shields.io/badge/engine%20deps-none-green) ![tests](https://img.shields.io/badge/tests-600%2B%20passing-brightgreen)
 
@@ -45,7 +45,8 @@ The complete build, CI, Pages, and alternative-host instructions are in
 ## What's inside
 
 - **Engine** (`web/src/engine/`) — circular rigid bodies with rotation,
-  static capsule walls, rigid rods / one-sided ropes / damped springs,
+  static capsule walls, rigid rods / one-sided ropes / damped springs / ideal
+  finite-wheel pulley strings,
   N-body gravity with softening, linear + quadratic drag, sinusoidal
   drivers and sandboxed user force fields.
 - **Library** — dozens of ready-made, annotated simulations across eight
@@ -86,7 +87,7 @@ OpenDyslexic SIL Open Font License notices in
 | --- | --- |
 | Space / `.` | Play / pause, step one frame |
 | Ctrl+R / Ctrl+Z / Ctrl+Y | Reset, undo, redo |
-| V H B A W R E S X | Tools: select, pan, body, anchor, wall, rod, rope, spring, eraser |
+| V H B A W R E S P X | Tools: select, pan, body, anchor, wall, rod, rope, spring, pulley, eraser |
 | F / C | Zoom to fit, follow selected body |
 | Arrows | Nudge selected bodies |
 | Ctrl+S | Save the scene |

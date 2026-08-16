@@ -15,7 +15,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { Body } from "../src/engine/body";
-import { DistanceLink, SpringLink } from "../src/engine/links";
+import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
 import { CATEGORIES, PRESETS } from "../src/scene/presets";
 
@@ -444,6 +444,13 @@ const CARD_CLAIMS: Record<string, Claim[]> = {
     }],
   ],
 
+  "Pulley on an incline": [
+    ["Two particles share one light inextensible string", (w) => {
+      expect(movers(w)).toHaveLength(2);
+      expect(w.links.filter((link) => link instanceof PulleyLink)).toHaveLength(1);
+    }],
+  ],
+
   "Galileo's drop": [
     ["A 10 kg ball and a 0.5 kg ball", (w) => {
       expect(movers(w).map((b) => b.mass).sort((a, b) => b - a)).toEqual([10, 0.5]);
@@ -738,7 +745,7 @@ describe("the card audit is complete", () => {
   });
 
   it("ships the library size the README, help and tour all quote", () => {
-    expect(PRESETS).toHaveLength(47);                              // "47 examples"
+    expect(PRESETS).toHaveLength(48);                              // "48 examples"
     expect(CATEGORIES.filter((c) => c !== "All")).toHaveLength(8); // "eight categories"
     expect(new Set(PRESETS.map((p) => p.name)).size).toBe(PRESETS.length);
   });

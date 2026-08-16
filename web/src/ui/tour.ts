@@ -1,7 +1,7 @@
 /** First-run guided tour.
  *
  * Mechanica opens on a canvas with nine tools, three inspector tabs and a
- * library of 47 examples, and previously said nothing about any of it - the
+ * library of 48 examples, and previously said nothing about any of it - the
  * only orientation was a shortcut table behind F1, which answers "what key
  * does X" and never "what is this and what do I do first". `tour_done` had
  * been sitting in the settings type since the port with nothing behind it.
@@ -132,7 +132,7 @@ export const STEPS: Step[] = [
     // the two buttons this step is about, not the whole toolbar
     target: "#btn-library, #btn-settings",
     title: "Start from a worked example",
-    body: "The Library has 47 ready-made simulations - orbits, pendulums, " +
+    body: "The Library has 48 ready-made simulations - orbits, pendulums, " +
           "collisions, gases, chaos, soft bodies - each with a note on what " +
           "it demonstrates. It is the fastest way in: load one, run it, " +
           "then take it apart. The gear beside it holds settings, and help " +

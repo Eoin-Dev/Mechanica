@@ -2,7 +2,7 @@
  *
  * Stepping pipeline (per substep of length h):
  *   1. Evaluate smooth forces (gravity, N-body, drag, springs, drivers,
- *      custom fields), then solve rod/rope tensions at the acceleration
+ *      custom fields), then solve rod/rope and pulley tensions at the acceleration
  *      level (warm-started Gauss-Seidel). Integrate with the selected
  *      integrator:
  *        - Symplectic Euler: 1st order, symplectic. Very robust.
@@ -11,8 +11,8 @@
  *          behaviour for orbits and oscillators.
  *        - RK4: 4th order, non-symplectic. Best short-term accuracy for
  *          smooth systems; may slowly drift on orbits.
- *   2. Remove the tiny residual link drift with an XPBD position solve and
- *      feed the corrections back into velocities.
+ *   2. Remove residual rod/pulley drift with XPBD, enforce the dedicated
+ *      particle/pulley stops, and feed feasible corrections into velocities.
  *   3. Detect all contacts, then resolve them together with iterated
  *      sequential impulses (restitution + Coulomb friction) and
  *      split-impulse positional projection.
@@ -38,7 +38,10 @@ import {
   normalizeAngle,
 } from "./body";
 import { Contact, ContactCache, ContactStatic, solveContacts } from "./contacts";
-import { DistanceLink, Link, LinkDict, SpringLink, linkFromDict } from "./links";
+import {
+  DistanceLink, Link, LinkDict, PULLEY_RADIUS, PulleyLink, SpringLink,
+  linkFromDict,
+} from "./links";
 import { ApproximateGravity } from "./perf-gravity";
 import {
   PERF_ITERATIONS_BY_LEVEL, PERF_MAX_SPEED, PERF_SPRING_PASSES_BY_LEVEL,
@@ -401,6 +404,7 @@ export class World {
   private contactCache: ContactCache = new Map(); // warm-start impulses between substeps
   private rods: DistanceLink[] = [];  // per-step caches, see prepareStep()
   private springs: SpringLink[] = [];
+  private pulleys: PulleyLink[] = [];
   private perf = new PerfSolver();    // performance mode's spring projection
   private movers: Body[] = [];
   private moverInvMass = new Float64Array(0);
@@ -470,13 +474,17 @@ export class World {
   private prepareStep(h: number): void {
     const springs = this.springs;
     const rods = this.rods;
+    const pulleys = this.pulleys;
     const noCollide = this.noCollide;
     springs.length = 0;
     rods.length = 0;
+    pulleys.length = 0;
     noCollide.clear();
+    this.syncPulleyMounts();
     for (const ln of this.links) {
       if (ln instanceof DistanceLink) rods.push(ln);
-      else springs.push(ln);
+      else if (ln instanceof SpringLink) springs.push(ln);
+      else pulleys.push(ln);
       // Linked bodies DO collide with each other: a ball on a string
       // still bounces off the ball it is tied to. The only exception is
       // a link whose natural length is shorter than the bodies' combined
@@ -489,6 +497,10 @@ export class World {
         noCollide.add(a < b ? `${a},${b}` : `${b},${a}`);
       }
     }
+    // Normalize imported, edited, or pointer-moved assemblies before any
+    // force evaluation sees their tangent geometry. This also makes a first
+    // step from an overlapping authoring state non-explosive.
+    this.enforcePulleyStops(pulleys, true);
     this.prepareSprings(h, springs);
     // Flag the spring endpoints for subdivisionNeed. Doing it here rather
     // than in the force loop keeps it out of the per-evaluation path: the
@@ -867,6 +879,7 @@ export class World {
 
     if (this.fields.length > 0) this.applyFields(t);
     this.solveRodForces();
+    this.solvePulleyForces();
   }
 
   // One environment record, refilled per body rather than rebuilt. It is
@@ -935,6 +948,27 @@ export class World {
   private rodB: Body[] = [];
   private rodNum = new Float64Array(0); // wa, wb, wSum, nx, ny, d, mu
   private static ROD_W = 7;
+
+  private pulleyCurvature(body: Body, pulley: Body, radialX: number,
+                          radialY: number, tangentCoeff: number,
+                          straight: number, nx: number, ny: number): number {
+    const cx = body.pos.x - pulley.pos.x;
+    const cy = body.pos.y - pulley.pos.y;
+    const d = Math.hypot(cx, cy);
+    if (d <= PULLEY_RADIUS + 1e-9) {
+      const vn = body.vel.x * nx + body.vel.y * ny;
+      return Math.max(0.0, body.vel.length2() - vn * vn) / straight;
+    }
+    const tangentX = -radialY;
+    const tangentY = radialX;
+    const vr = body.vel.x * radialX + body.vel.y * radialY;
+    const vt = body.vel.x * tangentX + body.vel.y * tangentY;
+    const radialCoeff = straight / d;
+    const radialDerivative = PULLEY_RADIUS * PULLEY_RADIUS /
+      (radialCoeff * d * d * d);
+    return radialDerivative * vr * vr + radialCoeff * vt * vt / d -
+      2 * tangentCoeff * vr * vt / d;
+  }
 
   private solveRodForces(): void {
     const links = this.rods;
@@ -1023,6 +1057,97 @@ export class World {
     // deliberately NOT truncated: emptying and regrowing these every call
     // makes V8 reallocate the backing store each time, which cost more
     // than the row objects they replaced. `n` alone bounds what is live.
+  }
+
+  /** Add equal, tension-only forces for every ideal pulley string.
+   *
+   * For the complete live tangent path, both endpoint gradients point away
+   * from their current wheel contacts. A positive multiplier therefore
+   * accelerates each particle back toward its contact. The two inverse-mass-
+   * scaled accelerations come from one shared multiplier, so the tension is
+   * equal on both legs even when the particle masses differ. Curvature terms
+   * keep swinging legs accurate at speed; clamping the multiplier at zero
+   * prevents a slack string pushing.
+   */
+  private solvePulleyForces(): void {
+    const links = this.pulleys;
+    if (links.length === 0) return;
+    for (const ln of links) {
+      const a = ln.a;
+      const b = ln.b;
+      const wa = a.invMass;
+      const wb = b.invMass;
+      const wSum = wa + wb;
+      if (wSum === 0.0) continue;
+      const geom = ln.geometry();
+      const da = geom.da;
+      const db = geom.db;
+      if (da < 1e-9 || db < 1e-9) {
+        ln.mu = 0.0;
+        continue;
+      }
+      if (geom.totalLength < ln.length - 1e-9) {
+        ln.mu = 0.0;
+        continue;
+      }
+      const nax = geom.nax;
+      const nay = geom.nay;
+      const nbx = geom.nbx;
+      const nby = geom.nby;
+      let mu = Math.max(0.0, ln.mu);
+      if (mu !== 0.0) {
+        a.acc.x -= mu * wa * nax;
+        a.acc.y -= mu * wa * nay;
+        b.acc.x -= mu * wb * nbx;
+        b.acc.y -= mu * wb * nby;
+      }
+      for (let pass = 0; pass < ROD_FORCE_PASSES; pass++) {
+        const curveA = this.pulleyCurvature(a, ln.pulley,
+          geom.aRadialX, geom.aRadialY, geom.aTangentCoeff, da, nax, nay);
+        const curveB = this.pulleyCurvature(b, ln.pulley,
+          geom.bRadialX, geom.bRadialY, geom.bTangentCoeff, db, nbx, nby);
+        const cdd = a.acc.x * nax + a.acc.y * nay + curveA +
+          b.acc.x * nbx + b.acc.y * nby + curveB;
+        const next = Math.max(0.0, mu + cdd / wSum);
+        const dmu = next - mu;
+        mu = next;
+        if (dmu === 0.0) break;
+        a.acc.x -= dmu * wa * nax;
+        a.acc.y -= dmu * wa * nay;
+        b.acc.x -= dmu * wb * nbx;
+        b.acc.y -= dmu * wb * nby;
+        if (Math.abs(dmu) < 1e-9) break;
+      }
+      ln.mu = mu;
+    }
+    // The wheel is deliberately absent from the ordinary collision system,
+    // but each particle still has to stop at the pulley frame. Cancel only
+    // acceleration into that frame: tangential acceleration remains free, as
+    // it would for a frictionless block contact.
+    this.clampPulleyStopAccelerations(links);
+  }
+
+  /** Remove inward acceleration at an active particle/pulley stop. */
+  private clampPulleyStopAccelerations(links: readonly PulleyLink[]): void {
+    for (const ln of links) {
+      this.clampPulleyBodyAcceleration(ln.a, ln.pulley);
+      this.clampPulleyBodyAcceleration(ln.b, ln.pulley);
+    }
+  }
+
+  private clampPulleyBodyAcceleration(body: Body, pulley: Body): void {
+    const dx = body.pos.x - pulley.pos.x;
+    const dy = body.pos.y - pulley.pos.y;
+    const d = Math.hypot(dx, dy);
+    const limit = PULLEY_RADIUS + body.radius;
+    if (d > limit + 1e-7 || d < 1e-12) return;
+    const nx = dx / d;
+    const ny = dy / d;
+    const inward = body.acc.x * nx + body.acc.y * ny;
+    if (inward < 0.0) {
+      body.acc.x -= inward * nx;
+      body.acc.y -= inward * ny;
+    }
   }
 
   // -------------------------------------------------------------- integrators
@@ -1368,6 +1493,15 @@ export class World {
         const level = performanceLevel(this.performanceLevel);
         this.perf.solve(projected, h, PERF_SPRING_PASSES_BY_LEVEL[level]);
       }
+      if (this.pulleys.length > 0) {
+        // A pulley row is cheap (two live tangent legs) but nonlinear.
+        // Keep eight refinement passes even in the most aggressive tier so
+        // dropping general scene iterations cannot visibly stretch a taut
+        // A-level mechanics string, including at an active wheel stop. Each
+        // pass is one two-particle row and is still cheap compared with
+        // contact generation or an ordinary dense scene solve.
+        this.solvePulleyPositions(this.pulleys, invH, Math.max(8, iters));
+      }
       if (rigid.length > 0) this.solveRodPositions(rigid, invH, iters);
 
       // `contacts` is a snapshot of the contacts that exist NOW, for the
@@ -1377,6 +1511,10 @@ export class World {
       solveContacts(this.bodies, this.walls, this.contacts, iters,
                     this.contactStatic.simplified ? null : this.contactCache,
                     this.contactStatic);
+      // Ordinary contacts intentionally exclude the axle. Reassert the
+      // particle stop after every other position solver so no later correction
+      // can leave a particle inside the wheel for the next force evaluation.
+      if (this.pulleys.length > 0) this.enforcePulleyStops(this.pulleys, true);
 
       if (this.globalDamping > 0.0) {
         const decay = Math.max(0.0, 1.0 - this.globalDamping * h);
@@ -1534,6 +1672,154 @@ export class World {
         const rate = kinematicRates?.get(body.id) ?? invH;
         body.vel.x += body.corrX * rate;
         body.vel.y += body.corrY * rate;
+      }
+    }
+  }
+
+  /** XPBD drift correction for the summed two-leg pulley constraint. */
+  private solvePulleyPositions(links: PulleyLink[], invH: number,
+                               iterations: number): void {
+    const touched = new Map<number, Body>();
+    for (const ln of links) {
+      ln.lambda = 0.0;
+      if (!touched.has(ln.a.id)) {
+        touched.set(ln.a.id, ln.a);
+        ln.a.corrX = 0.0;
+        ln.a.corrY = 0.0;
+      }
+      if (!touched.has(ln.b.id)) {
+        touched.set(ln.b.id, ln.b);
+        ln.b.corrX = 0.0;
+        ln.b.corrY = 0.0;
+      }
+    }
+    for (let pass = 0; pass < iterations; pass++) {
+      this.enforcePulleyStops(links, false);
+      let worst = 0.0;
+      for (const ln of links) {
+        const a = ln.a;
+        const b = ln.b;
+        const wa = a.invMass;
+        const wb = b.invMass;
+        const geom = ln.geometry();
+        const da = geom.da;
+        const db = geom.db;
+        if (da < 1e-12 || db < 1e-12) continue;
+        const c = geom.totalLength - ln.length;
+        if (c <= 0.0) continue;
+        // At the wheel stop a particle can slide around the frame but cannot
+        // be corrected through it. Project that endpoint's string gradient
+        // onto the local tangent, and let the other endpoint take the radial
+        // part of the length correction. This active-set treatment prevents
+        // the two constraints fighting and manufacturing velocity.
+        // Keep this hot path scalar: Performance mode still solves this row,
+        // so no per-pass closures or tuple allocations belong here.
+        let gax = geom.nax;
+        let gay = geom.nay;
+        let ga2 = 1.0;
+        const arx = a.pos.x - ln.pulley.pos.x;
+        const ary = a.pos.y - ln.pulley.pos.y;
+        const ad = Math.hypot(arx, ary);
+        if (ad <= PULLEY_RADIUS + a.radius + 1e-7 && ad >= 1e-12) {
+          const anx = arx / ad;
+          const any = ary / ad;
+          const radial = gax * anx + gay * any;
+          // dlam is negative while correcting an overlong string, so a
+          // positive radial gradient would move this body inward through the
+          // stop. A non-positive one remains feasible and is preserved.
+          if (radial > 0.0) {
+            gax -= radial * anx;
+            gay -= radial * any;
+            ga2 = gax * gax + gay * gay;
+          }
+        }
+        let gbx = geom.nbx;
+        let gby = geom.nby;
+        let gb2 = 1.0;
+        const brx = b.pos.x - ln.pulley.pos.x;
+        const bry = b.pos.y - ln.pulley.pos.y;
+        const bd = Math.hypot(brx, bry);
+        if (bd <= PULLEY_RADIUS + b.radius + 1e-7 && bd >= 1e-12) {
+          const bnx = brx / bd;
+          const bny = bry / bd;
+          const radial = gbx * bnx + gby * bny;
+          if (radial > 0.0) {
+            gbx -= radial * bnx;
+            gby -= radial * bny;
+            gb2 = gbx * gbx + gby * gby;
+          }
+        }
+        const wSum = wa * ga2 + wb * gb2;
+        if (wSum === 0.0) continue;
+        const alpha = ln.compliance * invH * invH;
+        const dlam = (-c - alpha * ln.lambda) / (wSum + alpha);
+        ln.lambda += dlam;
+        const ax = wa * dlam * gax;
+        const ay = wa * dlam * gay;
+        const bx = wb * dlam * gbx;
+        const by = wb * dlam * gby;
+        a.pos.x += ax;
+        a.pos.y += ay;
+        b.pos.x += bx;
+        b.pos.y += by;
+        a.corrX += ax;
+        a.corrY += ay;
+        b.corrX += bx;
+        b.corrY += by;
+        worst = Math.max(worst, Math.abs(dlam));
+      }
+      this.enforcePulleyStops(links, false);
+      if (worst < 1e-10) break;
+    }
+    for (const b of touched.values()) {
+      const rate = b.held && Number.isFinite(b.kinematicCorrectionRate)
+        ? Math.min(invH, b.kinematicCorrectionRate) : invH;
+      b.vel.x += b.corrX * rate;
+      b.vel.y += b.corrY * rate;
+    }
+    this.enforcePulleyStops(links, true);
+  }
+
+  /** Keep pulley particles outside the axle's finite frame.
+   *
+   * This is a dedicated zero-restitution unilateral contact, not a body/body
+   * collision: the axle remains globally non-colliding as promised, while its
+   * own two particles cannot cross the singular centre of their routed string.
+   * Position recovery never becomes velocity, and inward normal velocity is
+   * removed at contact, so reaching the stop can dissipate energy but cannot
+   * create it.
+   */
+  private enforcePulleyStops(links: readonly PulleyLink[], clampVelocity: boolean): void {
+    for (const ln of links) {
+      this.enforcePulleyBodyStop(ln.a, ln.pulley, ln.guideAOffset, clampVelocity);
+      this.enforcePulleyBodyStop(ln.b, ln.pulley, ln.guideBOffset, clampVelocity);
+    }
+  }
+
+  private enforcePulleyBodyStop(body: Body, pulley: Body, fallback: Vec2,
+                                clampVelocity: boolean): void {
+    let dx = body.pos.x - pulley.pos.x;
+    let dy = body.pos.y - pulley.pos.y;
+    let d = Math.hypot(dx, dy);
+    const limit = PULLEY_RADIUS + body.radius;
+    if (d < 1e-12) {
+      const fd = Math.max(1e-12, fallback.length());
+      dx = fallback.x / fd;
+      dy = fallback.y / fd;
+      d = 0.0;
+    } else {
+      dx /= d;
+      dy /= d;
+    }
+    if (d < limit) {
+      body.pos.x = pulley.pos.x + dx * limit;
+      body.pos.y = pulley.pos.y + dy * limit;
+    }
+    if (clampVelocity && d <= limit + 1e-7) {
+      const inward = body.vel.x * dx + body.vel.y * dy;
+      if (inward < 0.0) {
+        body.vel.x -= inward * dx;
+        body.vel.y -= inward * dy;
       }
     }
   }
@@ -1754,6 +2040,68 @@ export class World {
     return null;
   }
 
+  /** Attach a pulley axle to one endpoint of a static wall. The first guide
+   * sits on the wall's upper surface, so a particle spawned or resting along
+   * the wall has a string leg exactly parallel to it. */
+  mountPulley(link: PulleyLink, wall: Wall, end: 0 | 1): void {
+    const endpoint = end === 0 ? wall.a : wall.b;
+    const other = end === 0 ? wall.b : wall.a;
+    const dx = other.x - endpoint.x;
+    const dy = other.y - endpoint.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 1e-9) return;
+    const nx = -dy / d;
+    const ny = dx / d;
+    // Prefer the side facing upward under the world's ordinary downward
+    // gravity. For a vertical wall the tie-break chooses the left surface;
+    // the hanging leg is then placed on the opposite side.
+    link.mountNormalSign = ny > 1e-9 || (Math.abs(ny) <= 1e-9 && nx < 0) ? 1 : -1;
+    link.mountWallId = wall.id;
+    link.mountWallEnd = end;
+    this.syncPulleyMounts();
+  }
+
+  /** Recompute mounted pulley geometry after wall endpoint edits and before
+   * every physical step. Missing or degenerate walls detach without deleting
+   * the pulley, leaving its last valid geometry in place. */
+  syncPulleyMounts(): void {
+    for (const ln of this.links) {
+      if (!(ln instanceof PulleyLink) || ln.mountWallId === null) continue;
+      const wall = this.walls.find((w) => w.id === ln.mountWallId);
+      if (wall === undefined) {
+        ln.mountWallId = null;
+        continue;
+      }
+      const endpoint = ln.mountWallEnd === 0 ? wall.a : wall.b;
+      const other = ln.mountWallEnd === 0 ? wall.b : wall.a;
+      const dx = other.x - endpoint.x;
+      const dy = other.y - endpoint.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 1e-9) {
+        ln.mountWallId = null;
+        continue;
+      }
+      const ux = dx / d;
+      const uy = dy / d;
+      const nx = -uy * ln.mountNormalSign;
+      const ny = ux * ln.mountNormalSign;
+      ln.pulley.pos.set(endpoint.x, endpoint.y);
+      ln.pulley.vel.set(0, 0);
+      ln.guideAOffset.set(nx * PULLEY_RADIUS, ny * PULLEY_RADIUS);
+      const hangingSide = Math.abs(ux) > 1e-9 ? (ux < 0 ? 1 : -1)
+        : (nx < 0 ? 1 : -1);
+      ln.guideBOffset.set(hangingSide * PULLEY_RADIUS, 0);
+      const aa = Math.atan2(ln.guideAOffset.y, ln.guideAOffset.x);
+      const ab = hangingSide > 0 ? 0.0 : Math.PI;
+      let sweep = ((ab - aa + Math.PI) % (2 * Math.PI) + 2 * Math.PI) %
+        (2 * Math.PI) - Math.PI;
+      if (Math.abs(Math.abs(sweep) - Math.PI) < 1e-9) {
+        sweep = hangingSide > 0 ? -Math.PI : Math.PI;
+      }
+      ln.wrapSweep = sweep;
+    }
+  }
+
   removeBody(body: Body): void {
     this.removeBodies(new Set([body]));
   }
@@ -1771,33 +2119,72 @@ export class World {
    */
   removeBodies(gone: ReadonlySet<Body>): void {
     if (gone.size === 0) return;
-    this.bodies = this.bodies.filter((b) => !gone.has(b));
-    this.links = this.links.filter((ln) => !gone.has(ln.a) && !gone.has(ln.b));
+    const bodiesGone = new Set(gone);
+    const replacements: DistanceLink[] = [];
+    this.links = this.links.filter((ln) => {
+      if (ln instanceof PulleyLink) {
+        const endGone = gone.has(ln.a) || gone.has(ln.b);
+        const wheelGone = gone.has(ln.pulley);
+        if (endGone) {
+          // Deleting either particle dismantles the assembly but deliberately
+          // leaves the opposite particle as an ordinary independent body.
+          bodiesGone.add(ln.pulley);
+          return false;
+        }
+        if (wheelGone) {
+          // Removing only the wheel releases the same amount of string as an
+          // ordinary inelastic connection between the surviving particles.
+          replacements.push(new DistanceLink(ln.a, ln.b, ln.length, true,
+                                              ln.compliance));
+          return false;
+        }
+      }
+      return !gone.has(ln.a) && !gone.has(ln.b);
+    });
+    this.links = this.links.filter((ln) =>
+      !bodiesGone.has(ln.a) && !bodiesGone.has(ln.b) &&
+      (!(ln instanceof PulleyLink) || !bodiesGone.has(ln.pulley)));
+    if (replacements.length > 0) this.links.push(...replacements);
+    this.bodies = this.bodies.filter((b) => !bodiesGone.has(b));
     if (this.drivers.length > 0) {
       const ids = new Set<number>();
-      for (const b of gone) ids.add(b.id);
+      for (const b of bodiesGone) ids.add(b.id);
       this.drivers = this.drivers.filter((d) => !ids.has(d.bodyId));
     }
   }
 
   removeWall(wall: Wall): void {
-    const i = this.walls.indexOf(wall);
-    if (i >= 0) this.walls.splice(i, 1);
+    this.removeWalls(new Set([wall]));
   }
 
   removeWalls(gone: ReadonlySet<Wall>): void {
     if (gone.size === 0) return;
     this.walls = this.walls.filter((w) => !gone.has(w));
+    this.syncPulleyMounts();
   }
 
   removeLink(link: Link): void {
-    const i = this.links.indexOf(link);
-    if (i >= 0) this.links.splice(i, 1);
+    this.removeLinks(new Set([link]));
   }
 
   removeLinks(gone: ReadonlySet<Link>): void {
     if (gone.size === 0) return;
     this.links = this.links.filter((ln) => !gone.has(ln));
+    const wheels = new Set<Body>();
+    for (const ln of gone) {
+      if (ln instanceof PulleyLink) wheels.add(ln.pulley);
+    }
+    if (wheels.size > 0) {
+      this.bodies = this.bodies.filter((b) => !wheels.has(b));
+      // A malformed imported scene may have ordinary links or drivers aimed
+      // at the internal wheel body. Removing the pulley string must not leave
+      // those dangling references behind.
+      this.links = this.links.filter((ln) =>
+        !wheels.has(ln.a) && !wheels.has(ln.b) &&
+        (!(ln instanceof PulleyLink) || !wheels.has(ln.pulley)));
+      const ids = new Set([...wheels].map((b) => b.id));
+      this.drivers = this.drivers.filter((d) => !ids.has(d.bodyId));
+    }
   }
 
   // ----------------------------------------------------------- serialization
@@ -1912,6 +2299,7 @@ export class World {
 
     const byId = new Map<number, Body>();
     for (const b of w.bodies) byId.set(b.id, b);
+    const claimedPulleyIds = new Set<number>();
     w.links = linkInput
       .filter(entry)
       // `a !== b` rejects a link from a body to itself. Every solver stage
@@ -1920,6 +2308,24 @@ export class World {
       // its own endpoint as sprung - excluding that body from the adaptive
       // subdivision test for the rest of the session.
       .filter((ln) => ln.a !== ln.b && byId.has(ln.a) && byId.has(ln.b))
+      .filter((ln) => {
+        const a = byId.get(ln.a)!;
+        const b = byId.get(ln.b)!;
+        if (ln.type !== "pulley") {
+          // Internal axles are selectable only as pulley wheels. A damaged
+          // scene must not smuggle one into an ordinary rod or spring graph.
+          return !a.isPulley && !b.isPulley;
+        }
+        const pulley = byId.get(ln.pulley);
+        if (a.isAnchor || b.isAnchor || pulley?.isPulley !== true ||
+            ln.pulley === ln.a || ln.pulley === ln.b ||
+            claimedPulleyIds.has(ln.pulley)) return false;
+        // One axle belongs to exactly one routed string. Keeping the first
+        // valid claimant gives hand-edited duplicate references deterministic
+        // behavior and prevents deletion of one assembly dangling another.
+        claimedPulleyIds.add(ln.pulley);
+        return true;
+      })
       .map((ln) => linkFromDict(ln, byId));
     // Rods and springs have separate id counters and their identity keys
     // include the kind, so the same number may legitimately occur once in
@@ -1928,9 +2334,17 @@ export class World {
               () => DistanceLink.nextId++);
     uniqueIds(w.links.filter((link): link is SpringLink => link instanceof SpringLink),
               () => SpringLink.nextId++);
+    uniqueIds(w.links.filter((link): link is PulleyLink => link instanceof PulleyLink),
+              () => PulleyLink.nextId++);
+    const livePulleys = new Set(w.links
+      .filter((link): link is PulleyLink => link instanceof PulleyLink)
+      .map((link) => link.pulley));
+    w.bodies = w.bodies.filter((body) => !body.isPulley || livePulleys.has(body));
+    w.syncPulleyMounts();
     w.fields = fieldInput.filter(entry)
       .map((f) => ForceField.fromDict(f));
     w.drivers = driverInput.filter(entry)
+      .filter((driver) => !byId.get(idOr(driver.body_id, -1))?.isPulley)
       .map((x) => Driver.fromDict(x, preserveAngles));
     return w;
   }

@@ -6,7 +6,7 @@
  */
 import { App, GraphMode, Panel } from "../app";
 import { BODY_PALETTE, Body, Color, MATERIALS, Wall } from "../engine/body";
-import { DistanceLink, SpringLink } from "../engine/links";
+import { DistanceLink, PulleyLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
 import { Selectable } from "../render/draw";
 import { isMathRenderable } from "../core/mathfmt";
@@ -39,7 +39,8 @@ function clampInspectorW(w: number): number {
 function selectionKey(o: Selectable): string {
   const kind = o instanceof Body ? "b"
     : o instanceof Wall ? "w"
-      : o instanceof SpringLink ? "s" : "r";
+      : o instanceof PulleyLink ? "p"
+        : o instanceof SpringLink ? "s" : "r";
   return `${kind}${o.id}`;
 }
 
@@ -311,18 +312,21 @@ export class Inspector implements Panel {
     if (sel.length === 0) {
       let bodies = 0;
       let anchors = 0;
+      let pulleys = 0;
       let springs = 0;
       let rods = 0;
       for (const body of app.world.bodies) {
-        if (body.isAnchor) anchors++;
+        if (body.isPulley) pulleys++;
+        else if (body.isAnchor) anchors++;
         else bodies++;
       }
       for (const link of app.world.links) {
-        if (link instanceof SpringLink) springs++;
+        if (link instanceof PulleyLink) pulleys++;
+        else if (link instanceof SpringLink) springs++;
         else rods++;
       }
       inventory = `:${bodies}:${anchors}:${app.world.walls.length}:` +
-                  `${springs}:${rods}`;
+                  `${pulleys}:${springs}:${rods}`;
     }
     return `sel:${ids}:${drivers}${inventory}`;
   }
@@ -416,7 +420,8 @@ export class Inspector implements Panel {
       this.body.append(section("Box select picks up"));
       const flt = app.boxFilter;
       const rows: Array<[keyof typeof flt, string]> = [
-        ["bodies", "Bodies / particles"], ["anchors", "Anchors"], ["walls", "Walls"],
+        ["bodies", "Bodies / particles"], ["anchors", "Anchors"],
+        ["pulleys", "Pulleys"], ["walls", "Walls"],
         ["springs", "Springs & strings"], ["rods", "Rods"],
       ];
       for (const [key, label] of rows) {
@@ -426,10 +431,12 @@ export class Inspector implements Panel {
       const world = app.world;
       const groups: Array<[Selectable[], string, string]> = [
         [world.bodies.filter((b) => !b.isAnchor), "body", "bodies"],
-        [world.bodies.filter((b) => b.isAnchor), "anchor", "anchors"],
+        [world.bodies.filter((b) => b.isAnchor && !b.isPulley), "anchor", "anchors"],
+        [world.bodies.filter((b) => b.isPulley), "pulley", "pulleys"],
         [world.walls, "wall", "walls"],
         [world.links.filter((l) => l instanceof SpringLink), "spring/string", "springs & strings"],
         [world.links.filter((l) => l instanceof DistanceLink), "rod", "rods"],
+        [world.links.filter((l) => l instanceof PulleyLink), "pulley string", "pulley strings"],
       ];
       const nonEmpty = groups.filter(([g]) => g.length > 0);
       if (nonEmpty.length > 0) {
@@ -451,10 +458,13 @@ export class Inspector implements Panel {
       return;
     }
     if (sel.length === 1 && sel[0] instanceof Body) {
-      if (sel[0].isAnchor) this.buildSingleAnchor(sel[0]);
+      if (sel[0].isPulley) this.buildSinglePulley();
+      else if (sel[0].isAnchor) this.buildSingleAnchor(sel[0]);
       else this.buildSingleBody(sel[0]);
     } else if (sel.length === 1 && sel[0] instanceof Wall) this.buildWall(sel[0]);
-    else if (sel.length === 1) this.buildLink(sel[0] as DistanceLink | SpringLink);
+    else if (sel.length === 1) {
+      this.buildLink(sel[0] as DistanceLink | SpringLink | PulleyLink);
+    }
     else this.buildMulti(sel);
   }
 
@@ -615,16 +625,23 @@ export class Inspector implements Panel {
    * section, and each control writes to all selected objects of that type. */
   private buildMulti(sel: Selectable[]): void {
     const bodies = sel.filter((o): o is Body => o instanceof Body && !o.isAnchor);
-    const anchors = sel.filter((o): o is Body => o instanceof Body && o.isAnchor);
+    const anchors = sel.filter((o): o is Body =>
+      o instanceof Body && o.isAnchor && !o.isPulley);
+    const pulleys = sel.filter((o): o is Body => o instanceof Body && o.isPulley);
     const walls = sel.filter((o): o is Wall => o instanceof Wall);
     const springs = sel.filter((o): o is SpringLink => o instanceof SpringLink);
     const rods = sel.filter((o): o is DistanceLink => o instanceof DistanceLink);
+    const pulleyStrings = sel.filter((o): o is PulleyLink => o instanceof PulleyLink);
     const parts: string[] = [];
     if (bodies.length) parts.push(countNoun(bodies.length, "body", "bodies"));
     if (anchors.length) parts.push(countNoun(anchors.length, "anchor"));
+    if (pulleys.length) parts.push(countNoun(pulleys.length, "pulley"));
     if (walls.length) parts.push(countNoun(walls.length, "wall"));
     if (springs.length) parts.push(countNoun(springs.length, "spring/string", "springs/strings"));
     if (rods.length) parts.push(countNoun(rods.length, "rod"));
+    if (pulleyStrings.length) {
+      parts.push(countNoun(pulleyStrings.length, "pulley string"));
+    }
     this.body.append(el("div", { text: parts.join(", ") + " selected",
       style: "font-weight:600;margin-bottom:6px" }));
 
@@ -709,6 +726,14 @@ export class Inspector implements Panel {
         "Let bodies collide with these anchors. Off, they pass through."));
     }
 
+    if (pulleys.length > 0) {
+      this.typeGroup(pluralNoun(pulleys.length, "Pulley"), pulleys.length, "pulley");
+      this.target.append(el("div", { class: "dim",
+        text: "Pulley wheels are fixed, non-colliding assembly points. " +
+              "Drag a wheel to reposition or mount it; select its string to " +
+              "edit the total natural length." }));
+    }
+
     if (walls.length > 0) {
       const wf = walls[0];
       this.typeGroup(pluralNoun(walls.length, "Wall"), walls.length, "wall");
@@ -749,13 +774,26 @@ export class Inspector implements Panel {
           tooltip: "Fixed separation the rods hold between their bodies." }));
     }
 
+
+    if (pulleyStrings.length > 0) {
+      const pf = pulleyStrings[0];
+      this.typeGroup(pluralNoun(pulleyStrings.length, "Pulley string"),
+                     pulleyStrings.length, "pulley");
+      this.add(slider("Nat. len", () => pf.length,
+        (v) => pulleyStrings.forEach((p) => { p.length = v; }), 0.01, 100.0,
+        { unit: "m", log: true, onCommit: this.commit,
+          tooltip: "Total inextensible string length: both straight legs " +
+                   "and the wrapped section around each wheel." }));
+    }
+
     this.endGroups();
     this.actionButtons();
     // selective deletion: remove just one kind of thing from the selection
     const groups: Array<[Selectable[], string, string]> = [
       [bodies, "body", "bodies"], [anchors, "anchor", "anchors"],
-      [walls, "wall", "walls"], [springs, "spring", "springs"],
-      [rods, "rod", "rods"],
+      [pulleys, "pulley", "pulleys"], [walls, "wall", "walls"],
+      [springs, "spring", "springs"], [rods, "rod", "rods"],
+      [pulleyStrings, "pulley string", "pulley strings"],
     ];
     const nonEmpty = groups.filter(([g]) => g.length > 0);
     if (nonEmpty.length >= 2) {
@@ -844,13 +882,25 @@ export class Inspector implements Panel {
   }
 
   private buildWall(w: Wall): void {
+    const setEndpoint = (point: "a" | "b", axis: "x" | "y", value: number): void => {
+      w[point][axis] = value;
+      // Mount geometry is structural scene state. Refresh it before the
+      // delayed editor commits its undo snapshot, not merely on the next
+      // canvas paint, so undo/redo and structural digests capture one coherent
+      // wall-plus-pulley edit.
+      this.app.world.syncPulleyMounts();
+    };
     this.nameEdit(w);
     this.addHalf(
-      numEdit("x1", () => w.a.x, (v) => { w.a.x = v; }, "m", this.commit, fmt3dp),
-      numEdit("y1", () => w.a.y, (v) => { w.a.y = v; }, "m", this.commit, fmt3dp));
+      numEdit("x1", () => w.a.x, (v) => setEndpoint("a", "x", v),
+              "m", this.commit, fmt3dp),
+      numEdit("y1", () => w.a.y, (v) => setEndpoint("a", "y", v),
+              "m", this.commit, fmt3dp));
     this.addHalf(
-      numEdit("x2", () => w.b.x, (v) => { w.b.x = v; }, "m", this.commit, fmt3dp),
-      numEdit("y2", () => w.b.y, (v) => { w.b.y = v; }, "m", this.commit, fmt3dp));
+      numEdit("x2", () => w.b.x, (v) => setEndpoint("b", "x", v),
+              "m", this.commit, fmt3dp),
+      numEdit("y2", () => w.b.y, (v) => setEndpoint("b", "y", v),
+              "m", this.commit, fmt3dp));
     this.add(slider("Thickness", () => w.thickness, (v) => { w.thickness = v; },
       0.01, 2.0, { unit: "m", log: true, fmt: (v) => v.toFixed(2),
         onCommit: this.commit, tooltip: "Width of the wall across its length." }));
@@ -877,9 +927,20 @@ export class Inspector implements Panel {
     this.app.pushUndo();
   }
 
-  private buildLink(link: SpringLink | DistanceLink): void {
+  private buildLink(link: SpringLink | DistanceLink | PulleyLink): void {
     const app = this.app;
-    if (link instanceof SpringLink) {
+    if (link instanceof PulleyLink) {
+      this.body.append(el("div", { text: "Pulley string (inelastic)",
+        style: "font-weight:600;margin-bottom:6px" }));
+      this.add(slider("Nat. len", () => link.length, (v) => { link.length = v; },
+        0.01, 100.0, { unit: "m", log: true, onCommit: this.commit,
+          tooltip: "Total length of both legs and the wrapped section. The " +
+                   "string is rigid in tension and free when slack." }));
+      this.body.append(el("div", { class: "dim",
+        text: "The wheel is fixed and non-colliding. A mounted wheel follows " +
+              "its wall endpoint; both particles remain ordinary colliding " +
+              "bodies and may slide or swing freely." }));
+    } else if (link instanceof SpringLink) {
       const isString = link.tensionOnly;
       this.body.append(el("div", { text: isString ? "String (elastic)" : "Spring",
         style: "font-weight:600;margin-bottom:6px" }));
@@ -917,6 +978,18 @@ export class Inspector implements Panel {
       }
     }
     this.add(button("Delete", () => app.controller.deleteSelection(),
+      { icon: ICONS.trash, style: "danger" }));
+  }
+
+  private buildSinglePulley(): void {
+    this.body.append(el("div", { text: "Pulley wheel",
+      style: "font-weight:600;margin-bottom:6px" }));
+    this.body.append(el("div", { class: "dim",
+      text: "A fixed, non-colliding axle. It has no editable material or " +
+            "motion properties. Drag the wheel to reposition it; release near " +
+            "a wall end to mount it. Delete it to release the two particles " +
+            "as an ordinary inelastic string." }));
+    this.add(button("Delete wheel", () => this.app.controller.deleteSelection(),
       { icon: ICONS.trash, style: "danger" }));
   }
 

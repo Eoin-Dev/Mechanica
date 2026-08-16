@@ -176,7 +176,8 @@ export class App {
   camera = new Camera(800, 600);
   view = new ViewSettings();
   selection: Selectable[] = [];
-  boxFilter = { bodies: true, anchors: true, walls: true, springs: true, rods: true };
+  boxFilter = { bodies: true, anchors: true, pulleys: true, walls: true,
+                springs: true, rods: true };
   controller: CanvasController;
 
   playing = false;
@@ -1898,6 +1899,7 @@ export class App {
     } else {
       this.performanceRenderPhase = 0;
     }
+    this.world.syncPulleyMounts();
     const t0 = performance.now();
     const ctx = this.ctx;
     const dpr = this.renderPixelRatio;

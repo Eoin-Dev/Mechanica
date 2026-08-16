@@ -6,6 +6,7 @@
  * exact same JSON format - desktop scene files load unchanged.
  */
 import { SceneLimitError, World, WorldDict } from "../engine/world";
+import { PulleyLink } from "../engine/links";
 
 const SCENE_PREFIX = "mechanica.scene.";
 // per-scene user metadata (description, ...) lives under a separate key so
@@ -82,7 +83,8 @@ function visitStructuralValues(world: World,
     if (!visit(b.constForce.x)) return false;
     if (!visit(b.constForce.y)) return false;
     if (!visit((b.locked ? 1 : 0) | (b.collides ? 2 : 0) |
-               (b.noRotation ? 4 : 0) | (b.isAnchor ? 8 : 0))) return false;
+               (b.noRotation ? 4 : 0) | (b.isAnchor ? 8 : 0) |
+               (b.isPulley ? 16 : 0))) return false;
     if (!visit(b.color[0])) return false;
     if (!visit(b.color[1])) return false;
     if (!visit(b.color[2])) return false;
@@ -107,7 +109,20 @@ function visitStructuralValues(world: World,
     if (!visit(ln.id)) return false;
     if (!visit(ln.a.id)) return false;
     if (!visit(ln.b.id)) return false;
-    if ("stiffness" in ln) {
+    if (ln instanceof PulleyLink) {
+      if (!visit(3)) return false;
+      if (!visit(ln.pulley.id)) return false;
+      if (!visit(ln.length)) return false;
+      if (!visit(ln.compliance)) return false;
+      if (!visit(ln.guideAOffset.x)) return false;
+      if (!visit(ln.guideAOffset.y)) return false;
+      if (!visit(ln.guideBOffset.x)) return false;
+      if (!visit(ln.guideBOffset.y)) return false;
+      if (!visit(ln.wrapSweep)) return false;
+      if (!visit(ln.mountWallId ?? -1)) return false;
+      if (!visit(ln.mountWallEnd)) return false;
+      if (!visit(ln.mountNormalSign)) return false;
+    } else if ("stiffness" in ln) {
       if (!visit(1)) return false;
       if (!visit(ln.restLength)) return false;
       if (!visit(ln.stiffness)) return false;

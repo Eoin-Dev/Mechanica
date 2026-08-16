@@ -1,7 +1,7 @@
 /** Canvas rendering: grid, bodies, walls, links and analysis overlays. */
 import { Vec2 } from "../core/vec";
 import { Body, Color, Wall } from "../engine/body";
-import { Link, SpringLink } from "../engine/links";
+import { Link, PulleyLink, SpringLink } from "../engine/links";
 import { World } from "../engine/world";
 import * as theme from "../ui/theme";
 import { css, lighten } from "../ui/theme";
@@ -692,8 +692,12 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   for (const link of world.links) {
     const ax = link.a.pos.x, ay = link.a.pos.y;
     const bx = link.b.pos.x, by = link.b.pos.y;
-    if (Math.max(ax, bx) < minX - margin || Math.min(ax, bx) > maxX + margin ||
-        Math.max(ay, by) < minY - margin || Math.min(ay, by) > maxY + margin) {
+    const px = link instanceof PulleyLink ? link.pulley.pos.x : ax;
+    const py = link instanceof PulleyLink ? link.pulley.pos.y : ay;
+    if (Math.max(ax, bx, px) < minX - margin ||
+        Math.min(ax, bx, px) > maxX + margin ||
+        Math.max(ay, by, py) < minY - margin ||
+        Math.min(ay, by, py) > maxY + margin) {
       continue;
     }
     const pax = (ax - cx) * zoom + ox;
@@ -702,7 +706,29 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     const pby = (cy - by) * zoom + oy;
     const selected = picked.has(link);
     const hovered = link === hover;
-    if (link instanceof SpringLink) {
+    if (link instanceof PulleyLink) {
+      const geom = link.geometry();
+      const ga = geom.ga;
+      const gb = geom.gb;
+      const pga = cam.toScreen(ga);
+      const pgb = cam.toScreen(gb);
+      const centre = cam.toScreen(link.pulley.pos);
+      const slack = geom.totalLength < link.length - 1e-9;
+      const color = selected ? theme.SELECTION
+        : hovered ? STRING_HOVER : slack ? STRING_SLACK : STRING_TAUT;
+      const path = STROKES.path(color, slack ? 1 : 2);
+      path.moveTo(pax, pay);
+      path.lineTo(pga[0], pga[1]);
+      const guideAngle = Math.atan2(ga.y - link.pulley.pos.y,
+                                    ga.x - link.pulley.pos.x);
+      const start = -guideAngle;
+      const end = -(guideAngle + geom.sweep);
+      path.moveTo(pga[0], pga[1]);
+      path.arc(centre[0], centre[1], link.pulley.radius * zoom,
+               start, end, geom.sweep > 0);
+      path.moveTo(pgb[0], pgb[1]);
+      path.lineTo(pbx, pby);
+    } else if (link instanceof SpringLink) {
       if (link.tensionOnly) {
         // elastic string: a plain line, thinner while slack
         // Squared comparison avoids one square root per visible elastic
@@ -785,6 +811,36 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     const pr = Math.max(2, body.radius * cam.zoom);
     let color = body.color;
     if (body === hover && !picked.has(body)) color = lighten(color, 35);
+    if (body.isPulley) {
+      fillCircle(ctx, sx, sy, pr, color);
+      if (!simplify && pr >= 7) {
+        ctx.strokeStyle = css(lighten(color, 85));
+        ctx.lineWidth = Math.max(1, pr * 0.1);
+        ctx.beginPath();
+        for (let spoke = 0; spoke < 3; spoke++) {
+          const angle = spoke * 2 * Math.PI / 3 - Math.PI / 2;
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(sx + Math.cos(angle) * pr * 0.66,
+                     sy + Math.sin(angle) * pr * 0.66);
+        }
+        ctx.stroke();
+      }
+      const hub = Math.max(2.5, pr * 0.24);
+      fillCircle(ctx, sx, sy, hub, BODY_HUB);
+      ringCircle(ctx, sx, sy, hub, 1, BODY_HUB_EDGE);
+      if (picked.has(body)) {
+        // Selection is the only accent rim. It sits exactly on the wheel edge
+        // instead of floating outside the object.
+        ringCircle(ctx, sx, sy, pr, 2, theme.ACCENT);
+      }
+      if (view.labels && pr >= 3 &&
+          (!aggressive || picked.has(body) || body === hover)) {
+        LABEL_NAMES.push(body.name);
+        LABEL_X.push(sx);
+        LABEL_Y.push(sy - pr - 6);
+      }
+      continue;
+    }
     const edgeStyle = scaledRgb(color, 0.55);
     // Keep each body's path spatially bounded, but combine its disc edge and
     // optional spin marker into one stroke. This avoids both Chromium's
