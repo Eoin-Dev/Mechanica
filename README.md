@@ -52,9 +52,10 @@ The complete build, CI, Pages, and alternative-host instructions are in
 - **Library** — dozens of ready-made, annotated simulations across eight
   categories (press `L`), plus saved scenes with rename, description, export,
   and import.
-- **Analysis** — live energy / momentum / phase-space plots, velocity /
-  acceleration / force vector overlays, motion trails, centre of mass,
-  contact normals, an energy-drift readout in the status bar.
+- **Analysis** — live energy / momentum / phase-space plots, realised net-force
+  vectors, per-link spring/string/pulley force vectors with hover readouts,
+  motion trails, centre of mass, contact normals, and an energy-drift readout
+  in the status bar.
 - **Editing** — direct manipulation with undo/redo, renameable objects, a
   type-filtered box select with bulk editing, grid snapping, property
   copy/paste, alignment tools, scene save/load (JSON).

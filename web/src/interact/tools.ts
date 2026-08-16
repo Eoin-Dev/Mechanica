@@ -14,7 +14,7 @@
  *             so a pendulum can be drawn in two clicks.
  *   pulley  - place a fixed axle with two particles and an inextensible
  *             routed string; placement and later axle drags snap to wall ends.
- *   eraser  - click objects to delete them.
+ *   eraser  - click or scrub across objects to delete them in one gesture.
  *
  * Touch: one finger drives the active tool exactly like the mouse; two
  * fingers pinch-zoom and pan (something the desktop app never had).
@@ -66,7 +66,7 @@ export const TOOL_INFO: Record<Tool, [string, string]> = {
   pulley: ["Add pulley (P)", "Click near a wall end to mount a fixed pulley, or " +
            "click empty space to place one. It creates two particles and one " +
            "inextensible string with equal tension."],
-  eraser: ["Eraser (X)", "Click bodies, walls or links to delete them."],
+  eraser: ["Eraser (X)", "Click or hold and drag across bodies, walls or links to delete them."],
 };
 
 /** Touch wording for the hint bar (phones and tablets): short, tap-based,
@@ -86,7 +86,7 @@ export const TOOL_INFO_TOUCH: Record<Tool, string> = {
   spring: "Tap two bodies to join them with a spring.",
   pulley: "Tap near a wall end to mount a pulley with two particles and an " +
           "inextensible string.",
-  eraser: "Tap bodies, walls or links to delete them.",
+  eraser: "Tap or drag across bodies, walls or links to delete them.",
 };
 
 const ANCHOR_GREY: [number, number, number] = [120, 125, 135];
@@ -162,6 +162,8 @@ export class CanvasController {
   tool: Tool = "select";
   hover: Selectable | null = null;
   mouse: [number, number] = [0, 0];
+  /** Current in-canvas pointer for optional vector hover readouts. */
+  canvasPointer: [number, number] | null = null;
   shiftDown = false;
 
   private app: App;
@@ -188,6 +190,12 @@ export class CanvasController {
   private pointers = new Map<number, [number, number]>();
   private pinchDist = 0;
   private pinchMid: [number, number] = [0, 0];
+  private erasing = false;
+  private eraseChanged = false;
+  private eraseLast: [number, number] | null = null;
+  /** Live wall-end latches use a wider release radius than acquisition so a
+   * snapped wheel does not chatter at the threshold. */
+  private pulleyDragMounts = new Map<Body, { wall: Wall; end: 0 | 1 }>();
 
   constructor(app: App) {
     this.app = app;
@@ -243,6 +251,7 @@ export class CanvasController {
       body.vel.setVec(vel0);
     }
     this.dragItems = [];
+    this.pulleyDragMounts.clear();
     this.dragActive = false;
     this.dragPrev = null;
     if (changed) this.app.invalidateEnergy();
@@ -309,6 +318,9 @@ export class CanvasController {
       const solidPaused = app.dragHitsWalls;
       for (const { body, offset } of this.dragItems) {
         let t = this.snap(new Vec2(worldP.x + offset.x, worldP.y + offset.y));
+        const pulleyLink = body.isPulley ? this.pulleyLink(body) : null;
+        const pulleyTarget = pulleyLink === null ? null : this.pulleyDragTarget(body, t);
+        if (pulleyTarget !== null) t = pulleyTarget.target;
         // Walls are solid while paused too. Whether the clock is running
         // is irrelevant to where a body is allowed to BE - and placing
         // things is mostly done paused, so applying it only during play
@@ -318,7 +330,11 @@ export class CanvasController {
             sweepClearOfWalls(app.world.walls, body.pos, t, body.radius);
           t = new Vec2(cx, cy);
         }
-        body.pos.setVec(t);
+        if (pulleyLink !== null && pulleyTarget !== null) {
+          app.world.movePulleyForEdit(pulleyLink, t, pulleyTarget.mount);
+        } else {
+          body.pos.setVec(t);
+        }
         body.kinematicCorrectionRate = Infinity;
       }
       return;
@@ -334,6 +350,9 @@ export class CanvasController {
     const solid = this.app.dragHitsWalls;
     for (const { body, offset } of this.dragItems) {
       let t = this.snap(new Vec2(worldP.x + offset.x, worldP.y + offset.y));
+      const pulleyLink = body.isPulley ? this.pulleyLink(body) : null;
+      const pulleyTarget = pulleyLink === null ? null : this.pulleyDragTarget(body, t);
+      if (pulleyTarget !== null) t = pulleyTarget.target;
       // sweep from where the body actually is, so a fast flick cannot
       // step over a wall between frames
       if (solid && !body.locked) {
@@ -360,7 +379,17 @@ export class CanvasController {
       }
       body.vel.set(vx, vy);
       body.kinematicCorrectionRate = response / dt;
-      body.pos.setVec(t);
+      if (pulleyLink !== null && pulleyTarget !== null) {
+        if (pulleyTarget.mount === null) {
+          pulleyLink.mountWallId = null;
+          body.pos.setVec(t);
+        } else {
+          app.world.mountPulley(pulleyLink, pulleyTarget.mount.wall,
+                                pulleyTarget.mount.end);
+        }
+      } else {
+        body.pos.setVec(t);
+      }
     }
     this.applyChaseCaps();
   }
@@ -429,6 +458,33 @@ export class CanvasController {
       }
     }
     return mount;
+  }
+
+  private pulleyLink(body: Body): PulleyLink | null {
+    const link = this.app.world.links.find((candidate) =>
+      candidate instanceof PulleyLink && candidate.pulley === body);
+    return link instanceof PulleyLink ? link : null;
+  }
+
+  /** Apply snap acquisition/breakaway hysteresis to one dragged wheel. */
+  private pulleyDragTarget(body: Body, proposed: Vec2): {
+      target: Vec2; mount: { wall: Wall; end: 0 | 1 } | null;
+    } {
+    const sticky = this.pulleyDragMounts.get(body);
+    if (sticky !== undefined && this.app.world.walls.includes(sticky.wall)) {
+      const endpoint = sticky.end === 0 ? sticky.wall.a : sticky.wall.b;
+      const breakRadius = 34.0 / this.app.camera.zoom;
+      if (proposed.distTo(endpoint) <= breakRadius) {
+        return { target: endpoint.copy(), mount: sticky };
+      }
+      this.pulleyDragMounts.delete(body);
+    }
+    const nearby = this.nearestPulleyMount(proposed);
+    if (nearby === null) return { target: proposed, mount: null };
+    const mount = { wall: nearby.wall, end: nearby.end };
+    this.pulleyDragMounts.set(body, mount);
+    const endpoint = nearby.end === 0 ? nearby.wall.a : nearby.wall.b;
+    return { target: endpoint.copy(), mount };
   }
 
   /** Topmost object under the cursor: bodies, then links, then walls. */
@@ -506,6 +562,11 @@ export class CanvasController {
     this.linkFirst = null;
     this.linkCreatedFirst = null;
     this.panning = false;
+    this.erasing = false;
+    this.eraseChanged = false;
+    this.eraseLast = null;
+    this.canvasPointer = null;
+    this.pulleyDragMounts.clear();
     this.app.invalidateCanvas();
   }
 
@@ -520,7 +581,7 @@ export class CanvasController {
     // a fullscreen toggle or focus loss can swallow the matching pointerup,
     // which would otherwise leave bodies stuck "held"
     const abortWindowGesture = (): void => {
-      const moved = this.dragMoved;
+      const moved = this.dragMoved || this.eraseChanged;
       this.cancelPending();
       this.resetInteraction();
       if (moved) this.app.commitEdit();
@@ -537,6 +598,7 @@ export class CanvasController {
         // pointer already gone (released mid-dispatch): continue uncaptured
       }
       this.mouse = this.local(canvas, e);
+      this.canvasPointer = this.mouse;
       this.app.invalidateCanvas();
       // only touch contacts take part in pinch detection: a mouse whose
       // pointerup got eaten (context menu, F11) must never leave a stale
@@ -545,7 +607,7 @@ export class CanvasController {
         this.pointers.set(e.pointerId, this.mouse);
         if (this.pointers.size === 2) {
           // second finger: cancel the one-finger gesture, start pinching
-          const moved = this.dragMoved;
+          const moved = this.dragMoved || this.eraseChanged;
           this.abortDrag();
           if (moved) this.app.commitEdit();
           this.dragMoved = false;
@@ -581,6 +643,7 @@ export class CanvasController {
 
     canvas.addEventListener("pointermove", (e) => {
       const pos = this.local(canvas, e);
+      this.canvasPointer = pos;
       this.app.invalidateCanvas();
       this.shiftDown = e.shiftKey;
       if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, pos);
@@ -602,6 +665,9 @@ export class CanvasController {
       this.mouse = pos;
       this.motion(pos);
     });
+    canvas.addEventListener("pointerleave", (e) => {
+      if (e.buttons === 0) this.canvasPointer = null;
+    });
 
     const finish = (e: PointerEvent) => {
       this.app.invalidateCanvas();
@@ -611,6 +677,7 @@ export class CanvasController {
         return;
       }
       this.mouse = this.local(canvas, e);
+      this.canvasPointer = this.mouse;
       if (e.button === 1 || e.button === 2) {
         e.preventDefault();
         this.panning = false;
@@ -627,7 +694,7 @@ export class CanvasController {
     canvas.addEventListener("pointercancel", (e) => {
       this.app.invalidateCanvas();
       this.pointers.delete(e.pointerId);
-      const moved = this.dragMoved;
+      const moved = this.dragMoved || this.eraseChanged;
       this.abortDrag();
       if (moved) this.app.commitEdit();
       this.dragMoved = false;
@@ -763,12 +830,10 @@ export class CanvasController {
     }
 
     if (tool === "eraser") {
-      const picked = this.pick(mouse);
-      if (picked !== null) {
-        app.beginEdit();
-        this.deleteObject(picked);
-        app.commitEdit();
-      }
+      this.erasing = true;
+      this.eraseChanged = false;
+      this.eraseLast = mouse;
+      this.eraseAt(mouse);
     }
   }
 
@@ -865,6 +930,12 @@ export class CanvasController {
   // ------------------------------------------------------------------ motion
   private motion(mouse: [number, number]): void {
     const app = this.app;
+    if (this.erasing) {
+      const from = this.eraseLast ?? mouse;
+      this.eraseAlong(from, mouse);
+      this.eraseLast = mouse;
+      return;
+    }
     if (this.panning) {
       app.camera.panPixels(mouse[0] - this.panLast[0], mouse[1] - this.panLast[1]);
       this.panLast = mouse;
@@ -932,6 +1003,17 @@ export class CanvasController {
   // ----------------------------------------------------------------- release
   private release(mouse: [number, number]): void {
     const app = this.app;
+    if (this.erasing) {
+      if (this.eraseLast !== null &&
+          (this.eraseLast[0] !== mouse[0] || this.eraseLast[1] !== mouse[1])) {
+        this.eraseAlong(this.eraseLast, mouse);
+      }
+      if (this.eraseChanged) app.commitEdit();
+      this.erasing = false;
+      this.eraseChanged = false;
+      this.eraseLast = null;
+      return;
+    }
     if (this.panning) this.panning = false;
     if (this.velDrag !== null || this.wallDrag !== null || this.dragItems.length > 0) {
       // An inactive (never-moved) press was a pure inspect-click: the bodies
@@ -1094,6 +1176,33 @@ export class CanvasController {
   /** Remove one object, and anything that depended on it (the eraser). */
   deleteObject(obj: Selectable): void {
     this.deleteObjects([obj]);
+  }
+
+  /** Delete every topmost object crossed by one pointer segment.
+   *
+   * Samples are at most three CSS pixels apart, tighter than the smallest
+   * six-pixel link hit target. Fast pointer events therefore cannot skip a
+   * thin string or wall. The whole scrub owns one edit transaction, while the
+   * ordinary batched deletion path retains all pulley cascade semantics. */
+  private eraseAlong(from: [number, number], to: [number, number]): void {
+    const dx = to[0] - from[0];
+    const dy = to[1] - from[1];
+    const distance = Math.hypot(dx, dy);
+    if (distance < 1e-9) return;
+    const steps = Math.ceil(distance / 3);
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const point: [number, number] = [from[0] + dx * t, from[1] + dy * t];
+      this.eraseAt(point);
+    }
+  }
+
+  private eraseAt(point: [number, number]): void {
+    const picked = this.pick(point);
+    if (picked === null) return;
+    if (!this.eraseChanged) this.app.beginEdit();
+    this.deleteObject(picked);
+    this.eraseChanged = true;
   }
 
   /** Remove any number of objects at once, reconciling once at the end.

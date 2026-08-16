@@ -58,6 +58,7 @@ describe("a damped string is one-sided", () => {
     const [a, b] = pair(1.2, 0);
     const s = new SpringLink(a, b, 1.0, 1000.0, 2.0, true);
     expect(axialPull(a, b, s)).toBeCloseTo(200, 6); // k * ext = 1000 * 0.2
+    expect(s.axialForce).toBeCloseTo(200, 6);
   });
 
   it("still damps a stretch that is getting worse", () => {
@@ -80,7 +81,28 @@ describe("a damped string is one-sided", () => {
     const [a, b] = pair(0.8, 0); // compressed by 0.2 m
     const s = new SpringLink(a, b, 1.0, 1000.0, 2.0, false);
     expect(axialPull(a, b, s)).toBeCloseTo(-200, 6);
+    expect(s.axialForce).toBeCloseTo(-200, 6);
   });
+
+  it.each([false, true])("publishes one independent force for every link in a chain (performance=%s)",
+    (performance) => {
+      const w = new World();
+      w.gravity = 0;
+      w.performance = performance;
+      const a = new Body(new Vec2(0, 0), 0.1, 1);
+      const b = new Body(new Vec2(1.2, 0), 0.1, 1);
+      const c = new Body(new Vec2(2.5, 0), 0.1, 1);
+      const left = new SpringLink(a, b, 1, 100, 0, true);
+      const right = new SpringLink(b, c, 1, 100, 0, true);
+      w.bodies.push(a, b, c);
+      w.links.push(left, right);
+      w.step(DT);
+
+      expect(left.axialForce).toBeGreaterThan(0);
+      expect(right.axialForce).toBeGreaterThan(left.axialForce);
+      expect(Number.isFinite(left.axialForce)).toBe(true);
+      expect(Number.isFinite(right.axialForce)).toBe(true);
+    });
 
   it("a hanging damped string never lifts its bob", () => {
     // The failure was visible, not theoretical: a bob on a string that is

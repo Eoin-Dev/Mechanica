@@ -161,7 +161,7 @@ Duplication:
 | String | `E` | Select two endpoints and create a tension-only `SpringLink`; the inspector can convert it to an inelastic rope. |
 | Spring | `S` | Select two endpoints and create a bilateral `SpringLink`. |
 | Pulley | `P` | Place a fixed, non-colliding pulley with two ordinary non-rotating particles and one inextensible `PulleyLink`. A click near a wall endpoint mounts it there and starts the wall-side string tangent parallel to the wall. |
-| Eraser | `X` | Delete the picked selectable through the common deletion path. |
+| Eraser | `X` | Click one selectable or hold and scrub across bodies, links, and walls. Samples are no more than three CSS pixels apart and the whole gesture is one undoable edit. |
 
 For link tools, clicking empty space for the first endpoint creates an anchor;
 clicking empty space for the second creates a normal body. This permits a
@@ -194,7 +194,8 @@ from either straight leg; the wheel body owns the wrapped-arc hit area.
 
 The document context menu is suppressed outside text inputs so right-button
 gestures remain in the application. Losing window focus or changing fullscreen
-resets interaction to prevent a swallowed pointer-up leaving a body held.
+resets interaction to prevent a swallowed pointer-up leaving a body held or an
+eraser transaction open.
 
 ### Touch
 
@@ -272,9 +273,15 @@ separation. A mounted pulley follows its chosen endpoint; its wall-side tangent
 and wrapped arc are recomputed from the wall direction, while its particles
 remain free bodies governed only by string tension and ordinary contacts. The
 pulley wheel can be position-dragged even though it is physically fixed during
-simulation. Starting that drag detaches a mount; releasing within 22 screen
-pixels of any wall endpoint mounts and snaps it there. If the wall is deleted
-or becomes degenerate, the pulley detaches at its last valid position. A
+simulation. During the drag it acquires the nearest wall endpoint within 22
+screen pixels and visibly snaps immediately. The latch stays attached until
+the proposed pointer position moves more than 34 screen pixels from that
+endpoint, avoiding threshold chatter while leaving an intentional breakaway
+gesture. Releasing while latched preserves the mount. While paused, axle motion
+uses existing string slack first; once the routed path reaches its natural
+length, both particles receive the minimum shared axle translation needed to
+keep the string taut instead of storing an explosive length error. If the wall
+is deleted or becomes degenerate, the pulley detaches at its last valid position. A
 pending link holds a direct reference to its first body.
 `resetInteraction()` must therefore clear pending walls/links as well as drags,
 pans, pinches, and box selections whenever the world object graph is replaced.
@@ -315,9 +322,18 @@ For a single object it exposes type-specific state:
 - spring/string natural length, stiffness, damping, one-sidedness/conversion;
 - rod/rope length, compliance where applicable, and rope conversion;
 - pulley-string total natural length, including both straight legs and its
-  wrapped section; and
+  wrapped section, plus a transient four-arrow equal-tension overlay;
+- spring, elastic-string, and inelastic-string axial-force overlays with one
+  arrow on each endpoint; and
 - a read-only pulley-wheel explanation with position dragging and deletion as
-  its only editing actions.
+  its only physical editing actions, plus the pulley tension-overlay toggle.
+
+Tension-vector choices are per-link view state, are not serialized, and do not
+create undo entries. Multi-selection toggles every matching link, so separate
+members of a chain can display simultaneously. Hovering any link-force arrow
+shows its force as a two-component SI column vector; ordinary and elastic
+strings display pulling tension, while a bilateral spring arrow reverses when
+the spring is in compression.
 
 Multi-selection groups objects by type, provides common bulk property controls,
 driver operations, align/distribute operations for bodies, type-aware colours,
@@ -392,12 +408,20 @@ Major behavior includes:
 - spring coils in accurate mode and simplified lines in performance mode;
   dense lattices keep their authored two-coil spring detail as the camera
   zooms in instead of multiplying decorative segments per link;
-- distinct taut/slack string styling;
+- distinct taut/slack string styling with a one-millimetre visual tolerance so
+  microscopic projection residuals cannot make a pulley string flicker;
 - routed pulley strings with two live tangent legs and a finite wrapped arc;
 - body fills/rings, anchor treatment, selection/hover outlines, labels, and
   spin markers. A pulley has no permanent accent outline; selecting its wheel
   draws one tight accent rim exactly on its circumference;
-- velocity, acceleration, and net-force arrows at configurable scale;
+- velocity, acceleration, and net-force arrows at configurable scale. Net
+  force is the realised step-average resultant `mass * deltaVelocity / dt`, so
+  it includes contacts and constraint impulses rather than only the latest
+  smooth-force sample;
+- opt-in link-force arrows, including four equal-tension arrows for a pulley
+  and two endpoint arrows for a spring or string. The extra geometry pass runs
+  only when at least one link has enabled the overlay, and pointer hover draws
+  a two-decimal column-vector readout;
 - centre-of-mass marker and contact normals/impulses;
 - scale bar drawn after interaction overlays.
 

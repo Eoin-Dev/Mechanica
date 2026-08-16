@@ -99,6 +99,42 @@ describe("ideal pulley constraint", () => {
     expect(peakKinetic).toBeLessThanOrEqual(initialKinetic * 1.01);
   });
 
+  it.each([false, true])("sweeps fast particles before they tunnel through the wheel (performance=%s)",
+    (performance) => {
+      const { world, a, wheel, string } = assembly(1, 1);
+      world.gravity = 0;
+      world.performance = performance;
+      world.performanceLevel = 3;
+      string.length = 100; // isolate the wheel stop from string tension
+      a.pos.set(-1, 1);
+      a.vel.set(240, 0);
+      const initial = world.energy().ke;
+
+      world.step(1 / 60);
+
+      expect(a.pos.x).toBeLessThan(0);
+      expect(a.pos.distTo(wheel.pos)).toBeGreaterThanOrEqual(
+        wheel.radius + a.radius - 1e-9);
+      expect(a.vel.x).toBeLessThanOrEqual(1e-9);
+      expect(world.energy().ke).toBeLessThanOrEqual(initial * 1.000001);
+    });
+
+  it("reports realised net force after support impulses", () => {
+    const world = new World();
+    world.substeps = 8;
+    const body = new Body(new Vec2(0, 0.1), 0.1, 1);
+    body.noRotation = true;
+    body.restitution = 0;
+    const floor = new Wall(new Vec2(-2, 0), new Vec2(2, 0), 0);
+    floor.restitution = 0;
+    world.bodies.push(body);
+    world.walls.push(floor);
+    for (let i = 0; i < 120; i++) world.step(1 / 120);
+
+    expect(body.acc.y).toBeLessThan(-9); // smooth-force sample still has gravity
+    expect(Math.abs(body.netForce.y)).toBeLessThan(0.1); // support cancels it
+  });
+
   it.each([0, 1, 2, 3])("stays taut and finite at Performance level %s", (level) => {
     const { world, string } = assembly(0.75, 3.5);
     world.performance = true;
@@ -287,6 +323,22 @@ describe("pulley tool", () => {
     privateController.mouse = [199, -100];
     privateController.motion([199, -100]);
     controller.updateDrag();
+    // The latch is visible during the gesture, not deferred until pointer-up.
+    expect(wheel.pos.x).toBe(wall.b.x);
+    expect(wheel.pos.y).toBe(wall.b.y);
+    expect(string.mountWallId).toBe(wall.id);
+
+    // A wider 34 px breakaway threshold prevents threshold chatter while
+    // still letting the user pull the wheel free deliberately.
+    privateController.mouse = [240, -100];
+    privateController.motion([240, -100]);
+    controller.updateDrag();
+    expect(wheel.pos.x).toBeCloseTo(2.4, 10);
+    expect(string.mountWallId).toBeNull();
+
+    privateController.mouse = [199, -100];
+    privateController.motion([199, -100]);
+    controller.updateDrag();
     privateController.release([199, -100]);
 
     expect(wheel.pos.x).toBe(wall.b.x);
@@ -295,6 +347,20 @@ describe("pulley tool", () => {
     expect(string.mountWallEnd).toBe(1);
     expect(wheel.locked).toBe(true);
     expect(wheel.collides).toBe(false);
+  });
+
+  it("consumes slack then carries both particles during a paused axle drag", () => {
+    const { world, a, b, wheel, string } = assembly();
+    string.length += 0.25;
+    const oldA = a.pos.copy();
+    const oldB = b.pos.copy();
+    world.movePulleyForEdit(string, wheel.pos.add(new Vec2(2, 0)));
+
+    expect(string.currentLength()).toBeLessThanOrEqual(string.length + 2e-6);
+    expect(a.pos.x).toBeGreaterThan(oldA.x);
+    expect(b.pos.x).toBeGreaterThan(oldB.x);
+    expect(a.vel.length2()).toBe(0);
+    expect(b.vel.length2()).toBe(0);
   });
 
   it("box-selects a complete pulley when every other type filter is off", () => {

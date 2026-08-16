@@ -217,6 +217,7 @@ function moveAllowance(b: Body): number {
 export class PerfSolver {
   // body pack: every endpoint at least one spring can move
   private pBody: Body[] = [];
+  private pLink: SpringLink[] = [];
   private px = new Float64Array(0);  // position, mutated by the projection
   private py = new Float64Array(0);
   private px0 = new Float64Array(0); // position as the substep's solve began
@@ -239,6 +240,13 @@ export class PerfSolver {
   solve(springs: SpringLink[], h: number, passes: number): void {
     if (!this.gather(springs, h)) return;
     this.project(passes);
+    // Publish the signed XPBD reaction only for the optional link-force
+    // overlay. This reuses the row multiplier already produced by the solve;
+    // no second physics pass or per-row allocation is introduced.
+    const invH2 = 1.0 / (h * h);
+    for (let i = 0; i < this.nRows; i++) {
+      this.pLink[i].axialForce = -this.row[i * PerfSolver.W + 2] * invH2;
+    }
     // The emergency strain recovery is another positional projection, so it
     // must run before the one final combined displacement cap. Running it
     // afterwards let this last-resort guard teleport an endpoint arbitrarily
@@ -282,6 +290,7 @@ export class PerfSolver {
     const pw = this.pw;
     const pmove = this.pmove;
     const pBody = this.pBody;
+    const pLink = this.pLink;
     // A stamp rather than a Set or a Map: all this needs is "is this body
     // already in the pack, and where", which two numbers on the body answer
     // without allocating anything per substep.
@@ -290,6 +299,7 @@ export class PerfSolver {
     let n = 0;
     let nPack = 0;
     for (const s of springs) {
+      s.axialForce = 0.0;
       const a = s.a;
       const b = s.b;
       const wa = a.invMass;
@@ -353,6 +363,7 @@ export class PerfSolver {
         row[o + 5] = -1.0;
       }
       row[o + 6] = s.tensionOnly ? 1.0 : 0.0;
+      pLink[n] = s;
       n++;
     }
     this.nRows = n;

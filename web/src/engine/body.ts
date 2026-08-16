@@ -161,6 +161,9 @@ export class Body {
   color: Color;
   // scratch state used by the solver
   acc = new Vec2();
+  /** Realised step-average net force, including contact and constraint
+   * impulses. This is transient analysis state and is never serialized. */
+  netForce = new Vec2();
   prev = new Vec2();
   corrX = 0.0;
   corrY = 0.0;

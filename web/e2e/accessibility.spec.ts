@@ -124,6 +124,10 @@ test("pulley preset and tool expose a complete editable-string assembly", async 
   await expect(page.locator("#status-text")).toContainText("2 links");
   await expect(page.locator("#inspector-panel")).toContainText("Pulley string (inelastic)");
   await expect(page.getByText("Nat. len", { exact: true })).toBeVisible();
+  const tensionVectors = page.getByRole("checkbox", { name: "Tension vectors" });
+  await expect(tensionVectors).toBeVisible();
+  await tensionVectors.check();
+  await expect(tensionVectors).toBeChecked();
 });
 
 test("paused Jelly zoom reports painted FPS without lowering physical quality", async ({ page }) => {
