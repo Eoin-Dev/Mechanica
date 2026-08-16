@@ -619,6 +619,12 @@ button.perf-banner-btn:hover:not(:disabled) {
 .btn-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin: 4px 0; }
 .btn-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 4px 0; }
 .btn-grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 4px 0; }
+.inspector-action {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+  margin-top: 6px;
+}
 
 /* ------------------------------------------------------- formula guide */
 .guide-body { max-width: 100%; }

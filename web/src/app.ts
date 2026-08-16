@@ -1914,7 +1914,8 @@ export class App {
     }
     drawWorld(ctx, this.camera, this.world, this.view, this.selection,
               this.controller.hover, this.trails, w, h, this.trailQuality,
-              this.perfMode, this.perfMode && this.performanceLevel >= 3);
+              this.perfMode, this.perfMode && this.performanceLevel >= 3,
+              this.controller.canvasPointer);
     this.controller.drawOverlays(ctx);
     drawScaleBar(ctx, this.camera, w, h);
     this.renderMs = 0.85 * this.renderMs + 0.15 * (performance.now() - t0);

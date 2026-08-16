@@ -4,14 +4,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";
-import { DistanceLink, SpringLink } from "../src/engine/links";
+import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
 import { Camera } from "../src/render/camera";
 import { ViewSettings, drawGrid, drawWorld } from "../src/render/draw";
 import { Trail } from "../src/render/trail";
+import { WARN, css } from "../src/ui/theme";
 
 interface Op { op: string; style?: string; x?: number; y?: number;
-               cx?: number; cy?: number; }
+               cx?: number; cy?: number; text?: string; }
 
 /** Stand-in for the DOM Path2D, which Node does not provide.
  *
@@ -60,6 +61,9 @@ function recCtx(): { ctx: CanvasRenderingContext2D; ops: Op[] } {
     // the control points, since midpoints move whenever the stride does.
     quadraticCurveTo(cx: number, cy: number, x: number, y: number) {
       ops.push({ op: "quadraticCurveTo", x, y, cx, cy });
+    },
+    fillText(text: string, x: number, y: number) {
+      ops.push({ op: "fillText", text, x, y });
     },
   };
   const ctx = new Proxy(base, {
@@ -269,6 +273,43 @@ describe("link rendering", () => {
 
     expect(detailedSegments).toBeGreaterThan(6);
     expect(denseSegments).toBe(96 * 6 + 2); // plus one spin marker per body
+  });
+
+  it("draws four pulley tension arrows only when enabled and exposes a column vector", () => {
+    const a = new Body(new Vec2(-1, -1), 0.12, 1);
+    const b = new Body(new Vec2(1, -1), 0.12, 1);
+    const wheel = new Body(new Vec2(0, 0), 0.22, Infinity);
+    const link = new PulleyLink(a, b, wheel);
+    link.mu = 10;
+    const world = worldWith(a, b, wheel);
+    world.links.push(link);
+    const cam = new Camera(800, 600);
+    const noTrails = new ViewSettings();
+    noTrails.grid = false;
+    const pointer = cam.toScreen(a.pos);
+    const disabled = recCtx();
+    drawWorld(disabled.ctx, cam, world, noTrails, [], null,
+      new Map(), 800, 600, 1, false, false, pointer);
+    expect(disabled.ops.some((op) =>
+      op.op === "stroke" && op.style === css(WARN))).toBe(false);
+
+    link.showTensionVectors = true;
+    const { ctx, ops } = recCtx();
+
+    drawWorld(ctx, cam, world, noTrails, [], null,
+      new Map(), 800, 600, 1, false, false, pointer);
+
+    const warningStroke = ops.findIndex((op) =>
+      op.op === "stroke" && op.style === css(WARN));
+    expect(warningStroke).toBeGreaterThan(0);
+    let groupStart = warningStroke - 1;
+    while (groupStart >= 0 && ops[groupStart].op !== "stroke" &&
+           ops[groupStart].op !== "fill") groupStart--;
+    const shafts = ops.slice(groupStart + 1, warningStroke)
+      .filter((op) => op.op === "lineTo");
+    expect(shafts).toHaveLength(4);
+    expect(ops.filter((op) => op.op === "fillText").map((op) => op.text))
+      .toEqual([expect.stringContaining("F ="), expect.stringContaining("⎣")]);
   });
 });
 

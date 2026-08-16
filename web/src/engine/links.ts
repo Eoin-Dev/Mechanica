@@ -89,6 +89,8 @@ export class DistanceLink {
   isRope: boolean;
   lambda = 0.0; // XPBD accumulator (per substep)
   mu = 0.0;     // warm-start guess for the constraint force
+  /** Transient per-link analysis overlay; display state is not scene physics. */
+  showTensionVectors = false;
 
   constructor(a: Body, b: Body, length: number | null = null,
               isRope = false, compliance = 0.0) {
@@ -127,6 +129,11 @@ export class SpringLink {
   tensionOnly: boolean;
   kEff: number;
   cEff: number;
+  /** Signed axial force actually applied by the latest solver evaluation.
+   * Positive pulls the endpoints together; negative pushes them apart. */
+  axialForce = 0.0;
+  /** Transient per-link analysis overlay; display state is not serialized. */
+  showTensionVectors = false;
 
   constructor(a: Body, b: Body, restLength: number | null = null,
               stiffness = 20.0, damping = 0.0, tensionOnly = false) {
@@ -142,6 +149,7 @@ export class SpringLink {
   }
 
   applyForces(): void {
+    this.axialForce = 0.0;
     const a = this.a;
     const b = this.b;
     const dx = b.pos.x - a.pos.x;
@@ -172,6 +180,7 @@ export class SpringLink {
     // covers a negative stiffness (which no slider offers, but which the
     // clamp in prepareSprings only bounds from above).
     if (this.tensionOnly && f < 0.0) return;
+    this.axialForce = f;
     // positive f pulls the ends together
     a.acc.x += f * nx * a.invMass;
     a.acc.y += f * ny * a.invMass;
@@ -223,6 +232,14 @@ export class PulleyLink {
   mountNormalSign: -1 | 1;
   lambda = 0.0;
   mu = 0.0;
+  /** Transient per-link analysis overlay; display state is not serialized. */
+  showTensionVectors = false;
+  // Start of the current solver substep for continuous particle/wheel impact
+  // detection. One sample per endpoint avoids any hot-loop allocation.
+  safeAX = 0.0;
+  safeAY = 0.0;
+  safeBX = 0.0;
+  safeBY = 0.0;
 
   constructor(a: Body, b: Body, pulley: Body, length: number | null = null,
               compliance = 0.0,
@@ -251,6 +268,14 @@ export class PulleyLink {
     this.mountWallEnd = 0;
     this.mountNormalSign = 1;
     this.length = length ?? this.currentLength();
+    this.captureSafePositions();
+  }
+
+  captureSafePositions(): void {
+    this.safeAX = this.a.pos.x;
+    this.safeAY = this.a.pos.y;
+    this.safeBX = this.b.pos.x;
+    this.safeBY = this.b.pos.y;
   }
 
   /** Current tangent geometry around the finite wheel.

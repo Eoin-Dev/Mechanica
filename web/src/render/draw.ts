@@ -191,6 +191,61 @@ function ringCircle(ctx: CanvasRenderingContext2D, cx: number, cy: number,
   ctx.stroke();
 }
 
+function screenSegmentDistance2(px: number, py: number,
+                                ax: number, ay: number,
+                                bx: number, by: number): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const d2 = dx * dx + dy * dy;
+  const t = d2 > 0.0
+    ? Math.max(0.0, Math.min(1.0, ((px - ax) * dx + (py - ay) * dy) / d2))
+    : 0.0;
+  const qx = ax + dx * t - px;
+  const qy = ay + dy * t - py;
+  return qx * qx + qy * qy;
+}
+
+/** Add one link-force arrow and return its pointer distance for hover picking. */
+function addTensionArrow(sx: number, sy: number, fx: number, fy: number,
+                         zoom: number, scale: number,
+                         pointer: [number, number] | null): number {
+  const ex = sx + fx * scale * zoom;
+  const ey = sy - fy * scale * zoom;
+  const dx = ex - sx;
+  const dy = ey - sy;
+  if (dx * dx + dy * dy < 16.0) return Infinity;
+  addArrowXY(STROKES, FILLS, sx, sy, ex, ey, theme.WARN, 2);
+  return pointer === null ? Infinity
+    : screenSegmentDistance2(pointer[0], pointer[1], sx, sy, ex, ey);
+}
+
+function forceComponent(value: number): string {
+  if (Math.abs(value) < 0.005) return "0.00";
+  if (Math.abs(value) >= 10000 || Math.abs(value) < 0.01) {
+    return value.toExponential(2);
+  }
+  return value.toFixed(2);
+}
+
+function drawForceTooltip(ctx: CanvasRenderingContext2D,
+                          pointer: [number, number], fx: number, fy: number,
+                          areaW: number, areaH: number): void {
+  const width = 154;
+  const height = 50;
+  const x = Math.max(6, Math.min(areaW - width - 6, pointer[0] + 14));
+  const y = Math.max(6, Math.min(areaH - height - 6, pointer[1] + 14));
+  ctx.fillStyle = css(theme.PANEL);
+  ctx.strokeStyle = css(theme.OUTLINE);
+  ctx.lineWidth = 1;
+  ctx.fillRect(x, y, width, height);
+  ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+  ctx.fillStyle = css(theme.TEXT);
+  ctx.font = "12px ui-monospace, SFMono-Regular, Consolas, monospace";
+  ctx.textAlign = "left";
+  ctx.fillText(`F = ⎡ ${forceComponent(fx).padStart(9)} ⎤ N`, x + 9, y + 20);
+  ctx.fillText(`    ⎣ ${forceComponent(fy).padStart(9)} ⎦`, x + 9, y + 38);
+}
+
 function lineXY(ctx: CanvasRenderingContext2D, ax: number, ay: number,
                 bx: number, by: number, color: Color, width: number): void {
   ctx.strokeStyle = css(color);
@@ -643,7 +698,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
                           trails: Map<number, Trail>,
                           areaW: number, areaH: number,
                           trailQuality = 1.0, simplify = false,
-                          aggressive = false): void {
+                          aggressive = false,
+                          pointer: [number, number] | null = null): void {
   const halfW = (cam.screenW * 0.5) / cam.zoom;
   const halfH = (cam.screenH * 0.5) / cam.zoom;
   const minX = cam.centre.x - halfW;
@@ -687,9 +743,11 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     }
   }
   const denseSoftMesh = denseSoftSprings >= 96;
+  let tensionVisible = false;
 
   // --- links -----------------------------------------------------------------
   for (const link of world.links) {
+    if (link.showTensionVectors) tensionVisible = true;
     const ax = link.a.pos.x, ay = link.a.pos.y;
     const bx = link.b.pos.x, by = link.b.pos.y;
     const px = link instanceof PulleyLink ? link.pulley.pos.x : ax;
@@ -713,7 +771,11 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
       const pga = cam.toScreen(ga);
       const pgb = cam.toScreen(gb);
       const centre = cam.toScreen(link.pulley.pos);
-      const slack = geom.totalLength < link.length - 1e-9;
+      // The nonlinear projection deliberately leaves microscopic residuals.
+      // A one-nanometre visual threshold made the string alternate between
+      // the taut and slack colours/widths even though its physical state was
+      // unchanged. Only a clearly visible millimetre of slack dims it.
+      const slack = geom.totalLength < link.length - 1e-3;
       const color = selected ? theme.SELECTION
         : hovered ? STRING_HOVER : slack ? STRING_SLACK : STRING_TAUT;
       const path = STROKES.path(color, slack ? 1 : 2);
@@ -904,8 +966,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
         addArrowXY(STROKES, FILLS, sx, sy, ex, ey, theme.ACC_COLOR);
       }
       if (view.forceVectors) {
-        const fx = body.acc.x * body.mass;
-        const fy = body.acc.y * body.mass;
+        const fx = body.netForce.x;
+        const fy = body.netForce.y;
         const ex = (body.pos.x + fx * FORCE_ARROW_SCALE * vScale - cx) * zoom + ox;
         const ey = (cy - body.pos.y - fy * FORCE_ARROW_SCALE * vScale) * zoom + oy;
         addArrowXY(STROKES, FILLS, sx, sy, ex, ey, theme.FORCE_COLOR);
@@ -913,6 +975,59 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     }
     STROKES.strokeAll(ctx); // shafts: one stroke per arrow kind
     FILLS.fillAll(ctx);     // heads: one fill per arrow kind
+  }
+
+  // --- per-link tension / axial force ---------------------------------------
+  // This second pass exists only when a link explicitly opts in. Normal scenes
+  // perform one cheap boolean scan and no geometry or force recomputation.
+  let tensionHoverFx = 0.0;
+  let tensionHoverFy = 0.0;
+  let tensionHoverD2 = 49.0; // seven-pixel hover target
+  if (tensionVisible) {
+    const tensionScale = FORCE_ARROW_SCALE * vScale;
+    const consider = (sx: number, sy: number, fx: number, fy: number): void => {
+      const d2 = addTensionArrow(sx, sy, fx, fy, zoom, tensionScale, pointer);
+      if (d2 < tensionHoverD2) {
+        tensionHoverD2 = d2;
+        tensionHoverFx = fx;
+        tensionHoverFy = fy;
+      }
+    };
+    for (const link of world.links) {
+      if (!link.showTensionVectors) continue;
+      if (link instanceof PulleyLink) {
+        const tension = Math.max(0.0, link.mu);
+        if (!(tension > 0.0)) continue;
+        const geom = link.geometry();
+        const a = cam.toScreen(link.a.pos);
+        const b = cam.toScreen(link.b.pos);
+        const ga = cam.toScreen(geom.ga);
+        const gb = cam.toScreen(geom.gb);
+        // Two forces act on the particles toward their tangent contacts; the
+        // equal-and-opposite pair acts on the pulley at those contacts.
+        consider(a[0], a[1], -tension * geom.nax, -tension * geom.nay);
+        consider(b[0], b[1], -tension * geom.nbx, -tension * geom.nby);
+        consider(ga[0], ga[1], tension * geom.nax, tension * geom.nay);
+        consider(gb[0], gb[1], tension * geom.nbx, tension * geom.nby);
+        continue;
+      }
+      if (link instanceof SpringLink || link.isRope) {
+        const force = link instanceof SpringLink ? link.axialForce : link.mu;
+        if (Math.abs(force) < 1e-12) continue;
+        const dx = link.b.pos.x - link.a.pos.x;
+        const dy = link.b.pos.y - link.a.pos.y;
+        const length = Math.hypot(dx, dy);
+        if (length < 1e-12) continue;
+        const fx = force * dx / length;
+        const fy = force * dy / length;
+        const a = cam.toScreen(link.a.pos);
+        const b = cam.toScreen(link.b.pos);
+        consider(a[0], a[1], fx, fy);
+        consider(b[0], b[1], -fx, -fy);
+      }
+    }
+    STROKES.strokeAll(ctx);
+    FILLS.fillAll(ctx);
   }
 
   // --- contact normals ------------------------------------------------------------------
@@ -973,6 +1088,9 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
         ctx.stroke();
       }
     }
+  }
+  if (pointer !== null && tensionHoverD2 < 49.0) {
+    drawForceTooltip(ctx, pointer, tensionHoverFx, tensionHoverFy, areaW, areaH);
   }
   picked.clear();
   LABEL_NAMES.length = 0;

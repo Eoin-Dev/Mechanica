@@ -408,6 +408,10 @@ export class World {
   private perf = new PerfSolver();    // performance mode's spring projection
   private movers: Body[] = [];
   private moverInvMass = new Float64Array(0);
+  // Start-of-step velocities for the exact realised net-force diagnostic.
+  // The array grows geometrically and is reused; the ordinary force path pays
+  // no allocation even when the overlay is enabled or a scene is large.
+  private diagnosticVel = new Float64Array(0);
   // Enabled drivers, resolved against their (movable) body and flattened
   // once per step: the id->body lookup, the inverse mass and the direction's
   // sine and cosine are all fixed for the step, and a force evaluation
@@ -500,6 +504,7 @@ export class World {
     // Normalize imported, edited, or pointer-moved assemblies before any
     // force evaluation sees their tangent geometry. This also makes a first
     // step from an overlapping authoring state non-explosive.
+    for (const pulley of pulleys) pulley.captureSafePositions();
     this.enforcePulleyStops(pulleys, true);
     this.prepareSprings(h, springs);
     // Flag the spring endpoints for subdivisionNeed. Doing it here rather
@@ -1446,6 +1451,15 @@ export class World {
     const h2 = h * h;
     if (h === 0.0 || h2 === 0.0 || !Number.isFinite(1.0 / h2)) return;
     const invH = 1.0 / h;
+    const bodyCount = this.bodies.length;
+    if (this.diagnosticVel.length < bodyCount * 2) {
+      this.diagnosticVel = new Float64Array(Math.max(32, bodyCount * 4));
+    }
+    for (let i = 0; i < bodyCount; i++) {
+      const b = this.bodies[i];
+      this.diagnosticVel[2 * i] = b.vel.x;
+      this.diagnosticVel[2 * i + 1] = b.vel.y;
+    }
     this.prepareStep(h);
     this.contacts = [];
     this.diverged = [];
@@ -1482,6 +1496,10 @@ export class World {
         Math.floor(SLICE_WORK_BUDGET / (4 * Math.max(1, perEval))));
     }
     for (let s = 0; s < n; s++) {
+      // Continuous wheel stops need the beginning of this exact substep. A
+      // final-position overlap test alone lets a fast particle tunnel through
+      // the wheel and land outside it on the opposite string branch.
+      for (const pulley of this.pulleys) pulley.captureSafePositions();
       // (spin integration happens inside the integrator body loops;
       // torque only arises from contacts, applied there)
       if (adaptive) this.integrateAdaptive(h, this.time);
@@ -1550,6 +1568,23 @@ export class World {
     }
     this.updatePerformanceSleep();
     this.sanitize();
+    // `acc` is the last smooth-force sample taken by the integrator. It does
+    // not include wall/body impulses or the velocity feedback of positional
+    // constraints, so m*acc was not a net-force vector. Publish m*delta-v/dt
+    // instead: the exact average resultant that produced this completed
+    // step's motion, including contacts, links, damping and safety stops.
+    const invDt = 1.0 / dt;
+    for (let i = 0; i < bodyCount; i++) {
+      const b = this.bodies[i];
+      if (b.invMass === 0.0 || !Number.isFinite(b.mass)) {
+        b.netForce.set(0.0, 0.0);
+      } else {
+        b.netForce.set(
+          (b.vel.x - this.diagnosticVel[2 * i]) * b.mass * invDt,
+          (b.vel.y - this.diagnosticVel[2 * i + 1]) * b.mass * invDt,
+        );
+      }
+    }
     this.stepCount++;
   }
 
@@ -1791,17 +1826,44 @@ export class World {
    */
   private enforcePulleyStops(links: readonly PulleyLink[], clampVelocity: boolean): void {
     for (const ln of links) {
-      this.enforcePulleyBodyStop(ln.a, ln.pulley, ln.guideAOffset, clampVelocity);
-      this.enforcePulleyBodyStop(ln.b, ln.pulley, ln.guideBOffset, clampVelocity);
+      this.enforcePulleyBodyStop(ln.a, ln.pulley, ln.guideAOffset,
+        ln.safeAX, ln.safeAY, clampVelocity);
+      this.enforcePulleyBodyStop(ln.b, ln.pulley, ln.guideBOffset,
+        ln.safeBX, ln.safeBY, clampVelocity);
     }
   }
 
   private enforcePulleyBodyStop(body: Body, pulley: Body, fallback: Vec2,
+                                startX: number, startY: number,
                                 clampVelocity: boolean): void {
     let dx = body.pos.x - pulley.pos.x;
     let dy = body.pos.y - pulley.pos.y;
     let d = Math.hypot(dx, dy);
     const limit = PULLEY_RADIUS + body.radius;
+    // Swept circle/point contact: catch a particle whose start and end are
+    // both outside the wheel but whose path crossed its expanded disc. This is
+    // the tunnelling case that could switch tangent branches and create a
+    // discontinuous wrapped length before the old overlap-only stop saw it.
+    const sx = startX - pulley.pos.x;
+    const sy = startY - pulley.pos.y;
+    const mx = body.pos.x - startX;
+    const my = body.pos.y - startY;
+    const move2 = mx * mx + my * my;
+    const startGap = sx * sx + sy * sy - limit * limit;
+    const toward = sx * mx + sy * my;
+    if (startGap >= -1e-10 && move2 > 1e-18 && toward < -1e-12) {
+      const disc = toward * toward - move2 * startGap;
+      if (disc >= 0.0) {
+        const hit = (-toward - Math.sqrt(disc)) / move2;
+        if (hit >= 0.0 && hit < 1.0) {
+          body.pos.x = startX + mx * hit;
+          body.pos.y = startY + my * hit;
+          dx = body.pos.x - pulley.pos.x;
+          dy = body.pos.y - pulley.pos.y;
+          d = Math.hypot(dx, dy);
+        }
+      }
+    }
     if (d < 1e-12) {
       const fd = Math.max(1e-12, fallback.length());
       dx = fallback.x / fd;
@@ -1822,6 +1884,51 @@ export class World {
         body.vel.y -= inward * dy;
       }
     }
+  }
+
+  /** Move an axle during a paused edit without preloading its string.
+   *
+   * Slack is consumed with stationary particles. If the proposed wheel move
+   * would make the routed path longer than its natural length, both particles
+   * receive only the minimum shared translation along the axle displacement
+   * needed to keep the path taut. Their velocities are untouched. */
+  movePulleyForEdit(link: PulleyLink, target: Vec2,
+                    mount: { wall: Wall; end: 0 | 1 } | null = null): void {
+    const oldX = link.pulley.pos.x;
+    const oldY = link.pulley.pos.y;
+    const ax = link.a.pos.x;
+    const ay = link.a.pos.y;
+    const bx = link.b.pos.x;
+    const by = link.b.pos.y;
+    if (mount === null) {
+      link.mountWallId = null;
+      link.pulley.pos.setVec(target);
+    } else {
+      this.mountPulley(link, mount.wall, mount.end);
+    }
+    const dx = link.pulley.pos.x - oldX;
+    const dy = link.pulley.pos.y - oldY;
+    if (dx * dx + dy * dy < 1e-18 ||
+        link.currentLength() <= link.length + 1e-9) return;
+
+    // A full shared translation preserves the pre-drag relative geometry and
+    // is therefore the upper bracket. Search the smallest fraction that makes
+    // the new path non-overlong; this moves particles only after slack is gone.
+    link.a.pos.set(ax + dx, ay + dy);
+    link.b.pos.set(bx + dx, by + dy);
+    if (link.currentLength() > link.length + 1e-9) return;
+    let lo = 0.0;
+    let hi = 1.0;
+    for (let i = 0; i < 18; i++) {
+      const mid = (lo + hi) * 0.5;
+      link.a.pos.set(ax + dx * mid, ay + dy * mid);
+      link.b.pos.set(bx + dx * mid, by + dy * mid);
+      if (link.currentLength() > link.length) lo = mid;
+      else hi = mid;
+    }
+    link.a.pos.set(ax + dx * hi, ay + dy * hi);
+    link.b.pos.set(bx + dx * hi, by + dy * hi);
+    link.captureSafePositions();
   }
 
   /** Freeze any body whose state became non-finite or absurdly large

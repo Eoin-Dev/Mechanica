@@ -39,7 +39,7 @@ by the headless test suite.
 | External force | `constForce`, applied in newtons on every force evaluation. |
 | Modes | `locked`, `collides`, `noRotation`, `isAnchor`, and `isPulley`. |
 | Interaction transient | `held` makes the body infinite-mass during direct manipulation; `kinematicCorrectionRate` carries the pointer-derived rod feedback rate; `speedCap` bounds a dragged connected assembly in Performance mode. |
-| Solver transient | acceleration, previous position, position-correction totals, contact/spring flags, performance-solver slots, contact mass gain, and prior acceleration samples. |
+| Solver transient | acceleration, realised step-average `netForce`, previous position, position-correction totals, contact/spring flags, performance-solver slots, contact mass gain, and prior acceleration samples. |
 
 An anchor is represented by a body because links need the same endpoint shape.
 It is always locked, is named `Anchor`, does not participate in mutual gravity,
@@ -82,12 +82,15 @@ All links reference endpoint `Body` objects directly.
   constraint that becomes slack below its length.
 
 It stores natural `length`, XPBD `compliance` in m/N, a per-substep position
-multiplier `lambda`, and a warm-start tension estimate `mu`.
+multiplier `lambda`, and a warm-start tension estimate `mu`. Its optional
+tension-vector display flag is transient and absent from scene JSON.
 
 `SpringLink` stores `restLength`, authored `stiffness`, authored axial
 `damping`, and `tensionOnly`. It also stores effective `kEff`/`cEff` values
-prepared for the current step. A tension-only spring is the elastic-string
-model: it pulls when stretched and neither pushes nor damps while slack.
+prepared for the current step and publishes the signed axial force actually
+applied by its latest Normal- or Performance-mode solve for diagnostics. A
+tension-only spring is the elastic-string model: it pulls when stretched and
+neither pushes nor damps while slack.
 
 Spring force along the endpoint direction is:
 
@@ -119,7 +122,11 @@ Its own two string particles instead use a dedicated zero-restitution stop at
 normal velocity and acceleration into the active stop are removed while
 tangential motion remains free. The pulley length projection treats a stopped
 endpoint with an active-set tangent gradient, so the string and stop do not
-fight or inject energy when a rising particle reaches the wheel.
+fight or inject energy when a rising particle reaches the wheel. Each solver
+substep also sweeps the particle centre from its starting position against the
+wheel expanded by the particle radius. A fast particle is clamped at the first
+impact even when both sampled endpoints lie outside the wheel, preventing it
+from tunnelling through the disc and switching string branches.
 
 ## World state and effective settings
 
@@ -423,6 +430,10 @@ The stage performs:
    relative-velocity damping as a bounded fraction, which cannot
    overshoot and reverse the velocity it is damping.
 5. Scatter back to live bodies.
+
+The solver also exposes each row's existing signed XPBD reaction
+`-lambda / h^2` for the optional axial-force overlay. This adds no projection
+pass and allocates no per-row objects.
 
 This path trades force-model accuracy for unconditional spring stability at
 coarse resolution.

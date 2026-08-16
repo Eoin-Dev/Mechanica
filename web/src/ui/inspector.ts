@@ -731,7 +731,10 @@ export class Inspector implements Panel {
       this.target.append(el("div", { class: "dim",
         text: "Pulley wheels are fixed, non-colliding assembly points. " +
               "Drag a wheel to reposition or mount it; select its string to " +
-              "edit the total natural length." }));
+               "edit the total natural length." }));
+      const links = this.app.world.links.filter((link): link is PulleyLink =>
+        link instanceof PulleyLink && pulleys.includes(link.pulley));
+      if (links.length > 0) this.addTensionToggle(links);
     }
 
     if (walls.length > 0) {
@@ -763,6 +766,7 @@ export class Inspector implements Panel {
         { unit: "Ns/m", fmt: (v) => v.toFixed(2), onCommit: this.commit,
           tooltip: "Resistance to stretching and compressing, which bleeds " +
                    "energy out of the oscillation." }));
+      this.addTensionToggle(springs);
     }
 
     if (rods.length > 0) {
@@ -772,6 +776,8 @@ export class Inspector implements Panel {
         (v) => rods.forEach((r) => { r.length = v; }), 0.01, 100.0,
         { unit: "m", log: true, onCommit: this.commit,
           tooltip: "Fixed separation the rods hold between their bodies." }));
+      const strings = rods.filter((link) => link.isRope);
+      if (strings.length > 0) this.addTensionToggle(strings);
     }
 
 
@@ -783,7 +789,8 @@ export class Inspector implements Panel {
         (v) => pulleyStrings.forEach((p) => { p.length = v; }), 0.01, 100.0,
         { unit: "m", log: true, onCommit: this.commit,
           tooltip: "Total inextensible string length: both straight legs " +
-                   "and the wrapped section around each wheel." }));
+                    "and the wrapped section around each wheel." }));
+      this.addTensionToggle(pulleyStrings);
     }
 
     this.endGroups();
@@ -919,9 +926,10 @@ export class Inspector implements Panel {
 
   /** Swap a link object in place (elastic string <-> inelastic string). */
   private replaceLink(oldLink: SpringLink | DistanceLink,
-                      newLink: SpringLink | DistanceLink): void {
+                       newLink: SpringLink | DistanceLink): void {
     const world = this.app.world;
     const i = world.links.indexOf(oldLink);
+    newLink.showTensionVectors = oldLink.showTensionVectors;
     if (i >= 0) world.links[i] = newLink;
     this.app.setSelection([newLink]);
     this.app.pushUndo();
@@ -977,8 +985,13 @@ export class Inspector implements Panel {
           "Adds stiffness and damping."));
       }
     }
+    if (link instanceof PulleyLink || link instanceof SpringLink || link.isRope) {
+      this.sub("Analysis");
+      this.addTensionToggle([link]);
+    }
+    this.sub("Actions");
     this.add(button("Delete", () => app.controller.deleteSelection(),
-      { icon: ICONS.trash, style: "danger" }));
+      { icon: ICONS.trash, style: "danger", class: "inspector-action" }));
   }
 
   private buildSinglePulley(): void {
@@ -988,9 +1001,28 @@ export class Inspector implements Panel {
       text: "A fixed, non-colliding axle. It has no editable material or " +
             "motion properties. Drag the wheel to reposition it; release near " +
             "a wall end to mount it. Delete it to release the two particles " +
-            "as an ordinary inelastic string." }));
+             "as an ordinary inelastic string." }));
+    const link = this.app.world.links.find((candidate) =>
+      candidate instanceof PulleyLink && candidate.pulley === this.app.selection[0]);
+    if (link instanceof PulleyLink) {
+      this.sub("Analysis");
+      this.addTensionToggle([link], "Show four equal-tension force vectors: " +
+        "two on the particles and two on the pulley contacts.");
+    }
+    this.sub("Actions");
     this.add(button("Delete wheel", () => this.app.controller.deleteSelection(),
-      { icon: ICONS.trash, style: "danger" }));
+      { icon: ICONS.trash, style: "danger", class: "inspector-action" }));
+  }
+
+  private addTensionToggle(links: Array<SpringLink | DistanceLink | PulleyLink>,
+                           tooltip = "Show the axial force this link applies " +
+                             "to each endpoint. Hover an arrow for its column vector."): void {
+    this.add(checkbox("Tension vectors",
+      () => links.every((link) => link.showTensionVectors),
+      (value) => {
+        for (const link of links) link.showTensionVectors = value;
+        this.app.invalidateCanvas();
+      }, tooltip));
   }
 
   private actionButtons(): void {
@@ -1245,7 +1277,8 @@ export class Inspector implements Panel {
     chk("Acceleration vectors", () => view.accVectors, (v) => { view.accVectors = v; },
         "Orange arrow showing each body's acceleration.");
     chk("Net force vectors", () => view.forceVectors, (v) => { view.forceVectors = v; },
-        "Red arrow showing the net force on each body, F = ma.");
+        "Red arrow showing the realised average net force over the latest " +
+        "physics step, including contacts and constraints (F = m delta-v / delta-t).");
     this.add(slider("Vector size", () => view.vectorScale,
       (v) => { view.vectorScale = v; }, 0.02, 20.0,
       { unit: "x", log: true, fmt: (v) => v.toFixed(2),

@@ -204,8 +204,8 @@ per-step caches, and repeats this pipeline for every substep:
    gravity may use encounter slices inside this phase.
 3. In performance mode, project springs using `PerfSolver`.
 4. Project taut pulley-string and rigid rod/rope position error with XPBD,
-   enforce zero-restitution stops between each pulley and its two particles,
-   and feed only feasible corrections back into velocity.
+   enforce swept zero-restitution stops between each pulley and its two
+   particles, and feed only feasible corrections back into velocity.
 5. Rebuild contacts for the current positions, warm start them, resolve
    impacts and resting velocity constraints, project penetration, and apply
    static-friction anchoring. Maximum approximation retains only normal
@@ -216,8 +216,12 @@ per-step caches, and repeats this pipeline for every substep:
 
 After all substeps, eligible settled bodies may enter Performance-mode sleep,
 non-finite or extreme bodies are restored to their prior position and frozen,
-and `stepCount` advances. Contacts stored on `World` are only the latest
-substep's contacts, which is what the renderer and status bar display.
+and each movable body publishes the realised step-average resultant
+`mass * (finalVelocity - initialVelocity) / dt`. This diagnostic therefore
+includes contacts, links, damping, and safety stops that the integrator's last
+smooth `acc` sample cannot represent. `stepCount` then advances. Contacts
+stored on `World` are only the latest substep's contacts, which is what the
+renderer and status bar display.
 
 ## Rendering lifecycle
 
@@ -238,8 +242,11 @@ dirty render measures cost independently from physics cost and:
    it at `1.5`, `1.25`, `1`, and `1` without changing CSS/input geometry.
 2. Draws the optional world grid; maximum level omits minor lines.
 3. Calls `drawWorld()` with world, camera, view settings, selection, hover,
-   Normal-mode trails, viewport dimensions, adaptive trail quality, and
-   performance mode. Performance mode omits trail drawing entirely.
+   Normal-mode trails, viewport dimensions, adaptive trail quality,
+   performance mode, and the in-canvas pointer used by optional force-arrow
+   readouts. Performance mode omits trail drawing entirely. Link-force geometry
+   receives a second pass only when at least one link enables its transient
+   overlay.
 4. Draws interaction previews and the scale bar.
 5. Updates an exponential moving average of draw cost and tunes only the trail
    vertex budget.

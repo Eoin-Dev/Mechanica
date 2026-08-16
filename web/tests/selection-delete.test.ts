@@ -20,6 +20,11 @@ function makeApp(): { app: App; controller: CanvasController; undos: number } {
     selection: [] as Selectable[],
     undos: 0,
     setSelection(sel: Selectable[]) { stub.selection = sel; },
+    camera: {
+      zoom: 100,
+      toWorld: (x: number, y: number) => new Vec2(x / 100, -y / 100),
+    },
+    invalidateCanvas() {},
     invalidateEnergy() {},
     beginEdit() {},
     cancelEdit() {},
@@ -162,6 +167,27 @@ describe("batched deletion", () => {
     world.removeBodies = (g) => { seen.push(g.size); real(g); };
     controller.deleteObjects([...world.bodies]);
     expect(seen).toEqual([64]); // one call carrying all of them
+  });
+});
+
+describe("eraser gesture", () => {
+  it("scrubs through every crossed object and commits one undo entry", () => {
+    const made = makeApp();
+    for (const x of [0, 1, 2]) {
+      made.app.world.bodies.push(new Body(new Vec2(x, 0), 0.12, 1));
+    }
+    made.controller.tool = "eraser";
+    const controller = made.controller as unknown as {
+      press(point: [number, number]): void;
+      motion(point: [number, number]): void;
+      release(point: [number, number]): void;
+    };
+    controller.press([0, 0]);
+    controller.motion([200, 0]);
+    controller.release([200, 0]);
+
+    expect(made.app.world.bodies).toEqual([]);
+    expect(made.undos).toBe(1);
   });
 });
 
