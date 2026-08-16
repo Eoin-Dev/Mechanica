@@ -17,6 +17,7 @@ export const SCENE_MAX_MASS = 1e12;
 export const SCENE_MAX_FRICTION = 1e6;
 export const SCENE_MAX_FORCE = 1e9;
 export const SCENE_MAX_SURFACE_SPEED = 1e7;
+export const PULLEY_RADIUS = 0.22;
 
 /** Canonical angle representation used for imported body and driver data. */
 export function normalizeAngle(value: unknown, fallback = 0.0): number {
@@ -75,6 +76,7 @@ export interface BodyDict {
   collides: boolean;
   no_rotation?: boolean;
   is_anchor?: boolean;
+  is_pulley?: boolean;
   color: number[];
 }
 
@@ -108,6 +110,11 @@ export class Body {
   // always locked and, unlike a locked massive body, exerts no gravitational
   // pull and is not counted among the bodies. Always named "Anchor".
   isAnchor = false;
+  // The fixed axle of a pulley assembly. It is stored as a body because links
+  // and selection already use body identities, but it is never an editable or
+  // colliding physical disc. Deleting it has assembly-specific semantics in
+  // World.removeBodies.
+  isPulley = false;
   // transient: true while the user holds the mouse on this body. A held
   // body acts as infinite mass (it stays pinned under the cursor) but
   // everything else still collides with it. Never serialized.
@@ -235,6 +242,7 @@ export class Body {
       locked: this.locked, collides: this.collides,
       no_rotation: this.noRotation,
       is_anchor: this.isAnchor,
+      is_pulley: this.isPulley,
       color: [...this.color],
     };
   }
@@ -272,10 +280,19 @@ export class Body {
     b.collides = boolOr(d.collides, true);
     b.noRotation = boolOr(d.no_rotation, false);
     if (b.noRotation) b.omega = 0.0; // a non-rotating body never spins
-    b.isAnchor = boolOr(d.is_anchor, false);
+    b.isPulley = boolOr(d.is_pulley, false);
+    b.isAnchor = b.isPulley || boolOr(d.is_anchor, false);
     if (b.isAnchor) {
       b.locked = true;
-      b.name = "Anchor";
+      b.name = b.isPulley ? "Pulley" : "Anchor";
+    }
+    if (b.isPulley) {
+      b.collides = false;
+      b.radius = PULLEY_RADIUS;
+      b.constForce.set(0, 0);
+      b.noRotation = true;
+      b.vel.set(0, 0);
+      b.omega = 0.0;
     }
     return b;
   }

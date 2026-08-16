@@ -20,6 +20,10 @@ const DT = 1 / 120;
 const find = (n: string) => PRESETS.find((p) => p.name === n)!;
 
 describe("preset solver settings", () => {
+  it("loads Brownian motion with trails off by default", () => {
+    expect(find("Brownian motion").hints.trails).toBe(false);
+  });
+
   it("every scene is affordable on a modest machine", () => {
     const over: string[] = [];
     for (const p of PRESETS) {

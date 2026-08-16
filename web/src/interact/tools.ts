@@ -12,6 +12,8 @@
  *   rod/rope/spring - click two bodies to connect them. Clicking empty space
  *             creates an anchor for the first pick or a body for the second,
  *             so a pendulum can be drawn in two clicks.
+ *   pulley  - place a fixed axle with two particles and an inextensible
+ *             routed string; placement and later axle drags snap to wall ends.
  *   eraser  - click objects to delete them.
  *
  * Touch: one finger drives the active tool exactly like the mouse; two
@@ -21,7 +23,9 @@ import { nameTable } from "../core/expr";
 import { Vec2 } from "../core/vec";
 import { sweepClearOfWalls } from "../engine/contacts";
 import { Body, Wall } from "../engine/body";
-import { DistanceLink, Link, SpringLink } from "../engine/links";
+import {
+  DistanceLink, Link, PULLEY_RADIUS, PulleyLink, SpringLink,
+} from "../engine/links";
 import { Driver } from "../engine/world";
 import { Selectable, VEL_ARROW_SCALE, distToSegment, drawVelocityHandle,
          snapStep } from "../render/draw";
@@ -29,7 +33,7 @@ import { isTouch } from "../ui/dom";
 import type { App } from "../app";
 
 export const TOOLS = ["select", "pan", "body", "anchor", "wall",
-                      "rod", "rope", "spring", "eraser"] as const;
+                      "rod", "rope", "spring", "pulley", "eraser"] as const;
 export type Tool = (typeof TOOLS)[number];
 
 // nameTable: this is indexed by a live keystroke (`e.key.toLowerCase()` in
@@ -40,7 +44,7 @@ export type Tool = (typeof TOOLS)[number];
 // been a real bug twice in this codebase (see nameTable in core/expr.ts).
 export const TOOL_KEYS: Record<string, Tool> = nameTable<Tool>({
   v: "select", h: "pan", b: "body", a: "anchor", w: "wall",
-  r: "rod", e: "rope", s: "spring", x: "eraser",
+  r: "rod", e: "rope", s: "spring", p: "pulley", x: "eraser",
 });
 
 export const TOOL_INFO: Record<Tool, [string, string]> = {
@@ -59,6 +63,9 @@ export const TOOL_INFO: Record<Tool, [string, string]> = {
          "past its natural length, completely slack when shorter. Can be " +
          "made inelastic (fixed length) in the Inspector."],
   spring: ["Connect spring (S)", "Click two bodies to join them with a spring."],
+  pulley: ["Add pulley (P)", "Click near a wall end to mount a fixed pulley, or " +
+           "click empty space to place one. It creates two particles and one " +
+           "inextensible string with equal tension."],
   eraser: ["Eraser (X)", "Click bodies, walls or links to delete them."],
 };
 
@@ -77,6 +84,8 @@ export const TOOL_INFO_TOUCH: Record<Tool, string> = {
   rope: "Tap two bodies to join with an elastic string (pulls only " +
         "when stretched).",
   spring: "Tap two bodies to join them with a spring.",
+  pulley: "Tap near a wall end to mount a pulley with two particles and an " +
+          "inextensible string.",
   eraser: "Tap bodies, walls or links to delete them.",
 };
 
@@ -129,6 +138,17 @@ const DRAG_CHASE_CAP = 20.0; // m/s - per-substep clamp on linked bodies
  * discontinuity or stale-event cap is needed. */
 function dragResponseScale(speed: number): number {
   return DRAG_RESPONSE_SCALE / Math.hypot(1.0, speed / DRAG_RESPONSE_KNEE);
+}
+
+function makePulley(b: Body): Body {
+  b.locked = true;
+  b.isAnchor = true;
+  b.isPulley = true;
+  b.collides = false;
+  b.noRotation = true;
+  b.color = [65, 72, 88];
+  b.name = "Pulley";
+  return b;
 }
 
 interface DragItem {
@@ -393,6 +413,24 @@ export class CanvasController {
     return new Vec2(Math.round(p.x / step) * step, Math.round(p.y / step) * step);
   }
 
+  /** Closest wall endpoint within the same 22 px placement/drag target. */
+  private nearestPulleyMount(p: Vec2):
+      { wall: Wall; end: 0 | 1; distance: number } | null {
+    const snapRadius = 22.0 / this.app.camera.zoom;
+    let mount: { wall: Wall; end: 0 | 1; distance: number } | null = null;
+    for (const wall of this.app.world.walls) {
+      const ends = [wall.a, wall.b] as const;
+      for (let end = 0; end < 2; end++) {
+        const distance = p.distTo(ends[end]);
+        if (distance <= snapRadius &&
+            (mount === null || distance < mount.distance)) {
+          mount = { wall, end: end as 0 | 1, distance };
+        }
+      }
+    }
+    return mount;
+  }
+
   /** Topmost object under the cursor: bodies, then links, then walls. */
   pick(mouse: [number, number]): Selectable | null {
     const app = this.app;
@@ -408,8 +446,15 @@ export class CanvasController {
     }
     const links = app.world.links;
     for (let i = links.length - 1; i >= 0; i--) {
-      if (distToSegment(worldP, links[i].a.pos, links[i].b.pos) < 6.0 / app.camera.zoom) {
-        return links[i];
+      const link = links[i];
+      if (link instanceof PulleyLink) {
+        if (distToSegment(worldP, link.a.pos, link.guideA()) < 6.0 / app.camera.zoom ||
+            distToSegment(worldP, link.b.pos, link.guideB()) < 6.0 / app.camera.zoom) {
+          return link;
+        }
+      } else if (distToSegment(worldP, link.a.pos, link.b.pos) <
+                 6.0 / app.camera.zoom) {
+        return link;
       }
     }
     const walls = app.world.walls;
@@ -644,6 +689,36 @@ export class CanvasController {
       return;
     }
 
+    if (tool === "pulley") {
+      app.beginEdit();
+      const mount = this.nearestPulleyMount(worldP);
+      const centre = mount === null ? this.snap(worldP)
+        : (mount.end === 0 ? mount.wall.a.copy() : mount.wall.b.copy());
+      const wheel = makePulley(new Body(centre, PULLEY_RADIUS));
+      const a = new Body(centre.copy(), 0.15);
+      const b = new Body(centre.copy(), 0.15);
+      a.noRotation = true;
+      b.noRotation = true;
+      const string = new PulleyLink(a, b, wheel);
+      app.world.bodies.push(wheel, a, b);
+      app.world.links.push(string);
+      if (mount !== null) {
+        app.world.mountPulley(string, mount.wall, mount.end);
+        const endpoint = mount.end === 0 ? mount.wall.a : mount.wall.b;
+        const other = mount.end === 0 ? mount.wall.b : mount.wall.a;
+        const delta = other.sub(endpoint);
+        const along = delta.div(Math.max(1e-9, delta.length()));
+        a.pos = string.guideA().add(along.mul(1.35));
+      } else {
+        a.pos = string.guideA().add(new Vec2(0, -1.35));
+      }
+      b.pos = string.guideB().add(new Vec2(0, -1.35));
+      string.length = string.currentLength();
+      app.setSelection([string]);
+      app.commitEdit();
+      return;
+    }
+
     if (tool === "wall") {
       this.wallStart = this.snap(worldP);
       return;
@@ -651,7 +726,11 @@ export class CanvasController {
 
     if (tool === "rod" || tool === "rope" || tool === "spring") {
       const picked = this.pick(mouse);
-      let target = picked instanceof Body ? picked : null;
+        if (picked instanceof Body && picked.isPulley) {
+          app.toast("Connect to either pulley particle, not the wheel");
+          return;
+        }
+        let target = picked instanceof Body ? picked : null;
       if (target === null) {
         app.beginEdit();
         target = new Body(this.snap(worldP), this.linkFirst === null ? 0.08 : 0.12);
@@ -750,7 +829,8 @@ export class CanvasController {
       return;
     }
 
-    if (picked instanceof DistanceLink || picked instanceof SpringLink) {
+    if (picked instanceof DistanceLink || picked instanceof SpringLink ||
+        picked instanceof PulleyLink) {
       if (shift) this.toggleInSelection(picked);
       else if (!app.selection.includes(picked)) app.setSelection([picked]);
       return;
@@ -809,6 +889,7 @@ export class CanvasController {
         wall.b.addIp(delta);
         this.wallGrab = worldP;
       }
+      app.world.syncPulleyMounts();
       app.invalidateEnergy();
       this.dragMoved = true;
       return;
@@ -820,7 +901,14 @@ export class CanvasController {
         if (dx * dx + dy * dy < 16) return; // a click's jitter never grabs
         app.beginEdit();
         this.dragActive = true;
-        for (const { body } of this.dragItems) body.held = true;
+        for (const { body } of this.dragItems) {
+          body.held = true;
+          if (body.isPulley) {
+            const link = app.world.links.find((candidate) =>
+              candidate instanceof PulleyLink && candidate.pulley === body);
+            if (link instanceof PulleyLink) link.mountWallId = null;
+          }
+        }
         // first left-drag of a soft-body particle: nudge the user toward
         // right-drag (velocity drag), which pulls without deforming. Shown
         // once per soft-body preset load (see App.softBodyHintArmed).
@@ -851,6 +939,17 @@ export class CanvasController {
       // hands each dragged body back the velocity it was grabbed with, so a
       // drag repositions without throwing - running or paused, one body or a
       // whole box selection.
+      if (this.dragMoved && this.dragActive) {
+        for (const { body } of this.dragItems) {
+          if (!body.isPulley) continue;
+          const link = app.world.links.find((candidate) =>
+            candidate instanceof PulleyLink && candidate.pulley === body);
+          if (!(link instanceof PulleyLink)) continue;
+          const mount = this.nearestPulleyMount(body.pos);
+          if (mount === null) link.mountWallId = null;
+          else app.world.mountPulley(link, mount.wall, mount.end);
+        }
+      }
       this.releaseDragged();
       if (this.dragMoved) app.commitEdit();
       this.velDrag = null;
@@ -905,9 +1004,11 @@ export class CanvasController {
       p[1] >= rect.y && p[1] <= rect.y + rect.h;
     const flt = app.boxFilter;
     const found: Selectable[] = [];
-    if (flt.bodies || flt.anchors) {
+    if (flt.bodies || flt.anchors || flt.pulleys) {
       for (const body of app.world.bodies) {
-        if (!(body.isAnchor ? flt.anchors : flt.bodies)) continue;
+        const wanted = body.isPulley ? flt.pulleys
+          : body.isAnchor ? flt.anchors : flt.bodies;
+        if (!wanted) continue;
         if (inside(cam.toScreen(body.pos))) found.push(body);
       }
     }
@@ -918,10 +1019,14 @@ export class CanvasController {
         }
       }
     }
-    if (flt.springs || flt.rods) {
+    if (flt.springs || flt.rods || flt.pulleys) {
       for (const link of app.world.links) {
-        const want = link instanceof SpringLink ? flt.springs : flt.rods;
-        if (want && inside(cam.toScreen(link.a.pos)) && inside(cam.toScreen(link.b.pos))) {
+        const want = link instanceof PulleyLink ? flt.pulleys
+          : link instanceof SpringLink ? flt.springs : flt.rods;
+        const pulleyInside = !(link instanceof PulleyLink) ||
+          inside(cam.toScreen(link.pulley.pos));
+        if (want && pulleyInside && inside(cam.toScreen(link.a.pos)) &&
+            inside(cam.toScreen(link.b.pos))) {
           found.push(link);
         }
       }
@@ -1017,9 +1122,9 @@ export class CanvasController {
         links.add(o);
       }
     }
+    app.world.removeLinks(links);
     app.world.removeBodies(bodies); // cascades their links and drivers
     app.world.removeWalls(walls);
-    app.world.removeLinks(links);
     if (bodies.size > 0 || walls.size > 0 || links.size > 0) {
       app.invalidateEnergy();
     }
@@ -1038,7 +1143,8 @@ export class CanvasController {
     const app = this.app;
     app.beginEdit();
     const newSel: Selectable[] = [];
-    const bodies = app.selection.filter((o): o is Body => o instanceof Body);
+    const bodies = app.selection.filter((o): o is Body =>
+      o instanceof Body && !o.isPulley);
     const mapping = new Map<number, Body>();
     for (const body of bodies) {
       const clone = Body.fromDict(body.toDict());
@@ -1056,7 +1162,9 @@ export class CanvasController {
       const a = mapping.get(link.a.id);
       const b = mapping.get(link.b.id);
       if (a !== undefined && b !== undefined) {
-        if (link instanceof SpringLink) {
+        if (link instanceof PulleyLink) {
+          continue;
+        } else if (link instanceof SpringLink) {
           app.world.links.push(new SpringLink(a, b, link.restLength,
                                               link.stiffness, link.damping,
                                               link.tensionOnly));

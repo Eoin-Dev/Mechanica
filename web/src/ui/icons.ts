@@ -30,6 +30,9 @@ export const ICONS: Record<string, string> = {
   rope: svg('<path d="M4.5 14 Q8 9 11 13 T18.5 11" fill="none"/>' +
             '<circle class="fill" cx="4.5" cy="14" r="2.2"/><circle class="fill" cx="18.5" cy="11" r="2.2"/>'),
   spring: svg('<path d="M3.5 12 H6 L8 7.5 L10.5 16.5 L13 7.5 L15.5 16.5 L17.5 12 H20.5" fill="none"/>'),
+  pulley: svg('<path d="M5.2 20 V13.4 A6.8 6.8 0 0 1 18.8 13.4 V20" fill="none"/>' +
+              '<circle cx="12" cy="10.8" r="5.1" fill="none"/>' +
+              '<circle class="fill" cx="12" cy="10.8" r="1.5"/>'),
   eraser: svg('<path d="M5 5 L19 19 M5 19 L19 5" stroke-width="2.6"/>'),
   library: svg('<rect x="4.5" y="4.5" width="6.4" height="6.4" rx="1.4" fill="none"/>' +
                '<rect x="13.1" y="4.5" width="6.4" height="6.4" rx="1.4" fill="none"/>' +

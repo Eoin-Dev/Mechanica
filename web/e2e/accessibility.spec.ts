@@ -105,6 +105,27 @@ test("canvas pointer coordinates select the rendered body", async ({ page }) => 
   await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("Earth");
 });
 
+test("pulley preset and tool expose a complete editable-string assembly", async ({ page }) => {
+  await skipFirstRunTour(page, { theme: "dark", studio_mode: true });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Library" }).click();
+  await page.getByRole("button", { name: "Load Pulley on an incline", exact: true }).click();
+  await expect(page.locator("#status-text")).toContainText("2 bodies");
+  await expect(page.locator("#status-text")).toContainText("1 pulley");
+  await expect(page.locator("#status-text")).toContainText("1 link");
+
+  await page.getByRole("button", { name: /Add pulley \(P\)/ }).click();
+  const canvas = page.locator("#canvas");
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+  await canvas.click({ position: { x: box!.width * 0.7, y: box!.height * 0.35 } });
+  await expect(page.locator("#status-text")).toContainText("4 bodies");
+  await expect(page.locator("#status-text")).toContainText("2 pulleys");
+  await expect(page.locator("#status-text")).toContainText("2 links");
+  await expect(page.locator("#inspector-panel")).toContainText("Pulley string (inelastic)");
+  await expect(page.getByText("Nat. len", { exact: true })).toBeVisible();
+});
+
 test("paused Jelly zoom reports painted FPS without lowering physical quality", async ({ page }) => {
   await skipFirstRunTour(page, { perf_mode: true });
   await page.goto("/");
@@ -254,11 +275,11 @@ test("guided tour is modal, traps focus, and restores its opener", async ({ page
   await expect(dialog).toBeVisible();
   await expect(page.locator("#app")).toHaveJSProperty("inert", true);
   await expect(dialog.locator(".tour-step")).toHaveText(/1 of \d+/);
-  await expect(page.getByRole("button", { name: "Next" })).toBeFocused();
+  await expect(page.getByRole("button", { name: "Next", exact: true })).toBeFocused();
 
   await page.getByRole("button", { name: "Skip" }).focus();
   await page.keyboard.press("Shift+Tab");
-  await expect(page.getByRole("button", { name: "Next" })).toBeFocused();
+  await expect(page.getByRole("button", { name: "Next", exact: true })).toBeFocused();
   await page.getByRole("button", { name: "Skip" }).click();
   await expect(dialog).toBeHidden();
   await expect(page.locator("#app")).toHaveJSProperty("inert", false);

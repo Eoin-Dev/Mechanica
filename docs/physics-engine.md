@@ -37,7 +37,7 @@ by the headless test suite.
 | Shape/inertia | `radius`, `mass`, derived `invMass`, `inertia`, and `invInertia`. |
 | Contact material | `restitution` and `friction`; body colour is visual only. |
 | External force | `constForce`, applied in newtons on every force evaluation. |
-| Modes | `locked`, `collides`, `noRotation`, and `isAnchor`. |
+| Modes | `locked`, `collides`, `noRotation`, `isAnchor`, and `isPulley`. |
 | Interaction transient | `held` makes the body infinite-mass during direct manipulation; `kinematicCorrectionRate` carries the pointer-derived rod feedback rate; `speedCap` bounds a dragged connected assembly in Performance mode. |
 | Solver transient | acceleration, previous position, position-correction totals, contact/spring flags, performance-solver slots, contact mass gain, and prior acceleration samples. |
 
@@ -45,6 +45,12 @@ An anchor is represented by a body because links need the same endpoint shape.
 It is always locked, is named `Anchor`, does not participate in mutual gravity,
 and is excluded from ordinary body counts. A locked non-anchor can still exert
 mutual gravity and collide.
+
+A pulley axle is also body-shaped so it can be selected, serialized, mounted
+to a wall endpoint, and referenced by its string. `isPulley` implies anchor,
+locked, non-colliding, non-rotating behavior, the fixed `0.22 m` wheel radius,
+and the name `Pulley`. It is not an editable material body and cannot be used
+as an ordinary rod/spring endpoint.
 
 `noRotation` removes only rotational freedom. Translation and contact friction
 remain active, but friction creates no angular acceleration. This lets a disc
@@ -95,6 +101,26 @@ Positive magnitude pulls the endpoints together. A tension-only link rejects
 non-positive extension and also rejects a negative combined spring/damper
 force, so damping cannot make a closing string push.
 
+`PulleyLink` owns two ordinary particle endpoints plus one fixed pulley body.
+Its `length` is the complete light-string length: both straight tangent legs
+and the wrapped arc. The two contact points move around the finite wheel as
+the particles swing. Each leg meets the wheel tangentially, the wrapped arc is
+included in the length constraint, and both particle gradients share one
+non-negative multiplier. The result is equal tension on both legs, no pushing
+while slack, and free particle motion rather than a hidden rail constraint.
+`guideAOffset`/`guideBOffset` retain the intended wrap topology and the
+wall-aligned creation geometry; `wrapSweep` retains which direction the string
+passes around the wheel. Optional wall-mount identity follows a chosen wall
+endpoint without making either particle part of the wall.
+
+The pulley wheel remains absent from ordinary body/body collision generation.
+Its own two string particles instead use a dedicated zero-restitution stop at
+`wheel radius + particle radius`. Position recovery cannot become velocity;
+normal velocity and acceleration into the active stop are removed while
+tangential motion remains free. The pulley length projection treats a stopped
+endpoint with an active-set tangent gradient, so the string and stop do not
+fight or inject energy when a rising particle reaches the wheel.
+
 ## World state and effective settings
 
 `World` owns object collections and these authored physical settings:
@@ -125,7 +151,8 @@ chosen by its author.
 `prepareStep(h)` derives everything that cannot change during one call to
 `step()`:
 
-1. Split links into rod and spring arrays.
+1. Synchronize mounted pulley axles with their wall endpoints, then split links
+   into rod, spring, and pulley arrays.
 2. Build the set of linked endpoint pairs that should not collide. Linked
    bodies normally collide; exclusion applies only to a `DistanceLink` whose
    natural length is shorter than the sum of endpoint radii, where its rigid
@@ -262,6 +289,23 @@ Solving tension as acceleration is essential for energy behavior. A
 position-only pendulum correction would delete radial velocity gained during
 each substep and systematically damp the swing.
 
+### Pulley-string force solve
+
+For a taut pulley string the constraint is the sum of two tangent lengths and
+the live wrapped arc:
+
+```text
+C = tangentLengthA + tangentLengthB + wheelRadius*abs(wrapSweep) - length
+```
+
+The contact angles are recomputed from each particle, wheel centre, wheel
+radius, and retained wrap direction. The constraint gradients are the unit
+directions of the two straight legs. One warm-started, non-negative multiplier
+applies `-T*gradient` to each endpoint, so the force magnitude `T` is identical
+on both sides even when masses differ. The acceleration solve includes the
+finite-wheel curvature term for a moving tangent; when the current path is
+shorter than `length`, the multiplier is cleared and the string is slack.
+
 ## Integrators
 
 `World.integrate()` selects one of three methods for movable bodies. Contact
@@ -348,6 +392,15 @@ once-per-display-frame hand displacement from being reinterpreted as motion
 that occurred in one much shorter solver substep. The rate propagates through
 the rigid component in O(rows); untouched constraints retain the ordinary fast
 path. The solve exits early once correction is negligible.
+
+Pulley strings run an analogous one-sided XPBD pass on their summed live path.
+The two corrections are mass-weighted along the current tangent directions and
+fed back into particle velocity. Performance mode retains this same physical
+constraint at every quality level. Because one row is only two fixed-wheel
+tangent calculations, it keeps at least eight nonlinear refinement passes even
+when the general Performance iteration budget falls further, including while a
+particle is at the wheel stop; tiered substeps, contact work, rendering
+simplification, and global speed guards still apply.
 
 ### Performance-mode spring projection
 

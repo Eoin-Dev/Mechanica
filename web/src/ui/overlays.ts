@@ -677,7 +677,7 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
  * which is the question the help overlay never used to address at all. */
 const GETTING_STARTED: Array<[string, string, string]> = [
   ["1", "Open the Library",
-   "47 worked examples across eight topics, each with a note on what it " +
+   "48 worked examples across eight topics, each with a note on what it " +
    "shows. Loading one is the fastest way to see what this can do."],
   ["2", "Run it, then interfere",
    "Play, then drag something mid-flight. Nothing is on rails: lift a " +

@@ -131,14 +131,15 @@ with the behavior it protects rather than an exact assertion count.
 | [`slice-cost.test.ts`](../web/tests/slice-cost.test.ts) | Encounter slicing catches close motion while respecting the work budget for added/dense bodies. |
 | [`perf-mode.test.ts`](../web/tests/perf-mode.test.ts) | Four effective solver profiles without scene mutation, approximate large-cloud gravity, deterministic bounded energy, sleep/wake, maximum friction/spin omission, stable projected springs over full control ranges, compliance behavior, strain/movement/speed bounds, mixed contacts, lifecycle changes, and neutral UI styling. |
 | [`engine-safety.test.ts`](../web/tests/engine-safety.test.ts) | Fixed-support friction chains and common translation, held-support exclusion, final performance-spring displacement bounds, spring/string endpoint collision, strict timestep contracts, numeric import/runtime caps, and velocity-dependent Verlet convergence/conservative arithmetic. |
+| [`pulley.test.ts`](../web/tests/pulley.test.ts) | Equal-tension Atwood acceleration, tension-only slack behavior, live finite-wheel tangency, zero-restitution particle stops without energy spikes, all four Performance profiles, wall mount alignment/following, wheel drag-to-mount, pulley-only box filtering, complete placement, three dismantling cascades, persistence/digest structure, and malformed axle ownership/reference rejection. |
 
 ### Presets, determinism, stress, and long runs
 
 | Test file | Protected behavior |
 | --- | --- |
-| [`presets.test.ts`](../web/tests/presets.test.ts) | Central solver affordability, shipped-scene survival/coherence, dynamic Sun/Earth/Moon barycentre and hierarchy bounds, trampoline response, dense containment, penetration bounds, and contact iteration ceilings. |
-| [`preset-invariants.test.ts`](../web/tests/preset-invariants.test.ts) | Catalogue uniqueness/completeness, finite sane structures, link identity, deterministic builders/steps, and exact save/load continuation. |
-| [`preset-descriptions.test.ts`](../web/tests/preset-descriptions.test.ts) | Educational card claims agree with measured scene properties, including Friction ramp non-rotation/spacing and Trampoline anchor/suspension/ball geometry, and every preset is covered by the description audit. |
+| [`presets.test.ts`](../web/tests/presets.test.ts) | Central solver affordability, shipped-scene survival/coherence, dynamic Sun/Earth/Moon barycentre and hierarchy bounds, trampoline response, Brownian trails-off hint, incline-pulley structure, dense containment, penetration bounds, and contact iteration ceilings. |
+| [`preset-invariants.test.ts`](../web/tests/preset-invariants.test.ts) | Catalogue uniqueness/completeness, finite sane structures, pulley-axle ownership invariants, link identity, deterministic builders/steps, and exact save/load continuation. |
+| [`preset-descriptions.test.ts`](../web/tests/preset-descriptions.test.ts) | Educational card claims agree with measured scene properties, including Friction ramp non-rotation/spacing, incline-pulley wall/string/mass geometry, and Trampoline anchor/suspension/ball geometry, and every preset is covered by the description audit. |
 | [`determinism.test.ts`](../web/tests/determinism.test.ts) | Bit-identical repeated runs and independence from performance scheduling for demanding scenes. |
 | [`lifecycle-stress.test.ts`](../web/tests/lifecycle-stress.test.ts) | Continuous create/delete, integrator switching, repeated preset loads, violent reset, and sustained high-body-count consistency without cost drift. |
 | [`operation-fuzz.test.ts`](../web/tests/operation-fuzz.test.ts) | Seeded random application operations, running interleavings, and gestures that outlive deleted/replaced targets. |
@@ -148,7 +149,7 @@ with the behavior it protects rather than an exact assertion count.
 
 | Test file | Protected behavior |
 | --- | --- |
-| [`scene-guards.test.ts`](../web/tests/scene-guards.test.ts) | Numeric/boolean/colour/name/ID guards and limits, collection-resource caps, duplicate object-ID repair within each identity namespace, anchor normalization, settings and link ranges, malformed container shapes, field/driver defaults, missing/self link rejection, and stepping after damaged input. |
+| [`scene-guards.test.ts`](../web/tests/scene-guards.test.ts) | Numeric/boolean/colour/name/ID guards and limits, collection-resource caps, duplicate object-ID repair within each identity namespace, anchor/pulley normalization, settings and link ranges, malformed container shapes, field/driver defaults, missing/self link rejection, and stepping after damaged input. |
 | [`robustness.test.ts`](../web/tests/robustness.test.ts) | Scene deserialization defaults, divergence reporting, object colours, closest-point geometry, and kinematic dragged-body wall sweeping. |
 | [`scene-storage.test.ts`](../web/tests/scene-storage.test.ts) | Unicode name normalization, millisecond/suffix save collisions, save/load/list, discriminated cancellation/invalid/oversize/storage outcomes, upload and collection limits, quota reporting, metadata, damaged payload handling, rollback/error semantics, rename behavior, orphan metadata, and deletion. |
 | [`settings-guards.test.ts`](../web/tests/settings-guards.test.ts) | `sanitizeSettings` type filtering, base-theme and legacy-Studio handling, enum/hex validation, collection limits, and layout/font clamping. |
@@ -200,7 +201,7 @@ with the behavior it protects rather than an exact assertion count.
 
 | Test file | Protected behavior |
 | --- | --- |
-| [`e2e/accessibility.spec.ts`](../web/e2e/accessibility.spec.ts) | Production boot without console/page errors; axe WCAG A/AA scans at boot and with Library open, with only the deliberate browser-page-zoom `meta-viewport` exception waived; keyboard play/tabs/splitters/full-card library activation; undo after scene replacement; rendered-canvas pointer alignment; paused Jelly zoom paint-FPS/idle reporting with stable Performance quality; 390 x 844 transient inspector and Studio Library behavior; extreme-accent safe text/button states; full-disc swatch geometry; modal-tour focus/inertness/restoration; and contained Library/Settings layout at 320 CSS px with 200% application text. |
+| [`e2e/accessibility.spec.ts`](../web/e2e/accessibility.spec.ts) | Production boot without console/page errors; axe WCAG A/AA scans at boot and with Library open, with only the deliberate browser-page-zoom `meta-viewport` exception waived; keyboard play/tabs/splitters/full-card library activation; undo after scene replacement; rendered-canvas pointer alignment; paused Jelly zoom paint-FPS/idle reporting with stable Performance quality; incline-pulley preset/tool/status/Inspector editing; 390 x 844 transient inspector and Studio Library behavior; extreme-accent safe text/button states; full-disc swatch geometry; modal-tour focus/inertness/restoration; and contained Library/Settings layout at 320 CSS px with 200% application text. |
 
 ## Verification philosophy
 

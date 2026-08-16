@@ -158,7 +158,7 @@ function toggleOverlay(name: string): void {
 
 // ------------------------------------------------------------------ palette
 const TOOL_GROUPS: Tool[][] = [["select", "pan"], ["body", "anchor", "wall"],
-                               ["rod", "rope", "spring"], ["eraser"]];
+                               ["rod", "rope", "spring", "pulley"], ["eraser"]];
 
 export class Palette implements Panel {
   private group = new RefreshGroup();
@@ -225,16 +225,22 @@ export class HintBar implements Panel {
     const hint = app.controller.hint();
     let nBodies = 0;
     let nAnchors = 0;
-    for (const b of app.world.bodies) b.isAnchor ? nAnchors++ : nBodies++;
+    let nPulleys = 0;
+    for (const b of app.world.bodies) {
+      if (b.isPulley) nPulleys++;
+      else if (b.isAnchor) nAnchors++;
+      else nBodies++;
+    }
     const nLinks = app.world.links.length;
     const drift = app.energyDriftText();
     // Performance mode changes what the numbers beside it MEAN - the drift
     // readout will wander, and the substeps in the inspector are not what is
     // running - so it says so rather than leaving that a mystery.
     const items = [countNoun(nBodies, "body", "bodies"),
-                   countNoun(nAnchors, "anchor"),
-                   countNoun(nLinks, "link"),
-                   countNoun(app.world.contacts.length, "contact")];
+                   countNoun(nAnchors, "anchor")];
+    if (nPulleys > 0) items.push(countNoun(nPulleys, "pulley"));
+    items.push(countNoun(nLinks, "link"),
+               countNoun(app.world.contacts.length, "contact"));
     if (app.perfMode) items.push(`perf ${app.performanceQualityLabel}`);
     if (drift.trim() !== "") items.push(drift.trim());
     // the cursor position is a hover readout - meaningless on any touch
