@@ -35,8 +35,8 @@
  */
 import { boolOr, idOr, intIn, numIn } from "../core/guards";
 import { Vec2 } from "../core/vec";
-import { Body, PULLEY_RADIUS } from "./body";
-export { PULLEY_RADIUS } from "./body";
+import { Body, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS } from "./body";
+export { PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS } from "./body";
 
 export interface RodDict {
   type: "rod";
@@ -250,6 +250,10 @@ export class PulleyLink {
     this.a = a;
     this.b = b;
     this.pulley = pulley;
+    // These two bodies are point particles for as long as the routed pulley
+    // exists. A fixed size keeps the wheel stop and tangent geometry stable;
+    // dismantling the pulley turns them back into ordinary editable bodies.
+    this.normalizeParticles();
     pulley.isPulley = true;
     pulley.isAnchor = true;
     pulley.locked = true;
@@ -276,6 +280,18 @@ export class PulleyLink {
     this.safeAY = this.a.pos.y;
     this.safeBX = this.b.pos.x;
     this.safeBY = this.b.pos.y;
+  }
+
+  /** Reassert the point-particle shape at the step boundary. This also
+   * protects headless callers and a stale Inspector control left alive while
+   * an endpoint becomes part of a newly loaded pulley. */
+  normalizeParticles(): void {
+    this.a.radius = PULLEY_PARTICLE_RADIUS;
+    this.a.noRotation = true;
+    this.a.omega = 0.0;
+    this.b.radius = PULLEY_PARTICLE_RADIUS;
+    this.b.noRotation = true;
+    this.b.omega = 0.0;
   }
 
   /** Current tangent geometry around the finite wheel.
@@ -358,6 +374,22 @@ export class PulleyLink {
   get wrapLength(): number { return this.geometry().wrapLength; }
   get legLimit(): number { return Math.max(0.0, this.length - this.wrapLength); }
   currentLength(): number { return this.geometry().totalLength; }
+
+  /** Signed distance from an endpoint's permitted routing half-plane.
+   *
+   * The stored guide ray and winding direction define which side of the
+   * axle each leg belongs to. A negative result means the particle crossed
+   * the pulley and would make the wrapped path jump to another branch. */
+  branchDistance(endpoint: "a" | "b"): number {
+    const offset = endpoint === "a" ? this.guideAOffset : this.guideBOffset;
+    const body = endpoint === "a" ? this.a : this.b;
+    const d = Math.max(1e-12, offset.length());
+    const rx = body.pos.x - this.pulley.pos.x;
+    const ry = body.pos.y - this.pulley.pos.y;
+    const sigma = this.wrapSweep < 0 ? -1 : 1;
+    const side = endpoint === "a" ? -sigma : sigma;
+    return side * (offset.x * ry - offset.y * rx) / d;
+  }
 
   toDict(): PulleyDict {
     return {

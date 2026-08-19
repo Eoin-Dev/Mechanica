@@ -24,7 +24,7 @@ import { Vec2 } from "../core/vec";
 import { sweepClearOfWalls } from "../engine/contacts";
 import { Body, Wall } from "../engine/body";
 import {
-  DistanceLink, Link, PULLEY_RADIUS, PulleyLink, SpringLink,
+  DistanceLink, Link, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS, PulleyLink, SpringLink,
 } from "../engine/links";
 import { Driver } from "../engine/world";
 import { Selectable, VEL_ARROW_SCALE, distToSegment, drawVelocityHandle,
@@ -380,13 +380,11 @@ export class CanvasController {
       body.vel.set(vx, vy);
       body.kinematicCorrectionRate = response / dt;
       if (pulleyLink !== null && pulleyTarget !== null) {
-        if (pulleyTarget.mount === null) {
-          pulleyLink.mountWallId = null;
-          body.pos.setVec(t);
-        } else {
-          app.world.mountPulley(pulleyLink, pulleyTarget.mount.wall,
-                                pulleyTarget.mount.end);
-        }
+        // A running drag is still a direct axle edit. Consume slack and carry
+        // the endpoints once taut exactly as the paused path does, rather than
+        // injecting an arbitrarily large constraint error between display
+        // frames for the solver to release as a kick.
+        app.world.movePulleyForEdit(pulleyLink, t, pulleyTarget.mount);
       } else {
         body.pos.setVec(t);
       }
@@ -762,8 +760,8 @@ export class CanvasController {
       const centre = mount === null ? this.snap(worldP)
         : (mount.end === 0 ? mount.wall.a.copy() : mount.wall.b.copy());
       const wheel = makePulley(new Body(centre, PULLEY_RADIUS));
-      const a = new Body(centre.copy(), 0.15);
-      const b = new Body(centre.copy(), 0.15);
+      const a = new Body(centre.copy(), PULLEY_PARTICLE_RADIUS);
+      const b = new Body(centre.copy(), PULLEY_PARTICLE_RADIUS);
       a.noRotation = true;
       b.noRotation = true;
       const string = new PulleyLink(a, b, wheel);

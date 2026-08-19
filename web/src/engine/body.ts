@@ -18,6 +18,9 @@ export const SCENE_MAX_FRICTION = 1e6;
 export const SCENE_MAX_FORCE = 1e9;
 export const SCENE_MAX_SURFACE_SPEED = 1e7;
 export const PULLEY_RADIUS = 0.22;
+/** Pulley endpoints are system-owned point particles. Keeping one canonical
+ * radius makes the finite-wheel stop and wall-mount geometry unambiguous. */
+export const PULLEY_PARTICLE_RADIUS = 0.16;
 
 /** Canonical angle representation used for imported body and driver data. */
 export function normalizeAngle(value: unknown, fallback = 0.0): number {

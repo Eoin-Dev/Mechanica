@@ -104,7 +104,11 @@ Positive magnitude pulls the endpoints together. A tension-only link rejects
 non-positive extension and also rejects a negative combined spring/damper
 force, so damping cannot make a closing string push.
 
-`PulleyLink` owns two ordinary particle endpoints plus one fixed pulley body.
+`PulleyLink` owns two particle endpoints plus one fixed pulley body. While the
+route exists, both endpoints are system-sized to `0.16 m`, non-rotating point
+particles; the step boundary reasserts those invariants after imports or
+headless mutation. Their radius becomes an ordinary editable body property
+again if dismantling the assembly leaves either particle behind.
 Its `length` is the complete light-string length: both straight tangent legs
 and the wrapped arc. The two contact points move around the finite wheel as
 the particles swing. Each leg meets the wheel tangentially, the wrapped arc is
@@ -117,16 +121,22 @@ passes around the wheel. Optional wall-mount identity follows a chosen wall
 endpoint without making either particle part of the wall.
 
 The pulley wheel remains absent from ordinary body/body collision generation.
-Its own two string particles instead use a dedicated zero-restitution stop at
-`wheel radius + particle radius`. Position recovery cannot become velocity;
-normal velocity and acceleration into the active stop are removed while
-tangential motion remains free. The pulley length projection treats a stopped
-endpoint with an active-set tangent gradient, so the string and stop do not
-fight or inject energy when a rising particle reaches the wheel. Each solver
-substep also sweeps the particle centre from its starting position against the
-wheel expanded by the particle radius. A fast particle is clamped at the first
-impact even when both sampled endpoints lie outside the wheel, preventing it
-from tunnelling through the disc and switching string branches.
+Its own two string particles instead use a dedicated zero-restitution terminal
+stop at `wheel radius + particle radius`. At the stop, velocity, acceleration,
+and XPBD correction retain only a component directed away from the wheel;
+tangent motion is removed rather than letting the particle skate around the
+frame. Position recovery never becomes velocity. Each solver substep also
+sweeps the particle centre from its starting position against the wheel
+expanded by the particle radius, so a fast particle is clamped at its first
+impact even when both sampled endpoints lie outside the wheel.
+
+The guide ray and signed winding define a permitted half-plane for each leg.
+A second swept guard catches routes that miss the disc but cross to the other
+side, stops the endpoint at that boundary, and suppresses a force row during
+an intermediate integrator trial on the wrong side. This preserves routing
+topology and prevents a discontinuous wrapped angle from injecting energy into
+the partner. Both guards use the same bounded scalar work in Normal and every
+Performance profile.
 
 ## World state and effective settings
 
@@ -401,8 +411,11 @@ the rigid component in O(rows); untouched constraints retain the ordinary fast
 path. The solve exits early once correction is negligible.
 
 Pulley strings run an analogous one-sided XPBD pass on their summed live path.
-The two corrections are mass-weighted along the current tangent directions and
-fed back into particle velocity. Performance mode retains this same physical
+Feasible corrections are mass-weighted along the current tangent directions
+and fed back into particle velocity. A particle at the terminal wheel stop has
+zero constraint gradient, so its partner absorbs any remaining string-length
+correction without projection pushing the stopped endpoint around the axle.
+Performance mode retains this same physical
 constraint at every quality level. Because one row is only two fixed-wheel
 tangent calculations, it keeps at least eight nonlinear refinement passes even
 when the general Performance iteration budget falls further, including while a

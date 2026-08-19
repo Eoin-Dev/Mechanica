@@ -17,8 +17,8 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "../src/app";
-import { Body, Wall } from "../src/engine/body";
-import { DistanceLink, SpringLink } from "../src/engine/links";
+import { Body, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS, Wall } from "../src/engine/body";
+import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
 import { Driver } from "../src/engine/world";
 import { Vec2 } from "../src/core/vec";
 import { Inspector } from "../src/ui/inspector";
@@ -56,6 +56,31 @@ beforeEach(() => {
 });
 
 describe("Inspector structure key", () => {
+  it("keeps a live pulley particle's system radius out of every edit route", () => {
+    const { app, panel, inspector } = makeInspector();
+    const wheel = new Body(new Vec2(0, 1), PULLEY_RADIUS);
+    const a = new Body(new Vec2(-0.22, -0.5), 0.4, 1);
+    const b = new Body(new Vec2(0.22, -0.5), 0.4, 1);
+    const link = new PulleyLink(a, b, wheel);
+    app.world.bodies.push(wheel, a, b);
+    app.world.links.push(link);
+
+    app.setSelection([a]);
+    inspector.refresh();
+    expect(panel.querySelector('input[aria-label="Radius"]')).toBeNull();
+
+    app.clipboardProps = { radius: 2, mass: 3 };
+    app.pasteProps();
+    expect(a.radius).toBe(PULLEY_PARTICLE_RADIUS);
+    expect(a.mass).toBe(3);
+
+    const ordinary = new Body(new Vec2(2, 0), 0.25, 1);
+    app.world.bodies.push(ordinary);
+    app.setSelection([a, ordinary]);
+    inspector.refresh();
+    expect(panel.querySelector('input[aria-label="Radius"]')).not.toBeNull();
+  });
+
   it("tells a body from a wall that shares its id", () => {
     const { app, panel, inspector } = makeInspector();
     const body = new Body(new Vec2(0, 0), 0.2, 1);

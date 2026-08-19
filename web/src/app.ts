@@ -1017,7 +1017,14 @@ export class App {
     const bodies = this.selection.filter((o): o is Body => o instanceof Body && !o.isAnchor);
     if (bodies.length > 0) {
       this.edit(() => {
-        for (const b of bodies) Object.assign(b, this.clipboardProps);
+        for (const b of bodies) {
+          if (this.world.isPulleyParticle(b)) {
+            const { radius: _fixedRadius, ...editable } = this.clipboardProps!;
+            Object.assign(b, editable);
+          } else {
+            Object.assign(b, this.clipboardProps);
+          }
+        }
       });
       this.toast(`Pasted properties onto ${countNoun(bodies.length, "body", "bodies")}`);
     }
