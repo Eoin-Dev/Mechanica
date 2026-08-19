@@ -160,7 +160,7 @@ Duplication:
 | Rod | `R` | Select two endpoints and create a bilateral `DistanceLink`. |
 | String | `E` | Select two endpoints and create a tension-only `SpringLink`; the inspector can convert it to an inelastic rope. |
 | Spring | `S` | Select two endpoints and create a bilateral `SpringLink`. |
-| Pulley | `P` | Place a fixed, non-colliding pulley with two ordinary non-rotating particles and one inextensible `PulleyLink`. A click near a wall endpoint mounts it there and starts the wall-side string tangent parallel to the wall. |
+| Pulley | `P` | Place a fixed, non-colliding pulley with two system-sized non-rotating particles and one inextensible `PulleyLink`. A click near a wall endpoint mounts it there, seats the first particle exactly on the wall surface, and starts that string leg parallel to the wall. |
 | Eraser | `X` | Click one selectable or hold and scrub across bodies, links, and walls. Samples are no more than three CSS pixels apart and the whole gesture is one undoable edit. |
 
 For link tools, clicking empty space for the first endpoint creates an anchor;
@@ -270,15 +270,19 @@ drag so the two gestures are not visually conflated.
 
 Wall endpoint edits mutate `a` or `b`; whole-wall dragging preserves endpoint
 separation. A mounted pulley follows its chosen endpoint; its wall-side tangent
-and wrapped arc are recomputed from the wall direction, while its particles
-remain free bodies governed only by string tension and ordinary contacts. The
+and wrapped arc are recomputed from the wall direction. The axle receives the
+small surface-normal offset required by wall thickness, fixed particle radius,
+and wheel radius, so a newly placed wall-side particle lies on the plane while
+its string remains parallel. The particles remain free bodies governed by
+string tension, ordinary contacts, and the dedicated terminal wheel stop. The
 pulley wheel can be position-dragged even though it is physically fixed during
 simulation. During the drag it acquires the nearest wall endpoint within 22
 screen pixels and visibly snaps immediately. The latch stays attached until
 the proposed pointer position moves more than 34 screen pixels from that
 endpoint, avoiding threshold chatter while leaving an intentional breakaway
-gesture. Releasing while latched preserves the mount. While paused, axle motion
-uses existing string slack first; once the routed path reaches its natural
+gesture. Releasing while latched preserves the mount. During paused or running
+direct manipulation, axle motion uses existing string slack first; once the
+routed path reaches its natural
 length, both particles receive the minimum shared axle translation needed to
 keep the string taut instead of storing an explosive length error. If the wall
 is deleted or becomes degenerate, the pulley detaches at its last valid position. A
@@ -315,8 +319,9 @@ returning above 760 px restores the persisted desktop state.
 
 For a single object it exposes type-specific state:
 
-- body name, position, velocity, mass, radius, material, force, lock/collision
-  and rotation behavior, colour, driver, and actions;
+- body name, position, velocity, mass, material, force, lock/collision and
+  rotation behavior, colour, driver, and actions; radius is included for an
+  ordinary body but omitted while that body is a system-sized pulley endpoint;
 - anchor position and colour with anchor invariants preserved;
 - wall endpoints, thickness, material, colour, and actions;
 - spring/string natural length, stiffness, damping, one-sidedness/conversion;
@@ -335,7 +340,8 @@ shows its force as a two-component SI column vector; ordinary and elastic
 strings display pulling tension, while a bilateral spring arrow reverses when
 the spring is in compression.
 
-Multi-selection groups objects by type, provides common bulk property controls,
+Multi-selection groups objects by type, provides common bulk property controls
+(a radius edit targets only ordinary, resizable bodies),
 driver operations, align/distribute operations for bodies, type-aware colours,
 and batched delete actions. Distribution needs at least three bodies; two are
 already evenly spaced and produce explanatory feedback.

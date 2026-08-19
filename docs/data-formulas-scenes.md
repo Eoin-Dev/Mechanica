@@ -190,7 +190,7 @@ serialized.
 
 | Field | Behavior |
 | --- | --- |
-| `a`, `b` | Two distinct ordinary, non-anchor particle IDs. Both must resolve and must differ from the pulley ID. Missing, anchor, pulley, or repeated endpoints skip the link. |
+| `a`, `b` | Two distinct ordinary, non-anchor particle IDs. Both must resolve and must differ from the pulley ID. A valid route normalizes both to non-rotating radius-`0.16` point particles for its lifetime; their serialized radius is otherwise ignored. Missing, anchor, pulley, or repeated endpoints skip the link. |
 | `pulley` | ID of a body whose guarded `is_pulley` value is true. A missing, ordinary, endpoint, or already-claimed axle skips the link; one axle owns exactly one routed string. |
 | `length` | Total light-string length, including both live tangent legs and the finite wrapped arc; finite and clamped to `0..1e6`. Invalid data uses the current guide-leg lengths plus a half circumference. |
 | `compliance` | XPBD compliance, finite and clamped to `0..1e9`, default zero. The UI-created pulley keeps this zero for an inextensible string. |
@@ -201,8 +201,10 @@ serialized.
 | `wall_normal_sign` | Surface-side sign normalized to `-1` or `1`, default `1`. |
 | `id` | Guarded ID with a separate `PulleyLink` counter and duplicate-remapping namespace. |
 
-Force warm-start `mu`, position `lambda`, dynamic tangent contacts, and the
-active wheel-stop contact are transient and are not serialized.
+Force warm-start `mu`, position `lambda`, dynamic tangent contacts, safe sweep
+samples, active wheel-stop state, and routing-half-plane state are transient
+and are not serialized. The latter topology is derived from the persisted
+guide offsets and signed wrap direction.
 
 ## Force-field and driver documents
 

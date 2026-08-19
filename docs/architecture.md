@@ -198,14 +198,16 @@ profile instead.
 `World.step(dt)` divides `dt` by `effectiveSubsteps`, prepares immutable
 per-step caches, and repeats this pipeline for every substep:
 
-1. Synchronize wall-mounted pulley geometry, accumulate smooth accelerations,
-   and solve rod/rope plus equal-tension pulley-string constraint forces.
+1. Synchronize wall-mounted pulley geometry, normalize live pulley-particle
+   sizes, accumulate smooth accelerations, and solve rod/rope plus equal-tension
+   pulley-string constraint forces. A wrong-side pulley trial suppresses its
+   force row until the topology guard restores it.
 2. Integrate translation and spin with the effective integrator. Mutual
    gravity may use encounter slices inside this phase.
 3. In performance mode, project springs using `PerfSolver`.
 4. Project taut pulley-string and rigid rod/rope position error with XPBD,
-   enforce swept zero-restitution stops between each pulley and its two
-   particles, and feed only feasible corrections back into velocity.
+   enforce swept terminal wheel and routing-half-plane stops for each pulley
+   particle, and feed only feasible corrections back into velocity.
 5. Rebuild contacts for the current positions, warm start them, resolve
    impacts and resting velocity constraints, project penetration, and apply
    static-friction anchoring. Maximum approximation retains only normal

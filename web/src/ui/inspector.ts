@@ -482,9 +482,11 @@ export class Inspector implements Panel {
     this.add(slider("Mass", () => b.mass, (v) => { b.mass = v; },
       0.001, 10000.0, { unit: "kg", log: true, onCommit: this.commit,
         tooltip: "Mass of the body, both inertial and gravitational." }));
-    this.add(slider("Radius", () => b.radius, (v) => { b.radius = v; },
-      0.01, 10.0, { unit: "m", log: true, onCommit: this.commit,
-        tooltip: "Size of the body. Mass is set separately." }));
+    if (!app.world.isPulleyParticle(b)) {
+      this.add(slider("Radius", () => b.radius, (v) => { b.radius = v; },
+        0.01, 10.0, { unit: "m", log: true, onCommit: this.commit,
+          tooltip: "Size of the body. Mass is set separately." }));
+    }
     this.addHalf(
       numEdit("x", () => b.pos.x, (v) => { b.pos.x = v; }, "m", this.commit, fmt3dp),
       numEdit("y", () => b.pos.y, (v) => { b.pos.y = v; }, "m", this.commit, fmt3dp));
@@ -647,13 +649,16 @@ export class Inspector implements Panel {
 
     if (bodies.length > 0) {
       const first = bodies[0];
+      const resizableBodies = bodies.filter((b) => !this.app.world.isPulleyParticle(b));
       this.typeGroup(pluralNoun(bodies.length, "Body", "Bodies"), bodies.length, "body");
       this.add(slider("Mass", () => first.mass,
         (v) => bodies.forEach((b) => { b.mass = v; }), 0.001, 10000.0,
         { unit: "kg", log: true, onCommit: this.commit }));
-      this.add(slider("Radius", () => first.radius,
-        (v) => bodies.forEach((b) => { b.radius = v; }), 0.01, 10.0,
-        { unit: "m", log: true, onCommit: this.commit }));
+      if (resizableBodies.length > 0) {
+        this.add(slider("Radius", () => resizableBodies[0].radius,
+          (v) => resizableBodies.forEach((b) => { b.radius = v; }), 0.01, 10.0,
+          { unit: "m", log: true, onCommit: this.commit }));
+      }
       this.add(slider("Bounce", () => first.restitution,
         (v) => bodies.forEach((b) => { b.restitution = v; }), 0.0, 1.0,
         { fmt: (v) => v.toFixed(2), onCommit: this.commit,

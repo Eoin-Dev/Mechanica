@@ -6,7 +6,8 @@
  */
 import { Vec2 } from "../core/vec";
 import { Body, Color, Wall } from "../engine/body";
-import { DistanceLink, PULLEY_RADIUS, PulleyLink, SpringLink } from "../engine/links";
+import { DistanceLink, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS, PulleyLink,
+         SpringLink } from "../engine/links";
 import { Driver, ForceField, World } from "../engine/world";
 
 export interface PresetHints {
@@ -746,8 +747,10 @@ function buildInclinePulley(): World {
   w.walls.push(ramp);
 
   const wheel = new Body(ramp.b.copy(), PULLEY_RADIUS);
-  const onRamp = new Body(ramp.b.copy(), 0.15, 2.0, [86, 156, 214]);
-  const hanging = new Body(ramp.b.copy(), 0.15, 1.1, [220, 130, 90]);
+  const onRamp = new Body(ramp.b.copy(), PULLEY_PARTICLE_RADIUS, 2.0,
+    [86, 156, 214]);
+  const hanging = new Body(ramp.b.copy(), PULLEY_PARTICLE_RADIUS, 1.1,
+    [220, 130, 90]);
   onRamp.name = "2.0 kg on slope";
   hanging.name = "1.1 kg hanging";
   for (const body of [onRamp, hanging]) {

@@ -1,7 +1,7 @@
 /** Ideal-pulley physics, persistence, placement and dismantling semantics. */
 import { describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
-import { Body, PULLEY_RADIUS, Wall } from "../src/engine/body";
+import { Body, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS, Wall } from "../src/engine/body";
 import { DistanceLink, PulleyLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
 import { CanvasController } from "../src/interact/tools";
@@ -85,9 +85,11 @@ describe("ideal pulley constraint", () => {
       if (d <= limit + 1e-7) {
         touched = true;
         const outward = a.pos.sub(wheel.pos).div(d);
-        // A zero-restitution stop removes motion into the wheel without
-        // constraining a physically valid tangential slide.
+        // The terminal block preserves only motion directly away from the
+        // wheel. It cannot retain a tangent component and skate around it.
         expect(a.vel.dot(outward)).toBeGreaterThanOrEqual(-1e-7);
+        expect(Math.abs(a.vel.x * outward.y - a.vel.y * outward.x))
+          .toBeLessThan(1e-7);
       }
       const kinetic = world.energy().ke;
       expect(Number.isFinite(kinetic)).toBe(true);
@@ -118,6 +120,76 @@ describe("ideal pulley constraint", () => {
       expect(a.vel.x).toBeLessThanOrEqual(1e-9);
       expect(world.energy().ke).toBeLessThanOrEqual(initial * 1.000001);
     });
+
+  it.each([false, true])("blocks an outside-disc route to the opposite side (performance=%s)",
+    (performance) => {
+      const { world, a, b, wheel, string } = assembly(1, 1);
+      world.gravity = 0;
+      world.performance = performance;
+      world.performanceLevel = 3;
+      string.length = 100; // isolate the topology guard from tension
+      a.pos.set(-2, wheel.pos.y - 0.5);
+      a.vel.set(0, 180); // misses the wheel, but crosses the A-side route
+      b.vel.set(0, 0);
+      const initial = world.energy().ke;
+
+      world.step(1 / 60);
+
+      expect(string.branchDistance("a")).toBeGreaterThanOrEqual(-1e-10);
+      expect(a.pos.y).toBeLessThanOrEqual(wheel.pos.y + 1e-10);
+      expect(a.vel.length()).toBeLessThan(1e-9);
+      expect(b.vel.length()).toBeLessThan(1e-9);
+      expect(world.energy().ke).toBeLessThanOrEqual(initial * 1.000001);
+    });
+
+  it.each([
+    ["Velocity Verlet", false], ["Symplectic Euler", false], ["RK4", false],
+    ["Velocity Verlet", true], ["Symplectic Euler", true], ["RK4", true],
+  ] as const)("remains finite under a hostile stop (%s, performance=%s)",
+    (integrator, performance) => {
+      const { world, a, b, wheel, string } = assembly(0.01, 100);
+      world.gravity = 0;
+      world.integrator = integrator;
+      world.performance = performance;
+      world.performanceLevel = 3;
+      a.pos.set(-PULLEY_RADIUS, wheel.pos.y - 0.42);
+      b.pos.set(PULLEY_RADIUS, wheel.pos.y - 2.2);
+      string.length = string.currentLength();
+      a.vel.set(0, 45);
+      b.vel.set(0, -0.0045); // approximately constraint-compatible momentum
+      const initial = world.energy().ke;
+      let peak = initial;
+
+      for (let i = 0; i < 180; i++) {
+        world.step(1 / 720);
+        for (const body of [a, b]) {
+          expect(Number.isFinite(body.pos.x)).toBe(true);
+          expect(Number.isFinite(body.pos.y)).toBe(true);
+          expect(Number.isFinite(body.vel.x)).toBe(true);
+          expect(Number.isFinite(body.vel.y)).toBe(true);
+          expect(body.pos.distTo(wheel.pos)).toBeGreaterThanOrEqual(
+            wheel.radius + body.radius - 1e-8);
+        }
+        expect(string.branchDistance("a")).toBeGreaterThanOrEqual(-1e-8);
+        expect(string.branchDistance("b")).toBeGreaterThanOrEqual(-1e-8);
+        peak = Math.max(peak, world.energy().ke);
+      }
+      expect(peak).toBeLessThanOrEqual(initial * 1.02 + 1e-8);
+    });
+
+  it("stops tangent motion at the wheel instead of orbiting around it", () => {
+    const { world, a, wheel, string } = assembly(1, 1);
+    world.gravity = 0;
+    string.length = 100;
+    a.pos.set(wheel.pos.x, wheel.pos.y - wheel.radius - a.radius);
+    a.vel.set(80, 0);
+
+    world.step(1 / 60);
+
+    expect(a.pos.x).toBeCloseTo(wheel.pos.x, 12);
+    expect(a.vel.length()).toBeLessThan(1e-9);
+    expect(a.pos.distTo(wheel.pos)).toBeCloseTo(wheel.radius + a.radius, 10);
+  });
 
   it("reports realised net force after support impulses", () => {
     const world = new World();
@@ -191,14 +263,37 @@ describe("wall mounting and persistence", () => {
     a.pos = wheel.pos.add(string.guideAOffset).add(inwardUnit.mul(1.35));
     const leg = a.pos.sub(string.guideA());
     expect(leg.x * inward.y - leg.y * inward.x).toBeCloseTo(0, 12);
+    const wallDirection0 = wall.b.sub(wall.a);
+    const centreOffset0 = a.pos.sub(wall.b);
+    const planeDistance0 = Math.abs(wallDirection0.x * centreOffset0.y -
+      wallDirection0.y * centreOffset0.x) / wallDirection0.length();
+    expect(planeDistance0).toBeCloseTo(wall.thickness * 0.5 + a.radius, 12);
 
     wall.b.set(0.5, 1.5);
     world.syncPulleyMounts();
-    expect(wheel.pos.x).toBe(0.5);
-    expect(wheel.pos.y).toBe(1.5);
     const guideNormal = string.guideAOffset;
     const wallDirection = wall.a.sub(wall.b);
     expect(guideNormal.dot(wallDirection)).toBeCloseTo(0, 12);
+    const normal = guideNormal.div(guideNormal.length());
+    const axleOffset = wall.thickness * 0.5 + PULLEY_PARTICLE_RADIUS - PULLEY_RADIUS;
+    expect(wheel.pos.x).toBeCloseTo(wall.b.x + normal.x * axleOffset, 12);
+    expect(wheel.pos.y).toBeCloseTo(wall.b.y + normal.y * axleOffset, 12);
+  });
+
+  it("owns both particle radii while routed and releases them after dismantling", () => {
+    const { world, a, b, string } = assembly();
+    expect(a.radius).toBe(PULLEY_PARTICLE_RADIUS);
+    expect(b.radius).toBe(PULLEY_PARTICLE_RADIUS);
+    a.radius = 3;
+    b.radius = 0.01;
+    world.step(1 / 120);
+    expect(a.radius).toBe(PULLEY_PARTICLE_RADIUS);
+    expect(b.radius).toBe(PULLEY_PARTICLE_RADIUS);
+
+    world.removeLink(string);
+    a.radius = 0.3;
+    expect(world.isPulleyParticle(a)).toBe(false);
+    expect(a.radius).toBe(0.3);
   });
 
   it("round-trips the assembly and includes its structure in rewind digests", () => {
@@ -276,13 +371,19 @@ describe("pulley tool", () => {
     const link = world.links[0] as PulleyLink;
     expect(link).toBeInstanceOf(PulleyLink);
     expect(link.mountWallId).toBe(wall.id);
-    expect(link.pulley.pos.x).toBe(wall.b.x);
-    expect(link.pulley.pos.y).toBe(wall.b.y);
+    const guideNormal = link.guideAOffset.div(link.guideAOffset.length());
+    const axleOffset = wall.thickness * 0.5 + PULLEY_PARTICLE_RADIUS - PULLEY_RADIUS;
+    expect(link.pulley.pos.x).toBeCloseTo(wall.b.x + guideNormal.x * axleOffset, 12);
+    expect(link.pulley.pos.y).toBeCloseTo(wall.b.y + guideNormal.y * axleOffset, 12);
     expect(link.pulley.isPulley).toBe(true);
     expect(link.pulley.collides).toBe(false);
     const along = link.a.pos.sub(link.guideA());
     const wallAlong = wall.a.sub(wall.b);
     expect(along.x * wallAlong.y - along.y * wallAlong.x).toBeCloseTo(0, 10);
+    const centreOffset = link.a.pos.sub(wall.b);
+    const planeDistance = Math.abs(wallAlong.x * centreOffset.y -
+      wallAlong.y * centreOffset.x) / wallAlong.length();
+    expect(planeDistance).toBeCloseTo(wall.thickness * 0.5 + link.a.radius, 12);
     expect(link.b.pos.x).toBeCloseTo(link.guideB().x, 12);
     expect(stub.selection).toEqual([link]);
   });
@@ -324,8 +425,9 @@ describe("pulley tool", () => {
     privateController.motion([199, -100]);
     controller.updateDrag();
     // The latch is visible during the gesture, not deferred until pointer-up.
-    expect(wheel.pos.x).toBe(wall.b.x);
-    expect(wheel.pos.y).toBe(wall.b.y);
+    const expectedMounted = wheel.pos.copy();
+    expect(expectedMounted.distTo(wall.b)).toBeCloseTo(
+      Math.abs(wall.thickness * 0.5 + PULLEY_PARTICLE_RADIUS - PULLEY_RADIUS), 12);
     expect(string.mountWallId).toBe(wall.id);
 
     // A wider 34 px breakaway threshold prevents threshold chatter while
@@ -341,8 +443,8 @@ describe("pulley tool", () => {
     controller.updateDrag();
     privateController.release([199, -100]);
 
-    expect(wheel.pos.x).toBe(wall.b.x);
-    expect(wheel.pos.y).toBe(wall.b.y);
+    expect(wheel.pos.x).toBeCloseTo(expectedMounted.x, 12);
+    expect(wheel.pos.y).toBeCloseTo(expectedMounted.y, 12);
     expect(string.mountWallId).toBe(wall.id);
     expect(string.mountWallEnd).toBe(1);
     expect(wheel.locked).toBe(true);
@@ -361,6 +463,48 @@ describe("pulley tool", () => {
     expect(b.pos.x).toBeGreaterThan(oldB.x);
     expect(a.vel.length2()).toBe(0);
     expect(b.vel.length2()).toBe(0);
+  });
+
+  it("does not preload the string during a running axle drag", () => {
+    const { world, a, wheel, string } = assembly();
+    const oldA = a.pos.copy();
+    const stub = {
+      world,
+      playing: true,
+      perfMode: false,
+      dragHitsWalls: false,
+      softBodyHintArmed: false,
+      view: { snap: false, vectorScale: 1 },
+      selection: [] as Selectable[],
+      trails: new Map<number, unknown>(),
+      camera: {
+        zoom: 100,
+        toWorld: (x: number, y: number) => new Vec2(x / 100, -y / 100),
+        toScreen: (p: Vec2): [number, number] => [p.x * 100, -p.y * 100],
+      },
+      beginEdit() {},
+      commitEdit() { return "stored" as const; },
+      setSelection(value: Selectable[]) { stub.selection = value; },
+      invalidateCanvas() {},
+      invalidateEnergy() {},
+      toast() {},
+    };
+    const controller = new CanvasController(stub as unknown as App);
+    controller.tool = "select";
+    const privateController = controller as unknown as {
+      mouse: [number, number];
+      pressSelect(mouse: [number, number], world: Vec2): void;
+      motion(mouse: [number, number]): void;
+      release(mouse: [number, number]): void;
+    };
+    privateController.pressSelect([0, -100], wheel.pos.copy());
+    privateController.mouse = [200, -100];
+    privateController.motion([200, -100]);
+    controller.updateDrag();
+
+    expect(string.currentLength()).toBeLessThanOrEqual(string.length + 2e-6);
+    expect(a.pos.x).toBeGreaterThan(oldA.x);
+    privateController.release([200, -100]);
   });
 
   it("box-selects a complete pulley when every other type filter is off", () => {
