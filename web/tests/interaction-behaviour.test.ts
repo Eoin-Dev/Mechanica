@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import { App } from "../src/app";
 import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";
+import { DistanceLink } from "../src/engine/links";
 import { VEL_ARROW_SCALE } from "../src/render/draw";
 import { TimeSeries } from "../src/ui/plots";
 
@@ -178,6 +179,46 @@ describe("velocity aiming is continuous", () => {
     }
     send(canvas, "pointerup", target[0], target[1], 2);
   });
+
+  it("hides only the selected body's editable velocity handle for a free-body diagram", () => {
+    const { app } = makeApp();
+    const body = new Body(new Vec2(0, 0), 0.25, 1);
+    body.vel.set(2, 1);
+    app.world.bodies.push(body);
+    app.setSelection([body]);
+    app.controller.setTool("select");
+    app.view.velVectors = true;
+    const originalPath2D = globalThis.Path2D;
+    class TestPath2D {
+      moveTo(): void {}
+      lineTo(): void {}
+      closePath(): void {}
+    }
+    Object.defineProperty(globalThis, "Path2D", {
+      value: TestPath2D, configurable: true,
+    });
+    let handleCount = 0;
+    const ctx = {
+      beginPath() {}, moveTo() {}, lineTo() {}, closePath() {},
+      stroke() {}, fill() {},
+      roundRect() { handleCount++; },
+    } as unknown as CanvasRenderingContext2D;
+
+    try {
+      app.controller.drawOverlays(ctx);
+      expect(handleCount).toBe(1);
+
+      body.showForceComponents = true;
+      app.controller.drawOverlays(ctx);
+      expect(handleCount).toBe(1);
+      expect(app.view.velVectors).toBe(true);
+    } finally {
+      if (originalPath2D === undefined) Reflect.deleteProperty(globalThis, "Path2D");
+      else Object.defineProperty(globalThis, "Path2D", {
+        value: originalPath2D, configurable: true,
+      });
+    }
+  });
 });
 
 describe("box select", () => {
@@ -229,6 +270,100 @@ describe("picking", () => {
     app.world.bodies.push(b);
     const [sx, sy] = app.camera.toScreen(new Vec2(0, 0));
     expect(app.controller.pick([sx, sy])).toBe(b);
+  });
+});
+
+describe("rod anchors and attachment gestures", () => {
+  it("draws a standalone beam without visible endpoint particles or anchors", () => {
+    const { app, canvas } = makeApp();
+    app.controller.setTool("rod");
+    send(canvas, "pointerdown", 300, 300);
+    send(canvas, "pointerdown", 500, 300);
+    expect(app.world.links).toHaveLength(1);
+    const rod = app.world.links[0] as DistanceLink;
+    expect(rod.a.isRodEndpoint).toBe(true);
+    expect(rod.b.isRodEndpoint).toBe(true);
+    expect(app.world.bodies.filter((body) => !body.isRodEndpoint)).toHaveLength(0);
+    expect(app.world.bodies.some((body) => body.isAnchor)).toBe(false);
+    expect(app.selection).toEqual([rod]);
+  });
+
+  it("uses the anchor tool for both free anchors and rod supports", () => {
+    const { app, canvas } = makeApp();
+    const a = new Body(new Vec2(-1, 0), 0.1, 1);
+    const b = new Body(new Vec2(1, 0), 0.1, 1);
+    const rod = new DistanceLink(a, b);
+    app.world.bodies.push(a, b);
+    app.world.links.push(rod);
+    app.controller.setTool("anchor");
+    const [x, y] = app.camera.toScreen(new Vec2(0.25, 0));
+    send(canvas, "pointerdown", x, y);
+    const pivot = app.world.bodies.find((body) => body.isPivot);
+    expect(pivot).toBeDefined();
+    expect(pivot?.rodAttachmentId).toBe(rod.id);
+    expect(pivot?.rodAttachmentT).toBeCloseTo(0.625, 6);
+    expect(pivot?.locked).toBe(true);
+    expect(pivot?.collides).toBe(false);
+    expect(pivot?.name).toBe("Anchor");
+    expect(app.controller.pick([x, y + 8])).toBe(pivot);
+
+    const count = app.world.bodies.length;
+    send(canvas, "pointerdown", x, y - 120);
+    expect(app.world.bodies).toHaveLength(count + 1);
+    expect(app.world.bodies.at(-1)?.isAnchor).toBe(true);
+    expect(app.world.bodies.at(-1)?.isPivot).toBe(false);
+  });
+
+  it("spawns a particle attached when it is placed near a rigid rod", () => {
+    const { app, canvas } = makeApp();
+    const a = new Body(new Vec2(-1, 0), 0.1, 1);
+    const b = new Body(new Vec2(1, 0), 0.1, 1);
+    const rod = new DistanceLink(a, b);
+    app.world.bodies.push(a, b);
+    app.world.links.push(rod);
+    app.controller.setTool("body");
+
+    const near = app.camera.toScreen(new Vec2(0.35, 0.12));
+    send(canvas, "pointerdown", near[0], near[1]);
+    const particle = app.world.bodies.at(-1)!;
+    expect(particle.rodAttachmentId).toBe(rod.id);
+    expect(particle.rodAttachmentT).toBeCloseTo(0.675, 6);
+    expect(particle.pos.y).toBeCloseTo(0, 9);
+
+    const far = app.camera.toScreen(new Vec2(0.2, 0.5));
+    send(canvas, "pointerdown", far[0], far[1]);
+    expect(app.world.bodies.at(-1)?.rodAttachmentId).toBeNull();
+  });
+
+  it("snaps a slowly dragged particle, slides it, then releases past hysteresis", () => {
+    const { app, canvas } = makeApp();
+    const a = new Body(new Vec2(-1, 0), 0.1, 1);
+    const b = new Body(new Vec2(1, 0), 0.1, 1);
+    const particle = new Body(new Vec2(0, 1), 0.12, 1);
+    const rod = new DistanceLink(a, b);
+    app.world.bodies.push(a, b, particle);
+    app.world.links.push(rod);
+    app.controller.setTool("select");
+    const start = app.camera.toScreen(particle.pos);
+    const near = app.camera.toScreen(new Vec2(0.25, 0.08));
+    send(canvas, "pointerdown", start[0], start[1]);
+    send(canvas, "pointermove", near[0], near[1]);
+    (app.controller as unknown as { rodPointerSpeed: number }).rodPointerSpeed = 0;
+    app.controller.updateDrag();
+    expect(particle.rodAttachmentId).toBe(rod.id);
+    expect(particle.pos.y).toBeCloseTo(0, 8);
+
+    const sticky = app.camera.toScreen(new Vec2(0.6, 0.25));
+    send(canvas, "pointermove", sticky[0], sticky[1]);
+    app.controller.updateDrag();
+    expect(particle.rodAttachmentId).toBe(rod.id);
+    expect(particle.pos.y).toBeCloseTo(0, 8);
+
+    const away = app.camera.toScreen(new Vec2(0.6, 0.8));
+    send(canvas, "pointermove", away[0], away[1]);
+    app.controller.updateDrag();
+    expect(particle.rodAttachmentId).toBeNull();
+    send(canvas, "pointerup", away[0], away[1]);
   });
 });
 

@@ -138,6 +138,21 @@ export class Trail {
     if (this.sinceRecompute >= this.cap) this.recomputeBounds();
   }
 
+  /** Discard points recorded after a rewind target while retaining the path
+   * that had already happened. Rewind is an explicit, infrequent operation,
+   * so recomputing the exact bounds here is preferable to leaving a future
+   * segment visible or clearing the entire useful trail. */
+  truncateAfter(tCut: number): void {
+    let dropped = 0;
+    while (this.len > 0) {
+      const newest = (this.head + this.len - 1) % this.cap;
+      if (this.ts[newest] <= tCut + 1e-12) break;
+      this.len--;
+      dropped++;
+    }
+    if (dropped > 0) this.recomputeBounds();
+  }
+
   /** Discard everything (a rewind/reset invalidates recorded history). */
   clear(): void {
     this.head = 0;

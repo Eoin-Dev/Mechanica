@@ -80,6 +80,10 @@ export interface BodyDict {
   no_rotation?: boolean;
   is_anchor?: boolean;
   is_pulley?: boolean;
+  is_pivot?: boolean;
+  is_rod_endpoint?: boolean;
+  rod_id?: number | null;
+  rod_position?: number;
   color: number[];
 }
 
@@ -118,6 +122,20 @@ export class Body {
   // colliding physical disc. Deleting it has assembly-specific semantics in
   // World.removeBodies.
   isPulley = false;
+  /** A fixed support constrained to a point on an existing rod. */
+  isPivot = false;
+  /** System-owned endpoint of a standalone rod. It supplies the two solver
+   * coordinates needed by the existing headless constraint engine, but is
+   * neither a visible particle nor an attachment the user can select. */
+  isRodEndpoint = false;
+  /** Optional attachment to a fraction of a rigid rod. Ordinary particles
+   * use the same constraint as pivots, so their mass and applied links/forces
+   * feed back into the rod rather than following it decoratively. */
+  rodAttachmentId: number | null = null;
+  rodAttachmentT = 0.5;
+  /** Per-particle canvas analysis toggles. Presentation only. */
+  showForceComponents = false;
+  forceSlopeWallId: number | null = null;
   // transient: true while the user holds the mouse on this body. A held
   // body acts as infinite mass (it stays pinned under the cursor) but
   // everything else still collides with it. Never serialized.
@@ -249,6 +267,10 @@ export class Body {
       no_rotation: this.noRotation,
       is_anchor: this.isAnchor,
       is_pulley: this.isPulley,
+      is_pivot: this.isPivot,
+      is_rod_endpoint: this.isRodEndpoint,
+      rod_id: this.rodAttachmentId,
+      rod_position: this.rodAttachmentT,
       color: [...this.color],
     };
   }
@@ -287,10 +309,30 @@ export class Body {
     b.noRotation = boolOr(d.no_rotation, false);
     if (b.noRotation) b.omega = 0.0; // a non-rotating body never spins
     b.isPulley = boolOr(d.is_pulley, false);
-    b.isAnchor = b.isPulley || boolOr(d.is_anchor, false);
+    b.isPivot = !b.isPulley && boolOr(d.is_pivot, false);
+    b.isRodEndpoint = !b.isPulley && !b.isPivot &&
+      boolOr(d.is_rod_endpoint, false);
+    b.isAnchor = b.isPulley || b.isPivot || boolOr(d.is_anchor, false);
+    const rodId = d.rod_id === null || d.rod_id === undefined
+      ? null : idOr(d.rod_id, -1);
+    b.rodAttachmentId = rodId !== null && rodId >= 0 ? rodId : null;
+    b.rodAttachmentT = numIn(d.rod_position, 0.5, 0, 1);
     if (b.isAnchor) {
       b.locked = true;
       b.name = b.isPulley ? "Pulley" : "Anchor";
+    }
+    if (b.isPivot) {
+      b.collides = false;
+      b.constForce.set(0, 0);
+      b.vel.set(0, 0);
+      b.omega = 0;
+    }
+    if (b.isRodEndpoint) {
+      b.name = "Rod endpoint";
+      b.collides = false;
+      b.noRotation = true;
+      b.constForce.set(0, 0);
+      b.omega = 0;
     }
     if (b.isPulley) {
       b.collides = false;

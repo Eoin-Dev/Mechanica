@@ -3,7 +3,7 @@ import { App } from "../app";
 import { CATEGORIES, PRESETS } from "../scene/presets";
 import * as snap from "../scene/snapshot";
 import { Control, ModalFocus, button, checkbox, el, isTouch, refreshTabs,
-         segmented, wireTabs } from "./dom";
+         fmt3dp, numEdit, segmented, wireTabs } from "./dom";
 import { ICONS } from "./icons";
 import { ThemeName, css, defaultAccent } from "./theme";
 
@@ -550,6 +550,13 @@ export class SettingsPanel {
          "walls and slides along them, so you can push a ball up a ramp by " +
          "hand.");
 
+    group("New scene defaults");
+    add(numEdit("Gravity after Clear", () => app.newSceneGravity,
+      (value) => app.setNewSceneGravity(value), "m/s²", undefined, fmt3dp));
+    note("Defaults to 9.8 m/s². This is applied only when the toolbar's Clear " +
+         "button creates an empty workspace; premades and imported scenes " +
+         "keep their own gravity.");
+
     group("Accuracy & performance");
     add(checkbox("Performance mode",
       () => app.perfMode,
@@ -634,9 +641,9 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
   ["Tools", [
     ["V", "Select"],
     ["H", "Pan"],
-    ["B / A", "Add body / anchor"],
+    ["B / A", "Add body / anchor (anchors support nearby rods)"],
     ["W", "Draw wall (Shift snaps the angle)"],
-    ["R / E / S", "Connect rod / string / spring"],
+    ["R / E / S / P", "Connect rod / string / spring; add pulley"],
     ["X", "Eraser"],
     ["Esc", "Cancel a pending link or wall; clear selection"],
   ], "pc"],
@@ -656,6 +663,8 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
     ["D", "Velocity vectors"],
     ["G", "Broadphase debug grid"],
     ["1 / 2 / 3", "Energy / momentum / phase graph"],
+    ["Graph: Distance", "Distance travelled by the selected particle over time"],
+    ["Graph: Velocity", "Speed and x/y velocity of the selected particle over time"],
     ["Scroll / right-drag", "Zoom at cursor / pan"],
     ["\\", "Hide / show the inspector"],
     ["Tab", "Move between controls"],
@@ -693,9 +702,10 @@ const GETTING_STARTED: Array<[string, string, string]> = [
    "friction. The World tab has gravity, air drag, N-body attraction and " +
    "custom force fields you write as formulas."],
   ["5", "Measure it",
-   "The View tab turns on velocity and force arrows, motion trails, the " +
-   "centre of mass, and live energy, momentum and phase-space graphs. The " +
-   "status bar tracks total energy drift so you can see the solver working."],
+   "Select a particle for live position, displacement, distance, velocity, " +
+   "acceleration and free-body arrows drawn on the canvas. World records and " +
+    "pauses at events; Graphs adds energy, momentum, phase space, " +
+    "distance–time and velocity–time plots."],
   ["6", "Keep it",
    "Ctrl+S saves to this browser; the Library exports and imports .json, " +
    "which is the same format the desktop version used."],

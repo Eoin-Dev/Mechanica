@@ -28,6 +28,7 @@ describe("theme contrast invariants", () => {
         `\\[data-studio="true"\\] ${selector}\\s*\\{[^}]*color:\\s*var\\(--accent-text\\)`,
         "s"));
     }
+    expect(css).toMatch(/\[data-studio="true"\] \.segmented button\.active\s*\{[^}]*background:\s*var\(--panel-light\)/s);
   });
   it("keeps faint normal text readable on both panel surfaces", () => {
     for (const name of theme.THEME_NAMES) {

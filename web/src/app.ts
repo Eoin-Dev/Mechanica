@@ -4,8 +4,10 @@
  * trails and graph recording are direct ports of the desktop app; rendering
  * happens on requestAnimationFrame and the UI chrome lives in the DOM.
  */
-import { Body } from "./engine/body";
+import { Body, Wall } from "./engine/body";
+import { DistanceLink, PulleyLink, SpringLink } from "./engine/links";
 import { World, escapedBodies } from "./engine/world";
+import { EventTracker, PlaybackEvent, PlaybackEventKind } from "./education/analysis";
 import { Camera, MAX_ZOOM, MIN_ZOOM } from "./render/camera";
 import { Selectable, ViewSettings, drawGrid, drawScaleBar, drawWorld } from "./render/draw";
 import { Trail } from "./render/trail";
@@ -60,7 +62,7 @@ const SETTINGS_KEY = "mechanica.settings";
 // gesture ends without keeping the canvas itself repainting.
 const DISPLAY_ACTIVITY_MS = 250;
 
-export type GraphMode = "Off" | "Energy" | "Mom." | "Phase";
+export type GraphMode = "Off" | "Energy" | "Mom." | "Phase" | "Distance" | "Velocity";
 
 export interface Settings {
   adaptive_dt?: boolean;
@@ -77,6 +79,7 @@ export interface Settings {
   accent?: string;           // hex UI accent; unset = the theme's default
   custom_accents?: string[]; // user-picked accents shown as extra swatches
   font_scale?: number;       // UI font-size multiplier (0.9 - 1.2)
+  new_scene_gravity?: number; // downward acceleration applied by Clear
 }
 
 /** Every boolean preference, so loadSettings can validate them in one pass
@@ -147,6 +150,10 @@ export function sanitizeSettings(raw: unknown): Settings {
   if (typeof r.font_scale === "number" && Number.isFinite(r.font_scale)) {
     s.font_scale = Math.min(1.2, Math.max(0.9, r.font_scale));
   }
+  if (typeof r.new_scene_gravity === "number" &&
+      Number.isFinite(r.new_scene_gravity)) {
+    s.new_scene_gravity = Math.min(100, Math.max(0, r.new_scene_gravity));
+  }
   if (isHex(r.accent)) s.accent = r.accent;
   if (Array.isArray(r.custom_accents)) {
     s.custom_accents = r.custom_accents.filter(isHex).slice(0, 6);
@@ -167,6 +174,7 @@ interface PhysicsFailure {
 interface PhysicsBatchResult {
   completed: number;
   failure: PhysicsFailure | null;
+  eventStopped: boolean;
 }
 
 export class App {
@@ -255,8 +263,19 @@ export class App {
   trails = new Map<number, Trail>();
   energySeries = new TimeSeries(["KE", "PE", "Total"]);
   momentumSeries = new TimeSeries(["|p|", "px", "py", "L"]);
+  distanceSeries = new TimeSeries(["Distance"]);
+  velocitySeries = new TimeSeries(["Speed", "vx", "vy"]);
   phasePlot = new PhasePlot();
+  readonly playbackEvents = new EventTracker();
+  pauseOnEvent: PlaybackEventKind | null = null;
+  /** Event scanning is lazy because it walks the live scene. Opening the
+   * Events tab enables it for the session; an armed pause rule also enables
+   * it without adding work to ordinary simulation playback. */
+  playbackEventTracking = false;
   private phaseBodyId: number | null = null;
+  private kinematicsBodyId: number | null = null;
+  private kinematicsLastPosition: { x: number; y: number } | null = null;
+  private kinematicsDistance = 0;
   graphMode: GraphMode = "Off";
 
   settings: Settings = {};
@@ -272,6 +291,10 @@ export class App {
   private lastDisplayFrame = -Infinity;
   private displayFpsSmoothed = 0.0;
   private displayActiveUntil = -Infinity;
+  /** Paused camera easing is still visible animation and keeps rAF cadence
+   * until it settles; a truly unchanged paused scene returns to its 20 Hz
+   * housekeeping wake. */
+  private presentationAnimating = false;
 
   // true while a soft-body preset is loaded and the user has not yet been
   // shown the "right-drag instead" hint; the controller consumes it on the
@@ -396,6 +419,18 @@ export class App {
     this.resizeCanvas();
   }
 
+  /** Gravity assigned to a newly cleared workspace. Presets and imported
+   * scenes keep their authored values. */
+  get newSceneGravity(): number {
+    return this.settings.new_scene_gravity ?? 9.8;
+  }
+
+  setNewSceneGravity(value: number): void {
+    if (!Number.isFinite(value)) return;
+    this.settings.new_scene_gravity = Math.min(100, Math.max(0, value));
+    this.saveSettings();
+  }
+
   /** Point a world at the current solver mode. Called on every world the app
    * steps, so no path can forget it. */
   applySolverMode(world: World): void {
@@ -516,6 +551,13 @@ export class App {
 
   // --------------------------------------------------------------- playback
   togglePlay(): void {
+    if (!this.playing) {
+      const warning = this.rodConfigurationWarning();
+      if (warning !== null) {
+        this.toast(warning);
+        return;
+      }
+    }
     this.ensureInitial();
     this.playing = !this.playing;
     if (this.playing) {
@@ -525,6 +567,29 @@ export class App {
       this.lastFrame = performance.now();
     }
     this.scheduleDisplayFrame(true);
+  }
+
+  /** Standalone rods use hidden solver coordinates and are intentionally
+   * massless in the user model. Do not run a beam that has no meaningful
+   * support/load arrangement: the hidden coordinates must never masquerade
+   * as endpoint particles. Existing endpoint-to-endpoint rods are unaffected. */
+  private rodConfigurationWarning(): string | null {
+    for (const link of this.world.links) {
+      if (!(link instanceof DistanceLink) || link.isRope ||
+          !link.a.isRodEndpoint || !link.b.isRodEndpoint) continue;
+      let pivots = 0;
+      let particles = 0;
+      for (const body of this.world.bodies) {
+        if (body.rodAttachmentId !== link.id) continue;
+        if (body.isPivot) pivots++;
+        else if (!body.isRodEndpoint) particles++;
+      }
+      if ((pivots === 0 && particles < 2) || (pivots > 0 && particles === 0)) {
+        return "This rod is not ready to simulate. Add an anchor and a particle, " +
+          "or attach at least two particles, then press Play again.";
+      }
+    }
+    return null;
   }
 
   /** Run one engine step and preserve its diagnostic before a later step can
@@ -559,16 +624,167 @@ export class App {
   private runPhysicsBatch(world: World, count: number, dt: number,
                           afterStep: (() => void) | null = null): PhysicsBatchResult {
     for (let i = 0; i < count; i++) {
+      const refineable = world === this.world && this.playing && !this.perfMode &&
+        this.pauseOnEvent !== null;
+      const before = refineable ? snap.snapshot(world) : null;
       const failure = this.safeStep(world, dt);
       if (failure !== null) {
         // A divergence is a completed, contained engine step. An exception
         // may have interrupted the step, so it is not counted or sampled.
         if (!failure.exception) afterStep?.();
-        return { completed: i + (failure.exception ? 0 : 1), failure };
+        return { completed: i + (failure.exception ? 0 : 1), failure,
+          eventStopped: false };
+      }
+      if (world === this.world) {
+        const trackPlaybackEvents = this.playbackEventTracking ||
+          this.pauseOnEvent !== null;
+        const events = trackPlaybackEvents ? this.playbackEvents.observe(world) : [];
+        if (this.playing && this.pauseOnEvent !== null) {
+          const event = events.find(
+            (candidate) => candidate.kind === this.pauseOnEvent);
+          if (event !== undefined) {
+            if (before !== null) {
+              const refined = this.refinePlaybackEvent(before, dt, event);
+              if (refined !== null) {
+                this.installPlaybackRefinement(refined);
+                event.time = refined.time;
+              }
+            }
+            afterStep?.();
+            this.playing = false;
+            this.accumulator = 0;
+            this.overloaded = false;
+            this.toast(`Paused at ${event.time.toFixed(4)} s: ${event.label}`);
+            return { completed: i + 1, failure: null, eventStopped: true };
+          }
+        }
       }
       afterStep?.();
     }
-    return { completed: count, failure: null };
+    return { completed: count, failure: null, eventStopped: false };
+  }
+
+  /** Re-simulate only the final event interval to its transition. This work
+   * exists solely while an explicit event auto-pause rule is armed. Normal
+   * playback therefore keeps its allocation-free path; Performance mode
+   * intentionally pauses at its coarser completed quantum. */
+  private refinePlaybackEvent(before: string, dt: number,
+                              event: PlaybackEvent): World | null {
+    let fraction = event.fraction ?? 1;
+    if (event.kind === "contact" && event.key !== undefined) {
+      let lo = 0;
+      let hi = dt;
+      for (let pass = 0; pass < 18; pass++) {
+        const mid = (lo + hi) * 0.5;
+        const trial = snap.restoreSnapshot(before);
+        this.applySolverMode(trial);
+        trial.step(mid);
+        if (this.worldHasContact(trial, event.key)) hi = mid;
+        else lo = mid;
+      }
+      fraction = hi / dt;
+    } else if (event.kind === "pulley-stop" && event.bodyIds.length > 0) {
+      let lo = 0;
+      let hi = dt;
+      for (let pass = 0; pass < 18; pass++) {
+        const mid = (lo + hi) * 0.5;
+        const trial = snap.restoreSnapshot(before);
+        this.applySolverMode(trial);
+        trial.step(mid);
+        if (this.bodyAtPulleyStop(trial, event.bodyIds[0])) hi = mid;
+        else lo = mid;
+      }
+      fraction = hi / dt;
+    }
+    if (!Number.isFinite(fraction) || fraction <= 1e-8 || fraction >= 1 - 1e-8) {
+      return null;
+    }
+    const refined = snap.restoreSnapshot(before);
+    this.applySolverMode(refined);
+    refined.step(dt * fraction);
+    return refined;
+  }
+
+  private worldHasContact(world: World, key: string): boolean {
+    for (const contact of world.contacts) {
+      const other = contact.bodyBId ??
+        (contact.wallId === null ? -1 : -contact.wallId);
+      if (`contact:${contact.bodyAId}:${other}` === key) return true;
+    }
+    return false;
+  }
+
+  private bodyAtPulleyStop(world: World, bodyId: number): boolean {
+    const body = world.bodies.find((candidate) => candidate.id === bodyId);
+    if (body === undefined) return false;
+    for (const link of world.links) {
+      if (!(link instanceof PulleyLink) || (link.a !== body && link.b !== body)) continue;
+      if (body.pos.distTo(link.pulley.pos) <= link.pulley.radius + body.radius + 1e-7) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Install a refined state without clearing the graphs, trails, rewind
+   * buffer, initial snapshot, or the event row that requested the stop. */
+  private installPlaybackRefinement(world: World): void {
+    const selectionKeys = this.selection.map((item) => this.selectableKey(item));
+    this.transferAnalysisPresentation(this.world, world);
+    this.world = world;
+    this.applySolverMode(world);
+    this.controller.hover = null;
+    this.controller.resetInteraction();
+    this.selection = selectionKeys.flatMap((key) => {
+      const item = this.findSelectable(world, key);
+      return item === null ? [] : [item];
+    });
+    this.playbackEvents.prime(world);
+    this.invalidateEnergy();
+    this.onWorldReplaced();
+    this.onSelectionChange();
+    this.invalidateCanvas();
+  }
+
+  private selectableKey(item: Selectable): string {
+    if (item instanceof Body) return `b:${item.id}`;
+    if (item instanceof Wall) return `w:${item.id}`;
+    if (item instanceof PulleyLink) return `p:${item.id}`;
+    if (item instanceof SpringLink) return `s:${item.id}`;
+    return `r:${item.id}`;
+  }
+
+  private findSelectable(world: World, key: string): Selectable | null {
+    const [kind, raw] = key.split(":");
+    const id = Number(raw);
+    if (kind === "b") return world.bodies.find((body) => body.id === id) ?? null;
+    if (kind === "w") return world.walls.find((wall) => wall.id === id) ?? null;
+    return world.links.find((link) => link.id === id &&
+      (kind === "p" ? link instanceof PulleyLink
+        : kind === "s" ? link instanceof SpringLink
+          : link instanceof DistanceLink)) ?? null;
+  }
+
+  /** Rewind/refinement replace engine objects but not the user's view choice.
+   * Copy only transient analysis presentation; no physical state crosses the
+   * snapshot boundary through this path. */
+  private transferAnalysisPresentation(from: World, to: World): void {
+    const bodyView = new Map(from.bodies.map((body) => [body.id, {
+      forces: body.showForceComponents,
+      slope: body.forceSlopeWallId,
+    }]));
+    for (const body of to.bodies) {
+      const view = bodyView.get(body.id);
+      if (view === undefined) continue;
+      body.showForceComponents = view.forces;
+      body.forceSlopeWallId = view.slope !== null &&
+        to.walls.some((wall) => wall.id === view.slope) ? view.slope : null;
+    }
+    const linkView = new Map(from.links.map((link) =>
+      [this.selectableKey(link), link.showTensionVectors]));
+    for (const link of to.links) {
+      link.showTensionVectors = linkView.get(this.selectableKey(link)) ?? false;
+    }
   }
 
   private stopForPhysicsFailure(failure: PhysicsFailure,
@@ -641,25 +857,37 @@ export class App {
   stepBack(): void {
     this.cancelEdit();
     this.playing = false;
+    const previousWorld = this.world;
+    const selectionKeys = this.selection.map((item) => this.selectableKey(item));
     let world = this.history.back();
     if (world === null) {
       if (this.initialSnapshot === null) return;
       this.clearHistory();
       world = snap.restoreSnapshot(this.initialSnapshot);
     }
-    const selIds = new Set(this.selection
-      .filter((o): o is Body => o instanceof Body).map((o) => o.id));
+    this.transferAnalysisPresentation(previousWorld, world);
     this.world = world;
+    this.applySolverMode(world);
     this.invalidateEnergy();
     this.controller.hover = null;
     // a rewind swaps the world just as much as a load does, so the same
     // in-progress gestures have to go with it (see resetInteraction)
     this.controller.resetInteraction();
-    this.setSelection(world.bodies.filter((b) => selIds.has(b.id)));
+    this.setSelection(selectionKeys.flatMap((key) => {
+      const item = this.findSelectable(world, key);
+      return item === null ? [] : [item];
+    }));
     // trim graphs back to the rewound time instead of wiping them
     this.energySeries.truncate(world.time);
     this.momentumSeries.truncate(world.time);
+    this.distanceSeries.truncate(world.time);
+    this.velocitySeries.truncate(world.time);
     this.phasePlot.truncate(world.time);
+    this.restoreKinematicsAfterRewind();
+    for (const trail of this.trails.values()) trail.truncateAfter(world.time);
+    this.playbackEvents.rewindTo(world.time, world);
+    this.lastRewindSampleT = world.time;
+    this.invalidateCanvas();
   }
 
   ensureInitial(): void {
@@ -788,7 +1016,10 @@ export class App {
     this.trails.clear();
     this.energySeries.clear();
     this.momentumSeries.clear();
+    this.distanceSeries.clear();
+    this.velocitySeries.clear();
     this.phasePlot.clear();
+    this.playbackEvents.clear(world);
     this.clearHistory();
     this.rewindUnavailable = false;
     this.divergeCooldown = -Infinity;
@@ -810,7 +1041,11 @@ export class App {
 
   setSelection(sel: Selectable[]): void {
     this.selection = sel;
+    const measured = sel.find((item): item is Body =>
+      item instanceof Body && !item.isAnchor) ?? null;
+    this.playbackEvents.selectedBodyId = measured?.id ?? null;
     this.syncPhaseSelection();
+    this.syncKinematicsSelection();
     this.onSelectionChange();
     this.invalidateCanvas();
   }
@@ -900,7 +1135,9 @@ export class App {
   // -------------------------------------------------------------- scene ops
   newScene(): void {
     this.beginEdit();
-    this.replaceWorld(new World(), false, true);
+    const world = new World();
+    world.gravity = this.newSceneGravity;
+    this.replaceWorld(world, false, true);
     this.playing = false;
     this.commitEdit();
     this.toast("Scene cleared (Ctrl+Z restores it)");
@@ -1117,6 +1354,7 @@ export class App {
     } else {
       this.toast(`Camera follow ${this.view.follow ? "on" : "off"}`);
     }
+    this.invalidateCanvas();
   }
 
   toggleAutoFit(): void {
@@ -1124,6 +1362,7 @@ export class App {
     this.autofitRatio = 1.0;
     this.toast("Auto-fit camera " +
       (this.view.autoFit ? "on - framing the whole scene (scroll out any time)" : "off"));
+    this.invalidateCanvas();
   }
 
   /** Called after a manual scroll-zoom. With auto-fit active the user may
@@ -1194,6 +1433,25 @@ export class App {
     // before the simulation is started
     if (mode !== "Off") this.recordGraphSample();
     this.onWorldReplaced(); // panels re-check dock visibility
+  }
+
+  /** Clear every graph and restart selected-particle measurements from its
+   * current position. Distance therefore returns to zero without changing the
+   * scene or the simulation clock. */
+  clearGraphData(): void {
+    this.energySeries.clear();
+    this.momentumSeries.clear();
+    this.distanceSeries.clear();
+    this.velocitySeries.clear();
+    this.phasePlot.clear();
+    this.phaseBodyId = null;
+    this.kinematicsBodyId = null;
+    this.kinematicsLastPosition = null;
+    this.kinematicsDistance = 0;
+    this.lastGraphSampleT = -Infinity;
+    this.syncPhaseSelection();
+    this.syncKinematicsSelection();
+    this.recordGraphSample();
   }
 
   setAdaptiveDt(on: boolean): void {
@@ -1377,12 +1635,13 @@ export class App {
         for (const p of this.panels) p.refresh();
       }
       this.insideFrame = false;
-      this.scheduleDisplayFrame(this.playing);
+      this.scheduleDisplayFrame(this.playing || this.presentationAnimating);
     };
     this.scheduleDisplayFrame(true);
   }
 
   private update(dtFrame: number): void {
+    this.presentationAnimating = false;
     if (this.playing) {
       // Below 1x, keep stepping at the normal 120 Hz real-time rate but
       // with a proportionally smaller dt: slow motion then produces a
@@ -1401,11 +1660,12 @@ export class App {
       let quanta = 0;
       let qUsed = 1;
       let failure: PhysicsFailure | null = null;
+      let eventStopped = false;
       let advanced = false;
       let capturedVisualState = false;
       const t0 = performance.now();
       while (this.accumulator >= effDt && quanta < MAX_STEPS_PER_FRAME &&
-             failure === null) {
+             failure === null && !eventStopped) {
         if (!capturedVisualState) {
           this.capturePhysicsVisualState();
           capturedVisualState = true;
@@ -1419,8 +1679,9 @@ export class App {
         const result = this.runPhysicsBatch(
           this.world, q, h, () => this.recordTrails());
         failure = result.failure;
+        eventStopped = result.eventStopped;
         if (result.completed > 0) advanced = true;
-        if (failure !== null) break;
+        if (failure !== null || eventStopped) break;
         this.accumulator -= effDt;
         quanta++;
         if (performance.now() - t0 > PHYSICS_BUDGET_S * 1000) {
@@ -1430,6 +1691,8 @@ export class App {
       this.qNow = qUsed;
       if (failure !== null) {
         this.stopForPhysicsFailure(failure);
+      } else if (eventStopped) {
+        this.overloaded = false;
       } else {
         this.overloaded = this.accumulator >= effDt;
         if (this.overloaded) this.accumulator = 0.0;
@@ -1470,6 +1733,18 @@ export class App {
         // hard guarantee on top of the smoothing: nothing that exists
         // right now may be off-screen, however fast it moves
         this.clampCameraToBounds();
+        if (!instant) {
+          const centreErrorPx = Math.hypot(
+            target[0] - cam.centre.x, target[1] - cam.centre.y) * cam.zoom;
+          const zoomError = Math.abs(Math.log(desired / cam.zoom));
+          if (centreErrorPx > 0.1 || zoomError > 1e-4) {
+            this.presentationAnimating = true;
+          } else {
+            cam.zoom = desired;
+            cam.centre.set(target[0], target[1]);
+            this.clampCameraToBounds();
+          }
+        }
       }
     } else if (this.view.follow) {
       const body = this.selection.find((o): o is Body =>
@@ -1479,6 +1754,12 @@ export class App {
         const blend = instant ? 1.0 : Math.min(1.0, dtFrame * 8.0);
         cam.centre.x += (body.pos.x - cam.centre.x) * blend;
         cam.centre.y += (body.pos.y - cam.centre.y) * blend;
+        if (!instant) {
+          const errorPx = Math.hypot(
+            body.pos.x - cam.centre.x, body.pos.y - cam.centre.y) * cam.zoom;
+          if (errorPx > 0.1) this.presentationAnimating = true;
+          else cam.centre.set(body.pos.x, body.pos.y);
+        }
       }
     }
   }
@@ -1635,6 +1916,10 @@ export class App {
     const maxlen = this.view.trailLen;
     const now = this.world.time;
     const threshold = 0.5 / this.camera.zoom;
+    const internalRodEnds = new Set<number>();
+    for (const body of this.world.bodies) {
+      if (body.isRodEndpoint) internalRodEnds.add(body.id);
+    }
     let changed = false;
     const trailFor = (bid: number): Trail => {
       let t = this.trails.get(bid);
@@ -1650,7 +1935,7 @@ export class App {
       // future; they would never expire and would draw a path the body
       // has not taken yet, so drop them
       if (t.count > 0 && t.time(t.count - 1) > now + 1e-9) {
-        t.clear();
+        t.truncateAfter(now);
         changed = true;
       }
       return t;
@@ -1659,13 +1944,14 @@ export class App {
     // (close encounters turn around within a single step)
     if (this.world.trace.length > 0) {
       for (const [bid, x, y] of this.world.trace) {
+        if (internalRodEnds.has(bid)) continue;
         trailFor(bid).push(x, y, now);
         changed = true;
       }
       this.world.trace.length = 0;
     }
     for (const b of this.world.bodies) {
-      if (b.locked) continue;
+      if (b.locked || b.isRodEndpoint) continue;
       const t = trailFor(b.id);
       const n = t.count;
       if (n === 0 ||
@@ -1703,7 +1989,7 @@ export class App {
     const live = this.trailLive;
     live.clear();
     for (const b of this.world.bodies) {
-      if (!b.locked) live.add(b.id);
+      if (!b.locked && !b.isRodEndpoint) live.add(b.id);
     }
     for (const [bid, t] of this.trails) {
       if (live.has(bid)) {
@@ -1763,6 +2049,52 @@ export class App {
     return body;
   }
 
+  /** Bind distance-time and velocity-time history to one ordinary selected
+   * particle. Distance is cumulative path length measured from selection (or
+   * the most recent graph clear), not radial distance from the origin. */
+  private syncKinematicsSelection(): Body | undefined {
+    const body = this.selection.find((item): item is Body =>
+      item instanceof Body && !item.isAnchor && !item.isPivot &&
+      !item.isPulley && !item.isRodEndpoint);
+    const nextId = body?.id ?? null;
+    if (nextId === this.kinematicsBodyId) return body;
+    this.kinematicsBodyId = nextId;
+    this.kinematicsLastPosition = body === undefined
+      ? null : { x: body.pos.x, y: body.pos.y };
+    this.kinematicsDistance = 0;
+    this.distanceSeries.clear();
+    this.velocitySeries.clear();
+    if (body !== undefined) {
+      this.distanceSeries.add(this.world.time, { Distance: 0 });
+      this.velocitySeries.add(this.world.time, {
+        Speed: Math.hypot(body.vel.x, body.vel.y),
+        vx: body.vel.x,
+        vy: body.vel.y,
+      });
+    }
+    return body;
+  }
+
+  /** Re-base path measurement after the plotted future has been truncated.
+   * Otherwise the backwards position jump itself would be counted as new
+   * forward travel when the simulation resumes. */
+  private restoreKinematicsAfterRewind(): void {
+    const body = this.syncKinematicsSelection();
+    this.kinematicsLastPosition = body === undefined
+      ? null : { x: body.pos.x, y: body.pos.y };
+    this.kinematicsDistance = this.distanceSeries.count > 0
+      ? this.distanceSeries.valueAt("Distance", this.distanceSeries.count - 1)
+      : 0;
+    if (body !== undefined && this.distanceSeries.count === 0) {
+      this.distanceSeries.add(this.world.time, { Distance: 0 });
+      this.velocitySeries.add(this.world.time, {
+        Speed: Math.hypot(body.vel.x, body.vel.y),
+        vx: body.vel.x,
+        vy: body.vel.y,
+      });
+    }
+  }
+
   /** Sample the current state into every graph series. Runs after each
    * physics frame, and immediately when a graph is enabled or the world
    * changes, so an opened graph shows data from the very first frame
@@ -1771,6 +2103,19 @@ export class App {
     // Selection identity is independent of the sampling cadence: synchronise
     // it before the throttle can return on a paused or just-sampled clock.
     const phaseBody = this.syncPhaseSelection();
+    const kinematicsBody = this.syncKinematicsSelection();
+    if (kinematicsBody !== undefined) {
+      const previous = this.kinematicsLastPosition;
+      if (previous !== null) {
+        this.kinematicsDistance += Math.hypot(
+          kinematicsBody.pos.x - previous.x,
+          kinematicsBody.pos.y - previous.y);
+      }
+      this.kinematicsLastPosition = {
+        x: kinematicsBody.pos.x,
+        y: kinematicsBody.pos.y,
+      };
+    }
     // Cap the cadence in SIM time: the window shows GRAPH_WINDOW_S seconds
     // in at most GRAPH_MAX_POINTS samples, so anything finer is sub-pixel.
     // This bounds both the sampling cost (energy() is O(n^2) with mutual
@@ -1789,6 +2134,15 @@ export class App {
     this.momentumSeries.add(this.world.time, {
       "|p|": p.length(), px: p.x, py: p.y, L: this.world.angularMomentum(),
     });
+    if (kinematicsBody !== undefined) {
+      this.distanceSeries.add(this.world.time,
+        { Distance: this.kinematicsDistance });
+      this.velocitySeries.add(this.world.time, {
+        Speed: Math.hypot(kinematicsBody.vel.x, kinematicsBody.vel.y),
+        vx: kinematicsBody.vel.x,
+        vy: kinematicsBody.vel.y,
+      });
+    }
     if (phaseBody !== undefined) {
       this.phasePlot.add(
         this.world.time, phaseBody.pos.x, phaseBody.vel.x,

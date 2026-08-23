@@ -130,6 +130,63 @@ test("pulley preset and tool expose a complete editable-string assembly", async 
   await expect(tensionVectors).toBeChecked();
 });
 
+test("mechanics analysis is integrated into graphs, particles, rods, and playback", async ({ page }) => {
+  await skipFirstRunTour(page, { theme: "dark", studio_mode: true });
+  await page.goto("/");
+
+  await page.getByRole("button", { name: "Distance", exact: true }).click();
+  await expect(page.locator(".dock-hint")).toContainText("Select a particle");
+  await expect(page.getByRole("button", { name: "Velocity", exact: true }))
+    .toBeVisible();
+  const graphAxe = await new AxeBuilder({ page })
+    .disableRules(["meta-viewport"])
+    .include("#dock")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"])
+    .analyze();
+  expect(graphAxe.violations).toEqual([]);
+  await page.getByRole("button", { name: "Close the graph dock." }).click();
+
+  await page.getByRole("button", { name: "Remove everything from the scene. Ctrl+Z restores it." }).click();
+  const canvas = page.locator("#canvas");
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+  const first = { x: box!.width * 0.32, y: box!.height * 0.42 };
+  const second = { x: box!.width * 0.70, y: box!.height * 0.52 };
+  await page.getByRole("button", { name: /Add body \(B\)/ }).click();
+  await canvas.click({ position: first });
+  await canvas.click({ position: second });
+  await page.getByRole("button", { name: /Draw rod \(R\)/ }).click();
+  await canvas.click({ position: first });
+  await canvas.click({ position: second });
+  await page.getByRole("button", { name: /Add anchor \(A\)/ }).click();
+  await canvas.click({ position: {
+    x: (first.x + second.x) / 2,
+    y: (first.y + second.y) / 2,
+  } });
+  await expect(page.locator("#status-text")).toContainText("1 rod anchor");
+  await expect(page.locator("#inspector-panel")).toContainText("Rod anchor");
+
+  await page.getByRole("button", { name: /Select \(V\)/ }).click();
+  await canvas.click({ position: first });
+  await page.getByRole("checkbox", { name: "Free-body forces on canvas" }).check();
+  await expect(page.getByText("Forces on canvas", { exact: true })).toBeVisible();
+
+  await canvas.click({ position: {
+    x: box!.width * 0.434,
+    y: box!.height * 0.45,
+  } });
+  await expect(page.getByText("Rod coordinates", { exact: true })).toBeVisible();
+  await expect(page.getByText("Attached to rod", { exact: true })).toBeVisible();
+  await expect(page.locator(".rod-attachment-item")).toContainText("Anchor");
+
+  await page.getByRole("tab", { name: "World" }).click();
+  await expect(page.getByText("Playback events", { exact: true })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Pause playback at event" })).toBeVisible();
+  await expect(page.locator(".event-history")).toBeHidden();
+  await page.getByRole("button", { name: "Show", exact: true }).click();
+  await expect(page.locator(".event-history")).toBeVisible();
+});
+
 test("paused Jelly zoom reports painted FPS without lowering physical quality", async ({ page }) => {
   await skipFirstRunTour(page, { perf_mode: true });
   await page.goto("/");

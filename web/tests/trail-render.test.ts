@@ -9,7 +9,7 @@ import { World } from "../src/engine/world";
 import { Camera } from "../src/render/camera";
 import { ViewSettings, drawGrid, drawWorld } from "../src/render/draw";
 import { Trail } from "../src/render/trail";
-import { WARN, css } from "../src/ui/theme";
+import { ACC_COLOR, FORCE_COLOR, VEL_COLOR, WARN, css } from "../src/ui/theme";
 
 interface Op { op: string; style?: string; x?: number; y?: number;
                cx?: number; cy?: number; text?: string; }
@@ -220,6 +220,40 @@ describe("body rendering", () => {
     expect(strokeArgs.every((path) => path === undefined)).toBe(true);
     expect(fillArgs.every((path) => path === undefined)).toBe(true);
   });
+
+  it("retains sub-four-pixel analytical vectors only in Normal mode", () => {
+    const body = new Body(new Vec2(0, 0), 0.1, 1);
+    // At the 100 px/m camera below, each scaled vector is 0.75 CSS px long:
+    // visible in Normal mode but intentionally beneath Performance's 4 px
+    // dense-scene cutoff.
+    body.vel.set(0.05, 0);
+    body.acc.set(0.15, 0);
+    body.netForce.set(0.15, 0);
+    const analytical = new ViewSettings();
+    analytical.grid = false;
+    analytical.velVectors = true;
+    analytical.accVectors = true;
+    analytical.forceVectors = true;
+    const cam = new Camera(800, 600);
+    cam.zoom = 100;
+    const normal = recCtx();
+    drawWorld(normal.ctx, cam, worldWith(body), analytical, [], null,
+      new Map(), 800, 600);
+
+    for (const color of [VEL_COLOR, ACC_COLOR, FORCE_COLOR]) {
+      expect(normal.ops.some((op) =>
+        op.op === "stroke" && op.style === css(color))).toBe(true);
+    }
+
+    const performance = recCtx();
+    drawWorld(performance.ctx, cam, worldWith(body), analytical, [], null,
+      new Map(), 800, 600, 1, true);
+
+    for (const color of [VEL_COLOR, ACC_COLOR, FORCE_COLOR]) {
+      expect(performance.ops.some((op) =>
+        op.op === "stroke" && op.style === css(color))).toBe(false);
+    }
+  });
 });
 
 describe("link rendering", () => {
@@ -310,6 +344,32 @@ describe("link rendering", () => {
     expect(shafts).toHaveLength(4);
     expect(ops.filter((op) => op.op === "fillText").map((op) => op.text))
       .toEqual([expect.stringContaining("F ="), expect.stringContaining("⎣")]);
+  });
+
+  it("retains sub-four-pixel link-force arrows only in Normal mode", () => {
+    const a = new Body(new Vec2(-1, 0), 0.12, 1);
+    const b = new Body(new Vec2(1, 0), 0.12, 1);
+    const spring = new SpringLink(a, b, 2, 1);
+    spring.axialForce = 0.15;
+    spring.showTensionVectors = true;
+    const world = worldWith(a, b);
+    world.links.push(spring);
+    const cam = new Camera(800, 600);
+    cam.zoom = 100;
+    const analytical = new ViewSettings();
+    analytical.grid = false;
+
+    const normal = recCtx();
+    drawWorld(normal.ctx, cam, world, analytical, [], null,
+      new Map(), 800, 600);
+    expect(normal.ops.some((op) =>
+      op.op === "stroke" && op.style === css(WARN))).toBe(true);
+
+    const performance = recCtx();
+    drawWorld(performance.ctx, cam, world, analytical, [], null,
+      new Map(), 800, 600, 1, true);
+    expect(performance.ops.some((op) =>
+      op.op === "stroke" && op.style === css(WARN))).toBe(false);
   });
 });
 

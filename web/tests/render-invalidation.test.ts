@@ -130,6 +130,43 @@ describe("retained App canvas", () => {
     expect(frames).toHaveLength(1);
   });
 
+  it("animates paused auto-fit at display cadence, then returns to idle", () => {
+    const frames: FrameRequestCallback[] = [];
+    const timers: Array<() => void> = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      frames.push(cb);
+      return 1;
+    });
+    vi.spyOn(window, "setTimeout").mockImplementation(((cb: TimerHandler) => {
+      if (typeof cb === "function") timers.push(() => cb());
+      return 9;
+    }) as typeof window.setTimeout);
+    vi.spyOn(window, "clearTimeout").mockImplementation(() => {});
+    const h = harness();
+    h.app.world.bodies.push(
+      new Body(new Vec2(-4, 0), 0.2, 1),
+      new Body(new Vec2(4, 0), 0.2, 1),
+    );
+    h.app.camera.zoom = 300;
+    h.app.view.autoFit = true;
+    h.app.start();
+
+    let now = performance.now();
+    frames.shift()!(now += 16);
+    expect(frames).toHaveLength(1);
+    expect(timers).toHaveLength(0);
+
+    let animatedFrames = 1;
+    while (frames.length > 0 && animatedFrames < 300) {
+      frames.shift()!(now += 16);
+      animatedFrames++;
+    }
+    expect(animatedFrames).toBeGreaterThan(2);
+    expect(animatedFrames).toBeLessThan(300);
+    expect(timers).toHaveLength(1);
+    expect(h.app.playing).toBe(false);
+  });
+
   it("uses an opaque context and does not reset unchanged backing dimensions", () => {
     const h = harness();
     expect(h.contextOptions()).toEqual({ alpha: false });

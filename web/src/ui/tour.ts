@@ -1,6 +1,6 @@
 /** First-run guided tour.
  *
- * Mechanica opens on a canvas with nine tools, three inspector tabs and a
+ * Mechanica opens on a canvas with eleven tools, three inspector tabs and a
  * library of 48 examples, and previously said nothing about any of it - the
  * only orientation was a shortcut table behind F1, which answers "what key
  * does X" and never "what is this and what do I do first". `tour_done` had
@@ -82,14 +82,15 @@ export const STEPS: Step[] = [
   {
     target: "#palette",
     title: "Build your own",
-    body: "Bodies and anchors, walls, and three ways to connect things: a " +
+    body: "Bodies, anchors, walls and pulleys, plus three ways to connect things: a " +
           "rigid rod, a string, a spring. Click two bodies to link them - " +
           "or click empty space and the anchor or body you need is created " +
-          "for you, so a pendulum takes two clicks.",
-    touchBody: "Bodies and anchors, walls, and three ways to connect " +
-               "things: a rigid rod, a string, a spring. Tap two bodies to " +
-               "link them - or tap empty space and the anchor or body you " +
-               "need is created for you, so a pendulum takes two taps.",
+          "for you, so a pendulum takes two clicks. Place an anchor near a rod " +
+          "to support it there.",
+    touchBody: "Bodies, anchors, walls and pulleys, and three ways to connect " +
+                "things: a rigid rod, a string, a spring. Tap two bodies to " +
+                "link them - or tap empty space and the anchor or body you " +
+                "need is created for you. An anchor placed near a rod supports it.",
     enter: (app) => { app.playing = false; },
   },
   {
@@ -98,17 +99,17 @@ export const STEPS: Step[] = [
     // exactly what a phone user needs to be shown. Whichever of the two is
     // visible gets the ring; the other is skipped as hidden.
     target: "#inspector, #inspector-handle",
-    title: "Change anything, measure everything",
-    body: "Select an object and every property is here to edit: mass, " +
-          "radius, bounce, friction, colour. The World tab holds gravity, " +
-          "air drag and the solver; View turns on velocity arrows, motion " +
-          "trails, the centre of mass and the live energy and momentum " +
-          "graphs.",
+    title: "Change and analyse anything",
+    body: "Select a particle for on-canvas free-body forces, or select a rod " +
+          "for endpoint labels, coordinates and its attachment list. The World " +
+          "tab holds gravity, event-aware playback, air drag and the solver; " +
+          "View controls global overlays and the Graph dock plots live " +
+          "distance–time and velocity–time data for the selected particle.",
     touchBody: "Tap the tab on the right edge to slide the panel open. " +
-               "Select an object and every property is there to edit: mass, " +
-               "radius, bounce, friction, colour. The World tab holds " +
-               "gravity and air drag; View turns on velocity arrows, motion " +
-               "trails and the live energy and momentum graphs.",
+               "Select a particle for on-canvas free-body forces, " +
+                "or a rod for endpoint labels, coordinates and attachments. The World tab holds " +
+               "gravity and event-aware playback; View and Graphs provide " +
+               "the other analysis tools.",
   },
   {
     // Force fields are the most distinctive thing here and the steepest

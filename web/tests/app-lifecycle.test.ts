@@ -17,6 +17,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, PHYSICS_DT } from "../src/app";
 import { Body } from "../src/engine/body";
+import { DistanceLink } from "../src/engine/links";
 import { PRESETS } from "../src/scene/presets";
 import { Vec2 } from "../src/core/vec";
 import { listScenes, snapshot } from "../src/scene/snapshot";
@@ -80,6 +81,34 @@ describe("App construction", () => {
     expect(document.documentElement.dataset.theme).toBe("light");
     expect(document.documentElement.dataset.studio).toBe("true");
     expect(app.cullEnabled).toBe(false);
+  });
+});
+
+describe("new workspace defaults", () => {
+  it("clears to 9.8 m/s squared and honours the persisted setting", () => {
+    const app = makeApp();
+    app.newScene();
+    expect(app.world.gravity).toBe(9.8);
+    app.setNewSceneGravity(10);
+    app.newScene();
+    expect(app.world.gravity).toBe(10);
+    expect(JSON.parse(localStorage.getItem("mechanica.settings") ?? "{}")
+      .new_scene_gravity).toBe(10);
+  });
+
+  it("keeps an unconfigured standalone rod paused and explains what is missing", () => {
+    const app = makeApp();
+    const a = new Body(new Vec2(-1, 0), 0.04, 1e-3);
+    const b = new Body(new Vec2(1, 0), 0.04, 1e-3);
+    a.isRodEndpoint = b.isRodEndpoint = true;
+    a.collides = b.collides = false;
+    app.world.bodies.push(a, b);
+    app.world.links.push(new DistanceLink(a, b));
+    const messages: string[] = [];
+    app.toastFn = (message) => messages.push(message);
+    app.togglePlay();
+    expect(app.playing).toBe(false);
+    expect(messages.at(-1)).toContain("not ready to simulate");
   });
 });
 
@@ -254,6 +283,30 @@ describe("playback and history", () => {
     expect(Number.isFinite(app.world.time)).toBe(true);
   });
 
+  it("rewinds free-body analysis and retracts trails to the restored frame", () => {
+    const app = makeApp();
+    app.setTrails(true);
+    const body = new Body(new Vec2(0, 2), 0.2, 1);
+    body.showForceComponents = true;
+    app.world.bodies.push(body);
+    app.setSelection([body]);
+    app.stepOnce();
+    const firstTime = app.world.time;
+    const firstForceY = body.netForce.y;
+    app.stepOnce();
+    const trail = app.trails.get(body.id)!;
+    const beforeCount = trail.count;
+    app.stepBack();
+    const restored = app.world.bodies.find((candidate) => candidate.id === body.id)!;
+    expect(app.world.time).toBeCloseTo(firstTime, 12);
+    expect(restored.showForceComponents).toBe(true);
+    expect(restored.netForce.y).toBeCloseTo(firstForceY, 12);
+    expect(app.selection).toEqual([restored]);
+    expect(trail.count).toBeLessThanOrEqual(beforeCount);
+    expect(trail.count === 0 || trail.time(trail.count - 1) <= app.world.time + 1e-12)
+      .toBe(true);
+  });
+
   it("loads every preset without throwing", () => {
     const app = makeApp();
     for (const p of PRESETS) {
@@ -391,6 +444,48 @@ describe("settings persistence", () => {
     } finally {
       Storage.prototype.setItem = original;
     }
+  });
+});
+
+describe("event-aware playback", () => {
+  const update = (app: App, seconds: number): void => {
+    (app as unknown as { update(dt: number): void }).update(seconds);
+  };
+
+  it("refines an apex stop to the interpolated zero-velocity time", () => {
+    const app = makeApp();
+    app.world.gravity = 9.8;
+    const body = new Body(new Vec2(0, 0), 0.16, 1);
+    body.vel.y = 14;
+    body.collides = false;
+    app.world.bodies.push(body);
+    app.playbackEvents.selectedBodyId = body.id;
+    app.playbackEvents.clear(app.world);
+    app.pauseOnEvent = "apex";
+    app.playing = true;
+    for (let i = 0; i < 200 && app.playing; i++) update(app, 1 / 60);
+    expect(app.playing).toBe(false);
+    expect(app.world.time).toBeCloseTo(14 / 9.8, 5);
+    expect(app.world.bodies[0].vel.y).toBeCloseTo(0, 5);
+    expect(app.playbackEvents.events.at(-1)?.kind).toBe("apex");
+  });
+
+  it("bisects a first collision and stops at contact instead of a later frame", () => {
+    const app = makeApp();
+    app.world.gravity = 0;
+    const moving = new Body(new Vec2(-1, 0), 0.2, 1);
+    const target = new Body(new Vec2(0, 0), 0.2, 1);
+    moving.vel.x = 1;
+    moving.restitution = target.restitution = 0;
+    app.world.bodies.push(moving, target);
+    app.playbackEvents.clear(app.world);
+    app.pauseOnEvent = "contact";
+    app.playing = true;
+    for (let i = 0; i < 100 && app.playing; i++) update(app, 1 / 60);
+    expect(app.playing).toBe(false);
+    expect(app.world.time).toBeCloseTo(0.6, 4);
+    expect(app.world.contacts.length).toBeGreaterThan(0);
+    expect(app.playbackEvents.events.at(-1)?.kind).toBe("contact");
   });
 });
 
@@ -600,6 +695,50 @@ describe("graph recording", () => {
     expect(app.momentumSeries.values("py").at(-1)!).toBeCloseTo(p.y, 9);
     expect(app.momentumSeries.values("L").at(-1)!)
       .toBeCloseTo(app.world.angularMomentum(), 9);
+  });
+
+  it("records selected-particle distance and velocity and resets on selection", () => {
+    const app = makeApp();
+    app.world.gravity = 0;
+    const first = new Body(new Vec2(0, 0), 0.2, 1);
+    first.vel.set(3, 4);
+    const second = new Body(new Vec2(2, 1), 0.2, 1);
+    second.vel.set(-2, 0.5);
+    first.collides = second.collides = false;
+    app.world.bodies.push(first, second);
+    app.setSelection([first]);
+    app.setGraphMode("Distance");
+    const start = first.pos.copy();
+    for (let i = 0; i < 20; i++) app.stepOnce();
+
+    const travelled = app.distanceSeries.values("Distance").at(-1)!;
+    expect(travelled).toBeCloseTo(first.pos.distTo(start), 9);
+    expect(app.velocitySeries.values("Speed").at(-1)).toBeCloseTo(5, 9);
+    expect(app.velocitySeries.values("vx").at(-1)).toBeCloseTo(3, 9);
+    expect(app.velocitySeries.values("vy").at(-1)).toBeCloseTo(4, 9);
+
+    app.setSelection([second]);
+    expect(app.distanceSeries.values("Distance")).toEqual([0]);
+    expect(app.velocitySeries.values("Speed").at(-1))
+      .toBeCloseTo(Math.hypot(-2, 0.5), 9);
+  });
+
+  it("truncates distance and velocity history cleanly when rewinding", () => {
+    const app = makeApp();
+    app.world.gravity = 0;
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    body.vel.set(2, 0);
+    app.world.bodies.push(body);
+    app.setSelection([body]);
+    for (let i = 0; i < 20; i++) app.stepOnce();
+    app.stepBack();
+    app.stepBack();
+    expect(app.distanceSeries.lastT).toBeLessThanOrEqual(app.world.time + 1e-9);
+    expect(app.velocitySeries.lastT).toBeLessThanOrEqual(app.world.time + 1e-9);
+    const beforeReplay = app.distanceSeries.values("Distance").at(-1)!;
+    app.stepOnce();
+    expect(app.distanceSeries.values("Distance").at(-1)!)
+      .toBeGreaterThanOrEqual(beforeReplay);
   });
 
   it("keeps sampling after a rewind instead of going quiet", () => {

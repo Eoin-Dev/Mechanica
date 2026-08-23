@@ -128,7 +128,7 @@ window.addEventListener("resize", resize);
 resize();
 
 // ------------------------------------------------------------------- start
-app.initializePreset(PRESETS[0]);
+app.initializePreset(PRESETS.find((preset) => preset.name === "Earth & Moon") ?? PRESETS[0]);
 app.start();
 // First visit gets the guided tour instead of a toast that scrolls away
 // before it has been read; afterwards, the toast is the reminder.

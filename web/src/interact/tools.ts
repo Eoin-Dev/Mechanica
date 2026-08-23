@@ -6,12 +6,14 @@
  *             velocity; drag wall endpoints to reshape them.
  *   pan     - drag to pan (also middle/right button in any tool).
  *   body    - click to place a dynamic body.
- *   anchor  - click to place a locked (infinite mass) body: a pivot.
+ *   anchor  - click to place a fixed point; near a rod it becomes that rod's
+ *             fixed support.
  *   wall    - click and drag to draw a static wall (hold Shift to constrain
  *             to horizontal / vertical / 45 degrees).
- *   rod/rope/spring - click two bodies to connect them. Clicking empty space
- *             creates an anchor for the first pick or a body for the second,
- *             so a pendulum can be drawn in two clicks.
+ *   rod     - click two points to place a standalone beam; particles and
+ *             anchors are attached afterwards.
+ *   rope/spring - click two bodies to connect them. Clicking empty space
+ *             creates an anchor for the first pick or a body for the second.
  *   pulley  - place a fixed axle with two particles and an inextensible
  *             routed string; placement and later axle drags snap to wall ends.
  *   eraser  - click or scrub across objects to delete them in one gesture.
@@ -28,7 +30,7 @@ import {
 } from "../engine/links";
 import { Driver } from "../engine/world";
 import { Selectable, VEL_ARROW_SCALE, distToSegment, drawVelocityHandle,
-         snapStep } from "../render/draw";
+         pivotGlyphMetrics, snapStep } from "../render/draw";
 import { isTouch } from "../ui/dom";
 import type { App } from "../app";
 
@@ -55,10 +57,10 @@ export const TOOL_INFO: Record<Tool, [string, string]> = {
   pan: ["Pan (H)", "Drag to move the view. Middle drag (or right drag on " +
         "empty space) pans in any tool."],
   body: ["Add body (B)", "Click to place a dynamic body. Edit it in the Inspector."],
-  anchor: ["Add anchor (A)", "Click to place a fixed anchor - connect rods, strings and springs to it."],
+  anchor: ["Add anchor (A)", "Click to place a fixed anchor. Place it close to a rod to support the rod at that point."],
   wall: ["Draw wall (W)", "Click and drag to draw a static wall. Shift snaps the angle."],
-  rod: ["Connect rod (R)", "Click two bodies to join them rigidly. " +
-        "Click empty space to create an anchor/body automatically."],
+  rod: ["Draw rod (R)", "Click two points to place a standalone rigid beam. " +
+        "Add anchors or slowly drag particles onto it afterwards."],
   rope: ["Connect string (E)", "An elastic string: pulls when stretched " +
          "past its natural length, completely slack when shorter. Can be " +
          "made inelastic (fixed length) in the Inspector."],
@@ -77,10 +79,9 @@ export const TOOL_INFO_TOUCH: Record<Tool, string> = {
           "Drag empty space for a box select.",
   pan: "Drag to move the view. Pinch with two fingers to zoom.",
   body: "Tap to place a dynamic body. Edit it in the Inspector.",
-  anchor: "Tap to place a fixed anchor for rods, strings and springs.",
+  anchor: "Tap to place a fixed anchor. Near a rod, it supports the rod at that point.",
   wall: "Drag to draw a static wall.",
-  rod: "Tap two bodies to join them rigidly. Tap empty space to " +
-       "auto-create an anchor/body.",
+  rod: "Tap two points to place a standalone beam, then add anchors or particles.",
   rope: "Tap two bodies to join with an elastic string (pulls only " +
         "when stretched).",
   spring: "Tap two bodies to join them with a spring.",
@@ -128,6 +129,9 @@ function makeAnchor(b: Body): Body {
 const DRAG_RESPONSE_SCALE = 0.2;
 const DRAG_RESPONSE_KNEE = 2.0; // m/s; asymptotic response is 0.4 m/s
 const DRAG_CHASE_CAP = 20.0; // m/s - per-substep clamp on linked bodies
+const ROD_ATTACH_PX = 18;
+const ROD_DETACH_PX = 36;
+const ROD_ATTACH_MAX_PX_S = 280;
 
 /** Fraction of measured hand speed presented to the physical solvers.
  *
@@ -138,6 +142,31 @@ const DRAG_CHASE_CAP = 20.0; // m/s - per-substep clamp on linked bodies
  * discontinuity or stale-event cap is needed. */
 function dragResponseScale(speed: number): number {
   return DRAG_RESPONSE_SCALE / Math.hypot(1.0, speed / DRAG_RESPONSE_KNEE);
+}
+
+/** Internal solver coordinate for a standalone rod. The tiny finite mass
+ * lets the existing bilateral-constraint solver represent a massless beam's
+ * position and angle without exposing fake endpoint particles in the UI. A
+ * play-time configuration guard prevents an unsupported bare beam from being
+ * simulated as though those coordinates were physical objects. */
+function makeRodEndpoint(b: Body): Body {
+  b.isRodEndpoint = true;
+  b.collides = false;
+  b.noRotation = true;
+  b.radius = 0.04;
+  b.mass = 1e-3;
+  b.name = "Rod endpoint";
+  return b;
+}
+
+function makePivot(b: Body, rod: DistanceLink, t: number): Body {
+  makeAnchor(b);
+  b.isPivot = true;
+  b.collides = false;
+  b.name = "Anchor";
+  b.rodAttachmentId = rod.id;
+  b.rodAttachmentT = Math.max(0, Math.min(1, t));
+  return b;
 }
 
 function makePulley(b: Body): Body {
@@ -196,6 +225,8 @@ export class CanvasController {
   /** Live wall-end latches use a wider release radius than acquisition so a
    * snapped wheel does not chatter at the threshold. */
   private pulleyDragMounts = new Map<Body, { wall: Wall; end: 0 | 1 }>();
+  private rodPointerLast: { x: number; y: number; t: number } | null = null;
+  private rodPointerSpeed = Infinity;
 
   constructor(app: App) {
     this.app = app;
@@ -252,6 +283,8 @@ export class CanvasController {
     }
     this.dragItems = [];
     this.pulleyDragMounts.clear();
+    this.rodPointerLast = null;
+    this.rodPointerSpeed = Infinity;
     this.dragActive = false;
     this.dragPrev = null;
     if (changed) this.app.invalidateEnergy();
@@ -321,6 +354,7 @@ export class CanvasController {
         const pulleyLink = body.isPulley ? this.pulleyLink(body) : null;
         const pulleyTarget = pulleyLink === null ? null : this.pulleyDragTarget(body, t);
         if (pulleyTarget !== null) t = pulleyTarget.target;
+        if (pulleyLink === null && !body.isPivot) t = this.rodDragTarget(body, t);
         // Walls are solid while paused too. Whether the clock is running
         // is irrelevant to where a body is allowed to BE - and placing
         // things is mostly done paused, so applying it only during play
@@ -332,6 +366,8 @@ export class CanvasController {
         }
         if (pulleyLink !== null && pulleyTarget !== null) {
           app.world.movePulleyForEdit(pulleyLink, t, pulleyTarget.mount);
+        } else if (this.movePivotForEdit(body, t)) {
+          // The whole authoring assembly was translated above.
         } else {
           body.pos.setVec(t);
         }
@@ -353,6 +389,7 @@ export class CanvasController {
       const pulleyLink = body.isPulley ? this.pulleyLink(body) : null;
       const pulleyTarget = pulleyLink === null ? null : this.pulleyDragTarget(body, t);
       if (pulleyTarget !== null) t = pulleyTarget.target;
+      if (pulleyLink === null && !body.isPivot) t = this.rodDragTarget(body, t);
       // sweep from where the body actually is, so a fast flick cannot
       // step over a wall between frames
       if (solid && !body.locked) {
@@ -464,6 +501,89 @@ export class CanvasController {
     return link instanceof PulleyLink ? link : null;
   }
 
+  /** Nearest point on a true rigid rod. Strings deliberately do not count:
+   * a support or rod-mounted particle cannot be defined on slack geometry. */
+  private nearestRigidRod(point: Vec2, maxPx: number): {
+      rod: DistanceLink; t: number; point: Vec2; distancePx: number;
+    } | null {
+    let best: { rod: DistanceLink; t: number; point: Vec2; distancePx: number } | null = null;
+    for (const link of this.app.world.links) {
+      if (!(link instanceof DistanceLink) || link.isRope) continue;
+      const dx = link.b.pos.x - link.a.pos.x;
+      const dy = link.b.pos.y - link.a.pos.y;
+      const length2 = dx * dx + dy * dy;
+      if (length2 < 1e-16) continue;
+      const t = Math.max(0, Math.min(1,
+        ((point.x - link.a.pos.x) * dx + (point.y - link.a.pos.y) * dy) / length2));
+      const projected = new Vec2(link.a.pos.x + t * dx, link.a.pos.y + t * dy);
+      const distancePx = point.distTo(projected) * this.app.camera.zoom;
+      if (distancePx <= maxPx && (best === null || distancePx < best.distancePx)) {
+        best = { rod: link, t, point: projected, distancePx };
+      }
+    }
+    return best;
+  }
+
+  private attachedRod(body: Body): DistanceLink | null {
+    if (body.rodAttachmentId === null) return null;
+    const rod = this.app.world.links.find((link) =>
+      link instanceof DistanceLink && !link.isRope &&
+      link.id === body.rodAttachmentId);
+    return rod instanceof DistanceLink ? rod : null;
+  }
+
+  /** Slow acquisition plus a wider release radius gives rod-mounted
+   * particles the same deliberate, non-chattering gesture as wall pulleys. */
+  private rodDragTarget(body: Body, proposed: Vec2): Vec2 {
+    const attached = this.attachedRod(body);
+    if (attached !== null) {
+      const dx = attached.b.pos.x - attached.a.pos.x;
+      const dy = attached.b.pos.y - attached.a.pos.y;
+      const length2 = dx * dx + dy * dy;
+      if (length2 > 1e-16) {
+        const t = Math.max(0, Math.min(1,
+          ((proposed.x - attached.a.pos.x) * dx +
+           (proposed.y - attached.a.pos.y) * dy) / length2));
+        const point = new Vec2(attached.a.pos.x + t * dx,
+                               attached.a.pos.y + t * dy);
+        if (proposed.distTo(point) * this.app.camera.zoom <= ROD_DETACH_PX) {
+          body.rodAttachmentT = t;
+          return point;
+        }
+      }
+      body.rodAttachmentId = null;
+    }
+    const speed = this.rodPointerLast !== null &&
+      performance.now() - this.rodPointerLast.t > 100 ? 0 : this.rodPointerSpeed;
+    if (speed > ROD_ATTACH_MAX_PX_S) return proposed;
+    const hit = this.nearestRigidRod(proposed, ROD_ATTACH_PX);
+    if (hit === null || hit.rod.a === body || hit.rod.b === body) return proposed;
+    body.rodAttachmentId = hit.rod.id;
+    body.rodAttachmentT = hit.t;
+    if (body.isAnchor) {
+      body.isPivot = true;
+      body.collides = false;
+      body.name = "Anchor";
+    }
+    return hit.point;
+  }
+
+  /** A paused pivot edit is an authoring translation, so carry its whole rod
+   * assembly immediately instead of waiting for the first physics step. */
+  private movePivotForEdit(body: Body, target: Vec2): boolean {
+    if (!body.isPivot) return false;
+    const rod = this.attachedRod(body);
+    if (rod === null) return false;
+    const delta = target.sub(body.pos);
+    body.pos.setVec(target);
+    rod.a.pos.addIp(delta);
+    rod.b.pos.addIp(delta);
+    for (const other of this.app.world.bodies) {
+      if (other !== body && other.rodAttachmentId === rod.id) other.pos.addIp(delta);
+    }
+    return true;
+  }
+
   /** Apply snap acquisition/breakaway hysteresis to one dragged wheel. */
   private pulleyDragTarget(body: Body, proposed: Vec2): {
       target: Vec2; mount: { wall: Wall; end: 0 | 1 } | null;
@@ -493,6 +613,39 @@ export class CanvasController {
     const bodies = app.world.bodies;
     for (let i = bodies.length - 1; i >= 0; i--) {
       const body = bodies[i];
+      if (body.isRodEndpoint) continue;
+      if (body.isPivot) {
+        const [sx, sy] = app.camera.toScreen(body.pos);
+        const glyph = pivotGlyphMetrics(body, app.world, app.camera.zoom);
+        const pointDistance = (ax: number, ay: number, bx: number, by: number): number => {
+          const dx = bx - ax;
+          const dy = by - ay;
+          const length2 = dx * dx + dy * dy;
+          const t = length2 <= 1e-12 ? 0 : Math.max(0, Math.min(1,
+            ((mouse[0] - ax) * dx + (mouse[1] - ay) * dy) / length2));
+          return Math.hypot(mouse[0] - (ax + t * dx), mouse[1] - (ay + t * dy));
+        };
+        const relX = mouse[0] - sx;
+        const relY = mouse[1] - sy;
+        const height = Math.max(1e-9, glyph.footY - glyph.apexY);
+        const insidePedestal = relY >= glyph.apexY && relY <= glyph.footY &&
+          Math.abs(relX) <= glyph.footHalf *
+            (relY - glyph.apexY) / height + glyph.stroke;
+        // The support is larger than its solver point. Treat the circular
+        // joint, filled pedestal, both edges and base as one selectable object
+        // so the eraser and selection work anywhere on the complete glyph.
+        const pickWidth = Math.max(4, glyph.stroke + 2);
+        if (Math.hypot(relX, relY) <= glyph.jointR + 4 || insidePedestal ||
+            pointDistance(sx, sy + glyph.apexY,
+              sx - glyph.footHalf, sy + glyph.footY) <= pickWidth ||
+            pointDistance(sx, sy + glyph.apexY,
+              sx + glyph.footHalf, sy + glyph.footY) <= pickWidth ||
+            pointDistance(sx - glyph.groundHalf, sy + glyph.groundY,
+              sx + glyph.groundHalf, sy + glyph.groundY) <= pickWidth) {
+          return body;
+        }
+        continue;
+      }
       if (body.pos.distTo(worldP) <=
           Math.max(body.radius + pickPad, 6.0 / app.camera.zoom)) {
         return body;
@@ -738,7 +891,12 @@ export class CanvasController {
 
     if (tool === "body") {
       app.beginEdit();
-      const b = new Body(this.snap(worldP));
+      const rodHit = this.nearestRigidRod(worldP, ROD_ATTACH_PX);
+      const b = new Body(rodHit?.point ?? this.snap(worldP));
+      if (rodHit !== null) {
+        b.rodAttachmentId = rodHit.rod.id;
+        b.rodAttachmentT = rodHit.t;
+      }
       app.world.bodies.push(b);
       app.setSelection([b]);
       app.commitEdit();
@@ -747,7 +905,10 @@ export class CanvasController {
 
     if (tool === "anchor") {
       app.beginEdit();
-      const b = makeAnchor(new Body(this.snap(worldP), 0.08));
+      const hit = this.nearestRigidRod(worldP, ROD_ATTACH_PX);
+      const b = hit === null
+        ? makeAnchor(new Body(this.snap(worldP), 0.08))
+        : makePivot(new Body(hit.point, 0.07), hit.rod, hit.t);
       app.world.bodies.push(b);
       app.setSelection([b]);
       app.commitEdit();
@@ -789,7 +950,32 @@ export class CanvasController {
       return;
     }
 
-    if (tool === "rod" || tool === "rope" || tool === "spring") {
+    if (tool === "rod") {
+      const point = this.snap(worldP);
+      if (this.linkFirst === null) {
+        app.beginEdit();
+        const endpoint = makeRodEndpoint(new Body(point, 0.04, 1e-3));
+        app.world.bodies.push(endpoint);
+        this.linkFirst = endpoint;
+        this.linkCreatedFirst = endpoint;
+      } else {
+        if (point.distTo(this.linkFirst.pos) < 0.05) {
+          app.toast("Move the second point farther away to give the rod a length");
+          return;
+        }
+        const endpoint = makeRodEndpoint(new Body(point, 0.04, 1e-3));
+        app.world.bodies.push(endpoint);
+        const link = new DistanceLink(this.linkFirst, endpoint);
+        app.world.links.push(link);
+        app.setSelection([link]);
+        this.linkFirst = null;
+        this.linkCreatedFirst = null;
+        app.commitEdit();
+      }
+      return;
+    }
+
+    if (tool === "rope" || tool === "spring") {
       const picked = this.pick(mouse);
         if (picked instanceof Body && picked.isPulley) {
           app.toast("Connect to either pulley particle, not the wheel");
@@ -809,15 +995,10 @@ export class CanvasController {
         this.linkFirst = target;
       } else if (target !== this.linkFirst) {
         app.beginEdit();
-        let link;
-        if (tool === "spring") {
-          link = new SpringLink(this.linkFirst, target);
-        } else if (tool === "rope") {
+        const link = tool === "spring"
+          ? new SpringLink(this.linkFirst, target)
           // an elastic string: a tension-only spring
-          link = new SpringLink(this.linkFirst, target, null, 1000.0, 2.0, true);
-        } else {
-          link = new DistanceLink(this.linkFirst, target);
-        }
+          : new SpringLink(this.linkFirst, target, null, 1000.0, 2.0, true);
         app.world.links.push(link);
         app.setSelection([link]);
         this.linkFirst = null;
@@ -844,6 +1025,8 @@ export class CanvasController {
     // entry that the stack then discarded as identical, but only after
     // rebuilding the whole inspector for it.
     this.dragMoved = false;
+    this.rodPointerLast = { x: mouse[0], y: mouse[1], t: performance.now() };
+    this.rodPointerSpeed = Infinity;
 
     // velocity handle of a single selected body? The tip wins over the
     // body even when it lies inside the body's disc, as long as the
@@ -851,7 +1034,7 @@ export class CanvasController {
     // would grab the (zero-length) arrow and fling it instead of moving it.
     if (app.selection.length === 1 && app.selection[0] instanceof Body) {
       const body = app.selection[0];
-      if (!body.locked) {
+      if (!body.locked && !body.showForceComponents) {
         const s = VEL_ARROW_SCALE * app.view.vectorScale;
         const tip = app.camera.toScreenXY(body.pos.x + body.vel.x * s,
                                           body.pos.y + body.vel.y * s);
@@ -928,6 +1111,16 @@ export class CanvasController {
   // ------------------------------------------------------------------ motion
   private motion(mouse: [number, number]): void {
     const app = this.app;
+    if (this.dragItems.length > 0) {
+      const now = performance.now();
+      const previous = this.rodPointerLast;
+      if (previous !== null) {
+        const dt = Math.max(1, now - previous.t) / 1000;
+        this.rodPointerSpeed = Math.hypot(mouse[0] - previous.x,
+                                         mouse[1] - previous.y) / dt;
+      }
+      this.rodPointerLast = { x: mouse[0], y: mouse[1], t: now };
+    }
     if (this.erasing) {
       const from = this.eraseLast ?? mouse;
       this.eraseAlong(from, mouse);
@@ -1086,6 +1279,7 @@ export class CanvasController {
     const found: Selectable[] = [];
     if (flt.bodies || flt.anchors || flt.pulleys) {
       for (const body of app.world.bodies) {
+        if (body.isRodEndpoint) continue;
         const wanted = body.isPulley ? flt.pulleys
           : body.isAnchor ? flt.anchors : flt.bodies;
         if (!wanted) continue;
@@ -1251,7 +1445,7 @@ export class CanvasController {
     app.beginEdit();
     const newSel: Selectable[] = [];
     const bodies = app.selection.filter((o): o is Body =>
-      o instanceof Body && !o.isPulley);
+      o instanceof Body && !o.isPulley && !o.isPivot);
     const mapping = new Map<number, Body>();
     for (const body of bodies) {
       const clone = Body.fromDict(body.toDict());
@@ -1355,6 +1549,7 @@ export class CanvasController {
     let body = this.velDrag;
     if (body === null && this.tool === "select" && app.selection.length === 1 &&
         app.selection[0] instanceof Body && !app.selection[0].locked &&
+        !app.selection[0].showForceComponents &&
         !(this.dragActive &&
           this.dragItems.some((it) => it.body === app.selection[0]))) {
       body = app.selection[0];

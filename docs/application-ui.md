@@ -12,8 +12,8 @@ The important `App` state falls into these groups:
 | Group | State |
 | --- | --- |
 | Model | `world`, current `selection`, property clipboard, undo stack, initial reset snapshot, rolling rewind history. |
-| Playback | `playing`, speed multiplier, fixed-step accumulator, overload state, adaptive-resolution toggle/current factor, FPS observations. |
-| View | `camera`, `ViewSettings`, trails keyed by body ID, coalesced canvas invalidation state, adaptive trail quality, graph mode and series. |
+| Playback | `playing`, speed multiplier, fixed-step accumulator, overload state, adaptive-resolution toggle/current factor, FPS observations, event tracker, and selected auto-pause rule. |
+| View | `camera`, `ViewSettings`, trails keyed by body ID, coalesced canvas invalidation state, adaptive trail quality, graph mode, physical series, and selected-particle kinematics series. |
 | Interaction | One `CanvasController`, plus callbacks for selection and world replacement. |
 | Preferences | Sanitized browser `settings`, performance mode, culling, dragged-wall collision, appearance and layout values. |
 | UI integration | Panel list, toast callback, soft-body hint state, energy cache. |
@@ -51,8 +51,10 @@ retrying the bad state.
 
 `stepBack()` pauses and asks `RewindBuffer` for the previous recorded display
 frame. It reconstructs a new world, resets all live gestures, retains selected
-body IDs where the corresponding reconstructed objects exist, and truncates
-energy, momentum, and timestamped phase-portrait samples at the rewound clock.
+  body IDs where the corresponding reconstructed objects exist, and truncates
+  energy, momentum, distance, velocity, timestamped phase-portrait, event-table,
+  and motion-trail samples at the rewound clock. Cumulative distance resumes
+  from the restored particle position rather than counting the rewind jump.
 The compact rewind buffer is limited to 3,000 frames and 48 MB. A frame that
 cannot fit clears rewind history and produces a one-time explanation; ordinary
 undo history remains separate.
@@ -97,7 +99,8 @@ nonzero loaded baseline is rejected with that baseline in the message.
   entries are discarded with their byte accounting after a new edit. If a
   complete transition cannot fit, history resets to the resulting current
   state and the app explains that undo is unavailable for that edit.
-- `newScene()` installs an empty world and pauses as one undoable transaction.
+- `newScene()` installs an empty world, applies the sanitized Settings default
+  gravity (`9.8 m/s²` when unset), and pauses as one undoable transaction.
 - `loadPreset()` installs a newly built world, applies preset view hints,
   frames the initial bounds, captures reset/energy baselines, and arms a
   one-time soft-body drag hint as one undoable scene replacement.
@@ -152,12 +155,12 @@ Duplication:
 
 | Tool | Key | Behavior |
 | --- | --- | --- |
-| Select | `V` | Pick objects, replace/add/toggle selection, drag bodies or wall endpoints, drag empty space for filtered box selection, and expose a velocity handle for one selected body. |
+| Select | `V` | Pick objects, replace/add/toggle selection, drag bodies or wall endpoints, drag empty space for filtered box selection, and expose a velocity handle for one selected body unless its free-body diagram is active. |
 | Pan | `H` | Drag the camera. Middle-drag and right-drag on empty space also pan from any tool. |
-| Body | `B` | Place a new dynamic body at the snapped/unsnapped world point. |
-| Anchor | `A` | Place a locked grey anchor that does not participate in mutual gravity. |
+| Body | `B` | Place a new dynamic body at the snapped/unsnapped world point. Placement within the rod threshold attaches it directly at the closest point on that rod. |
+| Anchor | `A` | Place a locked grey anchor that does not participate in mutual gravity. Placement within the rod threshold attaches it as that rod's fixed support. |
 | Wall | `W` | Press-drag-release a capsule wall; Shift constrains the end direction to horizontal, vertical, or 45-degree increments. |
-| Rod | `R` | Select two endpoints and create a bilateral `DistanceLink`. |
+| Rod | `R` | Draw a visibly double-railed standalone massless beam with hidden solver endpoints and no pre-attached objects. Ordinary endpoint-to-endpoint `DistanceLink` rods remain supported for saved scenes and link conversion. |
 | String | `E` | Select two endpoints and create a tension-only `SpringLink`; the inspector can convert it to an inelastic rope. |
 | Spring | `S` | Select two endpoints and create a bilateral `SpringLink`. |
 | Pulley | `P` | Place a fixed, non-colliding pulley with two system-sized non-rotating particles and one inextensible `PulleyLink`. A click near a wall endpoint mounts it there, seats the first particle exactly on the wall surface, and starts that string leg parallel to the wall. |
@@ -243,6 +246,14 @@ does not mark a body held or touch its motion. Once active:
 Position dragging is therefore placement, not throwing. Intentional velocity
 changes use right-drag or the velocity handle.
 
+An ordinary particle dragged slowly within 18 screen pixels of a rod snaps to
+the closest affine point and then slides along the rod. The latch tolerates up
+to 36 screen pixels of perpendicular pointer movement before detaching, so it
+does not chatter at the acquisition threshold. A fast pass does not attach.
+Rod-attached particles keep their declared fractional coordinate while physics
+runs; dragging the rod support or beam transfers the corresponding authoring
+motion through the assembly.
+
 The controller opens a transaction only when a drag first mutates the world and
 commits once on release. Focus loss, fullscreen changes, pointer cancellation,
 and a second touch restore temporary drag state before committing the final
@@ -322,16 +333,28 @@ For a single object it exposes type-specific state:
 - body name, position, velocity, mass, material, force, lock/collision and
   rotation behavior, colour, driver, and actions; radius is included for an
   ordinary body but omitted while that body is a system-sized pulley endpoint;
-- anchor position and colour with anchor invariants preserved;
+- anchor position and colour with anchor invariants preserved; a rod-attached
+  anchor instead exposes its position along the rod and deletion;
 - wall endpoints, thickness, material, colour, and actions;
 - spring/string natural length, stiffness, damping, one-sidedness/conversion;
-- rod/rope length, compliance where applicable, and rope conversion;
+- rod/rope length, compliance where applicable, and rope conversion. A selected
+  standalone rod labels A and B on the canvas, lets the coordinate origin be A
+  or B, and lists every attached anchor/particle as a selectable row with its
+  distance from A;
 - pulley-string total natural length, including both straight legs and its
   wrapped section, plus a transient four-arrow equal-tension overlay;
 - spring, elastic-string, and inelastic-string axial-force overlays with one
   arrow on each endpoint; and
 - a read-only pulley-wheel explanation with position dragging and deletion as
   its only physical editing actions, plus the pulley tension-overlay toggle.
+
+An ordinary selected particle can enable a free-body diagram directly on the
+canvas. It draws named weight, applied, drag, field, driver, link, contact, and
+solver-reaction arrows whose sum equals the realised resultant. An optional
+wall reference also shows components parallel and perpendicular to that slope.
+While this per-particle diagram is active, the selected body's default editable
+green velocity handle is hidden to avoid overlapping the force arrows; the
+View tab's global velocity-vector overlay remains independent.
 
 Tension-vector choices are per-link view state, are not serialized, and do not
 create undo entries. Multi-selection toggles every matching link, so separate
@@ -361,6 +384,15 @@ Formula edits retain invalid source and the resulting actionable error. The
 field's compiled axes are updated atomically by the engine, while the retained
 source change is committed as an ordinary undoable edit so the user can either
 repair or undo it.
+
+The bottom of the World tab contains Playback events. The selector can keep
+recording without pausing or pause at the first collision, selected-particle
+apex or line crossing, a string becoming taut, or a pulley safety stop. Only
+the current choice's short explanation is shown. The bounded Event history is
+collapsed by default, can be shown or hidden, and can be cleared without
+changing the scene. Normal mode refines collision and pulley-stop times within
+the final physics quantum; Performance mode pauses at its coarser completed
+quantum so event tracking does not undermine its throughput contract.
 
 ### View tab
 
@@ -417,17 +449,23 @@ Major behavior includes:
 - distinct taut/slack string styling with a one-millimetre visual tolerance so
   microscopic projection residuals cannot make a pulley string flicker;
 - routed pulley strings with two live tangent legs and a finite wrapped arc;
+- standalone rods as two parallel rails, selected endpoint badges `A` and `B`,
+  and rod supports whose triangular glyph dimensions scale with physical rod
+  length and camera zoom instead of staying a fixed on-screen size;
 - body fills/rings, anchor treatment, selection/hover outlines, labels, and
   spin markers. A pulley has no permanent accent outline; selecting its wheel
   draws one tight accent rim exactly on its circumference;
-- velocity, acceleration, and net-force arrows at configurable scale. Net
-  force is the realised step-average resultant `mass * deltaVelocity / dt`, so
-  it includes contacts and constraint impulses rather than only the latest
-  smooth-force sample;
+- velocity, acceleration, and net-force arrows at configurable scale. Normal
+  mode retains analytical vectors down to a half CSS pixel, while Performance
+  mode omits arrows shorter than four CSS pixels to bound dense-scene path
+  construction. Net force is the realised step-average resultant
+  `mass * deltaVelocity / dt`, so it includes contacts and constraint impulses
+  rather than only the latest smooth-force sample;
 - opt-in link-force arrows, including four equal-tension arrows for a pulley
-  and two endpoint arrows for a spring or string. The extra geometry pass runs
-  only when at least one link has enabled the overlay, and pointer hover draws
-  a two-decimal column-vector readout;
+  and two endpoint arrows for a spring or string. They use the same half-pixel
+  Normal-mode and four-pixel Performance-mode visibility thresholds as body
+  vectors. The extra geometry pass runs only when at least one link has enabled
+  the overlay, and pointer hover draws a two-decimal column-vector readout;
 - centre-of-mass marker and contact normals/impulses;
 - scale bar drawn after interaction overlays.
 
@@ -486,7 +524,10 @@ The graph dock shows:
 
 - energy: kinetic, potential, total;
 - momentum: magnitude, x/y components, and angular momentum;
-- phase space: x-vx or y-vy for the selected body.
+- phase space: x-vx or y-vy for the selected body;
+- distance-time: cumulative path length travelled by the selected ordinary
+  particle from selection or the latest graph clear; and
+- velocity-time: speed plus signed x/y velocity for that particle.
 
 `App.recordGraphSample()` records every time-series family regardless of which
 one is displayed, so switching modes does not create gaps. Sampling cadence is
@@ -503,7 +544,9 @@ sample in place, clears on backward time, rejects non-finite samples, and lets
 legend clicks hide channels. Rendering uses binary search to find the visible
 range and smooths only shrinking y-axis bounds. Reduced motion snaps the range.
 
-`PhasePlot` stores bounded time/x/vx/y/vy tuples, compacts in blocks, draws one
+Selecting a different ordinary particle clears and seeds both kinematics
+series immediately, including while paused. `PhasePlot` stores bounded
+time/x/vx/y/vy tuples, compacts in blocks, draws one
 axis pair in a square region, and marks the latest point. Selecting a different
 body immediately clears the previous phase trajectory and seeds the new body's
 current state, even while paused. Its timestamps let rewind truncate future
@@ -594,7 +637,9 @@ constant `ICONS` table, not user input.
   occupies the second, keeping all controls reachable without horizontal
   clipping. Category filters wrap within the dialog.
 - **Settings:** appearance, theme/accent/font, accessibility, interaction,
-  adaptive resolution, performance mode, culling, help, and tour access. Accent
+  adaptive resolution, performance mode, culling, the gravity assigned by
+  Clear, help, and tour access. The new-scene gravity defaults to `9.8 m/s²`,
+  is clamped to `0..100`, and does not alter the current scene. Accent
   swatches are full-bleed colour discs whose focus and selected rings sit around
   the fill. They form a named pressed-state group and restore focus after their
   DOM is rebuilt. Each custom-colour removal action is a separate sibling

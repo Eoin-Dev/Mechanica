@@ -31,10 +31,11 @@ export function restoreSnapshot(snap: string): World {
 }
 
 // ------------------------------------------------------------ rewind buffer
-/** Numbers of dynamic state stored per body: position, velocity, angle,
- * spin. Everything else a body serializes is edited by the user, never by
- * the simulation. */
-const DYN_STRIDE = 6;
+/** Numbers of dynamic state stored per body: position, velocity, angle, spin,
+ * acceleration and realised net force. The final four are solver analysis
+ * state rather than scene data, but a rewound free-body diagram must describe
+ * the restored frame instead of the future frame the user just left. */
+const DYN_STRIDE = 10;
 
 // Scratch for hashing a double exactly: writing it and reading the two
 // halves back is the cheapest way to fold a float's full precision into an
@@ -84,7 +85,10 @@ function visitStructuralValues(world: World,
     if (!visit(b.constForce.y)) return false;
     if (!visit((b.locked ? 1 : 0) | (b.collides ? 2 : 0) |
                (b.noRotation ? 4 : 0) | (b.isAnchor ? 8 : 0) |
-               (b.isPulley ? 16 : 0))) return false;
+               (b.isPulley ? 16 : 0) | (b.isPivot ? 32 : 0) |
+               (b.isRodEndpoint ? 64 : 0))) return false;
+    if (!visit(b.rodAttachmentId ?? -1)) return false;
+    if (!visit(b.rodAttachmentT)) return false;
     if (!visit(b.color[0])) return false;
     if (!visit(b.color[1])) return false;
     if (!visit(b.color[2])) return false;
@@ -133,6 +137,7 @@ function visitStructuralValues(world: World,
       if (!visit(ln.length)) return false;
       if (!visit(ln.isRope ? 1 : 0)) return false;
       if (!visit(ln.compliance)) return false;
+      if (!visit(ln.originAtA ? 1 : 0)) return false;
     }
   }
   if (!visit(world.fields.length)) return false;
@@ -184,7 +189,7 @@ function structureMatches(world: World, expected: readonly StructuralValue[]): b
 
 interface Frame {
   key: number;             // index into `keys` of the snapshot this rests on
-  dyn: Float64Array | null; // null when the frame IS the keyframe's state
+  dyn: Float64Array | null; // null retained as a corruption/legacy guard
 }
 
 export type RewindStoreResult = "stored" | "too-large";
@@ -197,9 +202,10 @@ export type RewindStoreResult = "stored" | "too-large";
  * double as shortest-round-trip text, which is a couple of hundred
  * nanoseconds apiece and there are thousands of them.
  *
- * Only six numbers per body actually change as the simulation runs, so a
- * frame normally stores just those, as a flat Float64Array, against the
- * last full snapshot. A new snapshot is taken when the structural digest
+ * Ten numbers per body change as the simulation runs: position, velocity,
+ * angle, spin, acceleration and realised net force. A frame normally stores
+ * just those, plus the clock and step count, as a flat Float64Array against
+ * the last full snapshot. A new snapshot is taken when the structural digest
  * differs or an exact value comparison rejects a matching digest. A compact
  * delta is therefore stored only when every omitted value still equals its
  * keyframe value.
@@ -234,13 +240,39 @@ export class RewindBuffer {
     this.bytes = 0;
   }
 
+  private captureDynamic(world: World): Float64Array {
+    const dyn = new Float64Array(world.bodies.length * DYN_STRIDE + 2);
+    let i = 0;
+    for (const b of world.bodies) {
+      dyn[i] = b.pos.x;
+      dyn[i + 1] = b.pos.y;
+      dyn[i + 2] = b.vel.x;
+      dyn[i + 3] = b.vel.y;
+      dyn[i + 4] = b.angle;
+      dyn[i + 5] = b.omega;
+      dyn[i + 6] = b.acc.x;
+      dyn[i + 7] = b.acc.y;
+      dyn[i + 8] = b.netForce.x;
+      dyn[i + 9] = b.netForce.y;
+      i += DYN_STRIDE;
+    }
+    dyn[i] = world.time;
+    dyn[i + 1] = world.stepCount;
+    return dyn;
+  }
+
   push(world: World): RewindStoreResult {
     const digest = this.digestWorld(world);
+    const dyn = this.captureDynamic(world);
+    if (dyn.byteLength > RewindBuffer.BUDGET_BYTES) {
+      this.clear();
+      return "too-large";
+    }
     const sameStructure = this.haveDigest && digest === this.digest &&
       structureMatches(world, this.structure);
     if (!sameStructure || this.keys.length === 0) {
       const state = snapshot(world);
-      if (state.length * 2 > RewindBuffer.BUDGET_BYTES) {
+      if (state.length * 2 + dyn.byteLength > RewindBuffer.BUDGET_BYTES) {
         this.clear();
         return "too-large";
       }
@@ -249,24 +281,9 @@ export class RewindBuffer {
       this.digest = digest;
       this.haveDigest = true;
       this.structure = captureStructure(world);
-      this.frames.push({ key: this.keyBase + this.keys.length - 1, dyn: null });
+      this.bytes += dyn.byteLength;
+      this.frames.push({ key: this.keyBase + this.keys.length - 1, dyn });
     } else {
-      const dyn = new Float64Array(world.bodies.length * DYN_STRIDE + 1);
-      if (dyn.byteLength > RewindBuffer.BUDGET_BYTES) {
-        this.clear();
-        return "too-large";
-      }
-      let i = 0;
-      for (const b of world.bodies) {
-        dyn[i] = b.pos.x;
-        dyn[i + 1] = b.pos.y;
-        dyn[i + 2] = b.vel.x;
-        dyn[i + 3] = b.vel.y;
-        dyn[i + 4] = b.angle;
-        dyn[i + 5] = b.omega;
-        i += DYN_STRIDE;
-      }
-      dyn[i] = world.time;
       this.bytes += dyn.byteLength;
       this.frames.push({ key: this.keyBase + this.keys.length - 1, dyn });
     }
@@ -277,13 +294,15 @@ export class RewindBuffer {
     if (this.bytes > RewindBuffer.BUDGET_BYTES) {
       const state = snapshot(world);
       this.clear();
-      if (state.length * 2 > RewindBuffer.BUDGET_BYTES) return "too-large";
+      if (state.length * 2 + dyn.byteLength > RewindBuffer.BUDGET_BYTES) {
+        return "too-large";
+      }
       this.keys.push(state);
-      this.bytes = state.length * 2;
+      this.bytes = state.length * 2 + dyn.byteLength;
       this.digest = digest;
       this.haveDigest = true;
       this.structure = captureStructure(world);
-      this.frames.push({ key: 0, dyn: null });
+      this.frames.push({ key: 0, dyn });
     }
     return "stored";
   }
@@ -315,7 +334,7 @@ export class RewindBuffer {
     // Exact structural comparison guarantees the body list matches its
     // keyframe. Keep the length guard as a final corruption boundary rather
     // than reading past the end of a damaged array.
-    if (dyn !== null && dyn.length === world.bodies.length * DYN_STRIDE + 1) {
+    if (dyn !== null && dyn.length === world.bodies.length * DYN_STRIDE + 2) {
       let k = 0;
       for (const b of world.bodies) {
         b.pos.x = dyn[k];
@@ -324,9 +343,14 @@ export class RewindBuffer {
         b.vel.y = dyn[k + 3];
         b.angle = dyn[k + 4];
         b.omega = dyn[k + 5];
+        b.acc.x = dyn[k + 6];
+        b.acc.y = dyn[k + 7];
+        b.netForce.x = dyn[k + 8];
+        b.netForce.y = dyn[k + 9];
         k += DYN_STRIDE;
       }
       world.time = dyn[k];
+      world.stepCount = Math.max(0, Math.floor(dyn[k + 1]));
     }
     return world;
   }

@@ -72,7 +72,7 @@ driving. Production behavior does not depend on these handles.
 
 | Owner | Long-lived state | Not owned here |
 | --- | --- | --- |
-| `App` | Current `World`, camera, `ViewSettings`, selection, playback speed/accumulator, adaptive-resolution preference, active edit transaction, undo and rewind objects, initial reset snapshot, trails, plots, graph mode, clipboard properties, browser settings, canvas invalidation generation, performance observations, panel callbacks. | Physical integration rules, pointer gesture internals, DOM control trees. |
+| `App` | Current `World`, camera, `ViewSettings`, selection, playback speed/accumulator, event tracker/auto-pause rule, adaptive-resolution preference, active edit transaction, undo and rewind objects, initial reset snapshot, trails, energy/momentum/phase/distance/velocity plots, graph mode, clipboard properties, browser settings, canvas invalidation generation, performance observations, panel callbacks. | Physical integration rules, pointer gesture internals, DOM control trees. |
 | `World` | Bodies, walls, links, fields, drivers, physical settings, simulation clock, contact snapshot, solver caches, adaptive-slice scratch storage, diagnostics. | Camera, selected objects, playback state, browser preferences, storage, rendering. |
 | `CanvasController` | Active tool, hover, pointer coordinates, pending link/wall gestures, drag/pan/box-selection state, touch pointers and pinch state. | Canonical selection and world lists; it edits those through `App`/`World`. |
 | Panels and overlays | DOM nodes, local tab/filter/open state, refresh groups, focus traps, splitter state. | Canonical physical or playback state; controls read/write `App` and `World`. |
@@ -124,6 +124,12 @@ playing and 20 Hz while paused; their readouts still observe post-physics
 state. The energy readout is revision-cached against physical state rather
 than display frames, so an unchanged paused mutual-gravity scene does not
 repeat its quadratic pair-energy pass.
+
+A paused camera ease is temporarily active presentation work. Follow and
+continuous auto-fit request monitor-rate frames only while their centre/zoom
+error remains above the settling tolerance, then snap to the exact target and
+return to the 50 ms idle timer. This prevents a large idle-timer interval from
+driving each easing step without keeping an unchanged paused canvas awake.
 
 Playback FPS is sampled only while the simulation is running. Paused camera
 and editing gestures separately time frames that actually repaint the retained
@@ -199,19 +205,22 @@ profile instead.
 per-step caches, and repeats this pipeline for every substep:
 
 1. Synchronize wall-mounted pulley geometry, normalize live pulley-particle
-   sizes, accumulate smooth accelerations, and solve rod/rope plus equal-tension
-   pulley-string constraint forces. A wrong-side pulley trial suppresses its
-   force row until the topology guard restores it.
+   sizes, resolve standalone-rod attachments, accumulate smooth accelerations,
+   and solve rod/rope, affine mounted-body, plus equal-tension pulley-string
+   constraint forces. A wrong-side pulley trial suppresses its force row until
+   the topology guard restores it.
 2. Integrate translation and spin with the effective integrator. Mutual
    gravity may use encounter slices inside this phase.
 3. In performance mode, project springs using `PerfSolver`.
 4. Project taut pulley-string and rigid rod/rope position error with XPBD,
-   enforce swept terminal wheel and routing-half-plane stops for each pulley
-   particle, and feed only feasible corrections back into velocity.
+   including mounted-body affine rows and exact supported standalone-beam
+   geometry; enforce swept terminal wheel and routing-half-plane stops for each
+   pulley particle; and feed only feasible corrections back into velocity.
 5. Rebuild contacts for the current positions, warm start them, resolve
    impacts and resting velocity constraints, project penetration, and apply
-   static-friction anchoring. Maximum approximation retains only normal
-   bounce/separation and penetration work.
+   static-friction anchoring. Mounted-particle impact velocity is then projected
+   through the standalone beam's rigid modes. Maximum approximation retains
+   only normal bounce/separation and penetration work.
 6. Apply global velocity damping, interaction speed caps, and the performance
    mode speed ceiling.
 7. Advance the world clock.
@@ -312,7 +321,8 @@ path:
 - clear selection and hover;
 - reset every pointer and pending construction gesture, including half-made
   links that hold direct body references;
-- clear trails, graph series, timestamped phase data, and rewind history;
+- clear trails, every graph series, timestamped phase/event data, and rewind
+  history;
 - invalidate the energy cache;
 - reset rewind-unavailable and divergence-notification state;
 - reset or preserve the initial snapshot according to the caller;
@@ -367,8 +377,9 @@ instead of retaining a partial transaction.
   displayed update; Performance levels 0-3 cap rewind capture at 60, 30, 15,
   and 8 samples per simulated second.
 - Frame rewind pops the current recorded frame, reconstructs the previous one,
-  truncates energy, momentum, and timestamped phase data to its clock, and
-  pauses playback.
+  truncates energy, momentum, distance, velocity, timestamped phase/event data,
+  and trails to its clock, rebases cumulative distance at the restored
+  position, and pauses playback.
 - Reset reconstructs the original snapshot but preserves that snapshot so
   repeated reset remains meaningful.
 
@@ -376,6 +387,21 @@ Internal history reconstruction uses `restoreSnapshot()`, which preserves
 finite accumulated body and driver angles exactly. Saved and uploaded data use
 the untrusted `restore()` path, which applies import normalization and resource
 limits before the world becomes live.
+
+### Event-aware playback
+
+The tracker observes bounded transition state after each completed live step.
+It records contact begin/end, vertical apex, horizontal reversal, selected-body
+line crossing, string taut/slack, and pulley-stop rows even when auto-pause is
+off and the World tab is open. A selected pause rule stops the shared batch at
+its first matching event, clears the accumulator, and leaves later quanta
+unrun. In Normal mode the app snapshots only the final armed interval: line and
+apex events use interpolated fractions, while contacts and pulley stops use 18
+deterministic bisection re-simulations. The refined world is installed without
+discarding the surrounding graphs, trails, rewind history, selection, or event
+row. Performance mode intentionally pauses at the completed coarse quantum and
+does not pay this snapshot/re-simulation cost. Rewind removes future rows and
+re-primes transition state from the restored world.
 
 ### Time jumps
 

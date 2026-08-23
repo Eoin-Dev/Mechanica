@@ -7,7 +7,7 @@ import { Help, Library, SettingsPanel } from "../src/ui/overlays";
 
 function appStub(): App {
   const app = {
-    settings: {},
+    settings: {} as App["settings"],
     dragHitsWalls: false,
     perfMode: false,
     adaptiveDt: true,
@@ -16,6 +16,8 @@ function appStub(): App {
     setDragHitsWalls(value: boolean) { this.dragHitsWalls = value; },
     setPerfMode(value: boolean) { this.perfMode = value; },
     setAdaptiveDt(value: boolean) { this.adaptiveDt = value; },
+    get newSceneGravity() { return this.settings.new_scene_gravity ?? 9.8; },
+    setNewSceneGravity(value: number) { this.settings.new_scene_gravity = value; },
   };
   return app as unknown as App;
 }

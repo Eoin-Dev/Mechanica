@@ -105,6 +105,14 @@ describe("sanitizeSettings", () => {
     expect(sanitizeSettings({ font_scale: "big" }).font_scale).toBeUndefined();
   });
 
+  it("guards the gravity used by a newly cleared scene", () => {
+    expect(sanitizeSettings({ new_scene_gravity: 9.8 }).new_scene_gravity).toBe(9.8);
+    expect(sanitizeSettings({ new_scene_gravity: -2 }).new_scene_gravity).toBe(0);
+    expect(sanitizeSettings({ new_scene_gravity: 1e6 }).new_scene_gravity).toBe(100);
+    expect(sanitizeSettings({ new_scene_gravity: "9.8" }).new_scene_gravity)
+      .toBeUndefined();
+  });
+
   it("clamps pane sizes to exactly what the splitters allow", () => {
     // the constants themselves, not copies of their values: the guard, the
     // splitter that enforces them and the load-time re-apply all have to
@@ -139,6 +147,7 @@ describe("sanitizeSettings", () => {
       dock_h: 200, tour_done: true, theme: "light", dyslexic_font: false,
       cull: true, perf_mode: false, drag_hits_walls: true, studio_mode: true,
       accent: "#24427c", custom_accents: ["#b81f1f"], font_scale: 1.1,
+      new_scene_gravity: 9.8,
     };
     expect(sanitizeSettings(JSON.parse(JSON.stringify(full)))).toEqual(full);
   });

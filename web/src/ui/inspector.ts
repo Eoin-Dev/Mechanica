@@ -8,6 +8,7 @@ import { App, GraphMode, Panel } from "../app";
 import { BODY_PALETTE, Body, Color, MATERIALS, Wall } from "../engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
+import { PlaybackEventKind, analysePulley } from "../education/analysis";
 import { Selectable } from "../render/draw";
 import { isMathRenderable } from "../core/mathfmt";
 import { INSPECTOR_W_MAX, INSPECTOR_W_MIN, PHONE_QUERY, RefreshGroup, button,
@@ -78,6 +79,7 @@ export class Inspector implements Panel {
   private tabBtns = new Map<Tab, HTMLButtonElement>();
   private tab: Tab = "Selection";
   private group = new RefreshGroup();
+  private eventHistoryOpen = false;
   private structureKey = "";
   /** Formula rows where the user chose plain text over typeset math.
    *
@@ -316,6 +318,7 @@ export class Inspector implements Panel {
       let springs = 0;
       let rods = 0;
       for (const body of app.world.bodies) {
+        if (body.isRodEndpoint) continue;
         if (body.isPulley) pulleys++;
         else if (body.isAnchor) anchors++;
         else bodies++;
@@ -328,7 +331,7 @@ export class Inspector implements Panel {
       inventory = `:${bodies}:${anchors}:${app.world.walls.length}:` +
                   `${pulleys}:${springs}:${rods}`;
     }
-    return `sel:${ids}:${drivers}${inventory}`;
+    return `sel:${ids}:${drivers}:w${app.world.walls.length}${inventory}`;
   }
 
   private refreshStructure(): void {
@@ -430,7 +433,7 @@ export class Inspector implements Panel {
       }
       const world = app.world;
       const groups: Array<[Selectable[], string, string]> = [
-        [world.bodies.filter((b) => !b.isAnchor), "body", "bodies"],
+        [world.bodies.filter((b) => !b.isAnchor && !b.isRodEndpoint), "body", "bodies"],
         [world.bodies.filter((b) => b.isAnchor && !b.isPulley), "anchor", "anchors"],
         [world.bodies.filter((b) => b.isPulley), "pulley", "pulleys"],
         [world.walls, "wall", "walls"],
@@ -459,6 +462,7 @@ export class Inspector implements Panel {
     }
     if (sel.length === 1 && sel[0] instanceof Body) {
       if (sel[0].isPulley) this.buildSinglePulley();
+      else if (sel[0].isPivot) this.buildSinglePivot(sel[0]);
       else if (sel[0].isAnchor) this.buildSingleAnchor(sel[0]);
       else this.buildSingleBody(sel[0]);
     } else if (sel.length === 1 && sel[0] instanceof Wall) this.buildWall(sel[0]);
@@ -500,7 +504,7 @@ export class Inspector implements Panel {
                  "while No rotation is on." }));
     this.addHalf(
       checkbox("Locked", () => b.locked, (v) => { b.locked = v; this.commit(); },
-        "Hold the body permanently in place, as a pivot or obstacle (K)."),
+        "Hold the body permanently in place as a fixed point or obstacle (K)."),
       checkbox("Collides", () => b.collides, (v) => { b.collides = v; this.commit(); },
         "Let the body collide. Off, it passes through everything."));
     this.add(checkbox("No rotation", () => b.noRotation,
@@ -525,6 +529,9 @@ export class Inspector implements Panel {
       numEdit("Fx", () => b.constForce.x, (v) => { b.constForce.x = v; }, "N", this.commit),
       numEdit("Fy", () => b.constForce.y, (v) => { b.constForce.y = v; }, "N", this.commit));
 
+    this.buildParticleAnalysis(b);
+    this.buildRodAttachment(b);
+
     const drv = this.app.world.drivers.find((d) => d.bodyId === b.id);
     this.sub("Driving force");
     if (drv === undefined) {
@@ -545,6 +552,79 @@ export class Inspector implements Panel {
     }
 
     this.actionButtons();
+  }
+
+  /** Free-body controls belong to the selected particle and draw directly on
+   * the canvas rather than duplicating live kinematics in a bulky side card. */
+  private buildParticleAnalysis(b: Body): void {
+    const app = this.app;
+    this.sub("Forces on canvas");
+    this.add(checkbox("Free-body forces on canvas", () => b.showForceComponents,
+      (value) => { b.showForceComponents = value; app.invalidateCanvas(); },
+      "Draw every named force from this particle's centre. The final solver/contact reaction closes the arrows to the realised net force."));
+
+    const slope = el("select", { "aria-label": "Resolve forces relative to a slope" });
+    slope.append(el("option", { value: "", text: "No slope components" }));
+    for (const wall of app.world.walls) {
+      slope.append(el("option", { value: String(wall.id), text: wall.name }));
+    }
+    slope.addEventListener("change", () => {
+      b.forceSlopeWallId = slope.value === "" ? null : Number(slope.value);
+      if (b.forceSlopeWallId !== null) b.showForceComponents = true;
+      app.invalidateCanvas();
+    });
+    const slopeRow = el("div", { class: "row", title:
+      "Add the resultant components parallel and perpendicular to the chosen wall or inclined plane." },
+      el("span", { class: "lbl", text: "Slope reference" }), slope);
+    this.add({ root: slopeRow, refresh: () => {
+      const value = b.forceSlopeWallId === null ? "" : String(b.forceSlopeWallId);
+      if (slope.value !== value) slope.value = value;
+    } });
+  }
+
+  private buildRodAttachment(b: Body): void {
+    if (b.rodAttachmentId === null) return;
+    const rod = this.app.world.links.find((link) =>
+      link instanceof DistanceLink && !link.isRope && link.id === b.rodAttachmentId);
+    if (!(rod instanceof DistanceLink)) return;
+    this.sub("Rod attachment");
+    const distance = (): number => (rod.originAtA ? b.rodAttachmentT : 1 - b.rodAttachmentT) * rod.length;
+    const input = textEdit(() => distance().toFixed(3), (source) => {
+      const value = Number(source);
+      if (!Number.isFinite(value) || value < 0 || value > rod.length ||
+          rod.length <= 1e-12) {
+        this.app.toast(`Distance must be between 0 and ${rod.length.toFixed(3)} m`);
+        return false;
+      }
+      b.rodAttachmentT = rod.originAtA ? value / rod.length : 1 - value / rod.length;
+      const x = rod.a.pos.x + b.rodAttachmentT * (rod.b.pos.x - rod.a.pos.x);
+      const y = rod.a.pos.y + b.rodAttachmentT * (rod.b.pos.y - rod.a.pos.y);
+      b.pos.set(x, y);
+      this.commit();
+      this.app.invalidateCanvas();
+      return true;
+    }, "distance", "Position along rod");
+    this.add({ root: el("div", { class: "row" },
+      el("span", { class: "lbl", text: `From ${rod.originAtA ? "A" : "B"}` }),
+      input.root, el("span", { class: "unit", text: "m" })), refresh: input.refresh });
+    if (!b.isPivot) {
+      this.add(button("Detach from rod", () => {
+        b.rodAttachmentId = null;
+        this.commit();
+        this.markDirty();
+      }, { tooltip: "Release this particle; its forces and links remain attached to the particle." }));
+    }
+  }
+
+  private buildSinglePivot(b: Body): void {
+    this.body.append(el("div", { text: "Rod anchor",
+      style: "font-weight:600;margin-bottom:6px" }));
+    this.body.append(el("div", { class: "dim", text:
+      "An anchor attached to a point on the rod. It fixes that point, transmits a reaction force and lets the rod rotate around it." }));
+    this.buildRodAttachment(b);
+    this.body.append(section("Actions"));
+    this.add(button("Delete anchor", () => this.app.controller.deleteSelection(),
+      { icon: ICONS.trash, style: "danger", class: "inspector-action" }));
   }
 
   /** An anchor is a fixed attachment point: only its size, position, whether
@@ -674,7 +754,7 @@ export class Inspector implements Panel {
       this.addHalf(
         checkbox("Locked", () => first.locked,
           (v) => { bodies.forEach((b) => { b.locked = v; }); this.commit(); },
-          "Hold the bodies permanently in place, as pivots or obstacles (K)."),
+          "Hold the bodies permanently in place as fixed points or obstacles (K)."),
         checkbox("Collides", () => first.collides,
           (v) => { bodies.forEach((b) => { b.collides = v; }); this.commit(); },
           "Let the bodies collide. Off, they pass through everything."));
@@ -988,6 +1068,17 @@ export class Inspector implements Panel {
             new SpringLink(link.a, link.b, link.length, 1000.0, 2.0, true)),
           "Untick to make the string elastic, so it stretches under load. " +
           "Adds stiffness and damping."));
+      } else {
+        this.sub("Rod coordinates");
+        this.add(segmented(["A → B", "B → A"],
+          () => link.originAtA ? "A → B" : "B → A",
+          (value) => {
+            link.originAtA = value === "A → B";
+            this.commit();
+            this.markDirty();
+          },
+          "Choose which endpoint is the zero used by attached-particle position fields."));
+        this.buildRodAttachmentsList(link);
       }
     }
     if (link instanceof PulleyLink || link instanceof SpringLink || link.isRope) {
@@ -997,6 +1088,30 @@ export class Inspector implements Panel {
     this.sub("Actions");
     this.add(button("Delete", () => app.controller.deleteSelection(),
       { icon: ICONS.trash, style: "danger", class: "inspector-action" }));
+  }
+
+  private buildRodAttachmentsList(rod: DistanceLink): void {
+    this.sub("Attached to rod");
+    const output = el("div", { class: "rod-attachment-list" });
+    this.add({ root: output, refresh: () => {
+      const attached = this.app.world.bodies.filter((body) =>
+        body.rodAttachmentId === rod.id).sort((a, b) =>
+          a.rodAttachmentT - b.rodAttachmentT || a.id - b.id);
+      if (attached.length === 0) {
+        output.replaceChildren(el("div", { class: "dim", text:
+          "Nothing attached. Place an anchor or particle close to the rod." }));
+        return;
+      }
+      output.replaceChildren(...attached.map((body) => {
+        const row = el("button", { type: "button", class: "rod-attachment-item",
+          title: `Select ${body.name}` },
+          el("span", { text: body.isPivot ? "Anchor" : body.name }),
+          el("span", { class: "dim", text:
+            `${(body.rodAttachmentT * rod.length).toFixed(3)} m from A` }));
+        row.addEventListener("click", () => this.app.setSelection([body]));
+        return row;
+      }));
+    } });
   }
 
   private buildSinglePulley(): void {
@@ -1013,6 +1128,16 @@ export class Inspector implements Panel {
       this.sub("Analysis");
       this.addTensionToggle([link], "Show four equal-tension force vectors: " +
         "two on the particles and two on the pulley contacts.");
+      const readout = el("div", { class: "pulley-readout" });
+      this.add({ root: readout, refresh: () => {
+        const p = analysePulley(link);
+        readout.replaceChildren(
+          el("span", { text: `T ${p.tension.toFixed(3)} N` }),
+          el("span", { text: `path ${p.pathLength.toFixed(3)} / ${p.naturalLength.toFixed(3)} m` }),
+          el("span", { text: `leg rates ${p.legRateA.toFixed(3)}, ${p.legRateB.toFixed(3)} m/s` }),
+          el("span", { text: `constraint rate ${p.constraintRate.toExponential(2)} m/s` }),
+          el("span", { text: `axle reaction (${p.axleReactionX.toFixed(2)}, ${p.axleReactionY.toFixed(2)}) N` }));
+      } });
     }
     this.sub("Actions");
     this.add(button("Delete wheel", () => this.app.controller.deleteSelection(),
@@ -1060,6 +1185,18 @@ export class Inspector implements Panel {
       -100.0, 100.0, { unit: "m/s²", fmt: (v) => v.toFixed(2), onCommit: this.commit,
         tooltip: "Uniform downward gravity. 9.81 = Earth, 24.8 = Jupiter, " +
                  "0 = space, negative = upward." }));
+    const gravityPreset = segmented(["0", "9.8", "9.81", "10"],
+      () => [0, 9.8, 9.81, 10].find((value) =>
+        Math.abs(world.gravity - value) < 1e-12)?.toString() ?? "",
+      (value) => {
+        world.gravity = Number(value);
+        app.invalidateEnergy();
+        app.invalidateCanvas();
+        this.commit();
+      }, "Common exam gravity values in metres per second squared");
+    gravityPreset.root.classList.add("gravity-presets");
+    this.body.append(gravityPreset.root);
+    this.group.add(gravityPreset);
     this.add(checkbox("Bodies attract each other", () => world.mutualGravity,
       (v) => { world.mutualGravity = v; this.commit(); this.markDirty(); },
       "Newtonian attraction between every pair of bodies, for orbits."));
@@ -1256,6 +1393,113 @@ export class Inspector implements Panel {
         this.body.append(row);
       }
     }
+    this.buildPlaybackEvents();
+  }
+
+  private buildPlaybackEvents(): void {
+    const app = this.app;
+    app.playbackEventTracking = true;
+    this.body.append(section("Playback events"));
+    const card = el("div", { class: "event-rule-card" });
+    const choices: Array<[string, PlaybackEventKind | null, string]> = [
+      ["Off", null, "Keep recording events without pausing."],
+      ["First collision", "contact", "Pause when two collidable objects first touch."],
+      ["Apex", "apex", "Pause when the selected particle reaches the top of its motion."],
+      ["Line crossing", "line-crossing", "Pause when the selected particle crosses the chosen x or y line."],
+      ["String taut", "string-taut", "Pause when a slack string or spring first becomes taut."],
+      ["Pulley stop", "pulley-stop", "Pause when either pulley particle reaches the wheel's safety stop."],
+    ];
+    const helpId = "pause-event-description";
+    const select = el("select", { "aria-label": "Pause playback at event",
+      "aria-describedby": helpId });
+    for (const [label, value, description] of choices) {
+      select.append(el("option", { value: value ?? "", text: label,
+        title: description }));
+    }
+    const description = el("div", { id: helpId,
+      class: "dim event-option-description" });
+    const syncDescription = (): void => {
+      const active = choices.find(([, value]) => (value ?? "") === select.value) ?? choices[0];
+      description.textContent = active[2];
+      // Native option tooltips are platform-dependent; the select title
+      // guarantees that hovering the closed control explains its current rule.
+      select.title = active[2];
+    };
+    select.addEventListener("change", () => {
+      app.pauseOnEvent = select.value === "" ? null : select.value as PlaybackEventKind;
+      syncDescription();
+    });
+    const selectControl = this.group.add({ root: el("label", { class: "event-rule-field" },
+      select), refresh: () => {
+      const value = app.pauseOnEvent ?? "";
+      if (select.value !== value) {
+        select.value = value;
+        syncDescription();
+      }
+    } });
+    syncDescription();
+    card.append(selectControl.root, description);
+
+    const lineControls = el("div", { class: "event-line-controls" });
+    const axis = this.group.add(segmented(["x line", "y line"],
+      () => app.playbackEvents.lineAxis === "x" ? "x line" : "y line",
+      (value) => {
+        app.playbackEvents.lineAxis = value === "x line" ? "x" : "y";
+        app.playbackEvents.prime(app.world);
+      }, "Axis used by the line-crossing event."));
+    const line = this.group.add(numEdit("Position", () => app.playbackEvents.lineValue, (value) => {
+      app.playbackEvents.lineValue = value;
+      app.playbackEvents.prime(app.world);
+    }, "m", undefined, fmt3dp));
+    lineControls.append(axis.root, line.root);
+    card.append(lineControls);
+    this.group.add({ root: el("span"), refresh: () => {
+      lineControls.hidden = app.pauseOnEvent !== "line-crossing";
+    } });
+    this.body.append(card);
+
+    const historyHeader = el("div", { class: "event-history-header" },
+      el("strong", { text: "Event history" }));
+    const toggleHistory = el("button", { class: "event-history-toggle",
+      type: "button", text: this.eventHistoryOpen ? "Hide" : "Show",
+      "aria-expanded": String(this.eventHistoryOpen) });
+    historyHeader.append(toggleHistory);
+    this.body.append(historyHeader);
+
+    const history = el("div", { class: "event-history" });
+    history.hidden = !this.eventHistoryOpen;
+    toggleHistory.addEventListener("click", () => {
+      this.eventHistoryOpen = !this.eventHistoryOpen;
+      history.hidden = !this.eventHistoryOpen;
+      toggleHistory.textContent = this.eventHistoryOpen ? "Hide" : "Show";
+      toggleHistory.setAttribute("aria-expanded", String(this.eventHistoryOpen));
+    });
+    const clear = button("Clear history", () => app.playbackEvents.clear(app.world),
+      { icon: ICONS.trash, style: "ghost",
+        tooltip: "Discard recorded event rows without changing the scene." });
+    history.append(clear.root);
+    this.group.add(clear);
+    const table = el("div", { class: "inspector-event-table" });
+    let signature = "";
+    this.add({ root: table, refresh: () => {
+      const events = app.playbackEvents.events;
+      const next = `${events.length}:${events.at(-1)?.id ?? 0}`;
+      if (next === signature) return;
+      signature = next;
+      if (events.length === 0) {
+        table.replaceChildren(el("div", { class: "dim", text:
+          "No events yet. Select a particle for its apex and line crossings, then play or step." }));
+        return;
+      }
+      table.replaceChildren(...events.slice(-8).reverse().map((event) =>
+        el("div", { class: "inspector-event-row" },
+          el("time", { text: `${event.time.toFixed(4)} s` }),
+          el("div", { class: "event-row-copy" },
+            el("strong", { text: event.label }),
+            el("span", { text: event.value })))));
+    } });
+    history.append(table);
+    this.body.append(history);
   }
 
   // ------------------------------------------------------------------- view
@@ -1317,8 +1561,19 @@ export class Inspector implements Panel {
         "Show the cells collision detection uses to find candidate pairs (G).");
 
     this.body.append(section("Graph dock"));
-    this.add(segmented(["Off", "Energy", "Mom.", "Phase"], () => app.graphMode,
-      (v) => app.setGraphMode(v as GraphMode),
-      "Live plot shown along the bottom of the screen (keys 1, 2, 3)."));
+    const graph = el("select", { "aria-label": "Graph shown in the dock",
+      title: "Distance and velocity graphs follow the selected particle." });
+    for (const [label, value] of [
+      ["Off", "Off"], ["Energy", "Energy"], ["Momentum", "Mom."],
+      ["Phase space", "Phase"], ["Distance–time", "Distance"],
+      ["Velocity–time", "Velocity"],
+    ] as Array<[string, GraphMode]>) {
+      graph.append(el("option", { text: label, value }));
+    }
+    graph.addEventListener("change", () => app.setGraphMode(graph.value as GraphMode));
+    this.add({ root: el("div", { class: "row" },
+      el("span", { class: "lbl", text: "Graph" }), graph), refresh: () => {
+      if (graph.value !== app.graphMode) graph.value = app.graphMode;
+    } });
   }
 }

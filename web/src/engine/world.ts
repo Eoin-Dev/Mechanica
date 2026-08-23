@@ -157,7 +157,7 @@ export function escapedBodies(world: World, limit: number): Body[] {
   const limit2 = limit * limit;
   const out: Body[] = [];
   for (const b of world.bodies) {
-    if (b.locked || b.isAnchor || b.held) continue;
+    if (b.locked || b.isAnchor || b.isRodEndpoint || b.held) continue;
     const dx = b.pos.x - c.x;
     const dy = b.pos.y - c.y;
     const d2 = dx * dx + dy * dy;
@@ -404,6 +404,7 @@ export class World {
   clampDt = 1.0 / 120.0;
   private contactCache: ContactCache = new Map(); // warm-start impulses between substeps
   private rods: DistanceLink[] = [];  // per-step caches, see prepareStep()
+  private rodAttachments: Array<{ body: Body; rod: DistanceLink; t: number }> = [];
   private springs: SpringLink[] = [];
   private pulleys: PulleyLink[] = [];
   private perf = new PerfSolver();    // performance mode's spring projection
@@ -480,10 +481,12 @@ export class World {
     const springs = this.springs;
     const rods = this.rods;
     const pulleys = this.pulleys;
+    const rodAttachments = this.rodAttachments;
     const noCollide = this.noCollide;
     springs.length = 0;
     rods.length = 0;
     pulleys.length = 0;
+    rodAttachments.length = 0;
     noCollide.clear();
     this.syncPulleyMounts();
     for (const ln of this.links) {
@@ -500,6 +503,48 @@ export class World {
         const a = ln.a.id;
         const b = ln.b.id;
         noCollide.add(a < b ? `${a},${b}` : `${b},${a}`);
+      }
+    }
+    if (rods.length > 0 && this.bodies.some((body) => body.rodAttachmentId !== null)) {
+      const byId = new Map<number, DistanceLink>();
+      for (const rod of rods) {
+        if (!rod.isRope) byId.set(rod.id, rod);
+      }
+      for (const body of this.bodies) {
+        if (body.rodAttachmentId === null) continue;
+        const rod = byId.get(body.rodAttachmentId);
+        if (rod === undefined || body === rod.a || body === rod.b) {
+          body.rodAttachmentId = null;
+          continue;
+        }
+        body.rodAttachmentT = Math.max(0, Math.min(1, body.rodAttachmentT));
+        rodAttachments.push({ body, rod, t: body.rodAttachmentT });
+        for (const endpoint of [rod.a, rod.b]) {
+          const lo = Math.min(body.id, endpoint.id);
+          const hi = Math.max(body.id, endpoint.id);
+          noCollide.add(`${lo},${hi}`);
+        }
+      }
+      const groups = new Map<number, Array<{ body: Body; rod: DistanceLink; t: number }>>();
+      for (const attachment of rodAttachments) {
+        const group = groups.get(attachment.rod.id);
+        if (group === undefined) groups.set(attachment.rod.id, [attachment]);
+        else group.push(attachment);
+      }
+      for (const group of groups.values()) {
+        group.sort((left, right) => left.t - right.t);
+        let maxRadius = 0;
+        for (const item of group) maxRadius = Math.max(maxRadius, item.body.radius);
+        for (let i = 0; i < group.length; i++) {
+          for (let j = i + 1; j < group.length; j++) {
+            const along = (group[j].t - group[i].t) * group[i].rod.length;
+            if (along > group[i].body.radius + maxRadius) break;
+            if (along > group[i].body.radius + group[j].body.radius) continue;
+            const lo = Math.min(group[i].body.id, group[j].body.id);
+            const hi = Math.max(group[i].body.id, group[j].body.id);
+            noCollide.add(`${lo},${hi}`);
+          }
+        }
       }
     }
     // Normalize imported, edited, or pointer-moved assemblies before any
@@ -568,7 +613,7 @@ export class World {
       for (const drv of this.drivers) {
         if (!drv.enabled) continue;
         const b = byId.get(drv.bodyId);
-        if (b === undefined) continue;
+        if (b === undefined || b.isRodEndpoint) continue;
         const invM = b.invMass;
         if (invM === 0.0) continue;
         // the direction is fixed for the step, so its sine and cosine are
@@ -687,6 +732,10 @@ export class World {
     const drag = c1 !== 0.0 || c2 !== 0.0;
     for (let i = 0; i < movers.length; i++) {
       const b = movers[i];
+      // Standalone rod endpoints are solver coordinates for an ideal massless
+      // beam, not physical particles. Constraints may move them, but gravity,
+      // drag and authored forces must not give the rod hidden weight or drag.
+      if (b.isRodEndpoint) continue;
       const invM = invMass[i];
       let ax = b.constForce.x * invM;
       let ay = b.constForce.y * invM - g;
@@ -776,7 +825,7 @@ export class World {
     let n = 0;
     for (let k = 0; k < total; k++) {
       const b = bodies[k];
-      if (b.isAnchor) continue; // anchors neither pull nor are pulled
+      if (b.isAnchor || b.isRodEndpoint) continue;
       px[n] = b.pos.x;
       py[n] = b.pos.y;
       mass[n] = b.mass;
@@ -915,6 +964,7 @@ export class World {
       const fy = field.fy;
       for (let i = 0; i < movers.length; i++) {
         const b = movers[i];
+        if (b.isRodEndpoint) continue;
         const px = b.pos.x;
         const py = b.pos.y;
         env.x = px;
@@ -981,7 +1031,8 @@ export class World {
 
   private solveRodForces(): void {
     const links = this.rods;
-    if (links.length === 0) return;
+    const attachments = this.rodAttachments;
+    if (links.length === 0 && attachments.length === 0) return;
     const W = World.ROD_W;
     if (this.rodNum.length < links.length * W) {
       this.rodNum = new Float64Array(Math.max(16, links.length * 2) * W);
@@ -1030,7 +1081,7 @@ export class World {
       num[o + 6] = mu;
       n++;
     }
-    if (n === 0) return;
+    if (n === 0 && attachments.length === 0) return;
     for (let pass = 0; pass < ROD_FORCE_PASSES; pass++) {
       let worst = 0.0;
       for (let i = 0; i < n; i++) {
@@ -1059,6 +1110,35 @@ export class World {
           const dAbs = dmu > 0.0 ? dmu : -dmu;
           if (dAbs > worst) worst = dAbs;
         }
+      }
+      // A mounted particle is not merely snapped back onto the beam after
+      // integration: its acceleration must match the affine point on the two
+      // rod coordinates throughout the force solve. Without these two rows,
+      // gravity and applied forces first give the particle an incompatible
+      // velocity and the later position projection turns the accumulated
+      // error into a kick. Coupling these rows with the rod-length rows lets
+      // loads and contact reactions travel through the beam to its support.
+      for (const { body, rod, t } of attachments) {
+        const a = rod.a;
+        const b = rod.b;
+        const u = 1.0 - t;
+        const wc = body.invMass;
+        const wa = a.invMass;
+        const wb = b.invMass;
+        const wSum = wc + u * u * wa + t * t * wb;
+        if (wSum <= 0.0) continue;
+        const rx = body.acc.x - u * a.acc.x - t * b.acc.x;
+        const ry = body.acc.y - u * a.acc.y - t * b.acc.y;
+        const lamX = -rx / wSum;
+        const lamY = -ry / wSum;
+        body.acc.x += wc * lamX;
+        body.acc.y += wc * lamY;
+        a.acc.x -= u * wa * lamX;
+        a.acc.y -= u * wa * lamY;
+        b.acc.x -= t * wb * lamX;
+        b.acc.y -= t * wb * lamY;
+        const residual = Math.max(Math.abs(lamX), Math.abs(lamY));
+        if (residual > worst) worst = residual;
       }
       if (worst < 1e-9) break;
     }
@@ -1546,7 +1626,18 @@ export class World {
         // contact generation or an ordinary dense scene solve.
         this.solvePulleyPositions(this.pulleys, invH, Math.max(8, iters));
       }
-      if (rigid.length > 0) this.solveRodPositions(rigid, invH, iters);
+      if (rigid.length > 0) {
+        // A standalone beam adds only two solver coordinates but couples its
+        // length row to every mounted particle/support. The endpoints are nearly
+        // massless, which is physically appropriate but deliberately creates a
+        // poorly conditioned row set. A 32-pass floor is still only a few
+        // hundred scalar operations for an ordinary classroom beam and keeps
+        // it rigid in every Performance tier instead of trading stability for
+        // an imperceptible saving.
+        const standalone = this.rodAttachments.some(({ rod }) =>
+          rod.a.isRodEndpoint && rod.b.isRodEndpoint);
+        this.solveRodPositions(rigid, invH, standalone ? Math.max(32, iters) : iters);
+      }
 
       // `contacts` is a snapshot of the contacts that exist NOW, for the
       // overlay and the status-bar count - so each substep replaces the
@@ -1555,6 +1646,12 @@ export class World {
       solveContacts(this.bodies, this.walls, this.contacts, iters,
                     this.contactStatic.simplified ? null : this.contactCache,
                     this.contactStatic);
+      // A contact impulse is computed on the particle that touched the wall or
+      // another body. Mounted particles must immediately hand the incompatible
+      // part of that impulse to their massless beam/support; otherwise they
+      // begin the next substep moving away from the rod and the position solver
+      // has to remove the error as a violent correction.
+      if (this.rodAttachments.length > 0) this.projectStandaloneRodVelocities();
       // Ordinary contacts intentionally exclude the axle. Reassert the
       // particle stop after every other position solver so no later correction
       // can leave a particle inside the wheel for the next force evaluation.
@@ -1638,7 +1735,8 @@ export class World {
       rows.push({ ln, a, b, wa, wb, wSum: wa + wb,
                   alpha: ln.compliance * invH * invH });
     }
-    if (rows.length === 0) return;
+    const attachments = this.rodAttachments;
+    if (rows.length === 0 && attachments.length === 0) return;
     const touched = new Map<number, Body>();
     for (const { a, b } of rows) {
       if (!touched.has(a.id)) {
@@ -1650,6 +1748,15 @@ export class World {
         touched.set(b.id, b);
         b.corrX = 0.0;
         b.corrY = 0.0;
+      }
+    }
+    for (const { body, rod } of attachments) {
+      for (const item of [body, rod.a, rod.b]) {
+        if (!touched.has(item.id)) {
+          touched.set(item.id, item);
+          item.corrX = 0.0;
+          item.corrY = 0.0;
+        }
       }
     }
     for (let pass = 0; pass < iterations; pass++) {
@@ -1665,8 +1772,8 @@ export class World {
         const ny = dy / dist;
         const dlam = (-c - alpha * ln.lambda) / (wSum + alpha);
         ln.lambda += dlam;
-        const d = dlam > 0.0 ? dlam : -dlam;
-        if (d > worst) worst = d;
+        const error = c > 0.0 ? c : -c;
+        if (error > worst) worst = error;
         const ax = -wa * dlam * nx;
         const ay = -wa * dlam * ny;
         const bx = wb * dlam * nx;
@@ -1680,8 +1787,43 @@ export class World {
         b.corrX += bx;
         b.corrY += by;
       }
+      for (const { body, rod, t } of attachments) {
+        const a = rod.a;
+        const b = rod.b;
+        const u = 1 - t;
+        const wc = body.invMass;
+        const wa = a.invMass;
+        const wb = b.invMass;
+        const wSum = wc + u * u * wa + t * t * wb;
+        if (wSum <= 0) continue;
+        const cx = body.pos.x - (u * a.pos.x + t * b.pos.x);
+        const cy = body.pos.y - (u * a.pos.y + t * b.pos.y);
+        const dlamX = -cx / wSum;
+        const dlamY = -cy / wSum;
+        const error = Math.max(Math.abs(cx), Math.abs(cy));
+        if (error > worst) worst = error;
+        const ccx = wc * dlamX;
+        const ccy = wc * dlamY;
+        const acx = -u * wa * dlamX;
+        const acy = -u * wa * dlamY;
+        const bcx = -t * wb * dlamX;
+        const bcy = -t * wb * dlamY;
+        body.pos.x += ccx;
+        body.pos.y += ccy;
+        a.pos.x += acx;
+        a.pos.y += acy;
+        b.pos.x += bcx;
+        b.pos.y += bcy;
+        body.corrX += ccx;
+        body.corrY += ccy;
+        a.corrX += acx;
+        a.corrY += acy;
+        b.corrX += bcx;
+        b.corrY += bcy;
+      }
       if (worst < 1e-10) break; // converged: links are exact to sub-nanometre
     }
+    this.polishStandaloneRodPositions();
     // Direct manipulation moves a held endpoint once per display frame. The
     // ordinary corr/h feedback below is correct for integration drift, but h
     // may be dozens of times shorter than that pointer interval; using it for
@@ -1705,6 +1847,12 @@ export class World {
       for (const { a, b } of rows) {
         addNeighbour(a, b);
         addNeighbour(b, a);
+      }
+      for (const { body, rod } of attachments) {
+        addNeighbour(body, rod.a);
+        addNeighbour(rod.a, body);
+        addNeighbour(body, rod.b);
+        addNeighbour(rod.b, body);
       }
       kinematicRates = new Map<number, number>();
       const queue: Body[] = [];
@@ -1733,6 +1881,155 @@ export class World {
         const rate = kinematicRates?.get(body.id) ?? invH;
         body.vel.x += body.corrX * rate;
         body.vel.y += body.corrY * rate;
+      }
+    }
+    this.projectStandaloneRodVelocities();
+  }
+
+  /** Finish a standalone massless beam geometrically exactly.
+   *
+   * Its generic XPBD rows intentionally use tiny-mass endpoint coordinates;
+   * those rows transfer loads correctly but are poorly conditioned around a
+   * fixed support. Iteration therefore gets close to a rigid configuration but
+   * can leave visible deformation when several particles share the beam. A
+   * fixed support determines the exact beam line, after which every movable
+   * attachment can be placed at its declared affine coordinate in one pass.
+   * Corrections remain recorded so direct-manipulation velocity feedback keeps
+   * its existing behaviour. */
+  private polishStandaloneRodPositions(): void {
+    for (const rod of this.rods) {
+      if (!rod.a.isRodEndpoint || !rod.b.isRodEndpoint) continue;
+      let firstSupport: Body | null = null;
+      let secondSupport: Body | null = null;
+      let firstT = 0.0;
+      let secondT = 0.0;
+      for (const attachment of this.rodAttachments) {
+        if (attachment.rod !== rod || attachment.body.invMass !== 0.0) continue;
+        if (firstSupport === null) {
+          firstSupport = attachment.body;
+          firstT = attachment.t;
+        } else if (Math.abs(attachment.t - firstT) > 1e-9) {
+          secondSupport = attachment.body;
+          secondT = attachment.t;
+          break;
+        }
+      }
+      if (firstSupport !== null) {
+        let dx = rod.b.pos.x - rod.a.pos.x;
+        let dy = rod.b.pos.y - rod.a.pos.y;
+        if (secondSupport !== null) {
+          const sign = secondT >= firstT ? 1.0 : -1.0;
+          dx = sign * (secondSupport.pos.x - firstSupport.pos.x);
+          dy = sign * (secondSupport.pos.y - firstSupport.pos.y);
+        }
+        let length = Math.hypot(dx, dy);
+        if (length < 1e-12) {
+          dx = 1.0;
+          dy = 0.0;
+          length = 1.0;
+        }
+        const nx = dx / length;
+        const ny = dy / length;
+        const ax = firstSupport.pos.x - firstT * rod.length * nx;
+        const ay = firstSupport.pos.y - firstT * rod.length * ny;
+        const bx = ax + rod.length * nx;
+        const by = ay + rod.length * ny;
+        rod.a.corrX += ax - rod.a.pos.x;
+        rod.a.corrY += ay - rod.a.pos.y;
+        rod.b.corrX += bx - rod.b.pos.x;
+        rod.b.corrY += by - rod.b.pos.y;
+        rod.a.pos.set(ax, ay);
+        rod.b.pos.set(bx, by);
+      }
+      for (const { body, rod: mountedRod, t } of this.rodAttachments) {
+        if (mountedRod !== rod || body.invMass === 0.0) continue;
+        const u = 1.0 - t;
+        const x = u * rod.a.pos.x + t * rod.b.pos.x;
+        const y = u * rod.a.pos.y + t * rod.b.pos.y;
+        body.corrX += x - body.pos.x;
+        body.corrY += y - body.pos.y;
+        body.pos.set(x, y);
+      }
+    }
+  }
+
+  /** Orthogonally project mounted-particle motion onto the valid rigid modes
+   * of each standalone massless beam. This never adds kinetic energy: with one
+   * support it keeps only rotation about that support; without a support it
+   * keeps centre-of-mass translation and rotation. Calling it after contacts
+   * transfers an impact through the whole assembly before the next substep. */
+  private projectStandaloneRodVelocities(): void {
+    for (const rod of this.rods) {
+      if (!rod.a.isRodEndpoint || !rod.b.isRodEndpoint) continue;
+      let support: Body | null = null;
+      let supportCount = 0;
+      let mass = 0.0;
+      let cx = 0.0;
+      let cy = 0.0;
+      let vx = 0.0;
+      let vy = 0.0;
+      for (const { body, rod: mountedRod } of this.rodAttachments) {
+        if (mountedRod !== rod) continue;
+        if (body.invMass === 0.0) {
+          support ??= body;
+          supportCount++;
+          continue;
+        }
+        if (!(body.mass > 0.0) || !Number.isFinite(body.mass)) continue;
+        mass += body.mass;
+        cx += body.mass * body.pos.x;
+        cy += body.mass * body.pos.y;
+        vx += body.mass * body.vel.x;
+        vy += body.mass * body.vel.y;
+      }
+      if (mass <= 0.0) continue;
+      let baseX = 0.0;
+      let baseY = 0.0;
+      if (supportCount === 0) {
+        cx /= mass;
+        cy /= mass;
+        baseX = vx / mass;
+        baseY = vy / mass;
+      } else {
+        cx = support!.pos.x;
+        cy = support!.pos.y;
+        // A held support is a kinematic edit; an ordinary fixed support has no
+        // translational velocity even if stale imported data says otherwise.
+        if (support!.held) {
+          baseX = support!.vel.x;
+          baseY = support!.vel.y;
+        }
+      }
+      let inertia = 0.0;
+      let angularMomentum = 0.0;
+      for (const { body, rod: mountedRod } of this.rodAttachments) {
+        if (mountedRod !== rod || body.invMass === 0.0 ||
+            !(body.mass > 0.0) || !Number.isFinite(body.mass)) continue;
+        const rx = body.pos.x - cx;
+        const ry = body.pos.y - cy;
+        inertia += body.mass * (rx * rx + ry * ry);
+        angularMomentum += body.mass *
+          (rx * (body.vel.y - baseY) - ry * (body.vel.x - baseX));
+      }
+      const omega = supportCount > 1 || inertia < 1e-12
+        ? 0.0 : angularMomentum / inertia;
+      // Keep this allocation-free: the projection runs after both the rod and
+      // contact solves in every substep.
+      if (rod.a.invMass !== 0.0) {
+        const rx = rod.a.pos.x - cx;
+        const ry = rod.a.pos.y - cy;
+        rod.a.vel.set(baseX - omega * ry, baseY + omega * rx);
+      }
+      if (rod.b.invMass !== 0.0) {
+        const rx = rod.b.pos.x - cx;
+        const ry = rod.b.pos.y - cy;
+        rod.b.vel.set(baseX - omega * ry, baseY + omega * rx);
+      }
+      for (const { body, rod: mountedRod } of this.rodAttachments) {
+        if (mountedRod !== rod || body.invMass === 0.0) continue;
+        const rx = body.pos.x - cx;
+        const ry = body.pos.y - cy;
+        body.vel.set(baseX - omega * ry, baseY + omega * rx);
       }
     }
   }
@@ -2067,7 +2364,7 @@ export class World {
     let q = 1;
     const k = dt * dt * 0.125;
     for (const b of this.bodies) {
-      if (b.invMass === 0.0 || b.touching || b.sprung) continue;
+      if (b.invMass === 0.0 || b.isRodEndpoint || b.touching || b.sprung) continue;
       const ax = b.acc.x;
       const ay = b.acc.y;
       const dev = Math.sqrt(ax * ax + ay * ay) * k;
@@ -2090,7 +2387,7 @@ export class World {
     let ke = 0.0;
     let peG = 0.0;
     for (const b of this.bodies) {
-      if (b.invMass === 0.0) continue;
+      if (b.invMass === 0.0 || b.isRodEndpoint) continue;
       ke += b.kineticEnergy();
       peG += b.mass * this.gravity * b.pos.y;
     }
@@ -2106,7 +2403,9 @@ export class World {
       if (Number.isFinite(pairBudget)) {
         const active = this.energyBodies;
         active.length = 0;
-        for (const body of bodies) if (!body.isAnchor) active.push(body);
+        for (const body of bodies) {
+          if (!body.isAnchor && !body.isRodEndpoint) active.push(body);
+        }
         const n = active.length;
         const totalPairs = (n * (n - 1)) / 2;
         const samples = Math.min(totalPairs, Math.max(1, Math.floor(pairBudget)));
@@ -2142,10 +2441,10 @@ export class World {
       }
       for (let i = 0; i < bodies.length; i++) {
         const bi = bodies[i];
-        if (bi.isAnchor) continue; // consistent with the force: no anchor PE
+        if (bi.isAnchor || bi.isRodEndpoint) continue;
         for (let j = i + 1; j < bodies.length; j++) {
           const bj = bodies[j];
-          if (bj.isAnchor) continue;
+          if (bj.isAnchor || bj.isRodEndpoint) continue;
           const dx = bj.pos.x - bi.pos.x;
           const dy = bj.pos.y - bi.pos.y;
           const r2 = dx * dx + dy * dy;
@@ -2170,7 +2469,7 @@ export class World {
   momentum(): Vec2 {
     const p = new Vec2();
     for (const b of this.bodies) {
-      if (b.invMass !== 0.0) {
+      if (b.invMass !== 0.0 && !b.isRodEndpoint) {
         p.x += b.mass * b.vel.x;
         p.y += b.mass * b.vel.y;
       }
@@ -2183,7 +2482,7 @@ export class World {
     let cx = 0.0;
     let cy = 0.0;
     for (const b of this.bodies) {
-      if (b.invMass !== 0.0) {
+      if (b.invMass !== 0.0 && !b.isRodEndpoint) {
         mTotal += b.mass;
         cx += b.mass * b.pos.x;
         cy += b.mass * b.pos.y;
@@ -2199,7 +2498,7 @@ export class World {
     if (com === null) return 0.0;
     let total = 0.0;
     for (const b of this.bodies) {
-      if (b.invMass === 0.0) continue;
+      if (b.invMass === 0.0 || b.isRodEndpoint) continue;
       const rx = b.pos.x - com.x;
       const ry = b.pos.y - com.y;
       total += b.mass * (rx * b.vel.y - ry * b.vel.x);
@@ -2338,6 +2637,7 @@ export class World {
       (!(ln instanceof PulleyLink) || !bodiesGone.has(ln.pulley)));
     if (replacements.length > 0) this.links.push(...replacements);
     this.bodies = this.bodies.filter((b) => !bodiesGone.has(b));
+    this.pruneRodAttachments();
     if (this.drivers.length > 0) {
       const ids = new Set<number>();
       for (const b of bodiesGone) ids.add(b.id);
@@ -2361,21 +2661,52 @@ export class World {
 
   removeLinks(gone: ReadonlySet<Link>): void {
     if (gone.size === 0) return;
+    const internalEnds = new Set<Body>();
+    for (const ln of gone) {
+      if (ln instanceof DistanceLink && !ln.isRope &&
+          ln.a.isRodEndpoint && ln.b.isRodEndpoint) {
+        internalEnds.add(ln.a);
+        internalEnds.add(ln.b);
+      }
+    }
     this.links = this.links.filter((ln) => !gone.has(ln));
+    this.pruneRodAttachments();
     const wheels = new Set<Body>();
     for (const ln of gone) {
       if (ln instanceof PulleyLink) wheels.add(ln.pulley);
     }
-    if (wheels.size > 0) {
-      this.bodies = this.bodies.filter((b) => !wheels.has(b));
+    if (wheels.size > 0 || internalEnds.size > 0) {
+      // A standalone rod owns its two hidden solver coordinates. Deleting the
+      // beam deletes those implementation bodies as one object; no invisible
+      // debris is left in gravity, snapshots, or performance accounting.
+      const systemBodies = new Set<Body>([...wheels, ...internalEnds]);
+      this.bodies = this.bodies.filter((b) => !systemBodies.has(b));
       // A malformed imported scene may have ordinary links or drivers aimed
       // at the internal wheel body. Removing the pulley string must not leave
       // those dangling references behind.
       this.links = this.links.filter((ln) =>
-        !wheels.has(ln.a) && !wheels.has(ln.b) &&
-        (!(ln instanceof PulleyLink) || !wheels.has(ln.pulley)));
-      const ids = new Set([...wheels].map((b) => b.id));
+        !systemBodies.has(ln.a) && !systemBodies.has(ln.b) &&
+        (!(ln instanceof PulleyLink) || !systemBodies.has(ln.pulley)));
+      const ids = new Set([...systemBodies].map((b) => b.id));
       this.drivers = this.drivers.filter((d) => !ids.has(d.bodyId));
+    }
+  }
+
+  /** Release bodies whose supporting rod no longer exists. A deleted pivot's
+   * support marker survives as an ordinary anchor; an attached particle
+   * simply resumes ordinary particle motion. */
+  private pruneRodAttachments(): void {
+    const live = new Set(this.links
+      .filter((link): link is DistanceLink =>
+        link instanceof DistanceLink && !link.isRope)
+      .map((link) => link.id));
+    for (const body of this.bodies) {
+      if (body.rodAttachmentId === null || live.has(body.rodAttachmentId)) continue;
+      body.rodAttachmentId = null;
+      if (body.isPivot) {
+        body.isPivot = false;
+        body.name = "Anchor";
+      }
     }
   }
 
@@ -2528,15 +2859,47 @@ export class World {
               () => SpringLink.nextId++);
     uniqueIds(w.links.filter((link): link is PulleyLink => link instanceof PulleyLink),
               () => PulleyLink.nextId++);
+    const rodsById = new Set(w.links
+      .filter((link): link is DistanceLink =>
+        link instanceof DistanceLink && !link.isRope)
+      .map((link) => link.id));
+    const liveRodEndpoints = new Set<Body>();
+    for (const link of w.links) {
+      if (!(link instanceof DistanceLink) || link.isRope) continue;
+      if (link.a.isRodEndpoint && link.b.isRodEndpoint) {
+        liveRodEndpoints.add(link.a);
+        liveRodEndpoints.add(link.b);
+      } else {
+        // One hidden endpoint on an otherwise ordinary imported rod is not a
+        // coherent standalone beam. Keep the user's bodies and make the odd
+        // endpoint ordinary and visible instead of preserving a ghost.
+        link.a.isRodEndpoint = false;
+        link.b.isRodEndpoint = false;
+      }
+    }
+    for (const body of w.bodies) {
+      if (body.rodAttachmentId !== null && !rodsById.has(body.rodAttachmentId)) {
+        body.rodAttachmentId = null;
+        if (body.isPivot) {
+          body.isPivot = false;
+          body.name = "Anchor";
+        }
+      }
+    }
     const livePulleys = new Set(w.links
       .filter((link): link is PulleyLink => link instanceof PulleyLink)
       .map((link) => link.pulley));
-    w.bodies = w.bodies.filter((body) => !body.isPulley || livePulleys.has(body));
+    w.bodies = w.bodies.filter((body) =>
+      (!body.isPulley || livePulleys.has(body)) &&
+      (!body.isRodEndpoint || liveRodEndpoints.has(body)));
     w.syncPulleyMounts();
     w.fields = fieldInput.filter(entry)
       .map((f) => ForceField.fromDict(f));
     w.drivers = driverInput.filter(entry)
-      .filter((driver) => !byId.get(idOr(driver.body_id, -1))?.isPulley)
+      .filter((driver) => {
+        const body = byId.get(idOr(driver.body_id, -1));
+        return body?.isPulley !== true && body?.isRodEndpoint !== true;
+      })
       .map((x) => Driver.fromDict(x, preserveAngles));
     return w;
   }

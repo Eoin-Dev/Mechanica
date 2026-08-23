@@ -37,7 +37,7 @@ by the headless test suite.
 | Shape/inertia | `radius`, `mass`, derived `invMass`, `inertia`, and `invInertia`. |
 | Contact material | `restitution` and `friction`; body colour is visual only. |
 | External force | `constForce`, applied in newtons on every force evaluation. |
-| Modes | `locked`, `collides`, `noRotation`, `isAnchor`, and `isPulley`. |
+| Modes | `locked`, `collides`, `noRotation`, `isAnchor`, `isPulley`, internal rod-support `isPivot`, hidden-coordinate `isRodEndpoint`, and optional `rodAttachmentId`/affine `rodAttachmentT`. |
 | Interaction transient | `held` makes the body infinite-mass during direct manipulation; `kinematicCorrectionRate` carries the pointer-derived rod feedback rate; `speedCap` bounds a dragged connected assembly in Performance mode. |
 | Solver transient | acceleration, realised step-average `netForce`, previous position, position-correction totals, contact/spring flags, performance-solver slots, contact mass gain, and prior acceleration samples. |
 
@@ -45,6 +45,17 @@ An anchor is represented by a body because links need the same endpoint shape.
 It is always locked, is named `Anchor`, does not participate in mutual gravity,
 and is excluded from ordinary body counts. A locked non-anchor can still exert
 mutual gravity and collide.
+
+The same user-facing Anchor becomes a fixed rod support when it carries the
+internal `isPivot` compatibility flag and a rod attachment. It is additionally
+non-colliding and fixes its affine point while allowing the beam to rotate.
+Standalone rods own two hidden, nearly massless `isRodEndpoint` coordinates;
+the endpoints do not collide, render as particles, contribute to diagnostics,
+receive ordinary gravity/fields, or survive without their owning rod. User
+particles and supports attach to a beam by `rodAttachmentT`, where zero is A
+and one is B. A rod without a support needs at least two attached particles to
+define meaningful free rigid-body motion; a supported rod needs at least one
+particle load before the application will start playback.
 
 A pulley axle is also body-shaped so it can be selected, serialized, mounted
 to a wall endpoint, and referenced by its string. `isPulley` implies anchor,
@@ -170,21 +181,26 @@ chosen by its author.
 
 1. Synchronize mounted pulley axles with their wall endpoints, then split links
    into rod, spring, and pulley arrays.
-2. Build the set of linked endpoint pairs that should not collide. Linked
+2. Resolve each body rod reference to a live bilateral rod, clamp its affine
+   coordinate, and build the attachment rows. An invalid reference is released.
+   A mounted body does not collide with either hidden rod endpoint, and
+   overlapping bodies at the same rod coordinate exclude their contradictory
+   pair contact.
+3. Build the set of linked endpoint pairs that should not collide. Linked
    bodies normally collide; exclusion applies only to a `DistanceLink` whose
    natural length is shorter than the sum of endpoint radii, where its rigid
    distance constraint and contact constraint would be permanently
    contradictory. Springs and tension-only elastic strings remain collidable
    at every rest length in both solver modes.
-3. Prepare effective spring coefficients.
-4. Mark spring endpoints for adaptive-resolution exclusions and performance
+4. Prepare effective spring coefficients.
+5. Mark spring endpoints for adaptive-resolution exclusions and performance
    contact-mass behavior.
-5. Pack movable bodies and their inverse masses for repeated force evaluation.
-6. Prune obsolete trail sample anchors when their map has clearly outgrown the
+6. Pack movable bodies and their inverse masses for repeated force evaluation.
+7. Prune obsolete trail sample anchors when their map has clearly outgrown the
    live mover set.
-7. Resolve enabled drivers to live movable bodies and precompute direction
+8. Resolve enabled drivers to live movable bodies and precompute direction
    components divided by mass.
-8. Store the per-step contact-static object, including collision exclusions.
+9. Store the per-step contact-static object, including collision exclusions.
 
 The world assumes object lists and editable physical properties do not change
 inside a step. The application and controls make edits between step calls.
@@ -302,6 +318,12 @@ started, then a small fixed number of Gauss-Seidel sweeps propagates tension
 through chains. A rope multiplier is clamped so it can pull but never push; a
 slack rope clears its warm start.
 
+Each mounted body adds two affine acceleration rows,
+`aBody = (1-t)*aA + t*aB`. Solving these alongside rod length transfers weight,
+applied forces, and later contact reactions through the beam instead of first
+giving the mounted particle an incompatible velocity that a position snap
+would convert into an artificial kick.
+
 Solving tension as acceleration is essential for energy behavior. A
 position-only pendulum correction would delete radial velocity gained during
 each substep and systematically damp the swing.
@@ -392,7 +414,8 @@ smooth U-turn that happened inside one externally visible step.
 ### Rod/rope XPBD position pass
 
 After integration, rods and taut ropes remove their small remaining length
-error using XPBD. For each row:
+error using XPBD. Mounted bodies add matching x/y affine position rows. For
+each distance row:
 
 ```text
 alpha = compliance / h²
@@ -409,6 +432,17 @@ once-per-display-frame hand displacement from being reinterpreted as motion
 that occurred in one much shorter solver substep. The rate propagates through
 the rigid component in O(rows); untouched constraints retain the ordinary fast
 path. The solve exits early once correction is negligible.
+
+A standalone massless beam keeps a 32-pass minimum in every solver profile
+because its tiny hidden endpoint masses and several mounted loads form a poorly
+conditioned row set. When a fixed support exists, a final geometric polish
+places the exact rod line through that support and every movable attachment at
+its declared affine coordinate. Velocity is then orthogonally projected onto
+the beam's valid rigid modes: translation plus rotation for a free beam,
+rotation about one support, or zero motion with multiple supports. The same
+non-energy-increasing velocity projection runs after contact impulses so an
+impact is transferred through the assembly before the next substep rather than
+becoming deformation velocity and an energy spike.
 
 Pulley strings run an analogous one-sided XPBD pass on their summed live path.
 Feasible corrections are mass-weighted along the current tangent directions
@@ -509,6 +543,11 @@ The response has four stages:
    Unsupported contacts rebase their anchor every substep, and a newly
    supported contact rebases once before pinning, so a freely translating pair
    retains its common motion rather than being pinned to the world.
+
+After the contact stages, a mounted-particle impulse is projected across its
+standalone rod's rigid modes. Ordinary body/body and body/wall contact laws,
+including restitution and friction, therefore still act on attached particles;
+only incompatible deformation motion is discarded.
 
 Under heavy contact load, the iteration count is capped so manifold count
 times iterations stays bounded. Warm starting carries the converged support

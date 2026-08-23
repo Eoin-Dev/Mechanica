@@ -40,6 +40,12 @@ export class Contact {
     public nx: number,
     public ny: number,
     public impulse: number,
+    /** Stable diagnostic ownership. A negative/missing second body is a wall. */
+    public bodyAId: number = -1,
+    public bodyBId: number | null = null,
+    public wallId: number | null = null,
+    /** Tangential impulse has the same sign convention as (-ny, nx). */
+    public tangentImpulse: number = 0,
   ) {}
 }
 
@@ -1132,7 +1138,10 @@ export function solveContacts(bodies: Body[], walls: Wall[],
   for (const m of manifolds) {
     let contact = contactPool[contactCount];
     if (contact === undefined) {
-      contact = new Contact(m.px, m.py, m.nx, m.ny, m.pn + m.pnBounce);
+      contact = new Contact(m.px, m.py, m.nx, m.ny, m.pn + m.pnBounce,
+        m.a.id, m.b?.id ?? null,
+        m.b === null && m.key !== "" ? -Number(m.key.split(",")[1]) : null,
+        m.pt);
       contactPool.push(contact);
     } else {
       contact.px = m.px;
@@ -1140,6 +1149,11 @@ export function solveContacts(bodies: Body[], walls: Wall[],
       contact.nx = m.nx;
       contact.ny = m.ny;
       contact.impulse = m.pn + m.pnBounce;
+      contact.bodyAId = m.a.id;
+      contact.bodyBId = m.b?.id ?? null;
+      contact.wallId = m.b === null && m.key !== ""
+        ? -Number(m.key.split(",")[1]) : null;
+      contact.tangentImpulse = m.pt;
     }
     contacts.push(contact);
     contactCount++;

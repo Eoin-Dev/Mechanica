@@ -225,9 +225,12 @@ export class HintBar implements Panel {
     const hint = app.controller.hint();
     let nBodies = 0;
     let nAnchors = 0;
+    let nPivots = 0;
     let nPulleys = 0;
     for (const b of app.world.bodies) {
+      if (b.isRodEndpoint) continue;
       if (b.isPulley) nPulleys++;
+      else if (b.isPivot) nPivots++;
       else if (b.isAnchor) nAnchors++;
       else nBodies++;
     }
@@ -238,6 +241,7 @@ export class HintBar implements Panel {
     // running - so it says so rather than leaving that a mystery.
     const items = [countNoun(nBodies, "body", "bodies"),
                    countNoun(nAnchors, "anchor")];
+    if (nPivots > 0) items.push(countNoun(nPivots, "rod anchor"));
     if (nPulleys > 0) items.push(countNoun(nPulleys, "pulley"));
     items.push(countNoun(nLinks, "link"),
                countNoun(app.world.contacts.length, "contact"));
@@ -279,6 +283,7 @@ export class GraphDock implements Panel {
   private ctx: CanvasRenderingContext2D;
   private hintEl: HTMLElement;
   private liveBtn: HTMLButtonElement;
+  private clearBtn!: HTMLButtonElement;
   private group = new RefreshGroup();
   private syncSplitterAria: () => void = () => {};
   // time-axis view: zoom (span) and scroll-back position (end; null=live)
@@ -291,10 +296,10 @@ export class GraphDock implements Panel {
     this.splitter = splitter;
 
     const header = el("div", { class: "dock-header" });
-    header.append(this.group.add(segmented(["Energy", "Mom.", "Phase"],
+    header.append(this.group.add(segmented(["Energy", "Mom.", "Phase", "Distance", "Velocity"],
       () => app.graphMode,
       (v) => app.setGraphMode(v as GraphMode),
-      "Which live graph to display (keys 1, 2, 3)")).root);
+      "Which live graph to display. Distance and velocity follow the selected particle.")).root);
     this.hintEl = el("span", { class: "dock-hint" });
     header.append(this.hintEl);
     this.liveBtn = el("button", { class: "primary", text: "Live" });
@@ -302,9 +307,11 @@ export class GraphDock implements Panel {
     this.liveBtn.hidden = true;
     this.liveBtn.addEventListener("click", () => { this.viewEnd = null; });
     header.append(this.liveBtn);
-    header.append(this.group.add(button("", () => this.clearData(),
+    const clear = this.group.add(button("", () => this.clearData(),
       { icon: ICONS.trash, style: "ghost",
-        tooltip: "Discard all recorded graph data." })).root);
+        tooltip: "Discard all recorded graph data." }));
+    this.clearBtn = clear.root as HTMLButtonElement;
+    header.append(clear.root);
     header.append(this.group.add(button("", () => app.setGraphMode("Off"),
       { icon: ICONS.close, style: "ghost",
         tooltip: "Close the graph dock." })).root);
@@ -418,9 +425,7 @@ export class GraphDock implements Panel {
   }
 
   private clearData(): void {
-    this.app.energySeries.clear();
-    this.app.momentumSeries.clear();
-    this.app.phasePlot.clear();
+    this.app.clearGraphData();
     this.viewEnd = null;
   }
 
@@ -428,6 +433,8 @@ export class GraphDock implements Panel {
   private activeSeries(): TimeSeries | undefined {
     if (this.app.graphMode === "Energy") return this.app.energySeries;
     if (this.app.graphMode === "Mom.") return this.app.momentumSeries;
+    if (this.app.graphMode === "Distance") return this.app.distanceSeries;
+    if (this.app.graphMode === "Velocity") return this.app.velocitySeries;
     return undefined;
   }
 
@@ -435,6 +442,16 @@ export class GraphDock implements Panel {
   private hint(): string {
     const app = this.app;
     const w = app.world;
+    if (app.graphMode === "Distance") {
+      return app.distanceSeries.count === 0
+        ? "Select a particle to plot its distance travelled"
+        : "Distance travelled from the point where this particle was selected";
+    }
+    if (app.graphMode === "Velocity") {
+      return app.velocitySeries.count === 0
+        ? "Select a particle to plot its velocity"
+        : "Speed and signed x/y velocity of the selected particle";
+    }
     if (app.graphMode === "Mom.") {
       const ext: string[] = [];
       if (w.gravity !== 0.0) ext.push("gravity");
@@ -476,6 +493,7 @@ export class GraphDock implements Panel {
       if (visible) this.syncSplitterAria();
     }
     if (!visible) return;
+    this.clearBtn.hidden = false;
     // The dock maximum follows its parent height. Attribute writes are
     // internally guarded, so this cheap poll also keeps metadata current after
     // viewport/layout changes without creating DOM churn on stable frames.
@@ -542,6 +560,10 @@ export class GraphDock implements Panel {
       const x0 = (w - (2 * side + 12)) / 2;
       app.phasePlot.draw(ctx, x0, top, side, side, "x");
       app.phasePlot.draw(ctx, x0 + side + 12, top, side, side, "y");
+    } else if (app.graphMode === "Distance") {
+      app.distanceSeries.draw(ctx, w, h, "Distance travelled (m)", graphView);
+    } else if (app.graphMode === "Velocity") {
+      app.velocitySeries.draw(ctx, w, h, "Velocity (m/s)", graphView);
     }
   }
 }

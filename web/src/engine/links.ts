@@ -46,6 +46,7 @@ export interface RodDict {
   length: number;
   is_rope: boolean;
   compliance: number;
+  origin_at_a?: boolean;
 }
 
 export interface SpringDict {
@@ -91,6 +92,8 @@ export class DistanceLink {
   mu = 0.0;     // warm-start guess for the constraint force
   /** Transient per-link analysis overlay; display state is not scene physics. */
   showTensionVectors = false;
+  /** Which endpoint the Inspector calls zero for attachment distances. */
+  originAtA = true;
 
   constructor(a: Body, b: Body, length: number | null = null,
               isRope = false, compliance = 0.0) {
@@ -106,6 +109,7 @@ export class DistanceLink {
     return {
       type: "rod", id: this.id, a: this.a.id, b: this.b.id,
       length: this.length, is_rope: this.isRope, compliance: this.compliance,
+      origin_at_a: this.originAtA,
     };
   }
 }
@@ -460,6 +464,7 @@ export function linkFromDict(d: LinkDict, bodiesById: Map<number, Body>): Link {
                             numIn(d.length, natural, 0.0, 1e6),
                             boolOr(d.is_rope, false),
                             numIn(d.compliance, 0.0, 0.0, 1e9));
+    link.originAtA = boolOr(d.origin_at_a, true);
     link.id = idOr(d.id, link.id);
     DistanceLink.nextId = Math.max(DistanceLink.nextId, link.id + 1);
   }

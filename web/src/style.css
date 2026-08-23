@@ -199,7 +199,6 @@ body {
 .dock-hint { color: var(--text-faint); font-size: calc(11px * var(--fs, 1)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .dock-canvas-wrap { flex: 1; min-height: 0; position: relative; }
 .dock-canvas-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-
 #hintbar {
   height: 26px;
   flex: none;
@@ -553,6 +552,135 @@ label.checkbox.disabled input { cursor: default; }
 .row input.val:hover { border-color: var(--outline); }
 .row input.val:focus { border-color: var(--focus); background: var(--bg); }
 .row input.val.error { border-color: var(--bad); }
+.row > select, .row > input[type="text"]:not(.val) {
+  min-width: 0;
+  flex: 1;
+  color: var(--text);
+  background: var(--panel-light);
+  border: 1px solid var(--outline);
+  border-radius: var(--radius);
+  padding: 4px 6px;
+}
+.row > input.error { border-color: var(--bad) !important; }
+.pulley-readout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 3px;
+  margin: 5px 0 7px;
+  padding: 8px 9px;
+  border: 1px solid var(--outline);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel-light));
+  color: var(--text-dim);
+  font-size: calc(11px * var(--fs, 1));
+  font-variant-numeric: tabular-nums;
+}
+.rod-attachment-list {
+  display: grid;
+  gap: 5px;
+  margin: 5px 0;
+}
+.rod-attachment-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius);
+  background: var(--panel-light);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(11px * var(--fs, 1));
+  text-align: left;
+  cursor: pointer;
+}
+.rod-attachment-item:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel-light));
+}
+.rod-attachment-item .dim {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.event-rule-card {
+  display: grid;
+  gap: 6px;
+  margin: 5px 0 9px;
+}
+.event-rule-field { display: grid; gap: 4px; min-width: 0; }
+.event-rule-field > span {
+  font-size: calc(10px * var(--fs, 1));
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.event-rule-field select {
+  width: 100%;
+  min-width: 0;
+  color: var(--text);
+  background: var(--panel-light);
+  border: 1px solid var(--outline);
+  border-radius: var(--radius);
+  padding: 5px 7px;
+}
+.event-rule-field select:hover { border-color: var(--text-faint); }
+.event-option-description { min-height: 1.35em; line-height: 1.35; }
+.event-line-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(92px, .7fr);
+  align-items: end;
+  gap: 7px;
+}
+.event-line-controls[hidden] { display: none; }
+.event-line-controls .segmented { min-width: 0; }
+.event-line-controls .row { margin: 0; min-width: 0; }
+.event-line-controls .row .lbl { width: auto; }
+.event-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+.event-history-header > div { min-width: 0; line-height: 1.35; }
+.event-history-toggle {
+  flex: none;
+  min-height: 28px;
+  padding: 3px 9px;
+}
+.event-history { display: grid; gap: 5px; }
+.event-history[hidden] { display: none; }
+.event-history > button { justify-self: end; }
+.inspector-event-table {
+  display: grid;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.inspector-event-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--outline);
+  font-size: calc(10px * var(--fs, 1));
+  align-items: start;
+}
+.inspector-event-row:last-child { border-bottom: 0; }
+.inspector-event-row time {
+  color: var(--accent-text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.event-row-copy { min-width: 0; display: grid; gap: 2px; }
+.event-row-copy strong, .event-row-copy span { min-width: 0; overflow-wrap: anywhere; }
+.event-row-copy span { color: var(--text-dim); }
+@media (max-width: 390px) {
+  .event-line-controls { grid-template-columns: 1fr; }
+}
 /* Performance-mode banner above controls that are unavailable in this mode.
    Warning-coloured rather than accent-coloured on purpose: the accent means
    "active/yours" and the user can change it to anything, so this must not
@@ -791,6 +919,8 @@ button.perf-banner-btn:hover:not(:disabled) {
    header with no see-through gap above it. */
 #library .overlay-body { padding-top: 0; }
 
+.gravity-presets { width: 100%; margin: 0 0 8px; }
+.gravity-presets button { flex: 1; min-width: 0; padding-inline: 5px; }
 .cat-chips {
   display: flex;
   gap: 6px;
@@ -1293,7 +1423,10 @@ kbd {
 :root[data-studio="true"] .segmented button + button { border-left: 0; }
 :root[data-studio="true"] .segmented button.active {
   color: var(--accent-text);
-  background: color-mix(in srgb, var(--accent) 11%, var(--panel-light));
+  /* ACCENT_TEXT is guaranteed against the two neutral panel surfaces. Mixing
+     the accent into this background moved the two colours toward one another
+     and made the default blue miss AA at small graph-tab text (4.37:1). */
+  background: var(--panel-light);
   border-color: color-mix(in srgb, var(--accent) 38%, transparent);
 }
 
@@ -1323,6 +1456,17 @@ kbd {
   font-size: calc(10.5px * var(--fs, 1));
   font-weight: 650;
   letter-spacing: 0.055em;
+}
+:root[data-studio="true"] .event-rule-card {
+  gap: 8px;
+  margin: 6px 0 10px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--outline));
+  border-radius: 12px;
+  background: linear-gradient(145deg,
+    color-mix(in srgb, var(--accent) 7%, var(--panel-light)),
+    var(--panel-light) 72%);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.025);
 }
 :root[data-studio="true"] .type-group,
 :root[data-studio="true"] .guide-example,

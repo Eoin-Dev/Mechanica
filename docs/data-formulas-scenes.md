@@ -85,6 +85,10 @@ Each `bodies` entry maps to `BodyDict`:
 | `no_rotation` | Optional boolean, default `false`; other runtime types use the default. |
 | `is_anchor` | Optional boolean, default `false`; other runtime types use the default. A true value forces `locked` true and the name `Anchor`. |
 | `is_pulley` | Optional boolean, default `false`. A true value identifies an internal pulley axle and forces `is_anchor`, `locked`, and `no_rotation` true; `collides` false; radius `0.22`; zero velocity, spin, and constant force; and the name `Pulley`. An axle without a valid `PulleyLink` is pruned after link loading. |
+| `is_pivot` | Optional internal compatibility flag, default `false`. A true non-pulley value represents an Anchor attached as a fixed rod support: it forces anchor/locked/non-colliding identity, clears motion and constant force, and is presented to the user as `Anchor`. |
+| `is_rod_endpoint` | Optional internal flag, default `false`. It marks the two hidden, non-colliding, non-rotating solver coordinates owned by a standalone rod. It is ignored on pulley axles and rod anchors; orphaned endpoints are pruned after link reconstruction. |
+| `rod_id` | Optional non-negative `DistanceLink` ID or `null`, default `null`. After all links load, only a reference to a live bilateral rod survives; invalid/orphaned/self-endpoint references are released. |
+| `rod_position` | Finite affine coordinate along the referenced rod, clamped to `0..1`, default `0.5`; zero is endpoint A and one is endpoint B. |
 | `color` | At least three numeric channels. Channels are rounded/clamped to `0..255`; malformed colours use the generated palette colour. |
 
 The loader constructs each body before applying the stored identity and
@@ -94,8 +98,9 @@ or each other.
 The following live fields are deliberately absent: `held`, `speedCap`,
 `softBody`, `touching`, `sprung`, `contactMassGain`, acceleration, previous
 position, constraint corrections, performance packing slots/stamps, and prior
-acceleration samples. They are interaction, solver scratch, or preset-only
-hints and are rebuilt as needed.
+acceleration samples. The per-particle free-body-diagram toggle and slope
+reference are view state and are absent too. These values are interaction,
+analysis, solver scratch, or preset-only hints and are rebuilt as needed.
 
 ## Wall documents
 
@@ -137,6 +142,7 @@ Links use a tagged union and refer to bodies by ID.
 | `length` | Natural/fixed distance, finite and clamped to `0..1e6`; missing/invalid uses current endpoint separation. |
 | `is_rope` | Boolean, default false. False is a bilateral rod; true is a tension-only maximum-distance constraint. Other runtime types use the default. |
 | `compliance` | XPBD compliance, finite and clamped to `0..1e9`, default zero. |
+| `origin_at_a` | Boolean, default true. It chooses whether the Inspector's editable attachment distance is measured from A or B; the physical affine `rod_position` remains measured from A. |
 | `id` | Guarded ID; advances the `DistanceLink` counter. The first rod/rope with an imported ID keeps it and later duplicates in this link class receive fresh IDs. |
 
 Per-substep position `lambda` and warm-start force multiplier `mu` are not
@@ -353,8 +359,11 @@ intentionally clears undo history.
 
 `RewindBuffer` records simulation display frames under a 48,000,000-byte
 budget and a 3,000-frame ceiling. `push()` returns `stored` or `too-large`.
-Only six numbers per body normally change during play: x/y position, x/y
-velocity, angle, and spin. The clock adds one more number to a dynamic frame.
+Ten numbers per body normally change during play: x/y position, x/y velocity,
+angle, spin, x/y acceleration, and x/y realised net force. The clock and world
+step count add two more numbers to a dynamic frame. Retaining the analysis
+vectors is what makes free-body and resultant-force overlays agree immediately
+after a frame rewind rather than waiting for another forward step.
 
 `structuralDigest()` folds every other serialized world value into a fast
 32-bit digest: world settings except time, body identity/properties, walls,
@@ -373,8 +382,9 @@ the buffer clears and reports `too-large`; if a keyframe/delta pair cannot fit,
 it retains the latest state as a fresh keyframe when that snapshot fits.
 
 Rewind state is session-only and is not written to local storage or scene JSON.
-Energy, momentum, and phase-portrait samples carry simulation time and truncate
-future samples when the world rewinds.
+Energy, momentum, distance, velocity, phase-portrait, event-table, and trail
+samples carry simulation time or are explicitly rebased/truncated when the
+world rewinds.
 
 ## Browser settings
 
@@ -395,6 +405,7 @@ prevent startup.
 | `cull` | Boolean runaway-culling preference, default on. |
 | `perf_mode` | Boolean adaptive performance solver/render preference, default off. The chosen runtime level is not persisted. |
 | `drag_hits_walls` | Boolean kinematic wall-sweep preference, default off. |
+| `new_scene_gravity` | Finite number clamped to `0..100`, default `9.8` when absent. Clear applies it to the newly created world; it does not override gravity in presets, imports, saved scenes, reset, or the current world. |
 | `accent` | `#rrggbb` string. Absent uses the theme default. |
 | `custom_accents` | Up to six valid `#rrggbb` strings. |
 | `font_scale` | Finite number clamped to `0.9..1.2`. |

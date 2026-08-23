@@ -1,8 +1,9 @@
 /** Canvas rendering: grid, bodies, walls, links and analysis overlays. */
 import { Vec2 } from "../core/vec";
 import { Body, Color, Wall } from "../engine/body";
-import { Link, PulleyLink, SpringLink } from "../engine/links";
+import { DistanceLink, Link, PulleyLink, SpringLink } from "../engine/links";
 import { World } from "../engine/world";
+import { ForceEntry, forceLedger, projectForce } from "../education/analysis";
 import * as theme from "../ui/theme";
 import { css, lighten } from "../ui/theme";
 import { Camera, niceNumber } from "./camera";
@@ -13,7 +14,47 @@ export const VEL_ARROW_SCALE = 0.15;
 export const ACC_ARROW_SCALE = 0.05;
 export const FORCE_ARROW_SCALE = 0.05;
 
+// Normal mode is the analytical view: retain vectors down to a half CSS
+// pixel so small values fade continuously instead of disappearing at the old
+// four-pixel boundary. Performance mode keeps that coarser boundary because
+// skipping near-zero arrows bounds dense-scene path construction.
+const NORMAL_VECTOR_MIN_PX = 0.5;
+const PERFORMANCE_VECTOR_MIN_PX = 4.0;
+
 export type Selectable = Body | Wall | Link;
+
+export interface PivotGlyphMetrics {
+  jointR: number;
+  apexY: number;
+  footY: number;
+  footHalf: number;
+  groundY: number;
+  groundHalf: number;
+  stroke: number;
+}
+
+/** World-sized support geometry for an anchor mounted on a rod.
+ *
+ * Every dimension is a fraction of the owning rod's physical length. The
+ * glyph therefore grows when the camera zooms in and shrinks when it zooms
+ * out, just like the rod and particles, instead of occupying a fixed number
+ * of screen pixels. */
+export function pivotGlyphMetrics(body: Body, world: World,
+                                  zoom: number): PivotGlyphMetrics {
+  const rod = world.links.find((link) =>
+    link instanceof DistanceLink && !link.isRope &&
+    link.id === body.rodAttachmentId);
+  const rodPx = (rod instanceof DistanceLink ? rod.length : body.radius * 20) * zoom;
+  return {
+    jointR: Math.max(1, rodPx * 0.012),
+    apexY: rodPx * 0.01,
+    footY: rodPx * 0.03,
+    footHalf: rodPx * 0.016,
+    groundY: rodPx * 0.038,
+    groundHalf: rodPx * 0.022,
+    stroke: Math.max(1, rodPx * 0.004),
+  };
+}
 
 /** Toggleable overlays and display options. */
 export class ViewSettings {
@@ -97,11 +138,12 @@ export function drawGrid(ctx: CanvasRenderingContext2D, cam: Camera,
  * two, because every arrow of a kind shares one colour and width. */
 function addArrowXY(strokes: StyleBatch, fills: StyleBatch,
                     sx: number, sy: number, ex: number, ey: number,
-                    color: Color, width = 2): void {
+                    color: Color, width = 2,
+                    minLengthPx = PERFORMANCE_VECTOR_MIN_PX): void {
   const dx = ex - sx;
   const dy = ey - sy;
   const length2 = dx * dx + dy * dy;
-  if (length2 < 16) return;
+  if (length2 < minLengthPx * minLengthPx) return;
   addLine(strokes.path(color, width), sx, sy, ex, ey);
   const length = Math.sqrt(length2);
   const ux = dx / length;
@@ -208,13 +250,14 @@ function screenSegmentDistance2(px: number, py: number,
 /** Add one link-force arrow and return its pointer distance for hover picking. */
 function addTensionArrow(sx: number, sy: number, fx: number, fy: number,
                          zoom: number, scale: number,
-                         pointer: [number, number] | null): number {
+                         pointer: [number, number] | null,
+                         minLengthPx: number): number {
   const ex = sx + fx * scale * zoom;
   const ey = sy - fy * scale * zoom;
   const dx = ex - sx;
   const dy = ey - sy;
-  if (dx * dx + dy * dy < 16.0) return Infinity;
-  addArrowXY(STROKES, FILLS, sx, sy, ex, ey, theme.WARN, 2);
+  if (dx * dx + dy * dy < minLengthPx * minLengthPx) return Infinity;
+  addArrowXY(STROKES, FILLS, sx, sy, ex, ey, theme.WARN, 2, minLengthPx);
   return pointer === null ? Infinity
     : screenSegmentDistance2(pointer[0], pointer[1], sx, sy, ex, ey);
 }
@@ -819,14 +862,22 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
         : hovered ? STRING_HOVER : slack ? STRING_SLACK : STRING_TAUT;
       addLine(STROKES.path(color, slack ? 1 : 2), pax, pay, pbx, pby);
     } else {
-      const color: Color = selected ? theme.SELECTION
-        : hovered ? [200, 205, 215] : [150, 156, 166];
-      addLine(STROKES.path(color, 3), pax, pay, pbx, pby);
+      // A rod is a beam, not a wall or a thin string. The double rail makes
+      // that distinction visible even when its system-owned endpoints are
+      // deliberately hidden. Performance mode keeps one wider neutral rail
+      // and avoids the decorative second stroke.
+      const outer: Color = selected ? theme.SELECTION
+        : hovered ? theme.TEXT : theme.OUTLINE;
+      addLine(STROKES.path(outer, simplify ? 5 : 7), pax, pay, pbx, pby);
+      if (!simplify) {
+        const core: Color = selected ? theme.TEXT :
+          hovered ? theme.PANEL_LIGHT : theme.TEXT_DIM;
+        addLine(STROKES.path(core, 3), pax, pay, pbx, pby);
+      }
     }
   }
   // every link of a given style in one stroke, whatever the scene's size
   STROKES.strokeAll(ctx);
-
   // --- walls -------------------------------------------------------------------
   for (const wall of world.walls) {
     const m = margin + wall.thickness / 2;
@@ -863,6 +914,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   LABEL_X.length = 0;
   LABEL_Y.length = 0;
   for (const body of world.bodies) {
+    if (body.isRodEndpoint) continue;
     const r = body.radius;
     if (body.pos.x + r < minX || body.pos.x - r > maxX ||
         body.pos.y + r < minY || body.pos.y - r > maxY) {
@@ -873,6 +925,52 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     const pr = Math.max(2, body.radius * cam.zoom);
     let color = body.color;
     if (body === hover && !picked.has(body)) color = lighten(color, 35);
+    if (body.isPivot) {
+      const selected = picked.has(body);
+      const support: Color = selected ? theme.ACCENT
+        : body === hover ? theme.TEXT : theme.TEXT_DIM;
+      const glyph = pivotGlyphMetrics(body, world, zoom);
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      if (simplify) {
+        // Performance mode keeps the joint/support language with three short
+        // strokes and no filled pedestal geometry.
+        lineXY(ctx, sx, sy + glyph.apexY,
+          sx - glyph.footHalf, sy + glyph.footY, support, glyph.stroke);
+        lineXY(ctx, sx, sy + glyph.apexY,
+          sx + glyph.footHalf, sy + glyph.footY, support, glyph.stroke);
+      } else {
+        // A compact filled pedestal reads as part of the themed workspace,
+        // rather than the oversized wireframe triangle used by textbook art.
+        ctx.beginPath();
+        ctx.moveTo(sx, sy + glyph.apexY);
+        ctx.lineTo(sx - glyph.footHalf, sy + glyph.footY);
+        ctx.lineTo(sx + glyph.footHalf, sy + glyph.footY);
+        ctx.closePath();
+        ctx.fillStyle = css(theme.PANEL_LIGHT);
+        ctx.fill();
+        ctx.strokeStyle = css(support);
+        ctx.lineWidth = glyph.stroke;
+        ctx.stroke();
+      }
+      lineXY(ctx, sx - glyph.groundHalf, sy + glyph.groundY,
+        sx + glyph.groundHalf, sy + glyph.groundY, support,
+        glyph.stroke * 1.5);
+      // The joint itself is the focus: a palette surface with a small solid
+      // centre. Selection changes its fitted rim instead of adding a floating
+      // halo around the whole support.
+      fillCircle(ctx, sx, sy, glyph.jointR, theme.PANEL);
+      ringCircle(ctx, sx, sy, glyph.jointR, glyph.stroke, support);
+      fillCircle(ctx, sx, sy, glyph.jointR * 0.375, support);
+      ctx.lineJoin = "miter";
+      ctx.lineCap = "butt";
+      if (view.labels && (!aggressive || picked.has(body) || body === hover)) {
+        LABEL_NAMES.push(body.name);
+        LABEL_X.push(sx);
+        LABEL_Y.push(sy - glyph.jointR - 4);
+      }
+      continue;
+    }
     if (body.isPulley) {
       fillCircle(ctx, sx, sy, pr, color);
       if (!simplify && pr >= 7) {
@@ -948,9 +1046,12 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
 
   // --- vectors ------------------------------------------------------------------------
   const vScale = view.vectorScale;
+  const vectorMinLengthPx = simplify
+    ? PERFORMANCE_VECTOR_MIN_PX
+    : NORMAL_VECTOR_MIN_PX;
   if (view.velVectors || view.accVectors || view.forceVectors) {
     for (const body of world.bodies) {
-      if (body.invMass === 0.0) continue;
+      if (body.invMass === 0.0 || body.isRodEndpoint) continue;
       if (aggressive && !picked.has(body) && body !== hover) continue;
       const sx = (body.pos.x - cx) * zoom + ox;
       const sy = (cy - body.pos.y) * zoom + oy;
@@ -958,23 +1059,129 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
       if (view.velVectors) {
         const ex = (body.pos.x + body.vel.x * VEL_ARROW_SCALE * vScale - cx) * zoom + ox;
         const ey = (cy - body.pos.y - body.vel.y * VEL_ARROW_SCALE * vScale) * zoom + oy;
-        addArrowXY(STROKES, FILLS, sx, sy, ex, ey, theme.VEL_COLOR);
+        addArrowXY(STROKES, FILLS, sx, sy, ex, ey, theme.VEL_COLOR, 2,
+                   vectorMinLengthPx);
       }
       if (view.accVectors) {
         const ex = (body.pos.x + body.acc.x * ACC_ARROW_SCALE * vScale - cx) * zoom + ox;
         const ey = (cy - body.pos.y - body.acc.y * ACC_ARROW_SCALE * vScale) * zoom + oy;
-        addArrowXY(STROKES, FILLS, sx, sy, ex, ey, theme.ACC_COLOR);
+        addArrowXY(STROKES, FILLS, sx, sy, ex, ey, theme.ACC_COLOR, 2,
+                   vectorMinLengthPx);
       }
       if (view.forceVectors) {
         const fx = body.netForce.x;
         const fy = body.netForce.y;
         const ex = (body.pos.x + fx * FORCE_ARROW_SCALE * vScale - cx) * zoom + ox;
         const ey = (cy - body.pos.y - fy * FORCE_ARROW_SCALE * vScale) * zoom + oy;
-        addArrowXY(STROKES, FILLS, sx, sy, ex, ey, theme.FORCE_COLOR);
+        addArrowXY(STROKES, FILLS, sx, sy, ex, ey, theme.FORCE_COLOR, 2,
+                   vectorMinLengthPx);
       }
     }
     STROKES.strokeAll(ctx); // shafts: one stroke per arrow kind
     FILLS.fillAll(ctx);     // heads: one fill per arrow kind
+  }
+
+  // --- selected per-particle free-body diagrams -----------------------------
+  // This is opt-in per body. The ordinary render path pays only the boolean
+  // field check; named-force reconstruction runs solely for particles whose
+  // Inspector toggle is active.
+  const fbdLabels: Array<{ text: string; x: number; y: number; color: Color }> = [];
+  const slopeCards: Array<{ x: number; y: number; rows: Array<{ text: string; color: Color }> }> = [];
+  const forceColour = (entry: ForceEntry): Color => {
+    if (entry.kind === "weight") return theme.BAD;
+    if (entry.kind === "reaction") return theme.GOOD;
+    if (entry.kind === "spring" || entry.kind === "string" ||
+        entry.kind === "pulley" || entry.kind === "rod") return theme.WARN;
+    return theme.ACCENT_HOT;
+  };
+  const forceSymbol = (entry: ForceEntry): string => {
+    if (entry.kind === "weight") return "W";
+    if (entry.kind === "reaction") return "R";
+    if (entry.kind === "string" || entry.kind === "pulley") return "T";
+    if (entry.kind === "spring") return "Fₛ";
+    if (entry.kind === "rod") return entry.label.includes("thrust") ? "S" : "T";
+    if (entry.kind === "drag") return "D";
+    return "F";
+  };
+  let fbdCount = 0;
+  let fbdArrows = false;
+  for (const body of world.bodies) {
+    if (body.isRodEndpoint) continue;
+    if (!body.showForceComponents || body.invMass === 0) continue;
+    if (aggressive && !picked.has(body) && body !== hover) continue;
+    if (simplify && fbdCount++ >= 4) break;
+    const wall = body.forceSlopeWallId === null ? null :
+      world.walls.find((candidate) => candidate.id === body.forceSlopeWallId) ?? null;
+    const ledger = forceLedger(world, body, wall);
+    const [sx, sy] = cam.toScreen(body.pos);
+    for (const entry of ledger.entries) {
+      const ex = sx + entry.fx * FORCE_ARROW_SCALE * vScale * zoom;
+      const ey = sy - entry.fy * FORCE_ARROW_SCALE * vScale * zoom;
+      const color = forceColour(entry);
+      addArrowXY(STROKES, FILLS, sx, sy, ex, ey, color, 2,
+                 vectorMinLengthPx);
+      fbdArrows = true;
+      if (Math.hypot(ex - sx, ey - sy) >= 8) {
+        fbdLabels.push({ text: `${forceSymbol(entry)} ${Math.hypot(entry.fx, entry.fy).toFixed(2)} N`,
+          x: ex + (ex >= sx ? 5 : -5), y: ey - 4, color });
+      }
+    }
+    if (ledger.basis !== null) {
+      const rows = ledger.entries.map((entry) => {
+        const resolved = projectForce(entry, ledger.basis!);
+        return { text: `${forceSymbol(entry)}  ∥ ${resolved.parallel.toFixed(2)}   ⊥ ${resolved.normal.toFixed(2)} N`,
+          color: forceColour(entry) };
+      });
+      if (rows.length > 0) slopeCards.push({ x: sx + 38, y: sy + 26, rows });
+      const parallel = projectForce(ledger.resultant, ledger.basis).parallel;
+      const normal = projectForce(ledger.resultant, ledger.basis).normal;
+      for (const component of [
+        { value: parallel, x: ledger.basis.tx, y: ledger.basis.ty,
+          text: "F∥", color: theme.SELECTION },
+        { value: normal, x: ledger.basis.nx, y: ledger.basis.ny,
+          text: "F⊥", color: theme.ACC_COLOR },
+      ]) {
+        const ex = sx + component.value * component.x * FORCE_ARROW_SCALE * vScale * zoom;
+        const ey = sy - component.value * component.y * FORCE_ARROW_SCALE * vScale * zoom;
+        addArrowXY(STROKES, FILLS, sx, sy, ex, ey, component.color, 1.5,
+                   vectorMinLengthPx);
+        fbdArrows = true;
+        if (Math.hypot(ex - sx, ey - sy) >= 8) {
+          fbdLabels.push({ text: `${component.text} ${component.value.toFixed(2)} N`,
+            x: ex + 5, y: ey + 12, color: component.color });
+        }
+      }
+    }
+  }
+  if (fbdArrows) {
+    STROKES.strokeAll(ctx);
+    FILLS.fillAll(ctx);
+  }
+  if (fbdLabels.length > 0) {
+    ctx.font = "600 10px system-ui, sans-serif";
+    ctx.textAlign = "left";
+    for (const label of fbdLabels) {
+      ctx.fillStyle = css(label.color);
+      ctx.fillText(label.text, label.x, label.y);
+    }
+  }
+  for (const card of slopeCards) {
+    const width = 158;
+    const height = 20 + card.rows.length * 14;
+    const x = Math.max(5, Math.min(areaW - width - 5, card.x));
+    const y = Math.max(5, Math.min(areaH - height - 5, card.y));
+    ctx.fillStyle = `rgba(${theme.PANEL[0]},${theme.PANEL[1]},${theme.PANEL[2]},0.9)`;
+    ctx.fillRect(x, y, width, height);
+    ctx.strokeStyle = css(theme.OUTLINE);
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, width - 1, height - 1);
+    ctx.font = "600 9px system-ui, sans-serif";
+    ctx.fillStyle = css(theme.TEXT_DIM);
+    ctx.fillText("Slope components", x + 7, y + 12);
+    for (let i = 0; i < card.rows.length; i++) {
+      ctx.fillStyle = css(card.rows[i].color);
+      ctx.fillText(card.rows[i].text, x + 7, y + 27 + i * 14);
+    }
   }
 
   // --- per-link tension / axial force ---------------------------------------
@@ -986,7 +1193,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   if (tensionVisible) {
     const tensionScale = FORCE_ARROW_SCALE * vScale;
     const consider = (sx: number, sy: number, fx: number, fy: number): void => {
-      const d2 = addTensionArrow(sx, sy, fx, fy, zoom, tensionScale, pointer);
+      const d2 = addTensionArrow(sx, sy, fx, fy, zoom, tensionScale, pointer,
+                                 vectorMinLengthPx);
       if (d2 < tensionHoverD2) {
         tensionHoverD2 = d2;
         tensionHoverFx = fx;
@@ -1091,6 +1299,33 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   }
   if (pointer !== null && tensionHoverD2 < 49.0) {
     drawForceTooltip(ctx, pointer, tensionHoverFx, tensionHoverFy, areaW, areaH);
+  }
+  // Endpoint letters are editing landmarks, so they appear only on the
+  // selected rod. Draw them last: attached particles can occupy the actual
+  // endpoint and used to paint over a badge drawn in the link layer. Moving
+  // each badge a few pixels beyond its end also keeps the particle readable.
+  for (const link of world.links) {
+    if (!(link instanceof DistanceLink) || link.isRope || !picked.has(link)) continue;
+    const [ax, ay] = cam.toScreen(link.a.pos);
+    const [bx, by] = cam.toScreen(link.b.pos);
+    const dx = bx - ax;
+    const dy = by - ay;
+    const d = Math.hypot(dx, dy);
+    const ux = d > 1e-9 ? dx / d : 1;
+    const uy = d > 1e-9 ? dy / d : 0;
+    for (const [x, y, label] of [
+      [ax - ux * 13, ay - uy * 13, "A"],
+      [bx + ux * 13, by + uy * 13, "B"],
+    ] as const) {
+      fillCircle(ctx, x, y, 9, theme.PANEL);
+      ringCircle(ctx, x, y, 9, 2, theme.ACCENT);
+      ctx.fillStyle = css(theme.TEXT);
+      ctx.font = "700 10px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, x, y + 0.5);
+    }
+    ctx.textBaseline = "alphabetic";
   }
   picked.clear();
   LABEL_NAMES.length = 0;

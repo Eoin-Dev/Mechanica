@@ -745,8 +745,8 @@ describe("the card audit is complete", () => {
   });
 
   it("ships the library size the README, help and tour all quote", () => {
-    expect(PRESETS).toHaveLength(48);                              // "48 examples"
-    expect(CATEGORIES.filter((c) => c !== "All")).toHaveLength(8); // "eight categories"
+    expect(PRESETS).toHaveLength(48);                                // "48 examples"
+    expect(CATEGORIES.filter((c) => c !== "All")).toHaveLength(8);   // "eight topics"
     expect(new Set(PRESETS.map((p) => p.name)).size).toBe(PRESETS.length);
   });
 });
