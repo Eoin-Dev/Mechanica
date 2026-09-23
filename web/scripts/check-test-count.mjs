@@ -1,17 +1,4 @@
-/** Fail if the README's test-count badge has become a lie.
- *
- * The badge used to carry an exact number and had drifted fifty behind the
- * real suite, because nothing connected the two: an exact count in a README
- * is a claim about the PRESENT that only a human remembering to edit it
- * keeps true.
- *
- * So the badge states a LOWER BOUND, and this checks it. A bound only
- * becomes false if the suite shrinks past it, which is precisely when
- * someone should be told - and it needs no commit when a test is merely
- * added, which is the churn an exact figure would demand.
- *
- * Run by CI right after the suite, against the JSON report it emits.
- */
+/** Check that the CI test report meets the README badge's lower bound. */
 import { readFileSync } from "node:fs";
 
 const README = new URL("../../README.md", import.meta.url);

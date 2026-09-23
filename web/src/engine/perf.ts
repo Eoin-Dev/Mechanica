@@ -1,83 +1,23 @@
-/** Performance mode's solver: engineered for robustness, not for accuracy.
+/** Approximate solver for Performance mode.
  *
- * The rest of the engine treats a spring as what it physically is - a smooth
- * force, F = -k*extension, handed to an explicit integrator. That is the
- * accurate treatment, and it is also the one that cannot be made
- * unconditionally stable: an explicit scheme only survives while h*omega
- * stays small, so every stiffness has a timestep it will explode at.
- * World.prepareSprings therefore clamps each spring's effective k and c down
- * to that limit.
+ * Springs use XPBD position constraints with compliance 1/k. Bounded
+ * velocity projections provide damping without an explicit spring force.
+ * Per-spring force clamps alone cannot bound the combined stiffness of a
+ * lattice node with several attached springs.
  *
- * The clamp is computed PER SPRING, from that one spring's reduced mass, and
- * that is where performance mode came apart. A soft-body particle is not on
- * one spring; an interior particle of a lattice is on twelve - four
- * structural, four shear, four bend - and the stiffness they present to the
- * node is their sum. Clamping each one to the single-spring margin leaves the
- * node itself at roughly 4.5 times it, so h*omega lands near 1.5, and the
- * per-spring damping limit (chosen so no ONE spring overshoots in a step)
- * exceeds 1 when summed - which is an explicit-damping instability with
- * nothing to stop it. The Jelly block, Jelly smash and Trampoline presets all
- * reached ~1e7 m/s within three seconds of being played in performance mode,
- * and raising the stiffness slider only moved the explosion earlier.
- *
- * So this mode stops integrating springs at all. Every spring becomes a
- * POSITION CONSTRAINT solved by projection (XPBD), and the whole class of
- * failure above disappears rather than being tuned around:
- *
- *   - A projection can only move an endpoint TOWARDS satisfying its
- *     constraint, by at most the constraint error itself. There is no
- *     h*omega, no growth factor and therefore no stability limit: the
- *     stiffness slider can be pushed to its maximum, or a hand-edited scene
- *     can ask for 1e9, and the spring simply becomes a rigid rod.
- *   - Stiffness enters as XPBD compliance, 1/k, so it stays meaningful and
- *     monotone across the whole slider: soft springs barely correct, stiff
- *     ones correct almost fully, and the two ends saturate instead of
- *     diverging.
- *   - Damping is applied as a bounded velocity projection - it removes a
- *     capped FRACTION of a pair's relative axial velocity (see
- *     PERF_MAX_DAMP_FRACTION) rather than a force proportional to it - so it
- *     can never reverse a velocity, which is exactly how explicit damping
- *     blows up.
- *
- * On top of that sit three cheap guards that make "never catastrophically
- * explodes" a property of the code rather than a hope, and which also cover
- * the parts of the pipeline this module does not own (contacts, force fields,
- * the N-body encounters the mode declines to slice):
- *
- *   - a bound on how far one projection may move a body, so it cannot
- *     teleport anything through something it should have hit;
- *   - a hard strain limit, so a lattice physically cannot come apart;
- *   - a speed ceiling, so no body can reach the range where positions stop
- *     being representable.
- *
- * What is NOT here is any blanket dissipation - see the note where it used to
- * be. Everything in this file is deliberately non-physical, but it still has
- * to earn its inaccuracy in stability, and that did not.
- *
- * A jelly is squishier than its stiffness says, a trampoline dissipates more
- * than it should, and the energy graph is not worth reading here: a projected
- * spring holds a deformation without having done the work to store it, so its
- * reported potential energy is fiction. That is the trade this mode exists to
- * make; the accurate path is one checkbox away and untouched.
- */
+ * Projection-distance, strain, and speed limits bound extreme motion.
+ * The browser selects a quality level; the headless engine applies it
+ * deterministically. These approximations alter spring motion and energy,
+ * so energy-conservation measurements require Normal mode. */
 import { Body } from "./body";
 import { SpringLink } from "./links";
 
-// Performance mode's solver ceilings. Deliberately blunt: they are not a
-// tuning of the accuracy/cost curve but a decision to stop paying for
-// accuracy at all, for the scenes where nobody was measuring anything - a
-// soft body being poked, a hundred particles piled on a planet.
-//
-// Measured on Earth & Moon plus 200 loose particles all in mutual contact
-// (415 simultaneous contacts): 15.8 ms of physics per displayed frame at the
-// authored settings, which does not fit in a 60 Hz frame at all, against
-// 1.9 ms here. Symplectic Euler halves the force evaluations on top, and
-// dropping the adaptive machinery removes a multiplier that reached 16x.
+// Base Performance-mode solver ceilings; higher levels reduce work further.
 export const PERF_SUBSTEPS = 2;
 export const PERF_ITERATIONS = 4;
 
 /** Machine-load-selected quality ladder for Performance mode.
- * Level zero is the existing robust profile. Higher levels deliberately
+ * Level zero uses the base solver limits. Higher levels deliberately
  * spend progressively less solver work; the browser app selects the level,
  * while the headless engine merely applies the explicit value it is given. */
 export type PerformanceLevel = 0 | 1 | 2 | 3;
@@ -92,18 +32,8 @@ export function performanceLevel(value: number): PerformanceLevel {
   return 0;
 }
 
-// Gauss-Seidel passes for the spring projection.
-//
-// Under-converging is safe here in a way it is not for an explicit force: it
-// makes a lattice softer and laggier, never unstable. So this is purely a
-// quality-for-cost knob, and it was measured rather than guessed - the worst
-// strain the Jelly block, Squishy ball and Soft wheel reach over 7.5 s at the
-// maximum stiffness the inspector offers is the same to three decimal places
-// at 4, 6 and 8 passes (0.199 / 0.197 / 0.196 for the Jelly block). Extra
-// passes buy nothing because PERF_MAX_MOVE_RADII bounds the recovery per
-// substep anyway, and they are what made this mode SLOWER than the model it
-// replaces on a 300-spring lattice: 209 us a step at 8, 152 us at 4, against
-// the accurate solver's 158 us.
+// Gauss-Seidel spring projection passes. Fewer passes allow more constraint
+// error; PERF_MAX_MOVE_RADII separately bounds recovery per substep.
 export const PERF_SPRING_PASSES = 4;
 
 // Hard speed ceiling, m/s. Nothing in the shipped library moves faster than

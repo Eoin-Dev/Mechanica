@@ -1,11 +1,5 @@
-/** The global keyboard map.
- *
- * Nothing tested this before, and the gap cost a real regression: the
- * handler swallowed Space on a focused button, so no button in the app could
- * be activated from the keyboard, and 339 passing tests said nothing about
- * it. The map is small, entirely decidable, and the surface a keyboard-only
- * user depends on, so it is checked key by key here.
- */
+/** Keyboard command dispatch and native focused-control behavior.
+ * Simulation shortcuts must respect editing controls and modal ownership. */
 import { beforeEach, describe, expect, it } from "vitest";
 import type { App } from "../src/app";
 import { TOOLS } from "../src/interact/tools";
@@ -63,7 +57,8 @@ beforeEach(() => {
 
 /** A keydown that records whether the map claimed its default. */
 function press(key: string, opts: {
-  ctrl?: boolean; meta?: boolean; shift?: boolean; tag?: string; role?: string;
+  ctrl?: boolean; meta?: boolean; shift?: boolean; alt?: boolean;
+  composing?: boolean; tag?: string; role?: string;
 } = {}): { consumed: boolean; prevented: boolean } {
   let prevented = false;
   const target = {
@@ -75,6 +70,8 @@ function press(key: string, opts: {
     ctrlKey: opts.ctrl ?? false,
     metaKey: opts.meta ?? false,
     shiftKey: opts.shift ?? false,
+    altKey: opts.alt ?? false,
+    isComposing: opts.composing ?? false,
     target,
     preventDefault() { prevented = true; },
   } as unknown as KeyboardEvent;
@@ -83,6 +80,11 @@ function press(key: string, opts: {
 }
 
 describe("focused controls keep the keys they own", () => {
+  it("does not invoke a tool for Alt-modified or composing input", () => {
+    expect(press("b", { alt: true })).toEqual({ consumed: false, prevented: false });
+    expect(press("b", { composing: true })).toEqual({ consumed: false, prevented: false });
+    expect(log.calls).toEqual([]);
+  });
   it("leaves Space and Enter to a focused button", () => {
     // the regression: the map played/paused and preventDefault'd the
     // activation, so no button in the app could be pressed from the keyboard
@@ -255,12 +257,19 @@ describe("modal precedence", () => {
     expect(log.calls).toEqual([]);
   });
 
-  it("still allows Ctrl shortcuts to reach the app during the tour", () => {
-    // undo/redo are not the tour's to swallow, and the tour handles its own
-    // Esc and arrows in the capture phase before this ever runs
+  it("keeps modifier edits out of the scene during the tour", () => {
     host.tour.visible = true;
-    press("z", { ctrl: true });
-    expect(log.calls).toEqual(["undo"]);
+    for (const key of ["z", "y", "d", "r", "v", "s"]) press(key, { ctrl: true });
+    expect(log.calls).toEqual([]);
+  });
+
+  it("keeps modifier edits out of the scene under an open dialog", () => {
+    overlays[0].visible = true;
+    for (const key of ["z", "y", "d", "r", "v", "s"]) {
+      press(key, { ctrl: true });
+      press(key, { meta: true });
+    }
+    expect(log.calls).toEqual([]);
   });
 
   it("lets an open overlay swallow everything but its close keys", () => {

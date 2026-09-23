@@ -1,8 +1,5 @@
-/** Time-series graph rendering: the plot must stroke the exact polyline
- * through every sample. Decimation schemes artefacted: every-Nth stride
- * skipped peaks (they flickered and snapped as the window scrolled), and
- * per-pixel min/max drew each column as a vertical bar, turning steep
- * smooth curves into a scalloped sawtooth once the window got squished. */
+/** Time-series rendering must preserve the polyline through every sample,
+ * including narrow peaks and steep curves in a compressed visible window. */
 import { describe, expect, it } from "vitest";
 import * as theme from "../src/ui/theme";
 import { css } from "../src/ui/theme";
@@ -27,7 +24,11 @@ function recCtx() {
   };
   const ctx = new Proxy(base, {
     get(t, p) { if (p === "strokeStyle") return stroke; return (p in t) ? t[p as string] : () => {}; },
-    set(_t, p, v) { if (p === "strokeStyle") stroke = v as string; return true; },
+    set(t, p, v) {
+      if (p === "strokeStyle") stroke = v as string;
+      else t[p as string] = v;
+      return true;
+    },
   }) as unknown as CanvasRenderingContext2D;
   return { ctx, pts, dots, texts };
 }
@@ -39,6 +40,24 @@ function dataVertices(series: TimeSeries, w: number, h: number) {
 }
 
 describe("time-series rendering", () => {
+  it("wraps legends below the title on narrow plots and keeps every channel clickable", () => {
+    const series = new TimeSeries(["|p|", "px", "py", "L"]);
+    series.add(0, { "|p|": 12345, px: 2345, py: -5678, L: 98765 });
+    const { ctx } = recCtx();
+    const labels: Array<{ text: string; x: number; y: number }> = [];
+    ctx.measureText = (text) => ({ width: text.length * 6 }) as TextMetrics;
+    ctx.fillText = (text, x, y) => { labels.push({ text, x, y }); };
+    series.draw(ctx, 260, 180, "Momentum");
+    const legend = labels.filter(label => label.text.includes(":"));
+    expect(legend).toHaveLength(4);
+    for (const label of legend) {
+      expect(label.y).toBeGreaterThan(20);
+      expect(label.x).toBeGreaterThanOrEqual(0);
+      expect(label.x + label.text.length * 6).toBeLessThanOrEqual(260);
+      expect(series.legendClick(label.x, label.y)).toBe(true);
+    }
+    expect(series.hidden.size).toBe(4);
+  });
   it("keeps a sharp peak at a stable height while the window scrolls", () => {
     const s = new TimeSeries(["E"]);
     // narrow plot so there are many samples per pixel

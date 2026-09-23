@@ -1,10 +1,4 @@
-/** Guards for things that used to fail quietly.
- *
- * Every case here is a bug that produced no error message: a scene that
- * froze on load, an energy graph that drifted for no visible reason, a
- * status bar counting the same collision several times. Silent wrongness is
- * the expensive kind in a teaching tool, so each one gets a test.
- */
+/** Scene input validation, numerical diagnostics, and collision accounting. */
 import { describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { BODY_PALETTE, Body, Wall } from "../src/engine/body";

@@ -1,13 +1,9 @@
-/** Mechanica application: canvas, main loop, playback and app-level state.
- *
- * The fixed-timestep accumulator, adaptive time resolution, rewind history,
- * trails and graph recording are direct ports of the desktop app; rendering
- * happens on requestAnimationFrame and the UI chrome lives in the DOM.
- */
+/** Mechanica application state, fixed-timestep scheduling, playback, and history.
+ * Canvas rendering uses requestAnimationFrame; panels use DOM refresh callbacks. */
 import { Body, Wall } from "./engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "./engine/links";
 import { World, escapedBodies } from "./engine/world";
-import { EventTracker, PlaybackEvent, PlaybackEventKind } from "./education/analysis";
+import { contactKey, EventTracker, PlaybackEvent, PlaybackEventKind } from "./education/analysis";
 import { Camera, MAX_ZOOM, MIN_ZOOM } from "./render/camera";
 import { Selectable, ViewSettings, drawGrid, drawScaleBar, drawWorld } from "./render/draw";
 import { Trail } from "./render/trail";
@@ -274,7 +270,6 @@ export class App {
   playbackEventTracking = false;
   private phaseBodyId: number | null = null;
   private kinematicsBodyId: number | null = null;
-  private kinematicsLastPosition: { x: number; y: number } | null = null;
   private kinematicsDistance = 0;
   graphMode: GraphMode = "Off";
 
@@ -624,32 +619,42 @@ export class App {
   private runPhysicsBatch(world: World, count: number, dt: number,
                           afterStep: (() => void) | null = null): PhysicsBatchResult {
     for (let i = 0; i < count; i++) {
+      const measuredBody = world === this.world ? this.syncKinematicsSelection() : undefined;
+      const startX = measuredBody?.pos.x ?? 0;
+      const startY = measuredBody?.pos.y ?? 0;
       const refineable = world === this.world && this.playing && !this.perfMode &&
         this.pauseOnEvent !== null;
+      const trackPlaybackEvents = world === this.world &&
+        (this.playbackEventTracking || this.pauseOnEvent !== null);
+      if (trackPlaybackEvents) this.playbackEvents.prepareStep(world);
       const before = refineable ? snap.snapshot(world) : null;
       const failure = this.safeStep(world, dt);
       if (failure !== null) {
         // A divergence is a completed, contained engine step. An exception
         // may have interrupted the step, so it is not counted or sampled.
-        if (!failure.exception) afterStep?.();
+        if (!failure.exception) {
+          this.recordKinematicsStep(measuredBody, startX, startY);
+          afterStep?.();
+        }
         return { completed: i + (failure.exception ? 0 : 1), failure,
           eventStopped: false };
       }
       if (world === this.world) {
-        const trackPlaybackEvents = this.playbackEventTracking ||
-          this.pauseOnEvent !== null;
         const events = trackPlaybackEvents ? this.playbackEvents.observe(world) : [];
         if (this.playing && this.pauseOnEvent !== null) {
           const event = events.find(
-            (candidate) => candidate.kind === this.pauseOnEvent);
+            (candidate) => candidate.kind === this.pauseOnEvent &&
+              (candidate.kind !== "apex" ||
+                candidate.bodyIds.includes(this.playbackEvents.selectedBodyId ?? -1)));
           if (event !== undefined) {
             if (before !== null) {
               const refined = this.refinePlaybackEvent(before, dt, event);
               if (refined !== null) {
-                this.installPlaybackRefinement(refined);
                 event.time = refined.time;
+                this.installPlaybackRefinement(refined);
               }
             }
+            this.recordKinematicsStep(measuredBody, startX, startY);
             afterStep?.();
             this.playing = false;
             this.accumulator = 0;
@@ -659,6 +664,7 @@ export class App {
           }
         }
       }
+      this.recordKinematicsStep(measuredBody, startX, startY);
       afterStep?.();
     }
     return { completed: count, failure: null, eventStopped: false };
@@ -706,12 +712,7 @@ export class App {
   }
 
   private worldHasContact(world: World, key: string): boolean {
-    for (const contact of world.contacts) {
-      const other = contact.bodyBId ??
-        (contact.wallId === null ? -1 : -contact.wallId);
-      if (`contact:${contact.bodyAId}:${other}` === key) return true;
-    }
-    return false;
+    return world.contacts.some((contact) => contactKey(contact) === key);
   }
 
   private bodyAtPulleyStop(world: World, bodyId: number): boolean {
@@ -739,7 +740,7 @@ export class App {
       const item = this.findSelectable(world, key);
       return item === null ? [] : [item];
     });
-    this.playbackEvents.prime(world);
+    this.playbackEvents.rewindTo(world.time, world);
     this.invalidateEnergy();
     this.onWorldReplaced();
     this.onSelectionChange();
@@ -828,17 +829,9 @@ export class App {
     this.ensureInitial();
     this.playing = false;
     this.capturePhysicsVisualState();
-    // Frame-stepping is what you do to study a close encounter, so it needs
-    // the same in-slice path capture as playing does; this used to be set
-    // only on the playing path, so single-stepping through an encounter
-    // drew the trail as a step-to-step corner (or, in a scene that had
-    // never been played, not at all).
+    // Capture in-slice trail points during single-step as well as playback.
     this.syncTraceSpacing();
-    // One 60 Hz frame, run through the SAME path as play: same quantum
-    // count, same adaptive subdivision. Stepping used to take two flat
-    // PHYSICS_DT steps, so frame-stepping through a close encounter - the
-    // exact thing anyone steps frame by frame to study - integrated more
-    // coarsely than just watching it, and the two disagreed.
+    // Advance one nominal 60 Hz frame using the playback subdivision path.
     let failure: PhysicsFailure | null = null;
     const quantum = this.activePhysicsQuantum();
     const frameQuanta = Math.max(1, Math.round((2 * PHYSICS_DT) / quantum));
@@ -908,34 +901,10 @@ export class App {
     this.toast("Reset to the initial state");
   }
 
-  /** Simulate the scene to `text` seconds.
-   *
-   * Two things decide how this behaves, and they interact:
-   *
-   * WHERE IT STARTS. A target ahead of the clock is reached by continuing
-   * from the CURRENT state; only a target behind it has to go back to the
-   * start snapshot and re-simulate, because the solver cannot run
-   * backwards. The result is identical either way - the step sequence is
-   * the same fixed PHYSICS_DT either way, so 0->10 then 10->20 lands
-   * exactly where 0->20 does - but continuing does not redo work already
-   * done, and, crucially, it is what makes an interrupted jump RESUMABLE.
-   *
-   * Restarting from t = 0 every time was the old behaviour and it hid a
-   * trap: a target too far to reach in one go left the clock wherever the
-   * budget ran out, and asking again re-ran the same bounded work from the
-   * same start and stopped at the same place. The jump appeared to do
-   * nothing at all from the second attempt onward, however many times it
-   * was asked.
-   *
-   * HOW LONG IT MAY RUN. The jump is synchronous - there is no partial
-   * world to show and nothing useful to draw halfway - so the tab is
-   * unresponsive throughout. A step cap alone does not bound that: 20 000
-   * steps is 2.6 s frozen on the Trampoline and 6.4 s on the Jelly block on
-   * a desktop, and several times that on a phone, which is long enough for
-   * the browser to offer to kill the page. So the work is bounded in
-   * WALL-CLOCK time too, and falling short is reported rather than implied,
-   * with the fact that asking again continues.
-   */
+  /** Simulate to the requested time. Forward seeks continue from live state;
+   * backward seeks restore the initial snapshot. Work runs on a copy and is
+   * bounded by both step count and wall-clock time. Repeating an incomplete
+   * forward seek continues from the reached state. */
   commitTimeJump(text: string): boolean {
     const trimmed = text.trim();
     if (trimmed === "") return false;
@@ -1446,7 +1415,6 @@ export class App {
     this.phasePlot.clear();
     this.phaseBodyId = null;
     this.kinematicsBodyId = null;
-    this.kinematicsLastPosition = null;
     this.kinematicsDistance = 0;
     this.lastGraphSampleT = -Infinity;
     this.syncPhaseSelection();
@@ -1846,16 +1814,7 @@ export class App {
     this.invalidateCanvas();
   }
 
-  /** Why the app cannot hold real time, or null when it can.
-   *
-   * The warning used to say "physics can't keep up - reduce substeps or
-   * bodies" for every cause, which is actively misleading when the constraint
-   * is DRAWING: a 300-spring soft body costs about a millisecond of solver
-   * and far more than that in draw calls, and telling someone to cut
-   * substeps sends them to fix the half that was already fast. Rendering
-   * being the bottleneck is also the whole reason the same scene behaves
-   * differently between a small window and a maximised one.
-   */
+  /** Classify the real-time bottleneck as physics or rendering, or return null. */
   slowReason(): "physics" | "render" | null {
     if (!this.playing) return null;
     // A lower Performance profile is expected to miss briefly while the
@@ -1980,11 +1939,8 @@ export class App {
    * debris-heavy scene. */
   private sweepTrails(): void {
     if (!this.view.trails || this.perfMode || this.trails.size === 0) return;
-    // The trail is a window on the last trailLen x PHYSICS_DT seconds of
-    // SIMULATED time, so it decays even while a body sits still (a
-    // stationary body used to keep a frozen line forever) and covers the
-    // same amount of motion whatever the speed multiplier. trailLen stays
-    // the hard memory and drawing bound.
+    // Expire trails by simulated time, including stationary bodies.
+    // trailLen also bounds stored points and drawing work.
     const cutoff = this.world.time - this.view.trailLen * PHYSICS_DT;
     const live = this.trailLive;
     live.clear();
@@ -2059,8 +2015,6 @@ export class App {
     const nextId = body?.id ?? null;
     if (nextId === this.kinematicsBodyId) return body;
     this.kinematicsBodyId = nextId;
-    this.kinematicsLastPosition = body === undefined
-      ? null : { x: body.pos.x, y: body.pos.y };
     this.kinematicsDistance = 0;
     this.distanceSeries.clear();
     this.velocitySeries.clear();
@@ -2075,13 +2029,21 @@ export class App {
     return body;
   }
 
+  /** Accumulate each completed live solver step, including a refined event
+   * stop. Display cadence and paused edits must not change measured travel. */
+  private recordKinematicsStep(before: Body | undefined, x: number, y: number): void {
+    if (before === undefined) return;
+    // Event refinement replaces body instances but preserves their IDs.
+    const body = this.syncKinematicsSelection();
+    if (body === undefined || body.id !== before.id) return;
+    this.kinematicsDistance += Math.hypot(body.pos.x - x, body.pos.y - y);
+  }
+
   /** Re-base path measurement after the plotted future has been truncated.
    * Otherwise the backwards position jump itself would be counted as new
    * forward travel when the simulation resumes. */
   private restoreKinematicsAfterRewind(): void {
     const body = this.syncKinematicsSelection();
-    this.kinematicsLastPosition = body === undefined
-      ? null : { x: body.pos.x, y: body.pos.y };
     this.kinematicsDistance = this.distanceSeries.count > 0
       ? this.distanceSeries.valueAt("Distance", this.distanceSeries.count - 1)
       : 0;
@@ -2104,18 +2066,6 @@ export class App {
     // it before the throttle can return on a paused or just-sampled clock.
     const phaseBody = this.syncPhaseSelection();
     const kinematicsBody = this.syncKinematicsSelection();
-    if (kinematicsBody !== undefined) {
-      const previous = this.kinematicsLastPosition;
-      if (previous !== null) {
-        this.kinematicsDistance += Math.hypot(
-          kinematicsBody.pos.x - previous.x,
-          kinematicsBody.pos.y - previous.y);
-      }
-      this.kinematicsLastPosition = {
-        x: kinematicsBody.pos.x,
-        y: kinematicsBody.pos.y,
-      };
-    }
     // Cap the cadence in SIM time: the window shows GRAPH_WINDOW_S seconds
     // in at most GRAPH_MAX_POINTS samples, so anything finer is sub-pixel.
     // This bounds both the sampling cost (energy() is O(n^2) with mutual

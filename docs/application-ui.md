@@ -70,6 +70,8 @@ The toolbar clock accepts a strict unsigned decimal or scientific-notation
 target. Empty text, trailing characters, negative values, and non-finite values
 are rejected rather than partially parsed. A target earlier than a scene's
 nonzero loaded baseline is rejected with that baseline in the message.
+Focusing and leaving its rounded display unchanged does not seek; Escape
+cancels the edit without changing simulation time.
 
 - a future target continues from a copy of the current state;
 - a past target restarts from the initial snapshot;
@@ -199,6 +201,9 @@ The document context menu is suppressed outside text inputs so right-button
 gestures remain in the application. Losing window focus or changing fullscreen
 resets interaction to prevent a swallowed pointer-up leaving a body held or an
 eraser transaction open.
+Pointer cancellation and tool changes use the same cleanup: discard unfinished
+wall/link drafts, clear erasing/panning/selection state, restore held-body
+velocity, and commit any completed drag or eraser changes once for undo.
 
 ### Touch
 
@@ -355,6 +360,8 @@ wall reference also shows components parallel and perpendicular to that slope.
 While this per-particle diagram is active, the selected body's default editable
 green velocity handle is hidden to avoid overlapping the force arrows; the
 View tab's global velocity-vector overlay remains independent.
+The rod attachment inventory retains its button nodes while its displayed
+content is unchanged, preserving keyboard focus through panel refreshes.
 
 Tension-vector choices are per-link view state, are not serialized, and do not
 create undo entries. Multi-selection toggles every matching link, so separate
@@ -469,6 +476,11 @@ Major behavior includes:
 - centre-of-mass marker and contact normals/impulses;
 - scale bar drawn after interaction overlays.
 
+Canvas body names are measured and ellipsized to at most 160 CSS pixels, with
+their positions kept inside the visible canvas. The Inspector retains the
+complete name. The centre-of-mass ring and crosshair use the theme's dim-text
+colour so they remain visible on both light and dark backgrounds.
+
 Performance rendering progressively caps backing density without changing CSS
 coordinates or pointer alignment: levels 0-3 use at most `1.5`, `1.25`, `1`,
 and `1` device pixels per CSS pixel. Maximum level draws only major/axis grid
@@ -529,6 +541,12 @@ The graph dock shows:
   particle from selection or the latest graph clear; and
 - velocity-time: speed plus signed x/y velocity for that particle.
 
+Distance accumulates displacement after each completed live `World.step`,
+including a refined event stop, independently of graph/display sampling.
+Paused position edits do not count as travel. This is a stepwise path-length
+estimate, not an integral over internal contact or encounter slices. Rewind
+resumes from the last retained distance sample at or before the restored time.
+
 `App.recordGraphSample()` records every time-series family regardless of which
 one is displayed, so switching modes does not create gaps. Sampling cadence is
 capped in simulation time from the visible window and maximum point budget.
@@ -559,6 +577,13 @@ unchanged data unless autoscale easing
 is still active. Empty, undersized, or all-hidden plots cancel easing, and the
 retained draw signature includes the live palette revision so a theme/accent
 change repaints a paused graph exactly once.
+The header and mode controls wrap on narrow layouts. The dock reserves at least
+100 CSS pixels for its canvas, grows to fit wrapped controls, and limits a
+saved height against the current container (subject to its content minimum).
+Legends share the title row when they fit and otherwise wrap into measured rows
+above the plot; their click targets follow those rows. Detached wheel zoom
+clamps the view using the new span while retaining the time under the cursor
+where the retained history permits it.
 
 ## DOM control system
 
@@ -568,6 +593,9 @@ change repaints a paused graph exactly once.
   children without templating.
 - `button`, `slider`, numeric/text edits, checkbox, segmented control, colour
   editor, section, and half-row return `{ root, refresh? }` controls.
+- `textEdit` accepts an optional maximum length. Inspector object names use
+  200 UTF-16 code units and force-field names use 80, matching scene loading;
+  browser input is bounded and oversized programmatic edits are rejected.
 - sliders map a fixed internal range to linear, logarithmic, or blended
   linear/logarithmic values; a zero-preserving log option gives `0` its own
   track stop before a configurable positive floor. Friction uses that mapping
@@ -594,6 +622,12 @@ buttons receive an explicit `aria-label`. Toggle buttons expose
 control name. Colour preset groups and segmented controls expose their selected
 state instead of relying on a CSS class. Icon markup comes from the internal
 constant `ICONS` table, not user input.
+
+Text, numeric, colour-hex, and slider-value fields capture their displayed text
+on focus. An unchanged blur does not round the underlying value or commit an
+edit; Escape restores the display without committing. MathLive handles
+Enter/Escape in capture phase before its internal keyboard handler, and Escape
+restores canonical source before focus is released.
 
 ## Panels and overlays
 
@@ -670,12 +704,16 @@ testable without constructing the whole app. It:
 
 1. Lets focused text controls keep editing keys and lets range/checkbox/button
    controls keep keys they own.
-2. Handles escape in order: active tour, topmost open overlay, pending canvas
+2. Handles escape in order: active tour, open overlays, pending canvas
    gesture, then selection.
-3. Applies modifier edit commands (undo, redo, save, duplicate, copy/paste,
+3. Gives modal overlays/tours ownership before modifier edit commands. Scene
+   undo/redo, duplication, reset, paste, and save cannot act behind a dialog;
+   their browser defaults are suppressed too. Native focused editing and copy
+   remain available. Alt-modified and composing input do not select scene tools.
+4. Applies modifier edit commands (undo, redo, save, duplicate, copy/paste,
    reset).
-4. Applies tool keys and view/playback commands.
-5. Prevents browser defaults only for a command the app actually consumed,
+5. Applies tool keys and view/playback commands.
+6. Prevents browser defaults only for a command the app actually consumed,
    except for the intentionally global page-zoom suppression in `main.ts`.
 
 The toolbar clock and formula editors also stop key propagation while editing.
@@ -719,6 +757,9 @@ Physics-object colours remain scene controlled. Studio's shared button surface
 treatment has lower selector specificity than component variants, so primary,
 danger, ghost, swatch, card, and compact-action geometry and states remain
 intact.
+Destructive buttons use white text on their fixed dark-red hover fill,
+including in the light theme; compact saved-scene actions retain their own
+neutral-background hover treatment.
 Dark is the fallback for an absent or invalid stored theme.
 
 The bottom status row renders each item in its own separated segment. It shows

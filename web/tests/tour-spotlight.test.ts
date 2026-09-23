@@ -1,18 +1,5 @@
-/** The tour's spotlight survives being replayed.
- *
- * Tour pools its dark tiles and highlight rings so a reflow reuses divs
- * instead of rebuilding them. finish() removed the root that owned those
- * divs but kept the pool, so the SECOND run - Settings' "Replay the tour"
- * and Help's "Take the tour", the only two ways anyone sees it twice -
- * reused elements that were no longer in the document. Nothing was
- * appended to the new scrim, so the replay showed a card floating over a
- * completely undimmed page with no ring on anything.
- *
- * The existing tour test checks the step DATA against the page shell,
- * which is why this went unnoticed: nothing exercised the tour's DOM. It
- * needs a document, and the suite runs under plain Node, so this file
- * stands up the smallest stub the tour actually touches.
- */
+/** Tour spotlight DOM lifecycle, reflow, and replay.
+ * Pooled tiles and rings must attach to the active tour root after reopening. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { App } from "../src/app";
 import { STEPS, Tour } from "../src/ui/tour";

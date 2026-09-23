@@ -448,28 +448,9 @@ function fadedRgb(base: Color, f: number): string {
   return `rgb(${r},${g},${b})`;
 }
 
-/** Draw one decimated trail as a smoothed, colour-banded path.
- *
- * The curve is the standard midpoint quadratic: every retained point is a
- * control point and the path runs through the midpoints between them. Two
- * things make it behave, both of which the previous version got wrong:
- *
- * 1. Colour bands are cut at MIDPOINTS - points that lie exactly on the
- *    curve - so the geometry is identical however many bands there are and
- *    wherever they fall. Cutting at vertices instead made the curve pass
- *    exactly through the boundary vertex while passing through midpoints
- *    everywhere else, so each boundary sat in a slightly different place
- *    than the rest of the line. Worse, bands were cut on RAW indices while
- *    decimation was applied separately, so a band could contain no
- *    retained points at all and drew as a straight chord between two
- *    curved neighbours. Both boundaries move as the ring scrolls, so those
- *    artefacts crawled along the trail every frame - the glitching between
- *    the sharp turns and the smooth curve.
- *
- * 2. Genuine corners are kept. A vertex whose turn exceeds CORNER_COS is
- *    drawn as a corner instead of being rounded off, so a bounce stays a
- *    bounce.
- */
+/** Draw a decimated trail using midpoint quadratics and colour bands.
+ * Cut bands at curve midpoints so boundaries preserve the path geometry.
+ * Turns beyond CORNER_COS remain sharp to show bounces. */
 function appendTrail(paths: Path2D[], m: number, bands: number): void {
   if (m < 2) return;
   if (m === 2) {
@@ -1039,7 +1020,22 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     ctx.textAlign = "center";
     ctx.fillStyle = css(theme.TEXT_DIM);
     for (let i = 0; i < LABEL_NAMES.length; i++) {
-      ctx.fillText(LABEL_NAMES[i], LABEL_X[i], LABEL_Y[i]);
+      const maxWidth = Math.max(0, Math.min(160, areaW - 12));
+      let label = LABEL_NAMES[i];
+      if (ctx.measureText(label).width > maxWidth) {
+        const characters = Array.from(label);
+        let lo = 0, hi = characters.length;
+        while (lo < hi) {
+          const mid = Math.ceil((lo + hi) / 2);
+          if (ctx.measureText(characters.slice(0, mid).join("") + "…").width <= maxWidth) lo = mid;
+          else hi = mid - 1;
+        }
+        label = characters.slice(0, lo).join("") + "…";
+      }
+      const halfWidth = ctx.measureText(label).width / 2;
+      const x = Math.max(halfWidth + 6, Math.min(areaW - halfWidth - 6, LABEL_X[i]));
+      const y = Math.max(12, Math.min(areaH - 6, LABEL_Y[i]));
+      ctx.fillText(label, x, y);
     }
     ctx.textAlign = "left";
   }
@@ -1257,9 +1253,9 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     const com = world.centreOfMass();
     if (com !== null) {
       const [sx, sy] = cam.toScreen(com);
-      ringCircle(ctx, sx, sy, 7, 1, [255, 255, 255]);
-      lineXY(ctx, sx - 9, sy, sx + 9, sy, [255, 255, 255], 1);
-      lineXY(ctx, sx, sy - 9, sx, sy + 9, [255, 255, 255], 1);
+      ringCircle(ctx, sx, sy, 7, 1, theme.TEXT_DIM);
+      lineXY(ctx, sx - 9, sy, sx + 9, sy, theme.TEXT_DIM, 1);
+      lineXY(ctx, sx, sy - 9, sx, sy + 9, theme.TEXT_DIM, 1);
       ctx.fillStyle = css(theme.TEXT_DIM);
       ctx.fillText("COM", sx + 10, sy + 14);
     }

@@ -384,22 +384,30 @@ instead of retaining a partial transaction.
   repeated reset remains meaningful.
 
 Internal history reconstruction uses `restoreSnapshot()`, which preserves
-finite accumulated body and driver angles exactly. Saved and uploaded data use
+finite accumulated body and driver angles exactly and bypasses the collection
+ceilings intended for external input. Internal restores retain UI-created
+collections under the separate history byte budget. Saved and uploaded data use
 the untrusted `restore()` path, which applies import normalization and resource
 limits before the world becomes live.
 
 ### Event-aware playback
 
 The tracker observes bounded transition state after each completed live step.
+`prepareStep()` seeds the current state before the first observed step after
+an untracked interval, so enabling tracking does not discover stale events.
 It records contact begin/end, vertical apex, horizontal reversal, selected-body
 line crossing, string taut/slack, and pulley-stop rows even when auto-pause is
-off and the World tab is open. A selected pause rule stops the shared batch at
-its first matching event, clears the accumulator, and leaves later quanta
+off after the World tab has enabled tracking. Interpolated rows are sorted by
+time and then ID before the oldest rows are trimmed. Body-pair keys are unordered;
+wall keys use a distinct namespace, including when either ID is zero.
+A selected pause rule stops the shared batch at its first matching event
+(the selected particle only for apex), clears the accumulator, and leaves later quanta
 unrun. In Normal mode the app snapshots only the final armed interval: line and
 apex events use interpolated fractions, while contacts and pulley stops use 18
 deterministic bisection re-simulations. The refined world is installed without
 discarding the surrounding graphs, trails, rewind history, selection, or event
-row. Performance mode intentionally pauses at the completed coarse quantum and
+row. Installation truncates rows beyond the refined clock and re-primes the tracker.
+Performance mode intentionally pauses at the completed coarse quantum and
 does not pay this snapshot/re-simulation cost. Rewind removes future rows and
 re-primes transition state from the restored world.
 

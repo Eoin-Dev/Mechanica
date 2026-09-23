@@ -1,16 +1,6 @@
-/** The rewind buffer.
- *
- * A full JSON snapshot per displayed frame cost about five times the
- * physics step it recorded on the densest scenes - almost entirely in
- * `JSON.stringify` rendering thousands of doubles as text. The buffer
- * therefore stores a full snapshot only when the scene's STRUCTURE changes
- * and a flat array of the six dynamic numbers per body otherwise.
- *
- * That is only sound if the structural digest notices every field the
- * delta does not carry. These tests hold it to that: a rewound frame must
- * be indistinguishable from the full snapshot it replaces, whatever the
- * user edited in between.
- */
+/** Rewind reconstruction from structural keyframes and per-body deltas.
+ * Structural changes must invalidate the keyframe; restored frames must
+ * match full snapshots across edits and continued simulation. */
 import { describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body, Wall } from "../src/engine/body";

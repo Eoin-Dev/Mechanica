@@ -1,19 +1,6 @@
-/** Performance mode: robust everywhere, and invisible to saved scenes.
- *
- * The mode has two jobs and this file covers both. The first is to stay
- * strictly out of the scene's own data: the scene keeps the substeps,
- * iterations and integrator it was authored with, and the mode overrides them
- * for the duration of a step and nothing else.
- *
- * The second is the one it exists for - to be unconditionally stable. Springs
- * are position constraints here rather than forces (see engine/perf.ts), so
- * the tests below drive stiffness and damping to the ends of their sliders and
- * past them, on the densest lattices in the library, and assert that nothing
- * moves faster or stretches further than a scene running its authored settings
- * does. Those are regression tests for a real failure: with springs integrated
- * as forces and clamped per spring rather than per node, every soft-body
- * preset in the library reached ~1e7 m/s within three seconds of being played.
- */
+/** Performance-mode solver limits and scene-data isolation.
+ * Exercises dense lattices at extreme stiffness/damping settings and checks
+ * that temporary solver overrides do not alter serialized scene settings. */
 import { describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body, Wall } from "../src/engine/body";
@@ -55,9 +42,8 @@ function stress(w: World, steps: number): { speed: number; ratio: number } {
   return { speed, ratio };
 }
 
-/** A soft-body lattice: the shape that broke the old mode. Every interior
- * particle carries twelve springs, which is the whole point - the per-spring
- * stability clamp it used to rely on is blind to how many meet at a node. */
+/** Dense spring lattice: interior nodes have multiple structural, shear,
+ * and bend springs, exercising combined stiffness at each node. */
 function lattice(cols: number, rows: number, k: number, c: number): World {
   const w = new World();
   w.substeps = 8;

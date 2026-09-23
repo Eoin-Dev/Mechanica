@@ -1,18 +1,6 @@
-/** Every falsifiable claim in every preset description, pinned to its builder.
- *
- * The card text is the teaching material: someone reads "period 2.46 s" and
- * times it against the toolbar clock, or "9 x 7 lattice" and counts. A
- * description that drifts from its builder is worse than no description,
- * because it is believed.
- *
- * This used to be a handful of hand-picked cards inside one grab-bag
- * assertion, which is how "Swinging rope" came to advertise twelve segments
- * while building twenty-four: the audit was per-card and ad hoc, so a card
- * nobody had thought to include was simply never checked. The table below is
- * keyed by preset name and every entry names the phrase it checks, so the
- * coverage test at the bottom can insist that each card carrying a countable
- * claim has an entry - a new preset cannot arrive unaudited.
- */
+/** Check numerical claims in preset descriptions against their builders.
+ * The table names each checked phrase; the coverage assertion requires an
+ * entry for every preset with a countable claim. */
 import { describe, expect, it } from "vitest";
 import { Body } from "../src/engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";

@@ -279,7 +279,14 @@ export class Library {
       }));
       bar.append(mkBtn(ICONS.download, "Download as a .json file", () => {
         const result = snap.loadScene(name);
-        if (result.status === "loaded") snap.downloadScene(result.world, name);
+        if (result.status === "loaded") {
+          try {
+            snap.downloadScene(result.world, name);
+          } catch (exc) {
+            app.toast(exc instanceof snap.SceneSaveError ? exc.message
+                                                         : "Could not download the scene");
+          }
+        }
         else if (result.status === "too-large" || result.status === "storage-error") {
           app.toast(result.message);
         } else {

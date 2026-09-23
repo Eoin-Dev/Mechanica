@@ -1,10 +1,5 @@
-/** Resting-contact performance: bodies held in place by contacts must not
- * trigger the close-encounter time-slicing machinery (their acceleration is
- * cancelled by contact impulses, not free-flight motion). A resting
- * mutual-gravity cluster used to cost ~50x more per step than the same
- * bodies spread apart; these tests pin down the fix without giving up the
- * adaptive accuracy that free-flying encounters rely on.
- */
+/** Contact-supported bodies must not trigger free-flight encounter slicing.
+ * Tests bound resting-cluster work while retaining refinement for encounters. */
 import { describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";

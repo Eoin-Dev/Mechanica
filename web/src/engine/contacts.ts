@@ -40,7 +40,7 @@ export class Contact {
     public nx: number,
     public ny: number,
     public impulse: number,
-    /** Stable diagnostic ownership. A negative/missing second body is a wall. */
+    /** Stable diagnostic ownership; wall identity is independent of body IDs. */
     public bodyAId: number = -1,
     public bodyBId: number | null = null,
     public wallId: number | null = null,
@@ -124,9 +124,9 @@ export function clearOfWalls(walls: Wall[], px: number, py: number,
         // dead centre on the segment: the surface normal is ambiguous
         const sx = w.b.x - w.a.x;
         const sy = w.b.y - w.a.y;
-        const len = Math.hypot(sx, sy) || 1.0;
-        dx = -sy / len;
-        dy = sx / len;
+        const len = Math.hypot(sx, sy);
+        dx = len > 0 ? -sy / len : 0;
+        dy = len > 0 ? sx / len : 1;
         d = 1.0;
       }
       if (prev !== undefined) {
@@ -229,6 +229,7 @@ function pairKey(idA: number, idB: number): string {
 class Manifold {
   a: Body;
   b: Body | null;
+  wallId: number | null = null;
   nx: number;
   ny: number;
   px: number;
@@ -968,7 +969,7 @@ function wallManifold(body: Body, w: Wall, ax: number, ay: number,
     // centre exactly on the segment: push out along the normal
     const inv = segLen2 > 0 ? 1.0 / Math.sqrt(segLen2) : 1.0;
     nx = -sy * inv;
-    ny = sx * inv;
+    ny = segLen2 > 0 ? sx * inv : 1;
   } else {
     nx = dx / d;
     ny = dy / d;
@@ -982,6 +983,7 @@ function wallManifold(body: Body, w: Wall, ax: number, ay: number,
   const m = new Manifold(body, null, -nx, -ny, penetration, cpx, cpy, e,
                          makeKey ? mu : 0.0, makeKey);
   if (makeKey) m.key = `${body.id},${-w.id}`;
+  m.wallId = w.id;
   out.push(m);
 }
 
@@ -1140,7 +1142,7 @@ export function solveContacts(bodies: Body[], walls: Wall[],
     if (contact === undefined) {
       contact = new Contact(m.px, m.py, m.nx, m.ny, m.pn + m.pnBounce,
         m.a.id, m.b?.id ?? null,
-        m.b === null && m.key !== "" ? -Number(m.key.split(",")[1]) : null,
+        m.wallId,
         m.pt);
       contactPool.push(contact);
     } else {
@@ -1151,8 +1153,7 @@ export function solveContacts(bodies: Body[], walls: Wall[],
       contact.impulse = m.pn + m.pnBounce;
       contact.bodyAId = m.a.id;
       contact.bodyBId = m.b?.id ?? null;
-      contact.wallId = m.b === null && m.key !== ""
-        ? -Number(m.key.split(",")[1]) : null;
+      contact.wallId = m.wallId;
       contact.tangentImpulse = m.pt;
     }
     contacts.push(contact);

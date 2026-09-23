@@ -477,7 +477,7 @@ export class Inspector implements Panel {
       obj.name = s.trim() || obj.name;
       this.commit();
       return true;
-    }, "name", "Name"));
+    }, "name", "Name", 200));
   }
 
   private buildSingleBody(b: Body): void {
@@ -1093,10 +1093,15 @@ export class Inspector implements Panel {
   private buildRodAttachmentsList(rod: DistanceLink): void {
     this.sub("Attached to rod");
     const output = el("div", { class: "rod-attachment-list" });
+    let signature = "";
     this.add({ root: output, refresh: () => {
       const attached = this.app.world.bodies.filter((body) =>
         body.rodAttachmentId === rod.id).sort((a, b) =>
-          a.rodAttachmentT - b.rodAttachmentT || a.id - b.id);
+        a.rodAttachmentT - b.rodAttachmentT || a.id - b.id);
+      const next = JSON.stringify(attached.map((body) =>
+        [body.id, body.name, body.isPivot, body.rodAttachmentT * rod.length]));
+      if (signature === next) return;
+      signature = next;
       if (attached.length === 0) {
         output.replaceChildren(el("div", { class: "dim", text:
           "Nothing attached. Place an anchor or particle close to the rod." }));
@@ -1299,7 +1304,7 @@ export class Inspector implements Panel {
         field.name = s.trim() || field.name;
         this.commit();
         return true;
-      }, "Field name", "Force field name"));
+      }, "Field name", "Force field name", 80));
       nameEd.root.style.flex = "1";
       nameRow.append(chk.root, nameEd.root);
       this.body.append(nameRow);

@@ -5,7 +5,7 @@
  * also be exported as .json downloads / imported from files, using the
  * exact same JSON format - desktop scene files load unchanged.
  */
-import { SceneLimitError, World, WorldDict } from "../engine/world";
+import { assertSceneCollectionLimits, SceneLimitError, World, WorldDict } from "../engine/world";
 import { PulleyLink } from "../engine/links";
 
 const SCENE_PREFIX = "mechanica.scene.";
@@ -21,13 +21,16 @@ export function restore(snap: string): World {
   return World.fromDict(JSON.parse(snap) as WorldDict);
 }
 
-/** Rebuild a snapshot produced by this running application without applying
- * import normalization. Runtime angles deliberately accumulate beyond one
+/** Rebuild an internal snapshot preserving runtime angles and collection sizes.
+ * Other reconstruction guards still apply. Runtime angles accumulate beyond one
  * turn, so undo, rewind, reset, and time-jump copies must preserve them
  * exactly. Saved and uploaded scenes continue through {@link restore}, the
  * untrusted-input boundary. */
 export function restoreSnapshot(snap: string): World {
-  return World.fromDict(JSON.parse(snap) as WorldDict, true);
+  // Import budgets protect file loading. Editing/duplication can legitimately
+  // grow a live world beyond them; its own bounded undo/rewind records must
+  // still be restorable. Saved/uploaded data always goes through restore().
+  return World.fromDict(JSON.parse(snap) as WorldDict, true, false);
 }
 
 // ------------------------------------------------------------ rewind buffer
@@ -574,8 +577,9 @@ function restoreKeys(entries: ReadonlyArray<readonly [string, string | null]>): 
  * did not happen and the user was told it had. */
 export function saveScene(world: World, name: string): string {
   const safe = safeName(name);
+  const state = serializableScene(world);
   try {
-    localStorage.setItem(SCENE_PREFIX + safe, snapshot(world));
+    localStorage.setItem(SCENE_PREFIX + safe, state);
   } catch (exc) {
     throw storageError(exc, "save");
   }
@@ -709,9 +713,25 @@ export function setSceneDescription(name: string, description: string): void {
 }
 
 // -------------------------------------------------------- file import/export
+/** Refuse a save/export that the external loader could not open. History has
+ * its own larger byte budget and does not pass through this boundary. */
+function serializableScene(world: World, pretty = false): string {
+  try {
+    assertSceneCollectionLimits(world);
+  } catch (exc) {
+    if (exc instanceof SceneLimitError) throw new SceneSaveError(sceneLimitMessage(exc));
+    throw exc;
+  }
+  const state = JSON.stringify(world.toDict(), null, pretty ? 1 : undefined);
+  if (new Blob([state]).size > MAX_SCENE_FILE_BYTES) {
+    throw new SceneSaveError("Scene exceeds the 10 MiB file limit");
+  }
+  return state;
+}
+
 /** Offer the scene as a .json download (same format as the desktop app). */
 export function downloadScene(world: World, name: string): void {
-  const blob = new Blob([JSON.stringify(world.toDict(), null, 1)],
+  const blob = new Blob([serializableScene(world, true)],
                         { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

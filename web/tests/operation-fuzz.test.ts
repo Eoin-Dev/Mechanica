@@ -1,20 +1,7 @@
 /** @vitest-environment jsdom */
-/** Random sequences of real user operations, against invariants that must
- * hold after every single one.
- *
- * Every other test in this suite asks "does this specific thing work?" and
- * so can only cover situations someone thought to write down. Interaction
- * bugs do not live there - they live in orderings nobody considered: delete
- * the body you are dragging, undo past a scene load, rewind while a link is
- * half-drawn, switch tools mid-gesture, cull a body that is selected.
- *
- * So this drives the app the way a person mashing buttons would, from a
- * fixed seed, and after EVERY operation asserts the things that must never
- * stop being true - no NaN anywhere, no link pointing at a body that is
- * gone, no selection holding a deleted object, no id collisions, nothing
- * unbounded. A failure prints the exact operation sequence, which is
- * reproducible because the seed is.
- */
+/** Seeded sequences of user operations.
+ * Each operation checks finite state, valid links and selections, unique IDs,
+ * and bounded history. Failures include the reproducible operation sequence. */
 import { describe, expect, it } from "vitest";
 import { App } from "../src/app";
 

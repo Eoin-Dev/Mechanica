@@ -1,19 +1,6 @@
-/** Cost stability of the in-substep close-encounter slicer.
- *
- * The slicer is the only part of the pipeline whose cost is chosen by the
- * simulation STATE rather than by the scene's size, so it is also the only
- * part that can make an ordinary scene suddenly a hundred times more
- * expensive. These tests pin the two properties that keeps it honest:
- *
- *   - what it costs depends on whether the acceleration is genuinely
- *     changing fast, not on whether some body happens to be slow. A single
- *     particle dropped into a heavy star used to pin the slicer at its
- *     refinement floor forever, taking the whole scene from 12 to ~1800
- *     force evaluations per step (0.08 ms -> 15 ms);
- *   - the cost is the same whichever integrator is selected. Switching
- *     integrator and back used to "fix" the slowdown, purely because the
- *     perturbed trajectory fell out of the pathological state.
- */
+/** Close-encounter slicing cost across integrators.
+ * Refinement must follow acceleration changes without excessive work for
+ * a slow particle falling into a heavy body. */
 import { describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";

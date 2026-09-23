@@ -519,6 +519,10 @@ profiles use an x-sorted mover sweep when the body-wall product is large.
 
 The manifold normal points from body A toward body B. For a wall, B is null
 and the normal points from the body into the infinite-mass side.
+Wall identity is carried explicitly through manifold and diagnostic records,
+including ID zero and maximum Performance mode where cache keys are omitted.
+A body exactly at the centre of a zero-length capsule receives a deterministic
+unit separation direction; penetration correction remains position-only.
 
 ### Impact and resting solve
 

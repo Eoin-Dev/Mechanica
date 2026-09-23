@@ -1,22 +1,6 @@
-/** How exact the two-phase rod solver actually is, and that it converges.
- *
- * Rods are solved twice per substep: an analytic tension at the
- * acceleration level (warm-started Gauss-Seidel, ROD_FORCE_PASSES passes)
- * and then an XPBD position pass that removes the residual. The two are
- * deliberately redundant, and that redundancy is why neither was pinned:
- * halving the force solver's passes, or defeating the position pass's
- * convergence exit so it runs a single iteration, both left the entire
- * suite green. Each covers for the other well enough that no EXISTING
- * scene visibly broke - the pendulum tests still passed.
- *
- * What separates a healthy solver from a degraded one is a demanding
- * configuration: a long chain of heavy links released horizontally, which
- * is the maximum-tension case. There, both degradations show up as 2x to
- * 15x worse length error and 2x to 4x worse energy drift.
- *
- * Contacts are switched off in these chains so the numbers describe the rod
- * solver alone rather than the contact solver's handling of neighbours.
- */
+/** Rod length error and energy drift under demanding chain loads.
+ * Horizontal heavy chains exercise the acceleration-level tension solve and
+ * XPBD correction. Contacts are disabled to isolate rod convergence. */
 import { describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";

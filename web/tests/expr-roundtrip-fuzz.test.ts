@@ -1,30 +1,6 @@
-/** Property-based cover for the formula system's two round trips.
- *
- * A force field's text is converted between three representations, and the
- * user can move between them freely:
- *
- *   source text  <->  AST  <->  LaTeX (the typeset editor)
- *
- * Every one of those conversions must preserve MEANING, not merely parse.
- * The existing tests check a few dozen hand-written examples, which is the
- * right way to pin the notation choices (that `x^2` typesets as a
- * superscript, that `//` becomes a floor bracket) but a poor way to find
- * the cases nobody thought of: a precedence that survives one nesting and
- * not two, a unary minus that binds differently after a round trip, a
- * chained comparison that loses a link.
- *
- * So this generates expressions instead of listing them - random but
- * DETERMINISTIC, so a failure is reproducible and CI cannot flake - and
- * asserts the only property that actually matters: the round-tripped
- * expression computes the same numbers as the original, at several sample
- * points chosen to include the awkward ones (t = 0, r = 0, the origin).
- *
- * The generator covers every construct the language has: all seven
- * variables, all four constants, every arithmetic operator including
- * Python's `//` and `%`, unary minus, every whitelisted function, chained
- * comparisons, `not`, `and`/`or`, and `a if c else b` - nested to a depth
- * that produces genuinely awkward groupings.
- */
+/** Seeded formula round trips through source, AST, and LaTeX.
+ * Generated nested expressions must preserve evaluation at several sample
+ * points, including zero-valued variables and the origin. */
 import { describe, expect, it } from "vitest";
 import { Env, compileExpr, parseSource } from "../src/core/expr";
 import { astToSource, isMathRenderable, latexToSource,

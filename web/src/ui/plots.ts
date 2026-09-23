@@ -167,23 +167,9 @@ export class TimeSeries {
     this.rev++;
   }
 
-  /** Drop samples older than the retention window.
-   *
-   * Retain the last historyS seconds (the scroll-back buffer) and no more,
-   * so an all-day run cannot grow memory without bound; maxlen is a hard
-   * safety cap on top.
-   *
-   * Exact AND cheap. Expiring a sample only advances `head`, so the
-   * retained span is precisely historyS from the first add onward - the
-   * span is a user-visible guarantee (it is exactly how far back the graph
-   * scrolls), so it is not something to trade away. Reclaiming the memory
-   * is the expensive half, and that is the part deferred: once the dead
-   * prefix is worth collecting, one splice drops the lot.
-   *
-   * The previous version shifted every element of five arrays on every
-   * add. Past the first two minutes a sample expires on essentially every
-   * add, so that was ~50k element moves per sample for the rest of the
-   * run. */
+  /** Expire samples by advancing head and compact in batches.
+   * historyS bounds the retained time range, maxlen caps sample count,
+   * and at least two samples are retained for drawing when available. */
   private evict(now: number): void {
     const cutoff = now - this.historyS;
     const n = this.ts.length;
@@ -209,25 +195,36 @@ export class TimeSeries {
     return false;
   }
 
-  private drawLegend(ctx: CanvasRenderingContext2D, w: number): void {
+  private drawLegend(ctx: CanvasRenderingContext2D, w: number, titleWidth: number): number {
     this.legendHits = [];
     ctx.font = "11px system-ui, sans-serif";
-    let lx = w - 10;
-    for (let ci = this.channels.length - 1; ci >= 0; ci--) {
-      const c = this.channels[ci];
+    const labels = this.channels.map((c) => {
       const d = this.data.get(c)!;
-      const val = this.count > 0 ? d[d.length - 1] : 0.0;
+      return `${c}: ${fmt(this.count > 0 ? d[d.length - 1] : 0)}`;
+    });
+    const widths = labels.map(label => ctx.measureText(label).width + 24);
+    const total = widths.reduce((sum, width) => sum + width, 0);
+    const inline = titleWidth + total + 30 <= w;
+    let lx = inline ? w - total - 10 : 10;
+    let y = inline ? 14 : 34;
+    for (let ci = 0; ci < this.channels.length; ci++) {
+      const c = this.channels[ci];
       const off = this.hidden.has(c);
-      const lbl = `${c}: ${fmt(val)}`;
-      const tw = ctx.measureText(lbl).width;
-      lx -= tw + 18;
+      const lbl = labels[ci];
+      const width = widths[ci];
+      if (!inline && lx > 10 && lx + width > w - 10) {
+        lx = 10;
+        y += 22;
+      }
       const col = seriesColor(ci);
       ctx.fillStyle = css(off ? theme.TEXT_FAINT : col);
-      ctx.fillRect(lx, 9, 10, 3);
+      ctx.fillRect(lx, y - 5, 10, 3);
       ctx.fillStyle = css(off ? theme.TEXT_FAINT : theme.TEXT_DIM);
-      ctx.fillText(lbl, lx + 14, 14);
-      this.legendHits.push({ x: lx - 4, y: 2, w: tw + 20, h: 16, channel: c });
+      ctx.fillText(lbl, lx + 14, y);
+      this.legendHits.push({ x: lx - 4, y: y - 12, w: width, h: 20, channel: c });
+      lx += width;
     }
+    return y + 12;
   }
 
   /** First LIVE index with t >= tv (binary search; times ascending). */
@@ -248,8 +245,7 @@ export class TimeSeries {
     ctx.font = "600 12px system-ui, sans-serif";
     ctx.fillStyle = css(theme.TEXT_DIM);
     ctx.fillText(title, 10, 15);
-    ctx.font = "11px system-ui, sans-serif";
-    this.drawLegend(ctx, w);
+    const plotTop = this.drawLegend(ctx, w, ctx.measureText(title).width);
     if (this.count === 0) {
       this.easing = false;
       ctx.fillStyle = css(theme.TEXT_FAINT);
@@ -268,7 +264,7 @@ export class TimeSeries {
       ctx.textAlign = "left";
       return;
     }
-    const plot = { x: 8, y: 26, w: w - 16, h: h - 42 };
+    const plot = { x: 8, y: plotTop, w: w - 16, h: h - plotTop - 16 };
     if (plot.w < 20 || plot.h < 16) {
       this.easing = false;
       return;

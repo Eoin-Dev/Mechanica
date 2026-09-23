@@ -1,25 +1,6 @@
-/** Persisted preferences are validated before anything reads them.
- *
- * Settings are the most dangerous thing this app stores. A scene is loaded
- * on demand and a bad one can simply be abandoned; settings are read in the
- * App constructor on EVERY load, before a single pixel is drawn. So a value
- * this build cannot use is not a bad session - it is a blank page on every
- * reload, with no route back from inside the app, because the value that
- * causes it is exactly the value that survives the reload.
- *
- * Two fields could do that outright before this guard existed:
- *
- *   - `theme`: an unknown name indexed the palette table to `undefined` and
- *     threw on the first field read, inside `applyUiSettings`. Renaming or
- *     removing a theme in a future version is enough to cause it - no
- *     corruption or attacker required.
- *   - `custom_accents`: anything not iterable threw when the settings panel
- *     looped over it to build the swatches.
- *
- * `font_scale` is the quieter version of the same problem: it multiplies
- * every size in the stylesheet, so an out-of-range value does not crash but
- * does make the app unreadable - and persists, so reloading cannot undo it.
- */
+/** Persisted settings validation before app construction.
+ * Invalid themes and accent collections must not prevent startup;
+ * font and layout values must remain within their supported ranges. */
 import { describe, expect, it } from "vitest";
 import { sanitizeSettings } from "../src/app";
 import { DOCK_H_MAX, DOCK_H_MIN, INSPECTOR_W_MAX,

@@ -210,9 +210,11 @@ export class FormulaGuide {
         ["1.5,  0.02,  1e-3", "Numbers, scientific notation included"],
       ]),
       heading("When something is wrong"),
-      para("A formula that does not parse - or that evaluates to NaN, like " +
-           "sqrt of a negative - disables its field, and the reason appears " +
-           "in red underneath. The text stays so you can fix it in place."),
+      para("A formula that does not parse leaves its field inactive, with " +
+           "the reason in red underneath. The text stays so you can fix it. " +
+           "If a valid formula reaches an undefined value, like sqrt of a " +
+           "negative number, that field skips the affected particle for that " +
+           "evaluation; it keeps applying at other valid positions and times."),
       example("-9*y*exp(-r/5)/(r+0.15) - 3*x/(r+0.3)",
               "Fx of the Cyclone preset: a swirl that fades with distance " +
               "plus an inward pull. Every piece is explained in this guide."));
@@ -221,8 +223,9 @@ export class FormulaGuide {
   private buildFunctions(): void {
     this.body.append(
       para("All angles are in radians (tau is one full turn). A function " +
-           "outside its domain - sqrt of a negative, log of zero - gives " +
-           "NaN, which shows as an error under the formula."),
+           "outside its domain - sqrt of a negative, log of zero - produces " +
+           "a non-finite value. The field skips that particle for that " +
+           "evaluation."),
       heading("Trigonometry"),
       refTable([
         ["sin(a)  cos(a)  tan(a)", "The classics"],

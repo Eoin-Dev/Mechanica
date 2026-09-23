@@ -1,12 +1,5 @@
-/** The global keyboard map.
- *
- * Lifted out of main.ts so it can be exercised directly. It was previously a
- * closure inside the entry point, reachable only by constructing the entire
- * app against a real DOM, so nothing tested it - and a regression that made
- * Space unusable on every focused button in the app went unnoticed by the
- * whole suite. What it needs from the app is small and stated in
- * `ShortcutHost`, so the handler can be driven with a stub.
- */
+/** Keyboard shortcuts and focused-control/modal precedence.
+ * ShortcutHost supplies the app and overlay operations needed by the handler. */
 import type { App, GraphMode } from "../app";
 import { TOOL_KEYS } from "../interact/tools";
 
@@ -72,6 +65,25 @@ export function handleShortcut(e: KeyboardEvent, host: ShortcutHost): boolean {
   if (ownsKey(e.target, e.key)) return false;
 
   const key = e.key.toLowerCase();
+  // Modal ownership includes modifier edits: the scene behind a dialog must
+  // not be reset, duplicated or replaced by undo while the user reads it.
+  if (host.tour.visible || host.overlays.some((o) => o.visible)) {
+    if ((e.ctrlKey || e.metaKey) && ["z", "y", "d", "r", "v", "s"].includes(key)) {
+      // Suppress the corresponding browser actions as well (reload/save/
+      // bookmark), while native copying and focused text edits remain usable.
+      e.preventDefault();
+      return true;
+    }
+    if (host.tour.visible) return false;
+    if (e.key === "Escape" || (!(e.ctrlKey || e.metaKey || e.altKey) &&
+        (key === "l" || e.key === "F1"))) {
+      for (const o of host.overlays) o.close();
+      e.preventDefault();
+      return true;
+    }
+    return false;
+  }
+  if (e.altKey || e.isComposing) return false;
   if (e.ctrlKey || e.metaKey) {
     if (key === "z") {
       if (e.shiftKey) app.redo();
@@ -93,20 +105,6 @@ export function handleShortcut(e: KeyboardEvent, host: ShortcutHost): boolean {
     }
     e.preventDefault();
     return true;
-  }
-
-  // the tour owns the keyboard while it is up (it handles Esc and the
-  // arrows itself, in the capture phase); nothing else should also fire
-  if (host.tour.visible) return false;
-
-  // overlays swallow everything except their own close keys
-  if (host.overlays.some((o) => o.visible)) {
-    if (e.key === "Escape" || key === "l" || e.key === "F1") {
-      for (const o of host.overlays) o.close();
-      e.preventDefault();
-      return true;
-    }
-    return false;
   }
 
   switch (e.key) {

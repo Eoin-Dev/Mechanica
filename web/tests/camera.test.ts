@@ -1,14 +1,5 @@
-/** The world <-> screen transform.
- *
- * This had no tests whatsoever, which a mutation run made obvious: moving
- * the screen centre in `toWorld` from 0.5 to 0.4 of the canvas width - so
- * every click lands on a different world point than the one drawn under the
- * cursor - left the entire suite green.
- *
- * Every pick, drag, box-select, zoom-to-cursor and trail vertex goes through
- * these four functions, so an error here is not subtle in USE even though it
- * is invisible to a physics test: objects stop being where they look.
- */
+/** World/screen transforms, panning, and cursor-anchored zoom.
+ * Picking and drawing must map a point to the same screen position. */
 import { describe, expect, it } from "vitest";
 import { Camera, MAX_ZOOM, MIN_ZOOM, formatG, niceNumber } from "../src/render/camera";
 import { Vec2 } from "../src/core/vec";

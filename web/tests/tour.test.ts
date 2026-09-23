@@ -1,14 +1,6 @@
-/** The first-run tour points at real elements.
- *
- * A step whose target no longer exists is dropped silently at runtime -
- * that is the right behaviour on a narrow viewport where a panel is
- * genuinely hidden, but it also means renaming an id in index.html would
- * quietly gut the tour with nothing failing anywhere. These check the
- * selectors against the actual shell.
- */
-// `?raw` rather than node:fs so the suite needs no Node type packages -
-// vite/client already types this, and the project keeps its dependency
-// list to vite, vitest, typescript and mathlive.
+/** Tour targets must match the application shell.
+ * Hidden responsive targets may be skipped; missing shell IDs are errors. */
+// Use Vite raw imports to compare tour selectors with the HTML shell.
 import html from "../index.html?raw";
 import panelsSrc from "../src/ui/panels.ts?raw";
 import inspectorSrc from "../src/ui/inspector.ts?raw";

@@ -1,16 +1,6 @@
-/** Every number read off a scene file is guarded.
- *
- * Bodies and walls have been checked since the port; links, world settings
- * and colours were not, and each gap had the same shape: one malformed
- * field became a NaN, the NaN reached the solver, and World.sanitize froze
- * every body in the scene and reported "hit a numerical blow-up - check
- * extreme forces or fields". The scene was dead on load and the message
- * blamed the user's physics for it.
- *
- * A guard is only worth having if it is exercised, so each case here loads
- * a deliberately broken scene and then STEPS it: the assertion is that the
- * simulation survives, not merely that a field holds a plausible number.
- */
+/** Malformed scene fields must resolve to usable defaults.
+ * Tests step restored worlds as well as checking individual values, so
+ * validation must protect the solver from non-finite state. */
 import { describe, expect, it } from "vitest";
 import { boolOr, colorOr, intIn, numIn, numOr } from "../src/core/guards";
 import { Vec2 } from "../src/core/vec";
@@ -19,6 +9,27 @@ import { DistanceLink, SpringLink } from "../src/engine/links";
 import { World, WorldDict } from "../src/engine/world";
 
 const DT = 1 / 120;
+
+describe("internal rod references at the scene boundary", () => {
+  it("drops links to orphaned hidden endpoints before the first step", () => {
+    const world = World.fromDict({
+      bodies: [{ id: 1, is_rod_endpoint: true }, { id: 2, pos: [1, 0] }],
+      links: [{ type: "spring", a: 1, b: 2 }],
+    } as never);
+    expect(world.bodies.map(body => body.id)).toEqual([2]);
+    expect(world.links).toEqual([]);
+    expect(World.fromDict(world.toDict()).toDict()).toEqual(world.toDict());
+  });
+
+  it("releases a body attached to a rod of which it is already an endpoint", () => {
+    const world = World.fromDict({
+      bodies: [{ id: 1, rod_id: 7 }, { id: 2, pos: [1, 0] }],
+      links: [{ type: "rod", id: 7, a: 1, b: 2 }],
+    } as never);
+    expect(world.bodies[0].rodAttachmentId).toBeNull();
+    expect(world.links).toHaveLength(1);
+  });
+});
 
 /** Two bodies a metre apart, plus whatever the caller wants to break. */
 function scene(extra: Partial<WorldDict>): World {

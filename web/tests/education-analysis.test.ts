@@ -3,7 +3,61 @@ import { Vec2 } from "../src/core/vec";
 import { Body, Wall } from "../src/engine/body";
 import { PULLEY_RADIUS, PulleyLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
-import { analysePulley, forceLedger, projectForce, slopeBasis } from "../src/education/analysis";
+import { analysePulley, EventTracker, forceLedger, projectForce, slopeBasis } from "../src/education/analysis";
+import { Contact } from "../src/engine/contacts";
+
+describe("playback event identity and chronology", () => {
+  it("sorts interpolated events by time and removes every future row on rewind", () => {
+    const world = new World();
+    const late = new Body(new Vec2());
+    const early = new Body(new Vec2());
+    late.vel.y = 0.8;
+    early.vel.y = 0.2;
+    world.bodies.push(late, early);
+    const tracker = new EventTracker();
+    tracker.prime(world);
+    world.time = 1;
+    late.vel.y = -0.2;
+    early.vel.y = -0.8;
+    const added = tracker.observe(world);
+    expect(added.map(event => event.time)).toEqual([0.2, 0.8]);
+    tracker.rewindTo(0.5, world);
+    expect(tracker.events.map(event => event.bodyIds)).toEqual([[early.id]]);
+  });
+
+  it("does not invent contact transitions when body detection order changes", () => {
+    const world = new World();
+    const tracker = new EventTracker();
+    world.contacts = [new Contact(0, 0, 1, 0, 1, 10, 20)];
+    tracker.prime(world);
+    world.contacts = [new Contact(0, 0, -1, 0, 1, 20, 10)];
+    world.time = 1;
+    expect(tracker.observe(world)).toEqual([]);
+  });
+
+  it("distinguishes wall zero from body zero and reports only actual body IDs", () => {
+    const world = new World();
+    const body = new Body(new Vec2());
+    body.id = 1;
+    body.name = "Particle";
+    const zero = new Body(new Vec2());
+    zero.id = 0;
+    zero.name = "Body zero";
+    const wall = new Wall(new Vec2(), new Vec2(1, 0));
+    wall.id = 0;
+    wall.name = "Wall zero";
+    world.bodies.push(body, zero);
+    world.walls.push(wall);
+    const tracker = new EventTracker();
+    tracker.prime(world);
+    world.time = 1;
+    world.contacts = [new Contact(0, 0, 1, 0, 1, 1, 0),
+      new Contact(0, 0, 0, 1, 1, 1, null, 0)];
+    const events = tracker.observe(world);
+    expect(events).toHaveLength(2);
+    expect(events.find(event => event.value.includes("Wall zero"))?.bodyIds).toEqual([1]);
+  });
+});
 
 describe("education analysis", () => {
   it("decomposes named forces and closes exactly to the realised resultant", () => {

@@ -1,23 +1,8 @@
-/** Typeset formula editor for force fields, backed by MathLive.
- *
- * Presents a formula as real math — typing ^ jumps into a superscript,
- * / builds a fraction, sqrt draws a radical — while the engine keeps
- * seeing plain source text: the widget renders `get()` through
- * sourceToLatex and converts the user's LaTeX back with latexToSource on
- * commit (Enter or blur), exactly mirroring textEdit's contract.
- *
- * MathLive (~200 KB) is loaded on demand the first time a math row is
- * built, so it never weighs on the initial page load; until it arrives
- * the row shows a plain text input that is fully functional. Fonts come
- * through the bundled stylesheet, so nothing is fetched at runtime.
- *
- * Editing rules that keep the widget honest:
- *  - the field is never rewritten while focused or showing a conversion
- *    error, so a formula cannot change under the caret;
- *  - committing unchanged content is a no-op (no undo spam, no
- *    re-normalization);
- *  - Escape restores the stored formula, like every other control.
- */
+/** Typeset force-field editor backed by a lazy MathLive import.
+ * sourceToLatex renders stored source; latexToSource converts edits on commit.
+ * A text input remains usable while MathLive loads or if the import fails.
+ * Focused or invalid content is retained, unchanged commits are no-ops,
+ * and Escape restores the stored formula. */
 import { latexToSource, sourceToLatex } from "../core/mathfmt";
 import { Control, el, textEdit } from "./dom";
 
@@ -123,6 +108,7 @@ export function mathEdit(get: () => string, commit: (s: string) => boolean,
     };
 
     const revert = (): void => {
+      focused = false;
       errored = false;
       mf.classList.remove("error");
       errText.hidden = true;
@@ -147,9 +133,12 @@ export function mathEdit(get: () => string, commit: (s: string) => boolean,
       } else if (e.key === "Escape") {
         e.preventDefault();
         revert();
+      } else {
+        return;
       }
-      e.stopPropagation(); // keep global shortcuts from firing while typing
-    });
+      e.stopPropagation();
+    }, { capture: true }); // own commit/cancel before MathLive's inner handler
+    mf.addEventListener("keydown", (e) => e.stopPropagation());
 
     wrap.replaceChildren(mf, errText);
     // options only work on a mounted field (the getters throw otherwise)

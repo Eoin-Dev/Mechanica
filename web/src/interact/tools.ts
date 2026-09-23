@@ -19,7 +19,7 @@
  *   eraser  - click or scrub across objects to delete them in one gesture.
  *
  * Touch: one finger drives the active tool exactly like the mouse; two
- * fingers pinch-zoom and pan (something the desktop app never had).
+ * fingers pinch-zoom and pan.
  */
 import { nameTable } from "../core/expr";
 import { Vec2 } from "../core/vec";
@@ -234,7 +234,7 @@ export class CanvasController {
 
   // ------------------------------------------------------------------ helpers
   setTool(tool: Tool): void {
-    this.cancelPending();
+    this.finishInterruptedGesture();
     this.tool = tool;
     this.rubber = null;
     this.app.invalidateCanvas();
@@ -721,6 +721,16 @@ export class CanvasController {
     this.app.invalidateCanvas();
   }
 
+  /** Keep completed edits undoable, but discard unfinished construction and
+   * pointer modes so later hover/release events cannot resume the gesture. */
+  private finishInterruptedGesture(): void {
+    const moved = this.dragMoved || this.eraseChanged;
+    this.cancelPending();
+    this.resetInteraction();
+    if (moved) this.app.commitEdit();
+    this.dragMoved = false;
+  }
+
   attach(canvas: HTMLCanvasElement): void {
     // The page context menu must never open over the app: Chrome's menu
     // starts with Back/Forward, so a stray right-click could navigate the
@@ -731,14 +741,7 @@ export class CanvasController {
     });
     // a fullscreen toggle or focus loss can swallow the matching pointerup,
     // which would otherwise leave bodies stuck "held"
-    const abortWindowGesture = (): void => {
-      const moved = this.dragMoved || this.eraseChanged;
-      this.cancelPending();
-      this.resetInteraction();
-      if (moved) this.app.commitEdit();
-      this.dragMoved = false;
-      this.app.invalidateCanvas();
-    };
+    const abortWindowGesture = (): void => this.finishInterruptedGesture();
     window.addEventListener("blur", abortWindowGesture);
     document.addEventListener("fullscreenchange", abortWindowGesture);
 
@@ -759,9 +762,13 @@ export class CanvasController {
         if (this.pointers.size === 2) {
           // second finger: cancel the one-finger gesture, start pinching
           const moved = this.dragMoved || this.eraseChanged;
+          this.cancelPending();
           this.abortDrag();
           if (moved) this.app.commitEdit();
           this.dragMoved = false;
+          this.erasing = false;
+          this.eraseChanged = false;
+          this.eraseLast = null;
           this.rubber = null;
           this.wallStart = null;
           this.panning = false;
@@ -842,17 +849,7 @@ export class CanvasController {
       this.release(this.mouse);
     };
     canvas.addEventListener("pointerup", finish);
-    canvas.addEventListener("pointercancel", (e) => {
-      this.app.invalidateCanvas();
-      this.pointers.delete(e.pointerId);
-      const moved = this.dragMoved || this.eraseChanged;
-      this.abortDrag();
-      if (moved) this.app.commitEdit();
-      this.dragMoved = false;
-      this.rubber = null;
-      this.panning = false;
-      this.pinchDist = 0;
-    });
+    canvas.addEventListener("pointercancel", abortWindowGesture);
 
     canvas.addEventListener("wheel", (e) => {
       // Modified wheel gestures are reserved and suppressed at document

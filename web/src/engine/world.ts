@@ -75,6 +75,20 @@ export class SceneLimitError extends Error {
   }
 }
 
+/** Check collection budgets without constructing objects or consuming IDs. */
+export function assertSceneCollectionLimits(data: Partial<Record<SceneCollection, unknown>>): void {
+  const limits: Record<SceneCollection, number> = {
+    bodies: SCENE_MAX_BODIES, walls: SCENE_MAX_WALLS, links: SCENE_MAX_LINKS,
+    fields: SCENE_MAX_FIELDS, drivers: SCENE_MAX_DRIVERS,
+  };
+  for (const collection of Object.keys(limits) as SceneCollection[]) {
+    const value = data[collection];
+    if (Array.isArray(value) && value.length > limits[collection]) {
+      throw new SceneLimitError(collection, limits[collection], value.length);
+    }
+  }
+}
+
 // Gauss-Seidel passes for the acceleration-level rod tension solve. Warm
 // starting makes a handful of passes enough even for long chains.
 const ROD_FORCE_PASSES = 4;
@@ -2741,23 +2755,19 @@ export class World {
    * file, into a click handler where it surfaced as nothing happening.
    */
   static fromDict(data: Partial<WorldDict> | null | undefined,
-                  preserveAngles = false): World {
+                  preserveAngles = false, enforceCollectionLimits = true): World {
     const w = new World();
     const d: Partial<WorldDict> =
       typeof data === "object" && data !== null ? data : {};
-    const capped = <T>(value: unknown, collection: SceneCollection, limit: number): T[] => {
-      const items = arrayOr<T>(value);
-      if (items.length > limit) throw new SceneLimitError(collection, limit, items.length);
-      return items;
-    };
     // Check every collection before constructing objects or advancing global
     // identity counters. An over-limit load therefore fails atomically and
     // its cost is bounded by five array length reads.
-    const bodyInput = capped<BodyDict>(d.bodies, "bodies", SCENE_MAX_BODIES);
-    const wallInput = capped<WallDict>(d.walls, "walls", SCENE_MAX_WALLS);
-    const linkInput = capped<LinkDict>(d.links, "links", SCENE_MAX_LINKS);
-    const fieldInput = capped<FieldDict>(d.fields, "fields", SCENE_MAX_FIELDS);
-    const driverInput = capped<DriverDict>(d.drivers, "drivers", SCENE_MAX_DRIVERS);
+    if (enforceCollectionLimits) assertSceneCollectionLimits(d);
+    const bodyInput = arrayOr<BodyDict>(d.bodies);
+    const wallInput = arrayOr<WallDict>(d.walls);
+    const linkInput = arrayOr<LinkDict>(d.links);
+    const fieldInput = arrayOr<FieldDict>(d.fields);
+    const driverInput = arrayOr<DriverDict>(d.drivers);
     const raw = d.settings;
     const s: Partial<WorldDict["settings"]> =
       typeof raw === "object" && raw !== null ? raw : {};
@@ -2840,7 +2850,8 @@ export class World {
           return !a.isPulley && !b.isPulley;
         }
         const pulley = byId.get(ln.pulley);
-        if (a.isAnchor || b.isAnchor || pulley?.isPulley !== true ||
+        if (a.isAnchor || b.isAnchor || a.isRodEndpoint || b.isRodEndpoint ||
+            pulley?.isPulley !== true ||
             ln.pulley === ln.a || ln.pulley === ln.b ||
             claimedPulleyIds.has(ln.pulley)) return false;
         // One axle belongs to exactly one routed string. Keeping the first
@@ -2859,10 +2870,10 @@ export class World {
               () => SpringLink.nextId++);
     uniqueIds(w.links.filter((link): link is PulleyLink => link instanceof PulleyLink),
               () => PulleyLink.nextId++);
-    const rodsById = new Set(w.links
+    const rodsById = new Map(w.links
       .filter((link): link is DistanceLink =>
         link instanceof DistanceLink && !link.isRope)
-      .map((link) => link.id));
+      .map((link) => [link.id, link]));
     const liveRodEndpoints = new Set<Body>();
     for (const link of w.links) {
       if (!(link instanceof DistanceLink) || link.isRope) continue;
@@ -2878,7 +2889,9 @@ export class World {
       }
     }
     for (const body of w.bodies) {
-      if (body.rodAttachmentId !== null && !rodsById.has(body.rodAttachmentId)) {
+      const rod = rodsById.get(body.rodAttachmentId ?? -1);
+      if (body.rodAttachmentId !== null &&
+          (rod === undefined || rod.a === body || rod.b === body)) {
         body.rodAttachmentId = null;
         if (body.isPivot) {
           body.isPivot = false;
@@ -2892,6 +2905,10 @@ export class World {
     w.bodies = w.bodies.filter((body) =>
       (!body.isPulley || livePulleys.has(body)) &&
       (!body.isRodEndpoint || liveRodEndpoints.has(body)));
+    // Pruning an internal coordinate also removes every link that held a
+    // direct reference to it. The reconstructed graph is valid before step().
+    const liveBodies = new Set(w.bodies);
+    w.links = w.links.filter((link) => liveBodies.has(link.a) && liveBodies.has(link.b));
     w.syncPulleyMounts();
     w.fields = fieldInput.filter(entry)
       .map((f) => ForceField.fromDict(f));

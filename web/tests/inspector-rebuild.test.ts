@@ -1,20 +1,6 @@
 /** @vitest-environment jsdom */
-/** The Inspector rebuilds exactly when what it is editing changes.
- *
- * The panel refreshes its controls in place every frame and only tears
- * itself down when a "structure key" changes. That key has to distinguish
- * every selection the panel would lay out differently - and object ids
- * restart at 1 for each kind, so body 3 and wall 3 are different selections
- * carrying the same number.
- *
- * The kind used to come from `constructor.name`, which works only until a
- * bundler renames the class. The production build DOES minify class names,
- * so the key was being built from whatever one-character name esbuild
- * assigned; consistent within a build, and therefore harmless so far, but
- * decided by the bundler rather than the program. The failure it would
- * produce is silent - a panel still showing a body's controls after a wall
- * is selected - so it is worth pinning by behaviour rather than trusting.
- */
+/** Inspector structure keys must distinguish object kinds as well as IDs.
+ * Refresh keeps the existing controls when the required layout is unchanged. */
 import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "../src/app";
 import { Body, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS, Wall } from "../src/engine/body";
@@ -56,6 +42,26 @@ beforeEach(() => {
 });
 
 describe("Inspector structure key", () => {
+  it("keeps an attachment button focused through unchanged panel refreshes", () => {
+    const { app, panel, inspector } = makeInspector();
+    const a = new Body(new Vec2(0, 0));
+    const b = new Body(new Vec2(2, 0));
+    const attached = new Body(new Vec2(1, 0));
+    const rod = new DistanceLink(a, b);
+    attached.rodAttachmentId = rod.id;
+    attached.rodAttachmentT = 0.5;
+    app.world.bodies.push(a, b, attached);
+    app.world.links.push(rod);
+    app.setSelection([rod]);
+    inspector.refresh();
+    const button = panel.querySelector<HTMLButtonElement>(".rod-attachment-item")!;
+    button.focus();
+    for (let i = 0; i < 5; i++) inspector.refresh();
+    expect(document.activeElement).toBe(button);
+    button.click();
+    expect(app.selection).toEqual([attached]);
+  });
+
   it("keeps a live pulley particle's system radius out of every edit route", () => {
     const { app, panel, inspector } = makeInspector();
     const wheel = new Body(new Vec2(0, 1), PULLEY_RADIUS);

@@ -1,15 +1,5 @@
-/** Physical properties that nothing pinned, found by mutation testing.
- *
- * Each block here corresponds to a deliberate bug that the suite failed to
- * notice: the moment of inertia could be given the wrong constant, a
- * dragged body could stop acting as infinite mass, restitution could be
- * scaled by 20%, the resting threshold could be raised tenfold and global
- * damping could be doubled - all with 650 tests still green.
- *
- * These are user-visible physical claims (how high a ball bounces, whether
- * a stack sits still, whether dragging shoves things), so they are asserted
- * against closed-form answers rather than against recorded output.
- */
+/** Analytic checks for inertia, restitution, resting thresholds, damping,
+ * and the infinite-mass response of held bodies. */
 import { describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body, Wall } from "../src/engine/body";

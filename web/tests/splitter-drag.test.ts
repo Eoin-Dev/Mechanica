@@ -1,20 +1,6 @@
 /** @vitest-environment jsdom */
-/** The shared splitter drag, including the ways a gesture can END.
- *
- * The Inspector's width handle and the graph dock's height handle had grown
- * identical copies of this wiring, and both cleared their "dragging" flag
- * only on `pointerup`. A gesture that ends any other way - `pointercancel`
- * from a system touch gesture, or a lost pointer capture when the window
- * changes - never reached that line, so the flag stayed set and from then
- * on merely MOVING the mouse across the handle went on resizing the panel
- * with no button held. The graph canvas ten lines below already handled
- * pointercancel, so the two halves of one panel disagreed about the same
- * gesture.
- *
- * jsdom has no pointer capture, so `setPointerCapture` is stubbed to throw
- * on demand: that is also a real case (the pointer can be gone by the time
- * the handler runs) and the wiring must survive it.
- */
+/** Panel resizing through pointer release, cancellation, and lost capture.
+ * jsdom capture stubs also exercise failure to acquire pointer capture. */
 import { beforeEach, describe, expect, it } from "vitest";
 import { splitterDrag } from "../src/ui/dom";
 

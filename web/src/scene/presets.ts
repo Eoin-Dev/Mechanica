@@ -1363,7 +1363,8 @@ export const PRESETS: Preset[] = [
   new Preset("Newton's cannon", "Gravity & Orbits",
     "Newton's thought experiment: fire a cannonball sideways from a " +
     "mountain. Too slow and it falls; at circular speed it orbits; " +
-    "past sqrt(2) times that, it escapes forever.",
+    "past sqrt(2) times that, it escapes. These overlaid shots can " +
+    "interact: keep one shot at a time for an independent orbit comparison.",
     buildNewtonsCannon, { zoom: 105, trails: true }),
   new Preset("Trojan asteroids", "Gravity & Orbits",
     "Asteroids sharing Jupiter's orbit, 60 degrees ahead (L4) and " +
@@ -1372,8 +1373,7 @@ export const PRESETS: Preset[] = [
     buildTrojans, { zoom: 55 }),
   // ---- the three-body problem, from stability to chaos -------------
   new Preset("Sun, Earth & Moon", "Three-Body Problem",
-    "The one arrangement of three bodies that IS stable: a " +
-    "hierarchy. All three move around their shared barycentre while " +
+    "A hierarchical three-body system. All three move around their shared barycentre while " +
     "the Moon circles Earth, safe because it sits deep inside Earth's " +
     "Hill sphere, where Earth's pull dominates.",
     buildSunEarthMoon, { zoom: 95, centre: [0, 0], trails: true }),
@@ -1392,16 +1392,13 @@ export const PRESETS: Preset[] = [
   new Preset("Choreography: moth", "Three-Body Problem",
     "A true periodic solution of the three-body problem (Suvakov & " +
     "Dmitrasinovic, 2013): three equal masses chase each other along " +
-    "one moth-shaped track. It is dynamically UNSTABLE - tiny errors " +
-    "grow exponentially, so after many laps it must break into a " +
-    "binary plus an escaper. That is chaos, not a glitch.",
+    "one moth-shaped track. Small perturbations and numerical error can " +
+    "make the simulated path depart from this pattern; periodicity is not enforced.",
     buildMoth, { zoom: 220, trails: true }),
   new Preset("Choreography: butterfly", "Three-Body Problem",
     "Another genuine periodic three-body solution, tracing butterfly " +
-    "wings. Like all such choreographies it is unstable: error " +
-    "doubles every couple of seconds, so even a perfect computer " +
-    "eventually watches it split into a binary + escaper - the " +
-    "generic fate of three bodies.",
+    "wings. Small perturbations and numerical error can make the simulated " +
+    "path depart from this pattern; periodicity is not enforced.",
     buildButterflyOrbit, { zoom: 220, trails: true }),
   new Preset("Pythagorean three-body", "Three-Body Problem",
     "Burrau's 1913 problem: masses 3, 4 and 5 dropped at rest from a " +
@@ -1439,7 +1436,7 @@ export const PRESETS: Preset[] = [
 
   new Preset("Mass on a spring", "Oscillators",
     "Simple harmonic motion: period 2*pi*sqrt(m/k) = 1.26 s here. Open " +
-    "the phase plot to see the ellipse of x against v.",
+    "the phase plot and select the mass to see the ellipse of y against vy.",
     buildShm, { zoom: 130, graph: "phase" }),
   new Preset("Damping regimes", "Oscillators",
     "Identical oscillators with light, critical and heavy damping. " +
@@ -1475,7 +1472,8 @@ export const PRESETS: Preset[] = [
     buildElasticVsInelastic, { zoom: 130, graph: "momentum" }),
   new Preset("Gas in a box (50)", "Collisions & Gas",
     "Fifty particles bouncing elastically in zero gravity - a toy " +
-    "ideal gas. Total energy and momentum are conserved.",
+    "ideal gas. Elastic impacts preserve kinetic energy; the fixed walls " +
+    "exchange momentum with the particles.",
     () => gasWorld(50, 2.0, 1), { zoom: 130, graph: "energy" }),
   new Preset("Gas in a box (200)", "Collisions & Gas",
     "Two hundred particles stress-test the collision engine. The " +
@@ -1519,14 +1517,15 @@ export const PRESETS: Preset[] = [
     buildIndependenceOfMotion,
     { zoom: 95, centre: [1.2, 1.6], trails: true, vectors: true }),
   new Preset("Projectile angles", "Projectiles & Friction",
-    "Four launches at 10 m/s. 45 degrees flies farthest, and the " +
-    "30/60 pair lands on the same spot: range goes as sin(2*theta), " +
-    "so complementary angles match.",
+    "Four launches at 10 m/s. For ideal equal-height launches, range " +
+    "goes as sin(2*theta): 45 degrees flies farthest and 30/60 match. " +
+    "These finite discs separate at launch; keep one at a time for a precise comparison.",
     buildProjectileAngles, { zoom: 55, trails: true, centre: [5.0, 2.2] }),
   new Preset("Terminal velocity", "Projectiles & Friction",
     "Two same-size balls falling with quadratic air drag. Drag " +
-    "balances weight at v = sqrt(mg/c), so the 10x heavier ball " +
-    "falls about 3x faster - Galileo needs a vacuum.",
+    "balances weight at the terminal speed v = sqrt(mg/c), about 3x " +
+    "higher for the 10x heavier ball. The finite drop shows the approach " +
+    "toward those speeds - Galileo needs a vacuum.",
     buildTerminalVelocity, { zoom: 60, trails: true, centre: [0, 4.0],
                              vectors: true }),
   new Preset("Wrecking ball", "Projectiles & Friction",

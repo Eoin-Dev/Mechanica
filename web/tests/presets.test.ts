@@ -1,15 +1,5 @@
-/** The example library has to run on a school laptop.
- *
- * Presets are the first thing anyone loads, usually before they know what
- * substeps are, and often on hardware far weaker than the machine they were
- * authored on. These guard the solver settings each scene ships with: cheap
- * enough to run, not so cheap that the scene stops doing what its card
- * promises.
- *
- * The cost check is STRUCTURAL rather than timed. Wall-clock assertions are
- * flaky on shared CI and would have to be loose enough to be meaningless;
- * substeps x work is deterministic and is the thing actually being chosen.
- */
+/** Preset behavior and solver-cost bounds.
+ * Structural work estimates avoid hardware-dependent timing assertions. */
 import { describe, expect, it } from "vitest";
 import {
   PRESETS, SOLVER_WORK_BUDGET, sceneWork,

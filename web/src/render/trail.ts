@@ -1,13 +1,7 @@
-/** Fixed-capacity ring buffer of trail points for one body.
- *
- * Motion trails record a point on nearly every physics substep and only ever
- * keep the newest `capacity` of them. The obvious `Array.push` +
- * `splice(0, …)` costs O(capacity) per point (the whole array shifts down),
- * which dominates the frame in scenes with many bodies. This stores the
- * points in a flat Float64Array ring instead: appends are O(1), memory is a
- * tight 16 bytes/point (no per-point JS array objects), and a running
- * bounding box lets the renderer cull trails that are fully off-screen.
- */
+/** Fixed-capacity ring buffer of positions and simulation timestamps.
+ * Typed arrays provide O(1) appends; conservative bounds support off-screen
+ * culling. Stable sample serials let the renderer decimate without changing
+ * the retained subset as the buffer scrolls. */
 export class Trail {
   private xy: Float64Array;
   private ts: Float64Array; // simulation time of each point

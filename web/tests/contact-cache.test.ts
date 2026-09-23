@@ -1,22 +1,10 @@
-/** The warm-start cache identifies a contact by its PAIR, not by the order
- * the broadphase happened to visit it in.
- *
- * Which of two bodies the narrowphase calls `a` falls out of the spatial
- * hash: it depends on which cell was seen first and which cell is the
- * forward neighbour of which, and both change as bodies move between
- * cells. A detection-ordered key therefore looked like a brand-new contact
- * every time a resting pair flipped, discarding the accumulated impulse
- * that warm starting exists to carry between substeps.
- *
- * Re-keying is only safe if the cached scalars mean the same thing either
- * way round, so that is checked here directly rather than argued: the
- * normal reverses with the pair, and so does the tangent, which leaves
- * both `pn` and `pt` invariant.
- */
+/** Warm-start contact keys are independent of broadphase visitation order.
+ * Swapping the bodies reverses both normal and tangent, leaving the cached
+ * normal and friction impulse scalars unchanged. */
 import { describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body, Wall } from "../src/engine/body";
-import { Contact, ContactCache, solveContacts } from "../src/engine/contacts";
+import { clearOfWalls, Contact, ContactCache, solveContacts } from "../src/engine/contacts";
 
 /** Two overlapping discs with asymmetric motion, so any sign error shows. */
 function pair(): [Body, Body] {
@@ -47,6 +35,26 @@ function run(swap: boolean, substeps: number): { a: number[]; b: number[]; keys:
 }
 
 describe("contact warm-start cache", () => {
+  it("retains wall ownership with simplified contacts and no cache key", () => {
+    const body = new Body(new Vec2(0, 0.15), 0.2);
+    const wall = new Wall(new Vec2(-2, 0), new Vec2(2, 0), 0.1);
+    wall.id = 0;
+    const contacts: Contact[] = [];
+    solveContacts([body], [wall], contacts, 1, null, { simplified: true });
+    expect(contacts[0].wallId).toBe(0);
+    expect(contacts[0].bodyBId).toBeNull();
+  });
+
+  it("separates a disc centred on a zero-length capsule without injecting motion", () => {
+    const body = new Body(new Vec2(), 0.2);
+    const wall = new Wall(new Vec2(), new Vec2(), 0.1);
+    const contacts: Contact[] = [];
+    solveContacts([body], [wall], contacts, 8);
+    expect(body.pos.length()).toBeGreaterThan(0.24);
+    expect(body.vel.length()).toBe(0);
+    expect(Math.hypot(contacts[0].nx, contacts[0].ny)).toBeCloseTo(1, 12);
+    expect(Math.hypot(...clearOfWalls([wall], 0, 0, 0.2))).toBeCloseTo(0.25, 12);
+  });
   it("gives a pair the same key whichever way round it is detected", () => {
     // one pair, two orderings, a fresh cache each: same ids, so the keys
     // are directly comparable (ids are global and never reused, so two

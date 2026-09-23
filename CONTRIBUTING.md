@@ -1,135 +1,52 @@
 # Contributing
 
-## Documentation maintenance
+Read the [handbook index](docs/README.md) and the pages for the area you plan
+to change. Keep changes focused and preserve unrelated work already in the
+checkout.
 
-The detailed implementation reference begins at
-[`docs/README.md`](docs/README.md). Any change to runtime behavior,
-architecture, interfaces, persisted data, user workflows, invariants, build,
-testing, or deployment behavior must update the relevant handbook page in the
-same change.
+## Documentation
 
-The handbook describes how the current code works, not the history of how it
-arrived there:
+Update the relevant handbook page in the same change whenever behavior,
+architecture, interfaces, persisted data, workflows, invariants, build,
+testing, or deployment changes. The [ownership table](docs/source-reference.md#documentation-ownership)
+maps source areas to pages.
 
-- Rewrite or remove stale text; do not append “this was changed” notes.
-- Describe additions and replacements directly in their current form.
-- Bug fixes do not need documentation changes when they only restore behavior
-  the handbook already describes correctly. They do need an update when the
-  fix changes documented behavior or invalidates an explanation, interface,
-  invariant, schema, or workflow.
-- Git history and commit messages record change history. Do not turn the
-  handbook into a changelog.
-- Avoid exact totals that naturally drift unless an automated check enforces
-  the claim.
+Describe the current implementation. Rewrite or remove stale explanations;
+keep change history in commits. A bug fix needs no documentation edit if it
+restores behavior the handbook already describes accurately. Avoid exact
+totals that drift, such as test counts, unless an automated check maintains
+them. Update the index and README links when pages move or are added.
 
-The documentation ownership table in
-[`docs/source-reference.md`](docs/source-reference.md#documentation-ownership)
-maps source areas to pages. Before submitting a change, verify affected links,
-identifiers, defaults, schemas, commands, and diagrams against the resulting
-source, then run the complete tests and production build described in
-[`docs/testing-and-operations.md`](docs/testing-and-operations.md).
+Before finishing, compare the affected pages against the code and verify
+their links, identifiers, defaults, schemas, commands, and diagrams.
 
-## Commit message style
+## Implementation constraints
 
-This project's commit messages follow one convention, pulled from the
-repo's own history rather than invented in the abstract. The goal: a
-reader who wasn't in the room can tell **what changed and why it was
-necessary** without opening the diff.
+The physics engine must remain usable headlessly. Keep browser and UI
+dependencies out of web/src/engine. Normal-mode physics must not depend on
+measured frame time; see [performance and determinism expectations](docs/testing-and-operations.md#performance-and-determinism-expectations)
+for the separate Performance-mode rules.
 
-## Subject line
+## Validation
 
-One line, imperative mood, no trailing period. Pack multiple unrelated
-areas into one line by joining terse clauses with semicolons — don't
-force a generic summary over things that don't share a cause:
+Run focused tests for the affected area, then the full suite and build:
 
-```
-Fix trail warping and decay; collide linked bodies; UI polish
-Rework user dragging for a real lunge with bounded energy; icon and guide-scroll fixes
-Add the "Which lands first?" projectile-independence preset
-Math editor polish: caret placement, standard notation, stay-in superscript; recipes add on click
+```sh
+cd web
+npm test
+npm run build
 ```
 
-Quote proper nouns (preset/feature names) exactly as they appear in the
-UI. A colon can introduce a list of what "polish" or "rework" means when
-the subject alone would be too vague.
+Use npm.cmd on PowerShell if the script shim is disabled. Run browser tests
+for interaction or presentation changes. See [Testing and operations](docs/testing-and-operations.md)
+for browser setup, additional checks, and deployment requirements.
 
-## Body: two shapes, pick based on the commit
+## Commit messages
 
-**Shape A — single cohesive change.** Open with a short prose paragraph
-giving the *why* (the misconception, the root cause, the mechanism), then
-bullets for the specifics. No section headers needed:
+Use an imperative subject without a trailing period. Name the behavior or
+component affected. In the body, explain the problem, the resulting behavior,
+and relevant validation. Use separate sections when a change spans several
+areas; include identifiers and measurements when they help a reviewer.
 
-> Two identical balls released together from the same height, one also
-> launched sideways at 6 m/s. The intuitive answer is that the one falling
-> straight down lands first; in fact gravity acts only downward, so the
-> sideways velocity never touches the fall...
->
-> - Balls are identical in radius, mass, restitution and friction, so the
->   initial sideways velocity is the only variable on show...
-
-**Shape B — multiple areas in one commit.** Skip the prose lead-in
-entirely and go straight into titled sections, one per area, each a
-bullet list:
-
-```
-Dragging (interact/tools.ts, engine/world.ts, engine/body.ts):
-- Grabbed bodies track the cursor EXACTLY...
-
-Drag UX:
-- Hide the green velocity handle while a left-drag is active...
-
-UI fixes:
-- The "Import .json" button now uses a down-facing arrow-into-tray icon...
-
-Tests (physics.test.ts):
-- speedCap clamps every substep...
-```
-
-Section headers name the area or file, not a generic label like
-"Changes." Common headers seen in this repo: `Trails:`, `Physics:`,
-`Bug fixes:`, `UI:`, `Drag UX:`, `Tests:` — sometimes with the relevant
-file(s) in parens when that orients the reader faster than prose would.
-
-## Bullet style — this is the part that actually matters
-
-- **Cite the mechanism, not the surface.** "the rod force solver (which
-  reads relative velocity, `b.vel - a.vel`)" — not "fixed the drag bug."
-- **Name real identifiers.** Constants, function names, file paths:
-  `DRAG_VEL_CAP`, `Body.speedCap`, `PROJECTION_PERCENT`. A bullet without
-  a concrete anchor is too vague.
-- **State the failure mode being fixed**, concretely: "a nearly-still
-  mouse could fling a struck body," "a selected spring could outlive
-  itself and leave the inspector editing a ghost."
-- **Include measured numbers when you have them**, not adjectives:
-  "double-pendulum end bob whips to ~10.7 m/s," not "drag feels more
-  energetic now." A number is falsifiable; an adjective isn't.
-- **One bullet, one idea.** Use " - " (spaced hyphen, not em-dash) mid-bullet
-  to attach a consequence or reasoning clause, e.g. "...so a lattice can
-  squash yet never tangle through itself."
-- **Say what was removed, if anything was.** "removes `safeDragSpeed` and
-  the rigid-carry/kinematic-sharing paths" — deletions are as load-bearing
-  as additions, and readers need to know old assumptions no longer hold.
-
-## The Tests section
-
-Whenever a commit touches tested code, close with a compressed list of
-*what new invariant each test pins* — not test names:
-
-```
-Tests: both balls land within a couple of steps of each other, never
-diverge in height while airborne, land at the analytic sqrt(2h/g), and
-the launched ball's horizontal travel matches v*t (271 passing).
-```
-
-Always end with the exact current passing count in parens —
-`(271 passing)` — read off the real test run output, never estimated or
-rounded.
-
-## Hard rules
-
-- Never round or guess the test count — run the suite and read it off
-  right before writing the message.
-- No emoji, no marketing adjectives ("blazing," "robust," "clean"). If a
-  claim can't be backed by a number or a named mechanism, cut it.
-- Present the message in a fenced code block so it's a one-click copy
-  into `git commit`.
+Quote UI labels exactly. Report test results from the actual run and describe
+what the tests verify. Omit promotional language and unsupported claims.

@@ -63,18 +63,25 @@ export class Toolbar implements Panel {
       "aria-label": "Simulation time in seconds",
     });
     let timeFocused = false;
+    let timeEditText = "";
+    let timeCancelled = false;
     this.timeInput.addEventListener("focus", () => {
       timeFocused = true;
+      timeEditText = this.timeInput.value;
+      timeCancelled = false;
       this.timeInput.select();
     });
     this.timeInput.addEventListener("blur", () => {
       timeFocused = false;
-      app.commitTimeJump(this.timeInput.value);
+      if (!timeCancelled && this.timeInput.value !== timeEditText) {
+        app.commitTimeJump(this.timeInput.value);
+      }
+      this.timeInput.value = app.world.time.toFixed(2);
     });
     this.timeInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.timeInput.blur();
       else if (e.key === "Escape") {
-        this.timeInput.value = app.world.time.toFixed(2);
+        timeCancelled = true;
         this.timeInput.blur();
       }
       e.stopPropagation();
@@ -296,10 +303,12 @@ export class GraphDock implements Panel {
     this.splitter = splitter;
 
     const header = el("div", { class: "dock-header" });
-    header.append(this.group.add(segmented(["Energy", "Mom.", "Phase", "Distance", "Velocity"],
+    const modes = this.group.add(segmented(["Energy", "Mom.", "Phase", "Distance", "Velocity"],
       () => app.graphMode,
       (v) => app.setGraphMode(v as GraphMode),
-      "Which live graph to display. Distance and velocity follow the selected particle.")).root);
+      "Which live graph to display. Distance and velocity follow the selected particle."));
+    modes.root.classList.add("graph-modes");
+    header.append(modes.root);
     this.hintEl = el("span", { class: "dock-hint" });
     header.append(this.hintEl);
     this.liveBtn = el("button", { class: "primary", text: "Live" });
@@ -368,15 +377,16 @@ export class GraphDock implements Panel {
       const factor = 1.1 ** (-e.deltaY / 100);
       const newSpan = Math.min(GRAPH_HISTORY_S,
         Math.max(0.5, this.viewSpan / factor));
+      const oldSpan = this.viewSpan;
+      this.viewSpan = newSpan;
       if (this.viewEnd !== null) {
         // detached: keep the time under the cursor fixed while zooming
         const r = this.canvas.getBoundingClientRect();
         const frac = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width)));
-        const tCursor = this.viewEnd - this.viewSpan * (1 - frac);
+        const tCursor = this.viewEnd - oldSpan * (1 - frac);
         this.setViewEnd(tCursor + (1 - frac) * newSpan, series);
       }
       // live: the right edge stays anchored and keeps following
-      this.viewSpan = newSpan;
     }, { passive: false });
 
     let dragId: number | null = null;

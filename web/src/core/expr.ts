@@ -1,11 +1,11 @@
 /** Safe mathematical expression compiler for user-defined force fields.
  *
- * Compiles the same restricted expression language the desktop app accepts
+ * Compiles a restricted expression language
  * (arithmetic, comparisons, `a if cond else b` ternaries, and/or/not, and
- * whitelisted math functions) into a fast callable. The compiler is a real
+ * whitelisted math functions) into a callable. The compiler uses a
  * tokenizer + recursive-descent parser producing an AST that is then folded
  * into a closure tree — user text is never passed to eval/new Function, so
- * it cannot execute arbitrary code and works under any Content-Security-Policy.
+ * formula evaluation does not require dynamic-code execution permission.
  *
  * The AST is exposed (`parseSource`) so the UI can re-render formulas in
  * other notations (the typeset math editor); the engine only ever calls

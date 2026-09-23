@@ -23,6 +23,28 @@ function appStub(): App {
 }
 
 describe("toolbar and palette semantics", () => {
+  it("only seeks when the clock text is changed and committed", () => {
+    const app = appStub();
+    app.world.time = 1.23456789;
+    const seek = vi.spyOn(app, "commitTimeJump");
+    const root = document.createElement("div");
+    document.body.replaceChildren(root);
+    const toolbar = new Toolbar(app, root);
+    toolbar.refresh();
+    const clock = root.querySelector<HTMLInputElement>('input[aria-label="Simulation time in seconds"]')!;
+    clock.focus();
+    clock.blur();
+    expect(seek).not.toHaveBeenCalled();
+    clock.focus();
+    clock.value = "50";
+    clock.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(seek).not.toHaveBeenCalled();
+    expect(clock.value).toBe("1.23");
+    clock.focus();
+    clock.value = "2.5";
+    clock.blur();
+    expect(seek).toHaveBeenCalledExactlyOnceWith("2.5");
+  });
   it("announces the play state and keeps a level-one heading", () => {
     const app = appStub();
     const root = document.createElement("div");
@@ -134,6 +156,28 @@ describe("status readouts", () => {
 });
 
 describe("graph dock retained state", () => {
+  it("keeps the oldest time under the cursor when zooming detached history", () => {
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({} as CanvasRenderingContext2D);
+    try {
+      const app = { settings: {}, graphMode: "Energy",
+        energySeries: new TimeSeries(["Total"]), resizeCanvas() {},
+      } as unknown as App;
+      app.energySeries.add(0, { Total: 1 });
+      app.energySeries.add(120, { Total: 1 });
+      const root = document.createElement("div");
+      const dock = new GraphDock(app, root, document.createElement("div"));
+      const view = dock as unknown as { viewSpan: number; viewEnd: number | null };
+      view.viewSpan = 15;
+      view.viewEnd = 15;
+      const canvas = root.querySelector("canvas")!;
+      canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, clientX: 0 }));
+      expect(view.viewSpan).toBeCloseTo(15 / 1.1, 9);
+      expect(view.viewEnd! - view.viewSpan).toBeCloseTo(0, 9);
+    } finally {
+      getContext.mockRestore();
+    }
+  });
   it("resynchronises a revealed splitter and redraws after palette changes", () => {
     let clears = 0;
     const ctx = new Proxy({

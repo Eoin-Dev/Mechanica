@@ -1,17 +1,6 @@
-/** First-run guided tour.
- *
- * Mechanica opens on a canvas with eleven tools, three inspector tabs and a
- * library of 48 examples, and previously said nothing about any of it - the
- * only orientation was a shortcut table behind F1, which answers "what key
- * does X" and never "what is this and what do I do first". `tour_done` had
- * been sitting in the settings type since the port with nothing behind it.
- *
- * The tour spotlights real controls in place rather than describing them in
- * the abstract, and each step is one idea with one thing to look at. It runs
- * once automatically, can be skipped at any point, and can be replayed from
- * Settings. It never edits the user's scene: it plays and pauses the
- * simulation to show motion, and restores the play state it found.
- */
+/** First-run tour with spotlights on visible controls.
+ * Runs automatically once, supports skipping and replay, and restores the
+ * previous play state on close. Completion is stored in tour_done. */
 import type { App } from "../app";
 import { ModalFocus, countNoun, el, isTouch } from "./dom";
 
@@ -112,10 +101,7 @@ export const STEPS: Step[] = [
                "the other analysis tools.",
   },
   {
-    // Force fields are the most distinctive thing here and the steepest
-    // cliff: they sit at the bottom of the World tab, so nobody finds them
-    // by accident. Pointing at the panel is enough - the step's job is to
-    // establish that they exist and that there is a guide for them.
+    // Introduce force fields and their guide without changing the scene.
     target: "#inspector, #inspector-handle",
     title: "Write your own physics",
     body: "The World tab ends with custom force fields: type a formula for " +

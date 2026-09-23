@@ -1,18 +1,5 @@
-/** Invariants every preset in the library must satisfy.
- *
- * The existing preset tests are per-scene and behavioural: does it blow up,
- * does it stay in its box, are its solver settings sane. What nothing
- * checked is whether each library scene is STRUCTURALLY well formed -
- * ids unique, links pointing at bodies that exist, drivers addressing
- * bodies that are still there, anchors actually anchored, formulas that
- * compile, camera hints inside the camera's own limits.
- *
- * These are asserted over the whole library rather than scene by scene, so
- * a new preset is covered the moment it is added rather than when someone
- * remembers to write a test for it. The most valuable of them is the
- * snapshot round trip: it drives the entire serialization layer with all
- * real scenes instead of the hand-built ones the storage tests use.
- */
+/** Library-wide topology, ID, formula, view-hint, and snapshot invariants.
+ * Iterating all presets includes new scenes in the same structural checks. */
 import { describe, expect, it } from "vitest";
 import { compileExpr } from "../src/core/expr";
 import { Body } from "../src/engine/body";

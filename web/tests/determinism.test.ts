@@ -1,13 +1,5 @@
-/** The same scene must simulate identically however the app happens to
- * schedule it.
- *
- * The app subdivides each quantum adaptively; how finely used to depend
- * on measured frame times, i.e. on how busy the machine was. That leaked
- * into the physics two ways - the spring stability clamps were computed
- * from the live substep, and the substep itself set the integration
- * accuracy - so the same setup could ring on one run and sit still on
- * the next. Both are pinned here.
- */
+/** Simulation results must be independent of display scheduling.
+ * Adaptive resolution and spring stability limits depend on simulation state. */
 import { describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";

@@ -1,19 +1,6 @@
 /** @vitest-environment jsdom */
-/** App-level behaviour, under a real DOM.
- *
- * Everything here was previously untestable. `App` needs a canvas, a
- * document and a storage backend to construct, the suite ran under plain
- * Node, and so the entire top layer of the program - the frame loop's
- * bookkeeping, playback, undo/redo, the time jump, scene replacement - had
- * no coverage at all. That is exactly where the two worst defects this
- * audit found were living, and neither could have been caught by a test
- * that could not build an App.
- *
- * jsdom gives no 2D canvas context, so `getContext("2d")` returns null.
- * Nothing here draws - `render()` is only called from the rAF loop, which
- * is never started - so a stub context is enough to let construction
- * through, and it keeps the environment honest about what is faked.
- */
+/** App playback, history, time seeking, and scene replacement under jsdom.
+ * A stub canvas context supports construction without starting the render loop. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, PHYSICS_DT } from "../src/app";
 import { Body } from "../src/engine/body";
@@ -452,6 +439,43 @@ describe("event-aware playback", () => {
     (app as unknown as { update(dt: number): void }).update(seconds);
   };
 
+  it("starts newly armed tracking at the current step instead of reporting a past apex", () => {
+    const app = makeApp();
+    app.world.gravity = 10;
+    const body = new Body(new Vec2(0, 0));
+    body.vel.y = 0.02;
+    body.collides = false;
+    app.world.bodies.push(body);
+    app.setSelection([body]);
+    app.playbackEvents.prime(app.world);
+    app.playing = true;
+    update(app, 1 / 60);
+    expect(body.vel.y).toBeLessThan(0);
+    app.pauseOnEvent = "apex";
+    update(app, 1 / 60);
+    expect(app.playing).toBe(true);
+    expect(app.playbackEvents.events).toEqual([]);
+  });
+
+  it("waits for the selected particle's apex and discards future event rows", () => {
+    const app = makeApp();
+    app.world.gravity = 10;
+    const other = new Body(new Vec2(-1, 0));
+    const selected = new Body(new Vec2(1, 0));
+    other.vel.y = 0.02;
+    selected.vel.y = 0.037;
+    other.collides = selected.collides = false;
+    app.world.bodies.push(other, selected);
+    app.setSelection([selected]);
+    app.playbackEvents.prime(app.world);
+    app.pauseOnEvent = "apex";
+    app.playing = true;
+    update(app, 1 / 60);
+    expect(app.world.time).toBeCloseTo(0.0037, 8);
+    expect(app.playbackEvents.events.every(event => event.time <= app.world.time + 1e-9)).toBe(true);
+    expect(app.playbackEvents.events.at(-1)?.bodyIds).toEqual([selected.id]);
+  });
+
   it("refines an apex stop to the interpolated zero-velocity time", () => {
     const app = makeApp();
     app.world.gravity = 9.8;
@@ -721,6 +745,36 @@ describe("graph recording", () => {
     expect(app.distanceSeries.values("Distance")).toEqual([0]);
     expect(app.velocitySeries.values("Speed").at(-1))
       .toBeCloseTo(Math.hypot(-2, 0.5), 9);
+  });
+
+  it("measures travel through a turnaround inside one displayed batch", () => {
+    const app = makeApp();
+    app.world.gravity = 120;
+    app.world.substeps = 1;
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    body.vel.set(0, 1);
+    app.world.bodies.push(body);
+    app.setSelection([body]);
+    const batch = app as unknown as {
+      runPhysicsBatch(world: typeof app.world, count: number, dt: number): unknown;
+    };
+    batch.runPhysicsBatch(app.world, 2, PHYSICS_DT);
+    app.recordGraphSample();
+    expect(body.pos.y).toBeCloseTo(0, 9);
+    expect(app.distanceSeries.values("Distance").at(-1)).toBeCloseTo(PHYSICS_DT, 9);
+  });
+
+  it("excludes paused position edits from distance travelled", () => {
+    const app = makeApp();
+    app.world.gravity = 0;
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    body.vel.set(1, 0);
+    app.world.bodies.push(body);
+    app.setSelection([body]);
+    body.pos.x = 10;
+    app.recordGraphSample();
+    app.stepOnce();
+    expect(app.distanceSeries.values("Distance").at(-1)).toBeCloseTo(app.world.time, 9);
   });
 
   it("truncates distance and velocity history cleanly when rewinding", () => {

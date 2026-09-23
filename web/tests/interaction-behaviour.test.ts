@@ -1,20 +1,6 @@
 /** @vitest-environment jsdom */
-/** Interaction rules that a mutation run showed nothing was holding.
- *
- * Extending mutation testing past the engine and into the UI found ten
- * behaviours that could be changed freely with the whole suite still green.
- * Each one below is a rule the app states about itself - in a comment, a
- * tooltip or the help text - that had no test behind it:
- *
- *   - a click is not a drag (a few pixels of jitter must not grab a body);
- *   - a flick cannot inject unbounded energy;
- *   - a flat box-select still selects a row of bodies;
- *   - clicking overlapping bodies picks the one drawn on top;
- *   - trails sample by distance, not once per step;
- *   - a plot refuses a non-finite sample rather than scaling to it;
- *   - a plot restarts when the clock goes backwards;
- *   - auto-fit guarantees everything is on screen, not merely most of it.
- */
+/** Canvas interaction contracts: click/drag thresholds, bounded drag energy,
+ * selection and picking, distance-based trails, plot sampling, and framing. */
 import { describe, expect, it } from "vitest";
 import { App } from "../src/app";
 import { Vec2 } from "../src/core/vec";
@@ -58,6 +44,33 @@ function send(canvas: HTMLCanvasElement, type: string, x: number, y: number,
                      pointerType: "mouse", shiftKey: false });
   canvas.dispatchEvent(e);
 }
+
+describe("cancelled pointer gestures", () => {
+  it.each(["pointer cancellation", "tool switching"])("stops erasing after %s", (reason) => {
+    const { app, canvas } = makeApp();
+    const first = new Body(new Vec2(-1, 0), 0.2, 1);
+    const survivor = new Body(new Vec2(1, 0), 0.2, 1);
+    app.world.bodies.push(first, survivor);
+    app.controller.setTool("eraser");
+    send(canvas, "pointerdown", ...app.camera.toScreen(first.pos));
+    if (reason === "pointer cancellation") {
+      send(canvas, "pointercancel", ...app.camera.toScreen(first.pos));
+    } else app.controller.setTool("select");
+    send(canvas, "pointermove", ...app.camera.toScreen(survivor.pos));
+    expect(app.world.bodies).toEqual([survivor]);
+    app.undo();
+    expect(app.world.bodies.map(body => body.id)).toEqual([first.id, survivor.id]);
+  });
+
+  it("discards a cancelled wall draft before a later pointer release", () => {
+    const { app, canvas } = makeApp();
+    app.controller.setTool("wall");
+    send(canvas, "pointerdown", 200, 200);
+    send(canvas, "pointercancel", 300, 200);
+    send(canvas, "pointerup", 400, 200);
+    expect(app.world.walls).toHaveLength(0);
+  });
+});
 
 describe("a click is not a drag", () => {
   it("a press with a pixel of jitter never grabs the body", () => {

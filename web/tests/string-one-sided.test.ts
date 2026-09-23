@@ -1,22 +1,5 @@
-/** A string pulls, or it does nothing. It never pushes.
- *
- * `tensionOnly` springs are the app's elastic strings: the rope tool (E)
- * builds one with k = 1000 and c = 2, the Inspector's "make this a string"
- * conversion builds the same, and two shipped presets use damped ones.
- *
- * Slackness alone does not make such a spring one-sided once it is damped.
- * The total axial force is k*ext + c*v_rel, and while the ends APPROACH,
- * v_rel is negative - so a barely stretched string has a damping term that
- * outweighs its tension and the total force changes sign. At the tool's own
- * defaults that happens below 2 mm of stretch at 1 m/s of closing speed,
- * which a swinging string crosses on every cycle: instead of going slack it
- * shoved its endpoints apart.
- *
- * The rigid rope (DistanceLink with isRope) has always clamped its
- * multiplier at zero for exactly this reason, and performance mode's
- * position-constraint form skips a slack string outright. This pins the
- * same one-sidedness on the accurate force path, which was the outlier.
- */
+/** Elastic strings must never push, including while damped ends approach.
+ * Tests cover slackness and cases where damping exceeds elastic tension. */
 import { describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";

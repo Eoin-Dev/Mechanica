@@ -85,20 +85,8 @@ describe("focus ring cascade", () => {
   });
 });
 
-/** The mobile breakpoint is declared in two languages and must agree.
- *
- * `PHONE_QUERY` in ui/dom.ts decides BEHAVIOUR - whether the Inspector
- * becomes a slide-over drawer and whether the toolbar trims itself - while
- * the stylesheet decides what that state LOOKS like. They are the same
- * threshold written twice, in two files, with nothing connecting them.
- *
- * Changing one alone opens a band of viewport widths where the app is in
- * drawer mode but is not styled as a drawer (or the reverse): the panel
- * would be positioned as a fixed overlay with no width rule, or laid out
- * inline while the code believes it is hidden. It fails silently, only
- * between two specific widths, which is exactly the kind of thing nobody
- * finds by clicking around on a desktop.
- */
+/** The TypeScript PHONE_QUERY and CSS breakpoint must agree so drawer
+ * behavior and layout switch at the same viewport width. */
 describe("the mobile breakpoint", () => {
   it("is the same width in the stylesheet as in the code", () => {
     const inCode = /\(max-width:\s*(\d+)px\)/.exec(PHONE_QUERY);

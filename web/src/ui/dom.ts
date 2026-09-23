@@ -1,7 +1,7 @@
 /** Tiny DOM helpers and the reusable controls the panels are built from.
  *
  * Controls read their value through a getter and write through a setter
- * (matching the desktop widget design), and register a `refresh` that the
+ * and register a `refresh` that the
  * app calls on its panel cadence so live state remains current without
  * monitor-rate DOM polling, unless the user is actively editing.
  */
@@ -155,36 +155,14 @@ export class RefreshGroup {
 }
 
 // ------------------------------------------------------------------ splitter
-/** Bounds of the resizable panes.
- *
- * Exported because THREE places need to agree on them and previously did
- * not: the splitter that enforces them while dragging, the code that
- * re-applies a saved size on load, and the settings guard that decides
- * which saved sizes are usable at all. A stored width the splitter could
- * never have produced would otherwise be honoured on load and only snap
- * back the next time the splitter was touched. */
+/** Shared pane bounds for resizing, settings validation, and layout restoration. */
 export const INSPECTOR_W_MIN = 240;
 export const INSPECTOR_W_MAX = 620;
 export const DOCK_H_MIN = 110;
 export const DOCK_H_MAX = 1200;
 
-/** Wire a splitter element as a drag-to-resize handle.
- *
- * `onMove` applies the new size, `onCommit` persists it once the gesture
- * ends. Shared by the Inspector's width splitter and the graph dock's
- * height splitter, which had grown identical copies of this - and the same
- * two gaps in both:
- *
- *   - A cancelled drag (a system gesture on touch, a pointer lost to a
- *     window switch) fires `pointercancel`, never `pointerup`, so the
- *     "dragging" flag stayed true. From then on merely HOVERING over the
- *     splitter went on resizing the panel with no button held. The graph
- *     canvas in the same file already handled pointercancel, so the two
- *     halves of one panel disagreed about the same gesture.
- *   - `setPointerCapture` throws if the pointer is already gone by the time
- *     the handler runs; uncaught, that aborted the gesture's setup and left
- *     the flag set with no capture to release.
- */
+/** Keyboard configuration for a resizable separator.
+ * Values and limits use CSS pixels; min/max may follow the current viewport. */
 export interface SplitterKeyboardOptions {
   orientation: "horizontal" | "vertical";
   label: string;
@@ -549,6 +527,8 @@ export function slider(label: string, get: () => number,
 
   let dragging = false;
   let editing = false;
+  let editText = "";
+  let cancelled = false;
   const show = (v: number) => {
     if (editing) return; // don't clobber what the user is typing
     const s = opts.unit ? `${fmt(v)} ${opts.unit}` : fmt(v);
@@ -585,7 +565,9 @@ export function slider(label: string, get: () => number,
   // Typed values are clamped to the slider's range (and its step, if any).
   val.addEventListener("focus", () => {
     editing = true;
+    cancelled = false;
     val.value = fmt(get()); // drop the unit so only the number is edited
+    editText = val.value;
     val.select();
   });
   val.addEventListener("blur", () => {
@@ -593,7 +575,7 @@ export function slider(label: string, get: () => number,
     // Disabling a focused field makes the browser blur it, so this handler is
     // how a control that has just been taken away would commit the half-typed
     // value it was taken away with. Drop it and re-sync instead.
-    if (val.disabled) {
+    if (val.disabled || cancelled || val.value === editText) {
       refresh();
       return;
     }
@@ -611,7 +593,7 @@ export function slider(label: string, get: () => number,
   });
   val.addEventListener("keydown", (e) => {
     if (e.key === "Enter") val.blur();
-    else if (e.key === "Escape") { val.value = fmt(get()); val.blur(); }
+    else if (e.key === "Escape") { cancelled = true; val.blur(); }
     e.stopPropagation(); // keep global shortcuts from firing while typing
   });
 
@@ -656,8 +638,12 @@ export function numEdit(label: string, get: () => number,
                   el("span", { class: "lbl", text: label }), input,
                   unit ? el("span", { class: "unit", text: unit }) : null);
   let focused = false;
+  let editText = "";
+  let cancelled = false;
   input.addEventListener("focus", () => {
     focused = true;
+    cancelled = false;
+    editText = input.value;
     input.select();
   });
   const commit = () => {
@@ -672,12 +658,13 @@ export function numEdit(label: string, get: () => number,
   };
   input.addEventListener("blur", () => {
     focused = false;
-    commit();
+    if (!cancelled && input.value !== editText) commit();
+    refresh();
   });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") input.blur();
     else if (e.key === "Escape") {
-      input.value = fmt(get());
+      cancelled = true;
       input.blur();
     }
     e.stopPropagation();
@@ -761,24 +748,36 @@ export function segmented(options: string[], get: () => string,
 // ----------------------------------------------------------------- textEdit
 /** Free-text field (names, formulas). commit returns false to flag an error. */
 export function textEdit(get: () => string, commit: (s: string) => boolean,
-                         placeholder = "", label = ""): Control {
+                         placeholder = "", label = "", maxLength?: number): Control {
   // `label` names the field for assistive tech. A placeholder is not a
   // name - it disappears the moment anything is typed - and the object-name
   // field had neither, so it announced as an unlabelled text box.
   const input = el("input", { type: "text", placeholder });
+  if (maxLength !== undefined) input.maxLength = maxLength;
   if (label) input.setAttribute("aria-label", label);
   let focused = false;
+  let editText = "";
+  let cancelled = false;
   input.addEventListener("focus", () => {
     focused = true;
+    cancelled = false;
+    editText = input.value;
   });
   input.addEventListener("blur", () => {
     focused = false;
-    input.classList.toggle("error", !commit(input.value));
+    if (!cancelled && input.value !== editText) {
+      input.classList.toggle("error", (maxLength !== undefined && input.value.length > maxLength) ||
+        !commit(input.value));
+    }
+    if (cancelled) {
+      input.classList.remove("error");
+      refresh();
+    }
   });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") input.blur();
     else if (e.key === "Escape") {
-      input.value = get();
+      cancelled = true;
       input.blur();
     }
     e.stopPropagation();
@@ -841,9 +840,20 @@ export function colourEdit(label: string, get: () => readonly number[],
   input.addEventListener("change", () => apply(hexToRgb(input.value), true));
 
   let typing = false;
-  hex.addEventListener("focus", () => { typing = true; hex.select(); });
+  let editText = "";
+  let cancelled = false;
+  hex.addEventListener("focus", () => {
+    typing = true;
+    cancelled = false;
+    editText = hex.value;
+    hex.select();
+  });
   hex.addEventListener("blur", () => {
     typing = false;
+    if (cancelled || hex.value === editText) {
+      refresh();
+      return;
+    }
     const ok = /^#?[0-9a-f]{6}$/i.test(hex.value.trim());
     hex.classList.toggle("error", !ok);
     if (ok) apply(hexToRgb(hex.value), true);
@@ -851,7 +861,7 @@ export function colourEdit(label: string, get: () => readonly number[],
   });
   hex.addEventListener("keydown", (e) => {
     if (e.key === "Enter") hex.blur();
-    else if (e.key === "Escape") { refresh(); hex.blur(); }
+    else if (e.key === "Escape") { cancelled = true; hex.blur(); }
     e.stopPropagation();
   });
 

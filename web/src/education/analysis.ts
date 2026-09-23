@@ -5,7 +5,7 @@
  * event detection can be verified directly.
  */
 import { Body, Wall } from "../engine/body";
-import { closestOnSegment } from "../engine/contacts";
+import { closestOnSegment, Contact } from "../engine/contacts";
 import { DistanceLink, PulleyLink, SpringLink } from "../engine/links";
 import { World } from "../engine/world";
 
@@ -302,10 +302,13 @@ export class EventTracker {
    * from the restored state. Retained row ids stay stable for keyed DOM
    * updates; the next id continues above the newest survivor. */
   rewindTo(time: number, world: World): void {
-    let keep = this.events.length;
-    while (keep > 0 && this.events[keep - 1].time > time + 1e-9) keep--;
+    let keep = 0;
+    for (const event of this.events) {
+      if (event.time <= time + 1e-9) this.events[keep++] = event;
+    }
     this.events.length = keep;
-    this.nextId = (this.events.at(-1)?.id ?? 0) + 1;
+    this.events.sort((a, b) => a.time - b.time || a.id - b.id);
+    this.nextId = this.events.reduce((max, event) => Math.max(max, event.id), 0) + 1;
     this.prime(world);
   }
 
@@ -314,10 +317,14 @@ export class EventTracker {
     this.primed = true;
   }
 
+  /** Resume from the current state after an interval without observations. */
+  prepareStep(world: World): void {
+    if (!this.primed || this.sampleTime !== world.time) this.prime(world);
+  }
+
   private push(event: Omit<PlaybackEvent, "id">): PlaybackEvent {
     const complete = { ...event, id: this.nextId++ };
     this.events.push(complete);
-    if (this.events.length > 200) this.events.splice(0, this.events.length - 200);
     return complete;
   }
 
@@ -332,7 +339,7 @@ export class EventTracker {
     const interval = Math.max(0, time - this.sampleTime);
     const selected = this.selectedBodyId;
     for (const body of world.bodies) {
-      if (body.isAnchor) continue;
+      if (body.isAnchor || body.isRodEndpoint) continue;
       const before = this.bodies.get(body.id);
       if (before === undefined) continue;
       if (before.vy > 1e-6 && body.vel.y <= 1e-6) {
@@ -369,16 +376,14 @@ export class EventTracker {
     const nextContacts = contactKeys(world);
     for (const key of nextContacts) {
       if (!this.contacts.has(key)) {
-        const ids = key.split(":").slice(1).map(Number).filter(Number.isFinite);
         added.push(this.push({ kind: "contact", time, label: "Contact began",
-          bodyIds: ids.filter((id) => id >= 0), value: contactValue(world, key), key }));
+          bodyIds: contactBodyIds(key), value: contactValue(world, key), key }));
       }
     }
     for (const key of this.contacts) {
       if (!nextContacts.has(key)) {
-        const ids = key.split(":").slice(1).map(Number).filter(Number.isFinite);
         added.push(this.push({ kind: "contact-end", time, label: "Contact ended",
-          bodyIds: ids.filter((id) => id >= 0), value: "separated", key }));
+          bodyIds: contactBodyIds(key), value: "separated", key }));
       }
     }
 
@@ -401,6 +406,11 @@ export class EventTracker {
       }
     }
     this.capture(world, nextContacts, nextTaut, nextStops);
+    // Interpolated transitions are discovered in body-list order. Consumers
+    // choose the first matching stop and retain chronological event history.
+    added.sort((a, b) => a.time - b.time || a.id - b.id);
+    this.events.sort((a, b) => a.time - b.time || a.id - b.id);
+    if (this.events.length > 200) this.events.splice(0, this.events.length - 200);
     return added;
   }
 
@@ -419,33 +429,41 @@ export class EventTracker {
   }
 }
 
-function contactKeys(world: World): Set<string> {
-  const keys = new Set<string>();
-  for (const contact of world.contacts) {
-    // Contact identity fields are optional for compatibility with simple test
-    // doubles; quantised geometry remains stable enough for those callers.
-    const c = contact as typeof contact & {
-      bodyAId?: number; bodyBId?: number | null; wallId?: number | null;
-    };
-    if (c.bodyAId !== undefined) {
-      const other = c.bodyBId ?? (c.wallId === null || c.wallId === undefined
-        ? -1 : -c.wallId);
-      keys.add(`contact:${c.bodyAId}:${other}`);
-    } else {
-      keys.add(`point:${contact.px.toFixed(4)}:${contact.py.toFixed(4)}`);
+/** Stable event identity shared by detection and automatic-pause refinement.
+ * Explicit namespaces preserve ID zero and unordered body pairs. */
+export function contactKey(contact: Contact): string {
+  const a = contact.bodyAId;
+  const b = contact.bodyBId;
+  if (a !== undefined && a >= 0) {
+    if (b !== null && b !== undefined && b >= 0) {
+      return `body:${Math.min(a, b)}:${Math.max(a, b)}`;
+    }
+    if (contact.wallId !== null && contact.wallId !== undefined) {
+      return `wall:${a}:${contact.wallId}`;
     }
   }
-  return keys;
+  return `point:${contact.px.toFixed(4)}:${contact.py.toFixed(4)}`;
+}
+
+function contactKeys(world: World): Set<string> {
+  return new Set(world.contacts.map(contactKey));
+}
+
+function contactBodyIds(key: string): number[] {
+  const parts = key.split(":");
+  if (parts[0] === "body") return parts.slice(1).map(Number);
+  return parts[0] === "wall" ? [Number(parts[1])] : [];
 }
 
 function contactValue(world: World, key: string): string {
   const parts = key.split(":");
-  if (parts[0] !== "contact") return "contact";
+  if (parts[0] !== "body" && parts[0] !== "wall") return "contact";
   const a = world.bodies.find((body) => body.id === Number(parts[1]));
   const other = Number(parts[2]);
-  const b = world.bodies.find((body) => body.id === other);
-  const wall = other < 0 ? world.walls.find((candidate) => candidate.id === -other) : undefined;
-  return [a?.name, b?.name ?? wall?.name].filter(Boolean).join(" with ") || "contact";
+  const b = parts[0] === "body"
+    ? world.bodies.find((body) => body.id === other)
+    : world.walls.find((wall) => wall.id === other);
+  return [a?.name, b?.name].filter(Boolean).join(" with ") || "contact";
 }
 
 function linkTautStates(world: World): Map<string, boolean> {

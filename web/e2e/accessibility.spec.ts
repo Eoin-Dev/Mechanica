@@ -105,6 +105,70 @@ test("canvas pointer coordinates select the rendered body", async ({ page }) => 
   await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("Earth");
 });
 
+test("dialogs isolate scene edits and Escape cancels typeset edits", async ({ page }) => {
+  await skipFirstRunTour(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  await page.getByRole("button", { name: "Load Simple pendulum", exact: true }).click();
+  await expect(page.locator("#status-text")).toContainText("1 body");
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  await page.keyboard.press("Control+z");
+  await expect(page.locator("#status-text")).toContainText("1 body");
+  await expect(page.getByRole("dialog", { name: "Library" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Control+z");
+  await expect(page.locator("#status-text")).toContainText("2 bodies");
+
+  await page.getByRole("tab", { name: "World", exact: true }).click();
+  await page.getByRole("button", { name: "Add force field", exact: true }).click();
+  const formula = page.locator('math-field[aria-label="Fx formula"]');
+  await expect(formula).toBeVisible();
+  const before = await formula.evaluate((field) =>
+    (field as HTMLElement & { getValue(): string }).getValue());
+  await formula.click();
+  // MathLive transfers focus to its keyboard sink asynchronously.
+  await expect(formula).toBeFocused();
+  await page.keyboard.press("Control+a");
+  await page.keyboard.type("5x");
+  await expect.poll(() => formula.evaluate((field) =>
+    (field as HTMLElement & { getValue(): string }).getValue())).not.toBe(before);
+  await page.keyboard.press("Escape");
+  await expect.poll(() => formula.evaluate((field) =>
+    (field as HTMLElement & { getValue(): string }).getValue())).toBe(before);
+});
+
+test("destructive Inspector controls keep readable hover text in the light theme", async ({ page }) => {
+  await skipFirstRunTour(page, { theme: "light" });
+  await page.goto("/");
+  const canvas = page.locator("#canvas");
+  const box = (await canvas.boundingBox())!;
+  await canvas.click({ position: { x: box.width / 2 - 121.8, y: box.height / 2 } });
+  await page.locator("#inspector").getByRole("button", { name: "Delete", exact: true }).hover();
+  const result = await new AxeBuilder({ page }).include("#inspector button.danger")
+    .withRules(["color-contrast"]).analyze();
+  expect(result.violations).toEqual([]);
+});
+
+test("narrow graph controls remain reachable with enlarged application text", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  await skipFirstRunTour(page, { theme: "light", studio_mode: true });
+  await page.goto("/");
+  await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
+  const dock = page.locator("#dock");
+  for (const name of ["Energy", "Mom.", "Phase", "Distance", "Velocity"]) {
+    const button = dock.getByRole("button", { name, exact: true });
+    await button.click();
+    const rect = await button.boundingBox();
+    expect(rect!.x).toBeGreaterThanOrEqual(0);
+    expect(rect!.x + rect!.width).toBeLessThanOrEqual(320);
+  }
+  const close = page.getByRole("button", { name: "Close the graph dock." });
+  const rect = await close.boundingBox();
+  expect(rect!.x + rect!.width).toBeLessThanOrEqual(320);
+  await close.click();
+  await expect(dock).toBeHidden();
+});
+
 test("pulley preset and tool expose a complete editable-string assembly", async ({ page }) => {
   await skipFirstRunTour(page, { theme: "dark", studio_mode: true });
   await page.goto("/");
@@ -362,6 +426,8 @@ test("320 CSS pixels and 200% application text remain contained", async ({ page 
     })(),
   }));
   expect(contained).toEqual({ documentFits: true, canvasFits: true });
+  await expect.poll(async () => (await page.locator(".dock-canvas-wrap canvas").boundingBox())?.height ?? 0)
+    .toBeGreaterThanOrEqual(100);
 
   await page.getByRole("button", { name: "Library" }).click();
   const library = page.getByRole("dialog", { name: "Library" });

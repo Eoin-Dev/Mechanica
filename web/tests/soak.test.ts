@@ -1,16 +1,5 @@
 /** @vitest-environment jsdom */
-/** Long runs: what grows, and what drifts.
- *
- * Everything else here measures a second or two of simulated time. The way
- * this app is actually used is a scene left running while someone watches
- * it, which is a different question: over minutes, does anything accumulate
- * that is never released, and does the answer stay the answer?
- *
- * Both failure modes are invisible in short tests by construction. A cache
- * keyed by body id looks fine until enough ids have existed; a rewind buffer
- * looks fine until it has had time to fill; energy drift of 0.01% per second
- * looks like nothing until it has had a thousand seconds to compound.
- */
+/** Long-running checks for energy drift and bounded caches/history. */
 import { describe, expect, it } from "vitest";
 import { App, PHYSICS_DT } from "../src/app";
 import { Vec2 } from "../src/core/vec";

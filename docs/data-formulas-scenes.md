@@ -300,8 +300,12 @@ input within those limits:
    internal pulley body. Pulley records require two ordinary particles and one
    distinct valid axle marked `is_pulley`; the first valid record claims that
    axle and later shared-axle records are skipped.
-8. Internal pulley bodies not owned by a surviving pulley string are pruned;
-   valid wall mounts are synchronized and missing/degenerate mounts detach.
+8. Rod attachments are resolved only to a live bilateral rod that does not own
+   the attaching body as an endpoint. Orphaned hidden rod endpoints and internal
+   pulley bodies not owned by a surviving pulley string are pruned. Links to
+   pruned endpoints are removed too. Pulley particles cannot be hidden rod
+   endpoints. Valid wall mounts are synchronized and missing/degenerate mounts
+   detach.
 9. Fields and drivers are reconstructed. A driver aimed at an internal pulley
    axle is skipped because the axle has no editable motion or force state.
 
@@ -316,6 +320,8 @@ angles.
 `restoreSnapshot(text)` is reserved for strings produced by the running
 application. It uses the same shape and finite-number guards but preserves
 body angles and driver phase/direction exactly rather than normalizing them.
+It also bypasses external collection-count ceilings: live creation/duplication
+can exceed an import budget, while history has its own byte and entry limits.
 Undo, redo, rewind keyframes, reset, and time-jump copies use this trusted path;
 saved and uploaded scene data always use `restore()`.
 
@@ -329,7 +335,8 @@ loaded world emits the current supported shape.
 `snapshot(world)` is compact `JSON.stringify(world.toDict())`. `restore()` is
 the normalized untrusted scene boundary; `restoreSnapshot()` is the exact
 internal reconstruction boundary. Both delegate to `World.fromDict`, but only
-the trusted path requests angle preservation.
+the trusted path requests angle preservation and disables external collection
+limits. Other shape, scalar, and topology guards still apply.
 
 ### Undo stack
 
@@ -430,8 +437,11 @@ digits plus literal space, underscore, and hyphen, whitespace-collapsed, capped
 at 80 characters, and defaulted to `scene` if empty. `sceneExists()` checks the
 sanitized key so differently punctuated inputs cannot silently collide.
 
-`saveScene()` writes or overwrites one payload and returns the safe name. Quick
-save chooses a millisecond-resolution name such as
+`saveScene()` checks the loader's collection limits with
+`assertSceneCollectionLimits()` and the serialized UTF-8 payload's 10 MiB
+ceiling before writing or overwriting a payload. A rejected scene raises
+`SceneSaveError` and leaves any existing save intact. Successful saves return
+the safe name. Quick save chooses a millisecond-resolution name such as
 `Scene 2026-08-04 123456-789`; if that sanitized key already exists it probes
 `-2`, `-3`, and later suffixes rather than overwriting it. A quota or
 blocked-storage failure becomes `SceneSaveError` with a user-facing message.
@@ -463,7 +473,9 @@ metadata JSON reads as an empty description.
 ## File import and export
 
 Export serializes `world.toDict()` with indentation into an
-`application/json` blob. The temporary anchor receives a filesystem-safe name:
+`application/json` blob. It checks the same collection limits and the actual
+indented payload's 10 MiB size before offering the download; the Library reports
+any `SceneSaveError`. The temporary anchor receives a filesystem-safe name:
 non-ASCII/punctuation that survived the storage name is folded to underscores,
 and a name without ASCII alphanumerics becomes `scene.json`. The object URL is
 revoked after a delay so the browser has time to begin reading it.
@@ -599,6 +611,9 @@ MathLive and its CSS/fonts, and swaps in a `MathfieldElement` only after loading
 It preserves focus, keeps invalid in-progress LaTeX visible, commits on blur or
 Enter, reverts on Escape, and stops global shortcuts while editing. Load or
 attachment failure leaves the text editor in place.
+Enter/Escape are intercepted before MathLive's inner handler. Escape restores
+the stored source before blur; an unchanged text-field blur does not commit a
+rounded display value.
 
 The formula guide uses the same lazy chunk for static markup. If it cannot
 load, plain source remains visible.
@@ -637,6 +652,12 @@ The registry is ordered for the library and currently contains these groups:
 | Projectiles & Friction | Projectile drag race; Friction ramp; Pulley on an incline; Galileo's drop; Which lands first?; Projectile angles; Terminal velocity; Wrecking ball; Chain bridge |
 | Soft Bodies | Jelly block; Squishy ball; Trampoline; Soft wheel; Jelly smash |
 | Chaos | Butterfly effect; Orbit dance; Sinai billiard; Cyclone |
+
+Newton's cannon and Projectile angles overlay several finite-size bodies at
+one launch point. Their contact separation affects the comparison, and the
+cannon shots also attract each other through mutual gravity. Their descriptions
+explain that keeping one projectile at a time gives an isolated trajectory;
+the displayed ideal formulas assume the stated isolated/equal-height conditions.
 
 The Friction ramp places three deliberately non-rotating balls 1.5 m apart
 along its 25-degree surface. Its friction levels demonstrate fast sliding,

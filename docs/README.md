@@ -38,12 +38,12 @@ Suggested reading paths:
 - Release or validation work: [testing and
   operations](testing-and-operations.md).
 
-Documentation has three entry points:
+Documentation is organized into three entry points:
 
 - the root [`README.md`](../README.md) is the user-facing overview and quick
   start;
 - [`CONTRIBUTING.md`](../CONTRIBUTING.md) defines contribution and commit
-  conventions;
+  conventions; and
 - this directory owns detailed implementation and operational behavior.
 
 Put new detail in the handbook page that owns the subject. Add another page
@@ -91,7 +91,7 @@ Mechanica/
     └── tests/                headless verification suite
 ```
 
-## Core mental model
+## Application layers
 
 The application has five cooperating layers:
 
@@ -153,4 +153,5 @@ When changing the project:
 6. Run the checks described in [testing and
    operations](testing-and-operations.md) and verify all Markdown links.
 
-See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for contribution requirements.
+See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for contribution and validation
+requirements.

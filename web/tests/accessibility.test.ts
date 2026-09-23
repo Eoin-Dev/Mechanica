@@ -17,7 +17,7 @@
  * These are asserted against the builders rather than against a rendered
  * page, so a new control gets them by construction.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { button, checkbox, colourEdit, numEdit, segmented, slider,
          refreshTabs, textEdit, wireTabs } from "../src/ui/dom";
 
@@ -32,6 +32,75 @@ function accessibleName(el: Element): string {
 }
 
 const SELECTOR = "input, button, select, textarea";
+
+describe("editing preserves values until an intentional commit", () => {
+  it("keeps an oversized name out of state and accepts the exact length boundary", () => {
+    let name = "Body";
+    const control = textEdit(() => name, value => { name = value; return true; }, "", "Name", 200);
+    document.body.replaceChildren(control.root);
+    const input = control.root as HTMLInputElement;
+    expect(input.maxLength).toBe(200);
+    input.focus();
+    input.value = "x".repeat(201);
+    input.blur();
+    expect(name).toBe("Body");
+    input.focus();
+    input.value = "x".repeat(200);
+    input.blur();
+    expect(name).toHaveLength(200);
+  });
+
+  it.each(["slider", "number"])("does not round an untouched %s or commit Escape", (kind) => {
+    let value = 1.23456789;
+    const set = vi.fn((next: number) => { value = next; });
+    const commit = vi.fn();
+    const control = kind === "slider"
+      ? slider("Mass", () => value, set, 0, 100, { onCommit: commit })
+      : numEdit("Position", () => value, set, "m", commit);
+    document.body.replaceChildren(control.root);
+    const input = control.root.querySelector<HTMLInputElement>('input[type="text"]')!;
+    input.focus();
+    input.blur();
+    expect(value).toBe(1.23456789);
+    input.focus();
+    input.value = "9.87";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(value).toBe(1.23456789);
+    expect(set).not.toHaveBeenCalled();
+    expect(commit).not.toHaveBeenCalled();
+    input.focus();
+    input.value = "2.5";
+    input.blur();
+    expect(value).toBe(2.5);
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a valid typed colour without invoking its setter", () => {
+    const set = vi.fn();
+    const control = colourEdit("Colour", () => [1, 2, 3], set);
+    document.body.replaceChildren(control.root);
+    const input = control.root.querySelector<HTMLInputElement>(".colour-hex")!;
+    input.focus();
+    input.value = "#ffffff";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(set).not.toHaveBeenCalled();
+    expect(input.value).toBe("#010203");
+  });
+
+  it("leaves untouched and cancelled text edits out of history", () => {
+    const commit = vi.fn(() => true);
+    const control = textEdit(() => "Exact name", commit);
+    document.body.replaceChildren(control.root);
+    const input = control.root as HTMLInputElement;
+    input.focus();
+    input.blur();
+    input.focus();
+    input.value = "Cancelled name";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(commit).not.toHaveBeenCalled();
+    expect(input.value).toBe("Exact name");
+  });
+});
 
 /** Focusable parts of a control. Some builders return a wrapper and some
  * return the field itself (textEdit does), so the root counts too. */

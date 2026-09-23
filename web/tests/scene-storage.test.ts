@@ -1,11 +1,5 @@
-/** Saved scenes: the localStorage layer.
- *
- * This is user data - the scenes someone built and expects to still be
- * there - and none of it was covered. `safeName` in particular is subtle:
- * it decides the storage key, so two names that look different can collide
- * and silently overwrite one another, which is exactly why saveScene grew a
- * "does this already exist?" check for callers to ask first.
- */
+/** Local scene storage: name collisions, save/load, rename, and failures.
+ * Storage-key normalization must not silently overwrite a different scene. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";
@@ -13,7 +7,7 @@ import { SCENE_MAX_BODIES, World } from "../src/engine/world";
 import {
   MAX_SCENE_FILE_BYTES, SceneSaveError, deleteScene, listScenes, loadScene,
   readSceneFile, renameScene, saveScene, sceneDescription, sceneExists,
-  setSceneDescription,
+  setSceneDescription, restore, snapshot, UndoStack,
 } from "../src/scene/snapshot";
 
 /** Minimal localStorage, with a settable byte budget so the quota path is
@@ -55,6 +49,18 @@ class MemoryStorage {
 }
 
 let store: MemoryStorage;
+
+it("restores internal edit history above the external import budget", () => {
+  const world = new World();
+  for (let i = 0; i <= SCENE_MAX_BODIES; i++) world.bodies.push(new Body(new Vec2(i, 0)));
+  const before = snapshot(world);
+  const history = new UndoStack(world);
+  world.bodies[0].name = "Edited";
+  history.push(world);
+  expect(snapshot(history.undo()!)).toBe(before);
+  expect(history.redo()!.bodies[0].name).toBe("Edited");
+  expect(() => restore(before)).toThrow(/maximum/);
+});
 
 beforeEach(() => {
   store = new MemoryStorage();
@@ -139,6 +145,20 @@ describe("collisions", () => {
 });
 
 describe("save and load round trip", () => {
+  it("rejects an over-limit overwrite and preserves the reopenable saved scene", () => {
+    saveScene(scene(3.25), "keep");
+    const oversized = scene();
+    oversized.bodies = Array.from({ length: SCENE_MAX_BODIES + 1 }, () => new Body(new Vec2()));
+    expect(() => saveScene(oversized, "keep")).toThrow(/2,001 bodies.*2,000/);
+    expect(loaded("keep").bodies[0].pos.x).toBe(3.25);
+  });
+
+  it("rejects an oversized UTF-8 payload before writing any data", () => {
+    const oversized = scene();
+    oversized.bodies[0].name = "界".repeat(Math.ceil(MAX_SCENE_FILE_BYTES / 3));
+    expect(() => saveScene(oversized, "oversized")).toThrow(/10 MiB/);
+    expect(listScenes()).toEqual([]);
+  });
   it("restores the world that was saved", () => {
     saveScene(scene(3.25), "round trip");
     const back = loaded("round trip");
