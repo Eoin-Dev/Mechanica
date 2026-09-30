@@ -216,7 +216,14 @@ export function setTheme(requested: ThemeName): void {
       : scale(a, 0.58);
     SELECTION = lighten(a, 25); // the canvas highlight follows the accent
   }
-  ACCENT_TEXT = contrastSafe(ACCENT, [PANEL, PANEL_LIGHT], 4.5);
+  const tint = (surface: Color, weight: number): Color => [
+    Math.round(ACCENT[0] * weight + surface[0] * (1 - weight)),
+    Math.round(ACCENT[1] * weight + surface[1] * (1 - weight)),
+    Math.round(ACCENT[2] * weight + surface[2] * (1 - weight)),
+  ];
+  // Include the strongest Studio tints and hover surfaces as well as panels.
+  ACCENT_TEXT = contrastSafe(ACCENT, [BG, PANEL, PANEL_LIGHT, PANEL_HOVER,
+    tint(PANEL_LIGHT, 0.14), tint(PANEL_HOVER, 0.08)], 4.6);
   FOCUS = contrastSafe(ACCENT, [BG, PANEL, PANEL_LIGHT, PANEL_HOVER], 3.0);
   ACCENT_INK = surfaceInk(ACCENT);
   ACCENT_DARK_INK = surfaceInk(ACCENT_DARK);

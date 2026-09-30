@@ -23,6 +23,7 @@ npm test
 npm run test:watch
 npm run build
 npm run test:e2e
+npm run check:docs
 npm run benchmark:performance -- --quick
 npm run preview
 npm audit
@@ -44,6 +45,8 @@ npm audit
   and 200-particle gas smoke comparisons at DPR 1. Benchmark values describe
   the current machine and are intentionally not a flaky CI threshold.
 - `preview` serves that production output locally.
+- `check:docs` checks local files and Markdown heading references in the README,
+  contribution guide, and handbook. Fenced examples and external URLs are skipped.
 - `audit` asks the configured npm registry for known dependency
   vulnerabilities. Keep certificate validation enabled; fix the local trust
   store or use an organization-provided CA when registry TLS cannot be
@@ -68,8 +71,8 @@ change:
 5. Verify affected behavior manually when automated browser tests cannot
    exercise browser-chrome zoom overrides, assistive technology, or touch
    hardware.
-6. Check links in `README.md`, `CONTRIBUTING.md`, and `docs/*.md`
-   when documentation paths change.
+6. Run `npm run check:docs` to check links in `README.md`, `CONTRIBUTING.md`,
+   and `docs/*.md`.
 7. Update the current-behavior handbook page in the same change whenever its
    explanation, schema, workflow, invariant, or command would otherwise be
    stale.
@@ -191,6 +194,8 @@ with the behavior it protects rather than an exact assertion count.
 | Test file | Protected behavior |
 | --- | --- |
 | [`accessibility.test.ts`](../web/tests/accessibility.test.ts) | Exact-value preservation on unchanged blur and Escape cancellation for scalar/text/colour controls, text-length boundary enforcement, accessible control names, shortcut-name isolation, play state, value/selected semantics, zero-preserving and softened-log slider mappings, tab helpers, and refresh behavior that avoids redundant ARIA/DOM updates. |
+| [`input-validation.test.ts`](../web/tests/input-validation.test.ts) | Complete decimal/scientific numeric commits, rejected text/number/hex retention and correction, Escape restoration, exact slider endpoints, colour names, and unchanged-swatch DOM writes. |
+| [`mathedit.test.ts`](../web/tests/mathedit.test.ts) | Compiler and conversion rejection retention, correction, Escape, detached and invalid interim upgrade deferral, and usable text fallback when mounted MathLive configuration fails. |
 | [`focus-ring.test.ts`](../web/tests/focus-ring.test.ts) | Stylesheet cascade retains keyboard focus visibility and the TypeScript/CSS phone breakpoints agree. |
 | [`shortcuts.test.ts`](../web/tests/shortcuts.test.ts) | Focused-control ownership, modifier edits, tool keys, playback/view commands, modal/tour/Escape precedence, and unusual event targets. |
 | [`splitter-drag.test.ts`](../web/tests/splitter-drag.test.ts) | Pointer capture plus keyboard 10/32-pixel steps and Home/End limits, separator orientation/value metadata and reveal-time resynchronization, size direction, min/max clamps, commit behavior, and cancellation for inspector/dock resizing. |
@@ -205,6 +210,16 @@ with the behavior it protects rather than an exact assertion count.
 | [`zoom-accessibility.test.ts`](../web/tests/zoom-accessibility.test.ts) | Page-zoom-restricting viewport metadata, global modified wheel/keyboard/gesture suppression, canvas-only unmodified wheel/touch zoom, contrast-safe accented section/guide/preset/tour/Help headings, mobile heading presence, and selectable reference content. |
 
 ### Real-browser acceptance
+
+Tab recovery is covered by
+[`session-recovery.test.ts`](../web/tests/session-recovery.test.ts): edited/empty
+scene round trips, malformed and oversized input, unchanged-write suppression,
+blocked/quota storage, retries, and independence from named scenes. App lifecycle
+tests check edit, undo/redo, step/rewind, and pause checkpoint values. Production
+browser tests verify paused reload restoration, independent tabs, and damaged
+recovery fallback without overwriting named scenes. Search acceptance covers
+desktop Light/Studio, phone, and 320px/200% text, including actual focus, clear,
+transparent inner field styling, filtered loading, and axe scans.
 
 | Test file | Protected behavior |
 | --- | --- |
@@ -287,6 +302,9 @@ ignored by Git.
 README-count check, production build, Chromium/system-dependency installation,
 and Playwright/axe acceptance. Every third-party action reference is an
 immutable commit SHA for its documented major version.
+Both workflows also run `check:docs` before building. `playwright-core` is pinned
+to the same version as `@playwright/test` to satisfy axe's direct peer dependency
+without a second browser-library version during clean installation.
 
 `.github/workflows/deploy.yml` runs on pushes to `main` and manual dispatch.
 The build job:
@@ -297,9 +315,10 @@ The build job:
 4. runs Vitest with human and JSON reporters;
 5. runs `scripts/check-test-count.mjs` against the generated result so the
    README lower-bound badge cannot become false;
-6. runs the production build;
-7. installs Chromium and runs the browser acceptance suite; and
-8. uploads `web/dist` as the Pages artifact.
+6. checks documentation files and heading references;
+7. runs the production build;
+8. installs Chromium and runs the browser acceptance suite; and
+9. uploads `web/dist` as the Pages artifact.
 
 The build job has only `contents: read`. The deploy job alone receives
 `pages: write` and `id-token: write`; it waits for build, uses the GitHub Pages

@@ -759,6 +759,7 @@ export class CanvasController {
       // entry that turns every later click into a phantom two-finger pinch
       if (e.pointerType === "touch") {
         this.pointers.set(e.pointerId, this.mouse);
+        if (this.pointers.size > 2) return;
         if (this.pointers.size === 2) {
           // second finger: cancel the one-finger gesture, start pinching
           const moved = this.dragMoved || this.eraseChanged;
@@ -805,7 +806,7 @@ export class CanvasController {
       this.app.invalidateCanvas();
       this.shiftDown = e.shiftKey;
       if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, pos);
-      if (this.pointers.size === 2) {
+      if (this.pointers.size >= 2) {
         const [p1, p2] = [...this.pointers.values()];
         const dist = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
         const cx = (p1[0] + p2[0]) / 2;
@@ -824,12 +825,22 @@ export class CanvasController {
       this.motion(pos);
     });
     canvas.addEventListener("pointerleave", (e) => {
-      if (e.buttons === 0) this.canvasPointer = null;
+      if (e.buttons === 0) {
+        this.canvasPointer = null;
+        this.hover = null;
+        this.app.invalidateCanvas();
+      }
     });
 
     const finish = (e: PointerEvent) => {
       this.app.invalidateCanvas();
       this.pointers.delete(e.pointerId);
+      if (this.pointers.size >= 2) {
+        const [p1, p2] = [...this.pointers.values()];
+        this.pinchDist = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+        this.pinchMid = [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2];
+        return;
+      }
       if (this.pointers.size > 0) {
         this.pinchDist = 0;
         return;
@@ -850,6 +861,13 @@ export class CanvasController {
     };
     canvas.addEventListener("pointerup", finish);
     canvas.addEventListener("pointercancel", abortWindowGesture);
+    canvas.addEventListener("lostpointercapture", (e) => {
+      if (this.pointers.has(e.pointerId) || this.dragActive ||
+          this.wallDrag !== null || this.velDrag !== null || this.panning ||
+          this.erasing || this.wallStart !== null || this.rubber !== null) {
+        this.finishInterruptedGesture();
+      }
+    });
 
     canvas.addEventListener("wheel", (e) => {
       // Modified wheel gestures are reserved and suppressed at document

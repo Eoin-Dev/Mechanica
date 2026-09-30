@@ -28,6 +28,9 @@ function loadTypeset(): Promise<Typeset> {
     ]).then(([m]) => {
       m.MathfieldElement.fontsDirectory = null;
       return (latex: string) => m.convertLatexToMarkup(latex);
+    }).catch((error) => {
+      typesetLoading = null;
+      throw error;
     });
   }
   return typesetLoading;
@@ -51,6 +54,7 @@ function formula(source: string): HTMLElement {
 /** Upgrade every pending .guide-math in `root` to typeset markup. */
 function upgradeMath(root: HTMLElement): void {
   loadTypeset().then((render) => {
+    if (!root.isConnected) return;
     for (const n of root.querySelectorAll<HTMLElement>(".guide-math[data-latex]")) {
       try {
         n.innerHTML = render(n.dataset.latex!);

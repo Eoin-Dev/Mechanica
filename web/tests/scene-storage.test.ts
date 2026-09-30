@@ -222,6 +222,14 @@ describe("file import", () => {
     if (result.status === "loaded") expect(result.name).toBe("valid");
   });
 
+  it.each(["null", "[]", "42", '"hello"', "{}", '{"unrelated":true}'])(
+    "rejects unrelated JSON %s instead of loading an empty scene", async text => {
+      expect((await readSceneFile(file("unrelated.json", text))).status).toBe("invalid");
+      store.setItem("mechanica.scene.unrelated", text);
+      expect(loadScene("unrelated").status).toBe("invalid");
+      expect(store.getItem("mechanica.scene.unrelated")).toBe(text);
+    });
+
   it("reports engine collection limits as too-large", async () => {
     const text = JSON.stringify({ bodies: Array(SCENE_MAX_BODIES + 1).fill({}) });
     const result = await readSceneFile(file("crowded.json", text));

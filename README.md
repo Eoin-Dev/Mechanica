@@ -27,6 +27,7 @@ npm test           # verification suite (physics, rendering, robustness)
 npm run build      # production build into web/dist/
 npx playwright install chromium  # one-time browser-test prerequisite
 npm run test:e2e   # production-preview Chromium and axe checks
+npm run check:docs # local documentation links and heading references
 npm run benchmark:performance -- --quick  # comparative browser performance smoke matrix
 ```
 
@@ -49,7 +50,7 @@ The complete build, CI, Pages, and alternative-host instructions are in
   finite-wheel pulley strings,
   N-body gravity with softening, linear + quadratic drag, sinusoidal
   drivers and sandboxed user force fields.
-- **Library** — dozens of ready-made, annotated simulations across eight
+- **Library** — searchable, annotated simulations across eight
   categories (press `L`), plus saved scenes with rename, description, export,
   and import.
 - **Analysis** — live energy / momentum / phase-space plots, realised net-force
@@ -59,6 +60,8 @@ The complete build, CI, Pages, and alternative-host instructions are in
 - **Editing** — direct manipulation with undo/redo, renameable objects, a
   type-filtered box select with bulk editing, grid snapping, property
   copy/paste, alignment tools, scene save/load (JSON).
+- **Recovery** — refresh restores the tab's last unsaved checkpoint, paused;
+  named saves and JSON downloads keep scenes beyond the current tab.
 - **Touch** — one finger drives the active tool; two fingers pinch-zoom and pan.
 
 ## Codebase documentation

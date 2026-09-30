@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { Color } from "../src/engine/body";
 import * as theme from "../src/ui/theme";
 import css from "../src/style.css?raw";
 
@@ -46,7 +47,13 @@ describe("theme contrast invariants", () => {
       theme.setTheme(name);
       for (const accent of ["#000000", "#ffffff", "#777777", "#ff00ff"]) {
         theme.setAccent(accent);
-        for (const surface of [theme.PANEL, theme.PANEL_LIGHT]) {
+        const tint = (surface: Color, weight: number): Color => [
+          Math.round(theme.ACCENT[0] * weight + surface[0] * (1 - weight)),
+          Math.round(theme.ACCENT[1] * weight + surface[1] * (1 - weight)),
+          Math.round(theme.ACCENT[2] * weight + surface[2] * (1 - weight)),
+        ];
+        for (const surface of [theme.BG, theme.PANEL, theme.PANEL_LIGHT, theme.PANEL_HOVER,
+          tint(theme.PANEL_LIGHT, 0.14), tint(theme.PANEL_HOVER, 0.08)]) {
           expect(theme.contrastRatio(theme.ACCENT_TEXT, surface), `${name} ${accent} text`)
             .toBeGreaterThanOrEqual(4.5);
         }

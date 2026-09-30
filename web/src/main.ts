@@ -6,6 +6,8 @@ import { Vec2 } from "./core/vec";
 import { Body } from "./engine/body";
 import { World } from "./engine/world";
 import { Preset, gasWorld } from "./scene/presets";
+import { TabRecovery } from "./scene/recovery";
+import { snapshot } from "./scene/snapshot";
 import { Inspector } from "./ui/inspector";
 import { FormulaGuide } from "./ui/guide";
 import { Help, Library, SettingsPanel } from "./ui/overlays";
@@ -129,11 +131,40 @@ resize();
 
 // ------------------------------------------------------------------- start
 app.initializePreset(PRESETS.find((preset) => preset.name === "Earth & Moon") ?? PRESETS[0]);
+const recovery = new TabRecovery(() => window.sessionStorage);
+const recovered = recovery.read();
+if (recovered.status === "loaded") {
+  app.loadWorld(recovered.world, "previous tab", false);
+} else if (recovered.status === "invalid" || recovered.status === "too-large") {
+  app.toast("Could not restore the previous tab. Saved scenes are available in Library.");
+}
+let recoveryWarning = false;
+const checkpoint = (state: string): void => {
+  const status = recovery.write(state);
+  if ((status === "unavailable" || status === "too-large") && !recoveryWarning) {
+    recoveryWarning = true;
+    app.toast(status === "too-large"
+      ? "This scene is too large for tab recovery. Save or download it in Library."
+      : "Tab recovery is unavailable. Save or download your scene in Library.");
+  }
+};
+app.onSceneCheckpoint = checkpoint;
+const checkpointLive = (): void => {
+  try { checkpoint(snapshot(app.world)); }
+  catch { /* Recovery must not interrupt the live simulation. */ }
+};
+setInterval(() => { if (app.playing) checkpointLive(); }, 5000);
+window.addEventListener("pagehide", checkpointLive);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") checkpointLive();
+});
 app.start();
 // First visit gets the guided tour instead of a toast that scrolls away
 // before it has been read; afterwards, the toast is the reminder.
 if (app.settings.tour_done === true) {
-  app.toast("Welcome back! Press L for the library, F1 for help.");
+  app.toast(recovered.status === "loaded"
+    ? "Previous tab restored and paused. Press Space to run, L to save."
+    : "Welcome back! Press L for the library, F1 for help.");
 } else {
   tour.maybeAutoStart();
 }

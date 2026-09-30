@@ -37,7 +37,12 @@ function ownsKey(target: EventTarget | null | undefined, key: string): boolean {
   // as `null`, and only one of those was being caught.
   if (!target) return false;
   const el = target as { tagName?: string;
+                         isContentEditable?: boolean;
+                         closest?: (selector: string) => Element | null;
                          getAttribute?: (name: string) => string | null };
+  if (el.isContentEditable || el.closest?.('[contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"]')) {
+    return true;
+  }
   const tag = el.tagName;
   // text entry of every kind keeps all of its keys
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "MATH-FIELD" ||
@@ -62,9 +67,17 @@ function ownsKey(target: EventTarget | null | undefined, key: string): boolean {
  * already had preventDefault called on the event in that case). */
 export function handleShortcut(e: KeyboardEvent, host: ShortcutHost): boolean {
   const { app } = host;
+  if (e.altKey || e.isComposing) return false;
   if (ownsKey(e.target, e.key)) return false;
 
   const key = e.key.toLowerCase();
+  // Toggle and scene-wide commands run once per physical key press.
+  if (e.repeat && ((e.ctrlKey || e.metaKey)
+    ? ["d", "r", "s", "v"].includes(key)
+    : [" ", "n", "t", "g", "f", "d", "k", "c", "l", "1", "2", "3", "f1", "\\"].includes(key))) {
+    e.preventDefault();
+    return true;
+  }
   // Modal ownership includes modifier edits: the scene behind a dialog must
   // not be reset, duplicated or replaced by undo while the user reads it.
   if (host.tour.visible || host.overlays.some((o) => o.visible)) {
@@ -83,7 +96,6 @@ export function handleShortcut(e: KeyboardEvent, host: ShortcutHost): boolean {
     }
     return false;
   }
-  if (e.altKey || e.isComposing) return false;
   if (e.ctrlKey || e.metaKey) {
     if (key === "z") {
       if (e.shiftKey) app.redo();

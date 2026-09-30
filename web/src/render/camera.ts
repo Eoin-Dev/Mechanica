@@ -42,6 +42,8 @@ export class Camera {
 
   /** Zoom keeping the world point under the cursor fixed. */
   zoomAt(sx: number, sy: number, factor: number): void {
+    if (!Number.isFinite(sx) || !Number.isFinite(sy) ||
+        !Number.isFinite(factor) || factor <= 0) return;
     const before = this.toWorld(sx, sy);
     this.zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.zoom * factor));
     const after = this.toWorld(sx, sy);

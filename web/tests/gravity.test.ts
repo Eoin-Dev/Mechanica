@@ -10,6 +10,7 @@ import { Vec2 } from "../src/core/vec";
 import { Body } from "../src/engine/body";
 import { World } from "../src/engine/world";
 import { PRESETS } from "../src/scene/presets";
+import { forceLedger } from "../src/education/analysis";
 
 const DT = 1.0 / 120.0;
 
@@ -33,6 +34,34 @@ function passThroughWorld(pointGravity: boolean): { w: World; a: Body; b: Body }
 }
 
 describe("gravity model", () => {
+  it.each([false, true])("skips coincident unsoftened points in Performance=%s without losing other attraction", performance => {
+    const w = new World();
+    w.gravity = 0;
+    w.mutualGravity = true;
+    w.pointGravity = true;
+    w.G = 1;
+    w.softening = 0;
+    w.performance = performance;
+    w.performanceLevel = 3;
+    for (let i = 0; i < (performance ? 127 : 2); i++) {
+      const b = new Body(new Vec2(0, 0), 0.1, 1);
+      b.collides = false;
+      w.bodies.push(b);
+    }
+    const distant = new Body(new Vec2(2, 0), 0.1, 1);
+    distant.collides = false;
+    w.bodies.push(distant);
+    const a = w.bodies[0];
+    expect(forceLedger(w, a).resultant.fx).toBeCloseTo(0.25, 12);
+    Object.getPrototypeOf(w).accumulateGravity.call(w);
+    expect(a.acc.x).toBeCloseTo(0.25, 12);
+    expect(a.acc.y).toBe(0);
+    expect(distant.acc.x).toBeCloseTo(-0.25 * (w.bodies.length - 1), 12);
+    w.step(DT);
+    expect(w.bodies.every(b => [b.pos.x, b.pos.y, b.vel.x, b.vel.y,
+      b.acc.x, b.acc.y].every(Number.isFinite))).toBe(true);
+  });
+
   it("solid mode caps the pull inside an overlap; point mode slingshots", () => {
     const run = (point: boolean) => {
       const { w, a } = passThroughWorld(point);

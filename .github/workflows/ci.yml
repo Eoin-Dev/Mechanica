@@ -27,6 +27,8 @@ jobs:
         run: npm test -- --reporter=default --reporter=json --outputFile=test-results.json
       - name: Check the README test-count claim
         run: node scripts/check-test-count.mjs
+      - name: Check documentation links
+        run: npm run check:docs
       - name: Build production application
         run: npm run build
       - name: Install Chromium

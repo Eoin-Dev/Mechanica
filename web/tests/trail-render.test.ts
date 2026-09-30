@@ -193,6 +193,20 @@ describe("grid rendering", () => {
 });
 
 describe("body rendering", () => {
+  it("retains a sleeping body's weight and contact reaction diagram", () => {
+    const body = new Body(new Vec2(0, 0), 0.1, 1);
+    body.showForceComponents = true;
+    body.perfSleeping = true;
+    expect(body.invMass).toBe(0);
+    const world = worldWith(body);
+    world.stepCount = 1;
+    const { ctx, ops } = recCtx();
+    drawWorld(ctx, new Camera(800, 600), world, new ViewSettings(), [body], null,
+      new Map(), 800, 600, 1, true);
+    expect(ops.some(op => op.text?.startsWith("W "))).toBe(true);
+    expect(ops.some(op => op.text?.startsWith("R "))).toBe(true);
+  });
+
   it("keeps disjoint bodies in bounded current paths", () => {
     const strokeArgs: Array<FakePath2D | undefined> = [];
     const fillArgs: Array<FakePath2D | undefined> = [];

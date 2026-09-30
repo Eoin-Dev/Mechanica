@@ -451,6 +451,19 @@ export function fmt3dp(v: number): string {
 
 const RESOLUTION = 2000;
 
+/** Accept a complete decimal or scientific-notation number. */
+function readNumber(text: string): number {
+  const value = text.trim();
+  return /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value)
+    ? Number(value) : NaN;
+}
+
+function inputError(input: HTMLElement, invalid: boolean): void {
+  input.classList.toggle("error", invalid);
+  if (invalid) input.setAttribute("aria-invalid", "true");
+  else input.removeAttribute("aria-invalid");
+}
+
 export function fmt3g(v: number): string {
   if (v === 0) return "0";
   const abs = Math.abs(v);
@@ -529,8 +542,9 @@ export function slider(label: string, get: () => number,
   let editing = false;
   let editText = "";
   let cancelled = false;
+  let invalid = false;
   const show = (v: number) => {
-    if (editing) return; // don't clobber what the user is typing
+    if (editing || invalid) return;
     const s = opts.unit ? `${fmt(v)} ${opts.unit}` : fmt(v);
     if (val.value !== s) val.value = s; // avoid per-frame DOM writes
     // The range input's own value is a POSITION on a 0..RESOLUTION track,
@@ -549,6 +563,8 @@ export function slider(label: string, get: () => number,
     // deliberately taken away, ignoring the event is the only safe reading.
     if (input.disabled) return;
     dragging = true;
+    invalid = false;
+    inputError(val, false);
     const v = toValue(Number(input.value));
     set(v);
     show(v);
@@ -566,7 +582,7 @@ export function slider(label: string, get: () => number,
   val.addEventListener("focus", () => {
     editing = true;
     cancelled = false;
-    val.value = fmt(get()); // drop the unit so only the number is edited
+    if (!invalid) val.value = fmt(get());
     editText = val.value;
     val.select();
   });
@@ -576,19 +592,23 @@ export function slider(label: string, get: () => number,
     // how a control that has just been taken away would commit the half-typed
     // value it was taken away with. Drop it and re-sync instead.
     if (val.disabled || cancelled || val.value === editText) {
+      if (val.disabled || cancelled) {
+        invalid = false;
+        inputError(val, false);
+      }
       refresh();
       return;
     }
-    const raw = parseFloat(val.value);
-    if (Number.isFinite(raw)) {
+    const raw = readNumber(val.value);
+    invalid = !Number.isFinite(raw);
+    inputError(val, invalid);
+    if (!invalid) {
       let v = Math.max(min, Math.min(max, raw));
-      if (opts.step) v = Math.round(v / opts.step) * opts.step;
+      if (opts.step && v > min && v < max) v = Math.round(v / opts.step) * opts.step;
+      v = Math.max(min, Math.min(max, v));
       set(v);
       opts.onCommit?.();
     }
-    // unparseable input needs no error state: refresh() below rewrites the
-    // field with the value that is actually in effect, which is the clearer
-    // answer to "that is not a number"
     refresh(); // reformat readout and re-sync the slider knob
   });
   val.addEventListener("keydown", (e) => {
@@ -612,6 +632,8 @@ export function slider(label: string, get: () => number,
       if (dis) {
         dragging = false;
         editing = false;
+        invalid = false;
+        inputError(val, false);
       }
     }
     if (dragging || editing) return;
@@ -640,6 +662,7 @@ export function numEdit(label: string, get: () => number,
   let focused = false;
   let editText = "";
   let cancelled = false;
+  let invalid = false;
   input.addEventListener("focus", () => {
     focused = true;
     cancelled = false;
@@ -647,17 +670,20 @@ export function numEdit(label: string, get: () => number,
     input.select();
   });
   const commit = () => {
-    const v = parseFloat(input.value);
-    if (Number.isFinite(v)) {
+    const v = readNumber(input.value);
+    invalid = !Number.isFinite(v);
+    inputError(input, invalid);
+    if (!invalid) {
       set(v);
       onCommit?.();
-      input.classList.remove("error");
-    } else {
-      input.classList.add("error");
     }
   };
   input.addEventListener("blur", () => {
     focused = false;
+    if (cancelled) {
+      invalid = false;
+      inputError(input, false);
+    }
     if (!cancelled && input.value !== editText) commit();
     refresh();
   });
@@ -670,14 +696,10 @@ export function numEdit(label: string, get: () => number,
     e.stopPropagation();
   });
   const refresh = () => {
-    if (focused) return;
+    if (focused || invalid) return;
     const s = fmt(get());
     if (input.value !== s) {
       input.value = s;
-      // The field has been rewritten with the real value, so whatever the
-      // user typed that failed to parse is gone - keeping the red border
-      // left it flagging an error against text that is no longer there.
-      input.classList.remove("error");
     }
   };
   refresh();
@@ -758,6 +780,7 @@ export function textEdit(get: () => string, commit: (s: string) => boolean,
   let focused = false;
   let editText = "";
   let cancelled = false;
+  let invalid = false;
   input.addEventListener("focus", () => {
     focused = true;
     cancelled = false;
@@ -766,11 +789,13 @@ export function textEdit(get: () => string, commit: (s: string) => boolean,
   input.addEventListener("blur", () => {
     focused = false;
     if (!cancelled && input.value !== editText) {
-      input.classList.toggle("error", (maxLength !== undefined && input.value.length > maxLength) ||
-        !commit(input.value));
+      invalid = (maxLength !== undefined && input.value.length > maxLength) ||
+        !commit(input.value);
+      inputError(input, invalid);
     }
     if (cancelled) {
-      input.classList.remove("error");
+      invalid = false;
+      inputError(input, false);
       refresh();
     }
   });
@@ -783,7 +808,10 @@ export function textEdit(get: () => string, commit: (s: string) => boolean,
     e.stopPropagation();
   });
   const refresh = () => {
-    if (!focused) input.value = get();
+    if (!focused && !invalid) {
+      const value = get();
+      if (input.value !== value) input.value = value;
+    }
   };
   refresh();
   return { root: input, refresh };
@@ -818,10 +846,12 @@ export function colourEdit(label: string, get: () => readonly number[],
                                    onCommit?: () => void;
                                    tooltip?: string } = {}): Control {
   const input = el("input", { type: "color", class: "colour-well",
+                              "aria-label": `${label} colour`,
                               title: "Open the colour picker" });
   // the hex is editable text, so a colour can be typed or pasted exactly -
   // the native picker alone gives no way to enter a known value
   const hex = el("input", { class: "colour-hex", type: "text",
+                            "aria-label": `${label} hex colour`,
                             spellcheck: "false", maxlength: "7",
                             title: "Type or paste a hex colour" });
   const row = el("div", { class: "row" },
@@ -829,6 +859,8 @@ export function colourEdit(label: string, get: () => readonly number[],
   if (opts.tooltip) row.title = opts.tooltip;
 
   const apply = (c: [number, number, number], commit: boolean): void => {
+    invalid = false;
+    inputError(hex, false);
     set(c);
     if (commit) opts.onCommit?.();
     refresh();
@@ -842,6 +874,7 @@ export function colourEdit(label: string, get: () => readonly number[],
   let typing = false;
   let editText = "";
   let cancelled = false;
+  let invalid = false;
   hex.addEventListener("focus", () => {
     typing = true;
     cancelled = false;
@@ -851,11 +884,16 @@ export function colourEdit(label: string, get: () => readonly number[],
   hex.addEventListener("blur", () => {
     typing = false;
     if (cancelled || hex.value === editText) {
+      if (cancelled) {
+        invalid = false;
+        inputError(hex, false);
+      }
       refresh();
       return;
     }
     const ok = /^#?[0-9a-f]{6}$/i.test(hex.value.trim());
-    hex.classList.toggle("error", !ok);
+    invalid = !ok;
+    inputError(hex, invalid);
     if (ok) apply(hexToRgb(hex.value), true);
     else refresh();
   });
@@ -885,7 +923,7 @@ export function colourEdit(label: string, get: () => readonly number[],
   const refresh = (): void => {
     const cur = rgbToHex(get());
     if (input.value !== cur) input.value = cur;
-    if (!typing && hex.value !== cur) {
+    if (!typing && !invalid && hex.value !== cur) {
       hex.value = cur;
       hex.classList.remove("error");
     }
@@ -894,7 +932,10 @@ export function colourEdit(label: string, get: () => readonly number[],
     for (const c of chipList) {
       const on = c.hex === cur;
       c.el.classList.toggle("active", on);
-      c.el.setAttribute("aria-pressed", String(on));
+      const pressed = String(on);
+      if (c.el.getAttribute("aria-pressed") !== pressed) {
+        c.el.setAttribute("aria-pressed", pressed);
+      }
     }
   };
   refresh();

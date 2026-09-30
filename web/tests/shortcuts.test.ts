@@ -58,11 +58,12 @@ beforeEach(() => {
 /** A keydown that records whether the map claimed its default. */
 function press(key: string, opts: {
   ctrl?: boolean; meta?: boolean; shift?: boolean; alt?: boolean;
-  composing?: boolean; tag?: string; role?: string;
+  composing?: boolean; tag?: string; role?: string; repeat?: boolean; editable?: boolean;
 } = {}): { consumed: boolean; prevented: boolean } {
   let prevented = false;
   const target = {
     tagName: opts.tag ?? "BODY",
+    isContentEditable: opts.editable ?? false,
     getAttribute: (n: string) => (n === "role" ? opts.role ?? null : null),
   };
   const e = {
@@ -72,6 +73,7 @@ function press(key: string, opts: {
     shiftKey: opts.shift ?? false,
     altKey: opts.alt ?? false,
     isComposing: opts.composing ?? false,
+    repeat: opts.repeat ?? false,
     target,
     preventDefault() { prevented = true; },
   } as unknown as KeyboardEvent;
@@ -80,6 +82,22 @@ function press(key: string, opts: {
 }
 
 describe("focused controls keep the keys they own", () => {
+  it("leaves shortcuts to editable content", () => {
+    expect(press("Delete", { editable: true }).consumed).toBe(false);
+    expect(press("z", { editable: true, ctrl: true }).consumed).toBe(false);
+    expect(log.calls).toEqual([]);
+  });
+
+  it("ignores repeated toggles while retaining repeated stepping and undo", () => {
+    press(" ");
+    press(" ", { repeat: true });
+    press("l", { repeat: true });
+    press("d", { ctrl: true, repeat: true });
+    expect(log.calls).toEqual(["togglePlay"]);
+    press("ArrowRight", { repeat: true });
+    press("z", { ctrl: true, repeat: true });
+    expect(log.calls).toEqual(["togglePlay", "stepOnce", "undo"]);
+  });
   it("does not invoke a tool for Alt-modified or composing input", () => {
     expect(press("b", { alt: true })).toEqual({ consumed: false, prevented: false });
     expect(press("b", { composing: true })).toEqual({ consumed: false, prevented: false });

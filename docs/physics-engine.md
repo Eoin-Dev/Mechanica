@@ -254,6 +254,10 @@ sum of radii before softening is applied. Inside an overlap the resulting pull
 falls linearly toward zero at coincident centres instead of creating a
 point-mass singularity. The energy calculation uses a matching continuous
 interior potential.
+When point masses coincide with zero softening, their mutual acceleration has
+no defined direction; that pair contributes zero instead of non-finite values.
+The exact solver, Performance-mode nearby-pair approximation, and named-force
+ledger apply the same rule while retaining attraction from other bodies.
 
 Locked non-anchor bodies pull movable bodies but do not receive acceleration.
 Anchors neither pull nor are pulled.

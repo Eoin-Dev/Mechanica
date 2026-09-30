@@ -1,6 +1,6 @@
 /** The keyboard focus ring survives the cascade.
  *
- * There is one `:focus-visible` rule that draws the ring for the whole app,
+ * There is one shared rule that draws the ring for the whole app,
  * and it is a bare pseudo-class - specificity (0,1,0). Any rule that sets
  * `outline: none` with so much as one element or class in front of a `:focus`
  * outranks it and silently deletes the ring for everything it matches.
@@ -65,9 +65,11 @@ describe("focus ring cascade", () => {
     const clean = css.replace(/\/\*[\s\S]*?\*\//g, "");
     const rings = [...clean.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
       .filter((m) => /outline\s*:\s*\d/.test(m[2]))
-      .map((m) => m[1].trim())
+      .map((m) => m[1].trim().replace(/\r\n/g, "\n"))
       .filter((sel) => /:focus/.test(sel));
-    expect(rings).toEqual([":focus-visible"]);
+    expect(rings).toEqual([
+      ":focus-visible:not(.library-search-input),\n.library-search-field:has(.library-search-input:focus-visible)",
+    ]);
   });
 
   it("keeps the input border tint, which is the cue while typing", () => {

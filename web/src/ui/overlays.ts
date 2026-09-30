@@ -17,6 +17,7 @@ export class Library {
   private focus!: ModalFocus;
   private tab: LibraryTab = "Examples";
   private category = "All";
+  private search = "";
   private tabBtns = new Map<LibraryTab, HTMLButtonElement>();
   private content!: HTMLElement;
   private importing = false;
@@ -93,6 +94,22 @@ export class Library {
 
   // ------------------------------------------------------------- examples
   private renderExamples(): void {
+    const search = el("input", { type: "search", class: "library-search-input",
+      placeholder: "Search examples", "aria-label": "Search examples" });
+    search.value = this.search;
+    const searchIcon = el("span", { class: "library-search-icon", "aria-hidden": "true" });
+    searchIcon.insertAdjacentHTML("beforeend", ICONS.search);
+    const clear = button("", () => {
+      this.search = "";
+      search.value = "";
+      populate();
+      search.focus();
+    }, { icon: ICONS.close, style: "ghost", class: "library-search-clear",
+      tooltip: "Clear example search" }).root;
+    const searchField = el("div", { class: "library-search-field" }, searchIcon, search, clear);
+    const resultCount = el("span", { class: "faint library-result-count",
+      role: "status", "aria-live": "polite", "aria-atomic": "true" });
+    const searchRow = el("div", { class: "library-search" }, searchField, resultCount);
     const chips = el("div", { class: "cat-chips", role: "group",
                                "aria-label": "Example categories" });
     for (const cat of CATEGORIES) {
@@ -113,14 +130,43 @@ export class Library {
       chips.append(b);
     }
     const grid = el("div", { class: "card-grid" });
+    this.content.append(searchRow, chips, grid);
+    const populate = (): void => {
+      grid.replaceChildren();
+      clear.hidden = this.search.length === 0;
+      const words = this.search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+      const presets = PRESETS.filter(preset =>
+        (this.category === "All" || preset.category === this.category) &&
+        words.every(word => `${preset.name} ${preset.category} ${preset.description}`
+          .toLowerCase().includes(word)));
+      resultCount.textContent = `${presets.length} ${presets.length === 1 ? "example" : "examples"}`;
+      if (presets.length === 0) {
+        grid.append(el("p", { class: "faint library-empty",
+          text: "No examples match this search in the selected category." }),
+          button("Clear search", () => {
+            this.search = "";
+            search.value = "";
+            populate();
+            search.focus();
+          }).root);
+      }
+      this.renderExampleCards(grid, presets);
+    };
+    search.addEventListener("input", () => {
+      this.search = search.value;
+      populate();
+    });
+    populate();
+  }
+
+  private renderExampleCards(grid: HTMLElement, presets: typeof PRESETS): void {
     // Descriptions are clamped to a few lines; where one is truncated we add a
     // "Show more" toggle (mouse- or keyboard-activated) to reveal the full text
     // without loading the preset. Whether it's needed can only be measured once
     // the cards are laid out, so collect them and check after appending.
     const clampable: Array<{ desc: HTMLElement; card: HTMLElement }> = [];
     let descriptionIndex = 0;
-    for (const preset of PRESETS) {
-      if (this.category !== "All" && preset.category !== this.category) continue;
+    for (const preset of presets) {
       const desc = el("p", { text: preset.description,
                               id: `preset-description-${descriptionIndex++}` });
       const card = el("div", { class: "preset-card",
@@ -138,8 +184,6 @@ export class Library {
       grid.append(card);
       clampable.push({ desc, card });
     }
-    this.content.append(chips, grid);
-
     for (const { desc, card } of clampable) {
       if (desc.scrollHeight <= desc.clientHeight + 1) continue; // fully visible
       const more = el("button", { class: "card-more", text: "Show more",
@@ -714,7 +758,8 @@ const GETTING_STARTED: Array<[string, string, string]> = [
     "pauses at events; Graphs adds energy, momentum, phase space, " +
     "distance–time and velocity–time plots."],
   ["6", "Keep it",
-   "Ctrl+S saves to this browser; the Library exports and imports .json, " +
+   "Refreshing restores this tab's last checkpoint, paused. Ctrl+S saves " +
+   "a named scene to this browser; the Library exports and imports .json, " +
    "which is the same format the desktop version used."],
 ];
 

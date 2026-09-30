@@ -46,6 +46,56 @@ function send(canvas: HTMLCanvasElement, type: string, x: number, y: number,
 }
 
 describe("cancelled pointer gestures", () => {
+  it("finishes a moved body edit when pointer capture is lost", () => {
+    const { app, canvas } = makeApp();
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    app.world.bodies.push(body);
+    app.controller.setTool("select");
+    send(canvas, "pointerdown", 400, 300);
+    send(canvas, "pointermove", 450, 300);
+    app.controller.updateDrag();
+    expect(body.held).toBe(true);
+    send(canvas, "lostpointercapture", 450, 300);
+    expect(body.held).toBe(false);
+    app.undo();
+    expect(app.world.bodies[0].pos.x).toBe(0);
+  });
+
+  it("clears hover when the pointer leaves the canvas", () => {
+    const { app, canvas } = makeApp();
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    app.world.bodies.push(body);
+    send(canvas, "pointermove", 400, 300);
+    expect(app.controller.hover).toBe(body);
+    const exit = new Event("pointerleave");
+    Object.assign(exit, { buttons: 0 });
+    canvas.dispatchEvent(exit);
+    expect(app.controller.hover).toBeNull();
+    expect(app.controller.canvasPointer).toBeNull();
+  });
+
+  it("ignores a third touch and re-bases pinch geometry when a finger lifts", () => {
+    const { app, canvas } = makeApp();
+    app.controller.setTool("body");
+    const touch = (type: string, id: number, x: number, y: number) => {
+      const event = new Event(type);
+      Object.assign(event, { clientX: x, clientY: y, pointerId: id,
+        pointerType: "touch", button: 0, buttons: 1, shiftKey: false });
+      canvas.dispatchEvent(event);
+    };
+    touch("pointerdown", 1, 200, 200);
+    touch("pointerdown", 2, 400, 200);
+    const count = app.world.bodies.length;
+    touch("pointerdown", 3, 600, 300);
+    expect(app.world.bodies).toHaveLength(count);
+    touch("pointermove", 2, 420, 200);
+    const zoom = app.camera.zoom;
+    const centre = app.camera.centre.copy();
+    touch("pointerup", 1, 200, 200);
+    touch("pointermove", 3, 600, 300);
+    expect(app.camera.zoom).toBe(zoom);
+    expect(app.camera.centre).toEqual(centre);
+  });
   it.each(["pointer cancellation", "tool switching"])("stops erasing after %s", (reason) => {
     const { app, canvas } = makeApp();
     const first = new Body(new Vec2(-1, 0), 0.2, 1);

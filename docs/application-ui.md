@@ -204,6 +204,8 @@ eraser transaction open.
 Pointer cancellation and tool changes use the same cleanup: discard unfinished
 wall/link drafts, clear erasing/panning/selection state, restore held-body
 velocity, and commit any completed drag or eraser changes once for undo.
+Unexpected pointer-capture loss also ends an active drag. A pointer leaving the
+canvas without pressed buttons clears hover and redraws the view.
 
 ### Touch
 
@@ -212,6 +214,9 @@ keyboard and mouse-button references. A second touch cancels the one-finger
 gesture and enters pinch mode. The controller tracks distance and midpoint to
 combine zoom and pan. Only touch pointers enter the pinch map, preventing a
 lost mouse pointer from creating a false two-finger gesture.
+Additional fingers cannot activate a drawing tool. Releasing a finger resets
+the remaining pair's distance and midpoint so changing the pinch pair does not
+jump the view. Non-finite coordinates and invalid zoom factors are ignored.
 
 Custom `touch-action: none` behavior is scoped to the simulation/graph canvases
 and splitters. The viewport disables browser page scaling; the rest of the page
@@ -360,6 +365,8 @@ wall reference also shows components parallel and perpendicular to that slope.
 While this per-particle diagram is active, the selected body's default editable
 green velocity handle is hidden to avoid overlapping the force arrows; the
 View tab's global velocity-vector overlay remains independent.
+Performance-mode sleeping preserves the particle's force diagram, including
+weight and the supporting contact reaction.
 The rod attachment inventory retains its button nodes while its displayed
 content is unchanged, preserving keyboard focus through panel refreshes.
 
@@ -628,6 +635,12 @@ on focus. An unchanged blur does not round the underlying value or commit an
 edit; Escape restores the display without committing. MathLive handles
 Enter/Escape in capture phase before its internal keyboard handler, and Escape
 restores canonical source before focus is released.
+Rejected text, numbers, formulas, and hex colours stay visible across panel
+refreshes until corrected or cancelled, and expose `aria-invalid`. Numeric
+commits require a complete finite decimal or scientific-notation value; trailing
+characters and incomplete exponents are rejected. Slider endpoints remain exact
+when their bounds are not multiples of the step. Native colour and hex controls
+have separate accessible names, and unchanged colour refreshes avoid DOM writes.
 
 ## Panels and overlays
 
@@ -654,7 +667,15 @@ restores canonical source before focus is released.
 
 ### Modal overlays
 
-- **Library:** category-filtered built-in presets and locally saved scenes.
+- **Library:** searchable, category-filtered built-in presets and locally saved scenes.
+  Search matches every typed word across example names, categories, and
+  descriptions without replacing the focused input. A polite result count and
+  a clear-search action explain an empty result. The field follows theme, font,
+  and text-scale settings; its count wraps below at narrow sizes.
+  Its search surface uses the app's outlined rounded controls with an inline
+  magnifier, a separately focusable clear action, a subtle focus-within tint,
+  a full-field keyboard focus ring, and a bordered result badge. Native search
+  decoration is suppressed.
   A built-in preset's transparent native button covers its entire card, so the
   card loads from any ordinary click or from Enter/Space without displaying a
   separate Load control. Pointer hover and keyboard focus apply the same
@@ -683,6 +704,7 @@ restores canonical source before focus is released.
   production link to `THIRD_PARTY_NOTICES.txt` for MathLive and OpenDyslexic
   licensing. The notice opens in a separate `noopener` tab so following it
   cannot navigate the live in-memory scene away.
+  The Keep it step explains refresh recovery and durable scene saving.
 - **Formula guide:** variables, operators, functions, logic, math-editor help,
   and recipe cards with explicit `Add <recipe>` buttons.
 
@@ -717,6 +739,10 @@ testable without constructing the whole app. It:
    except for the intentionally global page-zoom suppression in `main.ts`.
 
 The toolbar clock and formula editors also stop key propagation while editing.
+Editable HTML regions keep their editing keys. Alt-modified and composing input
+is ignored before modal processing. Holding a key does not repeatedly toggle
+playback, tools, views, duplication, reset, or save; stepping, undo/redo, and
+continuous speed changes can still repeat.
 Browser page zoom is disabled by the viewport and by global modified-wheel,
 gesture, and Ctrl/Cmd zoom-key guards. Unmodified wheels over the simulation
 canvas or graph continue to zoom only those views; their custom touch gestures
@@ -730,7 +756,8 @@ application updates those bindings, a monotonic palette revision for retained
 Canvas consumers, and CSS custom properties. An optional
 hex accent derives hot/dark variants. Every palette's `TEXT_FAINT` has at least
 4.5:1 contrast against both panel surfaces. Accent application separately
-derives `ACCENT_TEXT` at 4.5:1 against panel surfaces, `FOCUS` at 3:1 against
+derives `ACCENT_TEXT` above 4.5:1 against background, panel, hover, and Studio
+tinted surfaces, `FOCUS` at 3:1 against
 the background and neutral button surfaces, and black-or-white `ACCENT_INK`
 and `ACCENT_DARK_INK` at 4.5:1 against their matching fills. Accent-filled
 controls use those ink tokens for text and an inset focus stroke while the

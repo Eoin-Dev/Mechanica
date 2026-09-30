@@ -60,10 +60,13 @@ Startup proceeds in this order:
 6. Install document-level focus cleanup, keyboard shortcuts, page-zoom input
    suppression, canvas resizing, and window resize handling. Unmodified wheel
    and touch zoom remain scoped to the simulation and graph surfaces.
-7. Install the first preset through `initializePreset()` without a toast, call
-   `app.start()`, and either start the first-visit tour or show the
-   returning-user welcome toast. This startup call is the only scene load that
-   intentionally resets edit history.
+7. Install the first preset through `initializePreset()` without a toast. Read
+   the tab's bounded recovery checkpoint from session storage and restore it as
+   a paused, undoable replacement when valid. Wire edit/pause/replacement
+   checkpoints plus five-second running, visibility-loss, and page-exit saves.
+8. Call `app.start()` and either start the first-visit tour or show the
+   returning-user welcome/recovery toast. The initial preset call is the only
+   scene load that intentionally resets edit history.
 
 Development builds expose the live app and UI objects on `window` for manual
 driving. Production behavior does not depend on these handles.

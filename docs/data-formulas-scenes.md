@@ -309,9 +309,11 @@ input within those limits:
 9. Fields and drivers are reconstructed. A driver aimed at an internal pulley
    axle is skipped because the axle has no editable motion or force state.
 
-`restore(text)` begins with `JSON.parse`, then uses the untrusted import path.
-Syntactically damaged JSON throws there; valid malformed shapes within the
-budgets still produce a usable world. Imported coordinates, velocities,
+`restore(text)` begins with `JSON.parse` and requires a non-array object with at
+least one scene member (`settings`, `bodies`, `walls`, `links`, `fields`, or
+`drivers`), then uses the untrusted import path. Syntactically damaged or
+unrelated JSON throws; recognized scene shapes within the budgets still produce
+a usable world. Imported coordinates, velocities,
 sizes, nonzero mass, friction, force, angular surface speed, and angles use the
 central limits documented above. Runtime sanitization reuses the coordinate,
 velocity, and angular surface-speed ceilings and also contains non-finite
@@ -470,6 +472,28 @@ their message without re-rendering a partially successful action.
 Descriptions are trimmed. An empty description removes metadata; invalid
 metadata JSON reads as an empty description.
 
+## Tab recovery
+
+`TabRecovery` stores one compact scene snapshot under `mechanica.tab-recovery`
+in `sessionStorage`, independently of named scenes in `localStorage`. It
+survives refreshes of that tab; closing a tab may discard it. New independent
+tabs have their own checkpoints. Duplicating a tab may copy its initial session
+storage, after which the two tabs remain independent.
+
+Startup validates the checkpoint through the untrusted `restore()` boundary,
+restores it paused, fits the view, and makes the replacement undoable. Undo
+history, graph samples, camera/view choices, and the earlier reset baseline are
+not included; the recovered clock becomes the new reset baseline.
+
+Committed edits reuse their existing serialized snapshot. Pause, step/rewind,
+and world replacements also checkpoint. Playback saves at five-second intervals;
+visibility loss and page exit capture the latest live scene. Unchanged writes
+are skipped. A one-million-character ceiling bounds the checkpoint's storage
+cost; unavailable/quota-limited storage and oversized scenes report a single
+session warning and retain the previous successfully saved checkpoint.
+Corrupt stored data is retained until a later successful write replaces it.
+Named saves and downloads remain the durable way to keep a scene.
+
 ## File import and export
 
 Export serializes `world.toDict()` with indentation into an
@@ -490,6 +514,8 @@ world and its history unchanged. A `loaded` result is installed as an undoable
 world replacement, captures that world's clock as the reset/time-jump
 baseline, fits the camera, and closes the overlay. Saved-scene loads follow the
 same atomic replacement rule.
+Valid JSON without a scene member is also rejected instead of opening an empty
+world. The low-level `World.fromDict()` remains tolerant of arbitrary shapes.
 
 ## Force-field expression language
 
@@ -611,12 +637,17 @@ MathLive and its CSS/fonts, and swaps in a `MathfieldElement` only after loading
 It preserves focus, keeps invalid in-progress LaTeX visible, commits on blur or
 Enter, reverts on Escape, and stops global shortcuts while editing. Load or
 attachment failure leaves the text editor in place.
+Upgrade waits while the interim text input is focused or contains a rejected
+edit, and detached rows are not upgraded. Both conversion failures and compiler
+rejections retain the edited formula and expose `aria-invalid`. A failed lazy
+load can be retried when another editor is opened.
 Enter/Escape are intercepted before MathLive's inner handler. Escape restores
 the stored source before blur; an unchanged text-field blur does not commit a
 rounded display value.
 
 The formula guide uses the same lazy chunk for static markup. If it cannot
-load, plain source remains visible.
+load, plain source remains visible and a later guide opening can retry. Detached
+guide content is not typeset after loading completes.
 
 ## Preset system
 

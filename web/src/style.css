@@ -283,7 +283,7 @@ button svg .fill { fill: currentColor; stroke: none; }
   color: var(--text-faint);
 }
 
-input[type="text"], input[type="number"] {
+input[type="text"], input[type="number"], input[type="search"] {
   font-family: var(--font);
   font-size: calc(12px * var(--fs, 1));
   color: var(--text);
@@ -312,7 +312,8 @@ input:focus:not(:focus-visible) { outline: none; }
    for keyboard users and never on a mouse click. The panel of an open
    overlay takes focus itself and must not draw a ring around the whole
    dialog, hence the exclusion. */
-:focus-visible {
+:focus-visible:not(.library-search-input),
+.library-search-field:has(.library-search-input:focus-visible) {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-radius: var(--radius);
@@ -925,6 +926,69 @@ button.perf-banner-btn:hover:not(:disabled) {
 
 .gravity-presets { width: 100%; margin: 0 0 8px; }
 .gravity-presets button { flex: 1; min-width: 0; padding-inline: 5px; }
+.library-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding-top: 16px;
+  margin-bottom: 2px;
+}
+.library-search-field {
+  display: flex;
+  flex: 1 1 220px;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  min-height: 40px;
+  padding: 5px 9px 5px 12px;
+  background: var(--bg);
+  border: 1px solid var(--outline);
+  border-radius: 9px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.library-search-field:focus-within {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 22%, transparent);
+}
+.library-search-icon { display: flex; flex: none; color: var(--text-dim); }
+.library-search-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+input.library-search-input,
+:root[data-studio="true"] .library-search-field input.library-search-input {
+  appearance: none;
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  padding: 3px 0;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font-family: var(--font);
+  font-size: calc(13px * var(--fs, 1));
+  /* The shared focus rule draws the keyboard ring around the entire field. */
+  outline: none;
+  box-shadow: none;
+}
+.library-search-input::placeholder { color: var(--text-dim); opacity: 1; }
+.library-search-input::-webkit-search-cancel-button { appearance: none; }
+.library-search-clear { flex: none; width: 30px; height: 30px; padding: 6px; border-radius: 7px; }
+.library-result-count {
+  flex-shrink: 0;
+  padding: 5px 9px;
+  background: var(--panel-light);
+  border: 1px solid var(--outline);
+  border-radius: 7px;
+  color: var(--text-dim);
+  font-size: calc(11px * var(--fs, 1));
+  font-variant-numeric: tabular-nums;
+}
+.library-empty { grid-column: 1 / -1; margin: 0; }
 .cat-chips {
   display: flex;
   gap: 6px;
@@ -1385,6 +1449,7 @@ kbd {
 
 :root[data-studio="true"] input[type="text"],
 :root[data-studio="true"] input[type="number"],
+:root[data-studio="true"] input[type="search"],
 :root[data-studio="true"] .math-edit math-field,
 :root[data-studio="true"] .accent-popover {
   background: var(--panel-light);

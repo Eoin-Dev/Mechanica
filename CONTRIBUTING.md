@@ -35,6 +35,7 @@ Run focused tests for the affected area, then the full suite and build:
 cd web
 npm test
 npm run build
+npm run check:docs
 ```
 
 Use npm.cmd on PowerShell if the script shim is disabled. Run browser tests

@@ -300,6 +300,7 @@ export class App {
   panels: Panel[] = [];
   onSelectionChange: () => void = () => {};
   onWorldReplaced: () => void = () => {};
+  onSceneCheckpoint: ((state: string) => void) | null = null;
   toastFn: (msg: string) => void = () => {};
 
   constructor(canvas: HTMLCanvasElement) {
@@ -562,6 +563,7 @@ export class App {
       this.lastFrame = performance.now();
     }
     this.scheduleDisplayFrame(true);
+    if (!this.playing) this.onSceneCheckpoint?.(snap.snapshot(this.world));
   }
 
   /** Standalone rods use hidden solver coordinates and are intentionally
@@ -844,6 +846,7 @@ export class App {
     this.afterPhysics();
     if (this.physicsVisualStateChanged()) this.invalidateCanvas();
     if (failure !== null) this.stopForPhysicsFailure(failure);
+    this.onSceneCheckpoint?.(snap.snapshot(this.world));
   }
 
   /** Rewind the simulation by one displayed frame (,). */
@@ -881,6 +884,7 @@ export class App {
     this.playbackEvents.rewindTo(world.time, world);
     this.lastRewindSampleT = world.time;
     this.invalidateCanvas();
+    this.onSceneCheckpoint?.(snap.snapshot(this.world));
   }
 
   ensureInitial(): void {
@@ -1006,6 +1010,7 @@ export class App {
     if (this.graphMode !== "Off") this.recordGraphSample();
     this.onWorldReplaced();
     this.invalidateCanvas();
+    if (!preserveEdit) this.onSceneCheckpoint?.(snap.snapshot(this.world));
   }
 
   setSelection(sel: Selectable[]): void {
@@ -1061,6 +1066,7 @@ export class App {
       this.toast("This scene is too large to keep undo history");
     }
     this.invalidateCanvas();
+    this.onSceneCheckpoint?.(after);
     return result;
   }
 

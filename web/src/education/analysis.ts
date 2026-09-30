@@ -120,6 +120,7 @@ export function forceLedger(world: World, body: Body,
           (d2 * Math.sqrt(d2));
       } else {
         const d2 = r2 + eps2;
+        if (d2 === 0) continue;
         scale = world.G * body.mass * other.mass /
           (d2 * Math.sqrt(d2));
       }

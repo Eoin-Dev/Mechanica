@@ -18,7 +18,13 @@ export function snapshot(world: World): string {
 }
 
 export function restore(snap: string): World {
-  return World.fromDict(JSON.parse(snap) as WorldDict);
+  const data: unknown = JSON.parse(snap);
+  if (typeof data !== "object" || data === null || Array.isArray(data) ||
+      !["settings", "bodies", "walls", "links", "fields", "drivers"]
+        .some(key => Object.hasOwn(data, key))) {
+    throw new Error("File does not contain a Mechanica scene");
+  }
+  return World.fromDict(data as WorldDict);
 }
 
 /** Rebuild an internal snapshot preserving runtime angles and collection sizes.

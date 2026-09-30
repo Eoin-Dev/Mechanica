@@ -73,6 +73,12 @@ Paths in the tables are relative to `web/src` unless stated otherwise.
 | [`ui/guide-recipes.ts`](../web/src/ui/guide-recipes.ts) | Exports `Recipe` and `RECIPES`, the named force-field examples shown by the guide. | Imported only by `guide.ts`. Every recipe source must compile under the expression language and its blurb must match the resulting force. |
 | [`ui/tour.ts`](../web/src/ui/tour.ts) | Exports `Step`, tour `STEPS`, and `Tour`. Builds a modal guided tour, derives active-step progress, locates visible targets, creates tiled spotlight holes/rings, positions cards, handles navigation/finish/resize/scroll, announces step changes, and records completion in app settings. | Constructed by `main.ts`; referenced by shortcut/help/settings hosts. While open it makes the app shell inert, blocks underlying pointer actions, traps focus, and restores the opener. Spotlight geometry supports multiple targets and responsive visibility. The tour has first Escape priority and cleans up listeners/DOM/inertness on finish. |
 
+[`scene/recovery.ts`](../web/src/scene/recovery.ts) exports `TabRecovery` and its
+bounded read/write results. The browser composition root supplies session
+storage, restores valid checkpoints paused, and wires edit/playback/page-exit
+checkpoints. This module contains storage failures and skips unchanged writes;
+it does not own the live world or named-scene storage.
+
 ## Font assets
 
 | File | Purpose and invariant |
@@ -94,6 +100,7 @@ Paths in the tables are relative to `web/src` unless stated otherwise.
 | [`web/scripts/run-e2e.mjs`](../web/scripts/run-e2e.mjs) | Starts Vite's production preview API, runs the pinned Playwright CLI against it, forwards termination signals, propagates the exit code, and reliably closes the preview server. |
 | [`web/scripts/benchmark-performance.mjs`](../web/scripts/benchmark-performance.mjs) | Starts a development Vite server and bundled Chromium, samples frame/physics/render timings for representative scenes under Normal and forced maximum approximation at DPR 1/2, and prints a table plus machine-readable JSON. `--quick` runs the smoke matrix. Results are comparative evidence, not a hardware-independent pass/fail threshold. |
 | [`web/scripts/check-test-count.mjs`](../web/scripts/check-test-count.mjs) | Reads JSON test output in CI and enforces the README's lower-bound test badge without hard-coding a volatile exact total in prose. |
+| [`web/scripts/check-docs.mjs`](../web/scripts/check-docs.mjs) | Checks local file and Markdown heading links in the README, contribution guide, and handbook, skipping fenced examples and external URLs. Both validation workflows run it before building. |
 | [`web/public/THIRD_PARTY_NOTICES.txt`](../web/public/THIRD_PARTY_NOTICES.txt) | Production-accessible upstream MathLive MIT and OpenDyslexic SIL OFL notices; Vite copies it unchanged to `dist/`. |
 | [`.node-version`](../.node-version) | Pins the repository development/CI Node version to 22.23.1. |
 | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) | Pull-request validation: immutable action revisions, exact Node setup, clean install, Vitest/README-count verification, build, Chromium installation, and browser acceptance tests under `contents: read`. |

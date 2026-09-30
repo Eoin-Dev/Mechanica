@@ -41,6 +41,30 @@ afterEach(() => {
 });
 
 describe("App construction", () => {
+  it("checkpoints edit, undo, redo, and pause states for recovery", () => {
+    const app = makeApp();
+    const checkpoint = vi.fn();
+    app.onSceneCheckpoint = checkpoint;
+    app.newScene();
+    const empty = snapshot(app.world);
+    expect(checkpoint).toHaveBeenLastCalledWith(empty);
+    app.edit(() => app.world.bodies.push(new Body(new Vec2(1, 0), 0.2, 1)));
+    const edited = snapshot(app.world);
+    expect(checkpoint).toHaveBeenLastCalledWith(edited);
+    app.undo();
+    expect(checkpoint).toHaveBeenLastCalledWith(empty);
+    app.redo();
+    expect(checkpoint).toHaveBeenLastCalledWith(edited);
+    app.stepOnce();
+    expect(checkpoint).toHaveBeenLastCalledWith(snapshot(app.world));
+    app.stepBack();
+    expect(checkpoint).toHaveBeenLastCalledWith(snapshot(app.world));
+    app.togglePlay();
+    app.world.step(PHYSICS_DT);
+    app.togglePlay();
+    expect(checkpoint).toHaveBeenLastCalledWith(snapshot(app.world));
+  });
+
   it("builds against a real document without throwing", () => {
     const app = makeApp();
     expect(app.world).toBeDefined();

@@ -879,6 +879,7 @@ export class World {
           const dx = px[j] - bix;
           const dy = py[j] - biy;
           const d2 = dx * dx + dy * dy + eps2;
+          if (d2 === 0) continue; // coincident unsoftened points have no force direction
           const s = G / (d2 * Math.sqrt(d2)); // G / d^3
           if (biMovable !== 0) {
             const m = s * mass[j];

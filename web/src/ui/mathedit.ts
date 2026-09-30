@@ -18,6 +18,9 @@ function loadMathlive(): Promise<Mathlive> {
       m.MathfieldElement.fontsDirectory = null;  // fonts come from the css
       m.MathfieldElement.soundsDirectory = null; // no keypress plonks
       return m;
+    }).catch((error) => {
+      loading = null;
+      throw error;
     });
   }
   return loading;
@@ -57,8 +60,9 @@ export function mathEdit(get: () => string, commit: (s: string) => boolean,
   let refreshActive: () => void = () => interim.refresh?.();
 
   const attach = (m: Mathlive): void => {
+    if (!wrap.isConnected) return;
     // never yank a field out from under a mid-edit
-    if (document.activeElement === interim.root) {
+    if (document.activeElement === interim.root || interim.root.classList.contains("error")) {
       interim.root.addEventListener("blur", () => attach(m), { once: true });
       return;
     }
@@ -93,15 +97,22 @@ export function mathEdit(get: () => string, commit: (s: string) => boolean,
       if (!errored && latex === lastLatex) return; // untouched
       try {
         const src = latexToSource(latex);
-        errored = false;
-        errText.hidden = true;
-        mf.classList.toggle("error", !commit(src));
-        lastSrc = null; // show the normalized form on the next refresh
+        errored = !commit(src);
+        errText.hidden = !errored;
+        mf.classList.toggle("error", errored);
+        if (errored) {
+          mf.setAttribute("aria-invalid", "true");
+          errText.textContent = "Check the formula and try again. Escape restores the saved formula.";
+        } else {
+          mf.removeAttribute("aria-invalid");
+          lastSrc = null;
+        }
       } catch (exc) {
         // not convertible (empty box, half-typed function...): flag it and
         // keep the user's content so they can fix it in place
         errored = true;
         mf.classList.add("error");
+        mf.setAttribute("aria-invalid", "true");
         errText.textContent = (exc as Error).message;
         errText.hidden = false;
       }
@@ -111,6 +122,7 @@ export function mathEdit(get: () => string, commit: (s: string) => boolean,
       focused = false;
       errored = false;
       mf.classList.remove("error");
+      mf.removeAttribute("aria-invalid");
       errText.hidden = true;
       lastSrc = null;
       refresh();
@@ -141,14 +153,18 @@ export function mathEdit(get: () => string, commit: (s: string) => boolean,
     mf.addEventListener("keydown", (e) => e.stopPropagation());
 
     wrap.replaceChildren(mf, errText);
-    // options only work on a mounted field (the getters throw otherwise)
-    mf.inlineShortcuts = { ...mf.inlineShortcuts, ...SHORTCUTS };
-    mf.menuItems = []; // no context menu / hamburger in a one-line field
-    // stay inside a superscript until the user arrows/clicks out — the
-    // default hops out after a single digit, which reads as a glitch
-    mf.smartSuperscript = false;
-    refreshActive = refresh;
-    refresh();
+    try {
+      // MathLive options require a mounted field.
+      mf.inlineShortcuts = { ...mf.inlineShortcuts, ...SHORTCUTS };
+      mf.menuItems = [];
+      mf.smartSuperscript = false;
+      refresh();
+      refreshActive = refresh;
+    } catch (error) {
+      wrap.replaceChildren(interim.root);
+      refreshActive = () => interim.refresh?.();
+      throw error;
+    }
   };
 
   // .catch (not a rejection arg) so a throw inside attach lands here too;

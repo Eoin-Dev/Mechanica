@@ -110,6 +110,7 @@ export class ApproximateGravity {
               if (r2 < reach2) r2 = reach2;
             }
             const d2 = r2 + eps2;
+            if (d2 === 0) continue;
             const scale = G * bodyMass[j] / (d2 * Math.sqrt(d2));
             aix += scale * dx;
             aiy += scale * dy;

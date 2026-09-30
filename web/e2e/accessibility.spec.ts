@@ -11,6 +11,103 @@ function normalizeCssColor(value: string): string {
   return value.replace(/\s+/g, "");
 }
 
+for (const layout of [
+  { width: 1440, height: 900, theme: "light", scale: 1 },
+  { width: 390, height: 844, theme: "dark", scale: 1 },
+  { width: 320, height: 844, theme: "dark", scale: 2 },
+]) {
+  test(`Library search at ${layout.width}px and ${layout.scale * 100}% text`, async ({ page }) => {
+    await page.setViewportSize({ width: layout.width, height: layout.height });
+    await skipFirstRunTour(page, { theme: layout.theme, studio_mode: true });
+    await page.goto("/");
+    await page.evaluate(scale => document.documentElement.style.setProperty("--fs", String(scale)), layout.scale);
+    await page.getByRole("button", { name: "Library", exact: true }).click();
+    const library = page.getByRole("dialog", { name: "Library" });
+    const search = library.getByRole("searchbox", { name: "Search examples" });
+    const cards = library.locator(".preset-card");
+    const allCount = await cards.count();
+    expect(allCount).toBeGreaterThan(20);
+    await expect(library.getByRole("button", { name: "Clear example search", exact: true })).not.toBeVisible();
+    await search.focus();
+    await expect(search).toBeFocused();
+    expect(await library.locator(".library-search-field").evaluate(field => {
+      const style = getComputedStyle(field);
+      return { style: style.outlineStyle, width: style.outlineWidth };
+    })).toEqual({ style: "solid", width: "2px" });
+    await search.fill("  EARTH   moon ");
+    await expect(cards).toHaveCount(2);
+    await expect(library.locator(".library-result-count")).toHaveText("2 examples");
+    await expect(search).toBeFocused();
+    await library.getByRole("button", { name: "Pendulums", exact: true }).click();
+    await expect(cards).toHaveCount(0);
+    await expect(library.getByText("No examples match this search in the selected category.")).toBeVisible();
+    await library.getByRole("button", { name: "Clear search", exact: true }).click();
+    await expect(search).toBeFocused();
+    await expect(search).toHaveValue("");
+    await expect(library.getByRole("button", { name: "Load Simple pendulum", exact: true })).toBeVisible();
+    await library.getByRole("button", { name: "All", exact: true }).click();
+    await expect(cards).toHaveCount(allCount);
+    await search.fill("moon");
+    const dimensions = await library.locator(".library-search").evaluate(row => ({
+      fits: row.scrollWidth <= row.clientWidth,
+      fieldWidth: row.querySelector("input")!.getBoundingClientRect().width,
+    }));
+    expect(dimensions.fits).toBe(true);
+    expect(dimensions.fieldWidth).toBeGreaterThanOrEqual(150);
+    expect(await search.evaluate(field => getComputedStyle(field).backgroundColor)).toBe("rgba(0, 0, 0, 0)");
+    expect(await search.evaluate(field => parseFloat(getComputedStyle(field).fontSize)))
+      .toBeGreaterThanOrEqual(11 * layout.scale);
+    const result = await new AxeBuilder({ page }).disableRules(["meta-viewport"])
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze();
+    expect(result.violations).toEqual([]);
+    await page.screenshot({ path: test.info().outputPath(`library-${layout.width}.png`) });
+    await library.getByRole("button", { name: "Clear example search", exact: true }).click();
+    await expect(search).toBeFocused();
+    await expect(search).toHaveValue("");
+    await search.fill("moon");
+    await library.getByRole("button", { name: "Load Earth & Moon", exact: true }).click();
+    await expect(library).not.toBeVisible();
+    await expect(page.locator("#status-text")).toContainText("bodies");
+  });
+}
+
+test("unsaved tab recovery restores playback paused and remains isolated from other tabs", async ({ page, context }) => {
+  await skipFirstRunTour(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  await page.getByRole("button", { name: "Load Triple pendulum", exact: true }).click();
+  await expect(page.locator("#status-text")).toContainText("3 bodies");
+  await page.getByRole("button", { name: /Start the simulation/ }).click();
+  const clock = page.getByRole("textbox", { name: "Simulation time in seconds" });
+  await expect.poll(async () => Number(await clock.inputValue())).toBeGreaterThan(0.1);
+  await page.getByRole("button", { name: /Pause the simulation/ }).click();
+  const before = await page.evaluate(() => sessionStorage.getItem("mechanica.tab-recovery"));
+  expect(before).not.toBeNull();
+  await page.reload();
+  await expect(page.locator("#status-text")).toContainText("3 bodies");
+  await expect(page.getByRole("button", { name: /Start the simulation/ })).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator("#toasts")).toContainText("Previous tab restored and paused");
+  expect(await page.evaluate(() => sessionStorage.getItem("mechanica.tab-recovery"))).toBe(before);
+  const other = await context.newPage();
+  await skipFirstRunTour(other);
+  await other.goto("/");
+  await expect(other.locator("#status-text")).toContainText("2 bodies");
+  await other.close();
+});
+
+test("damaged tab recovery does not break startup or overwrite saved scenes", async ({ page }) => {
+  await skipFirstRunTour(page);
+  await page.addInitScript(() => {
+    sessionStorage.setItem("mechanica.tab-recovery", '{"notes":"unrelated"}');
+    localStorage.setItem("mechanica.scene.Saved experiment", "keep this payload");
+  });
+  await page.goto("/");
+  await expect(page.locator("#status-text")).toContainText("2 bodies");
+  await expect(page.locator("#toasts")).toContainText("Could not restore the previous tab");
+  expect(await page.evaluate(() => localStorage.getItem("mechanica.scene.Saved experiment")))
+    .toBe("keep this payload");
+});
+
 test("boots cleanly and has no unwaived automated WCAG A/AA violations", async ({ page }) => {
   const errors: string[] = [];
   page.on("console", (message) => {

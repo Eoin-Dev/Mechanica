@@ -1103,7 +1103,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   let fbdArrows = false;
   for (const body of world.bodies) {
     if (body.isRodEndpoint) continue;
-    if (!body.showForceComponents || body.invMass === 0) continue;
+    if (!body.showForceComponents || (body.invMass === 0 && !body.perfSleeping)) continue;
     if (aggressive && !picked.has(body) && body !== hover) continue;
     if (simplify && fbdCount++ >= 4) break;
     const wall = body.forceSlopeWallId === null ? null :

@@ -76,6 +76,18 @@ describe("panning", () => {
 });
 
 describe("zoom at the cursor", () => {
+  it("ignores invalid coordinates and non-positive or non-finite scales", () => {
+    const c = cam();
+    c.centre.set(2, -1);
+    const zoom = c.zoom;
+    for (const [x, y, factor] of [[NaN, 300, 2], [400, Infinity, 2],
+      [400, 300, 0], [400, 300, -1], [400, 300, NaN], [400, 300, Infinity]]) {
+      c.zoomAt(x, y, factor);
+      expect(c.zoom).toBe(zoom);
+      expect([c.centre.x, c.centre.y]).toEqual([2, -1]);
+    }
+  });
+
   it("keeps the world point under the cursor fixed", () => {
     for (const [sx, sy] of [[400, 300], [0, 0], [800, 600], [123, 45]] as const) {
       const c = cam();
