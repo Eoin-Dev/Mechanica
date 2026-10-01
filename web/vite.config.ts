@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   // Site is served from a sub-path on GitHub Pages; "./" keeps asset URLs

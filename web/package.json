@@ -8,11 +8,12 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run check:types && vite build",
     "preview": "vite preview",
     "test": "node --test \"scripts/*.test.mjs\" && vitest run",
     "test:scripts": "node --test \"scripts/*.test.mjs\"",
     "test:e2e": "node scripts/run-e2e.mjs",
+    "check:types": "tsc --noEmit && tsc --noEmit --project tsconfig.tools.json",
     "check:docs": "node scripts/check-docs.mjs",
     "check:security": "npm audit --audit-level=moderate",
     "benchmark:performance": "node scripts/benchmark-performance.mjs",
@@ -21,6 +22,7 @@
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",
     "@playwright/test": "1.62.0",
+    "@types/node": "22.20.4",
     "jsdom": "^30.1.1",
     "playwright-core": "1.62.0",
     "typescript": "^5.5.4",

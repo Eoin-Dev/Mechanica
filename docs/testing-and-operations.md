@@ -22,6 +22,7 @@ npm run dev
 npm test
 npm run test:scripts
 npm run test:watch
+npm run check:types
 npm run build
 npm run test:e2e
 npm run check:docs
@@ -36,7 +37,9 @@ npm audit
 - `test:scripts` runs only the Node tests for handbook links, the test-count gate,
   and benchmark reports.
 - `test:watch` runs Vitest interactively.
-- `build` first executes `tsc --noEmit`, then creates the static Vite bundle in
+- `check:types` compiles the application/unit tests and the browser tests plus
+  Vite/Playwright configuration under strict settings, without emitting files.
+- `build` first runs `check:types`, then creates the static Vite bundle in
   `web/dist/`.
 - `test:e2e` starts a production preview of the existing `web/dist/`, runs the
   serial Chromium/axe acceptance suite, then closes the preview. Run `build`
@@ -112,6 +115,12 @@ JSON results produced by the same run.
 `tsconfig.json` includes both `src` and `tests`, so the build's `tsc --noEmit`
 also type-checks test code. Strict mode, unused locals/parameters, isolated
 modules, and switch fallthrough checks are enabled.
+
+`tsconfig.tools.json` inherits those settings for `e2e/`, `vite.config.ts` and
+`playwright.config.ts`, adding pinned Node 22 declarations for test/tool APIs.
+`check:types` runs both projects, and both GitHub workflows enforce it through
+the production build before browser execution or artifact publication.
+Playwright's own TypeScript transformation does not replace this compiler gate.
 
 Most physics/core tests run directly in Node. DOM-oriented tests install the
 minimum jsdom or hand-written browser stubs they need. The suite does not need a
@@ -324,7 +333,8 @@ fuzz, performance-mode, preset, and soak areas in addition to focused tests.
 
 `npm run build` executes:
 
-1. `tsc --noEmit` using the strict project configuration; then
+1. `check:types`, running `tsc --noEmit` for the application/unit project and
+   `tsc --noEmit --project tsconfig.tools.json` for browser tests/configuration;
 2. `vite build` targeting ES2022.
 
 Vite uses `base: "./"`, making asset URLs relative so the same `dist/` works at

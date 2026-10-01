@@ -608,7 +608,7 @@ test("320 CSS pixels and 200% application text remain contained", async ({ page 
   const libraryLayout = await library.evaluate((dialog) => {
     const header = dialog.querySelector<HTMLElement>(".library-header")!;
     const chips = dialog.querySelector<HTMLElement>(".cat-chips")!;
-    const widths = (element: HTMLElement) => ({
+    const widths = (element: Element) => ({
       client: element.clientWidth,
       scroll: element.scrollWidth,
     });
@@ -657,9 +657,9 @@ test.describe("dense particle rendering", () => {
       (window as unknown as { particleDrawing: typeof counts }).particleDrawing = counts;
       const prototype = CanvasRenderingContext2D.prototype;
       const copy = prototype.drawImage;
-      prototype.drawImage = function (...args: Parameters<typeof copy>) {
-        if (this.canvas.id === "canvas" && args.length === 9 && args[0] instanceof HTMLCanvasElement) counts.copies++;
-        return copy.apply(this, args);
+      prototype.drawImage = function (image: CanvasImageSource, ...dimensions: number[]) {
+        if (this.canvas.id === "canvas" && dimensions.length === 8 && image instanceof HTMLCanvasElement) counts.copies++;
+        return Reflect.apply(copy, this, [image, ...dimensions]);
       };
       const arc = prototype.arc;
       prototype.arc = function (...args: Parameters<typeof arc>) {
