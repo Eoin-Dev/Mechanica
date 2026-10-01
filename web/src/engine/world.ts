@@ -2402,7 +2402,7 @@ export class World {
     let ke = 0.0;
     let peG = 0.0;
     for (const b of this.bodies) {
-      if (b.invMass === 0.0 || b.isRodEndpoint) continue;
+      if (b.locked || b.held || b.mass <= 0.0 || b.isRodEndpoint) continue;
       ke += b.kineticEnergy();
       peG += b.mass * this.gravity * b.pos.y;
     }

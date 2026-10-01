@@ -36,6 +36,7 @@ cd web
 npm test
 npm run build
 npm run check:docs
+npm run check:security
 ```
 
 Use npm.cmd on PowerShell if the script shim is disabled. Run browser tests

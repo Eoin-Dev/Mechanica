@@ -10,9 +10,11 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run",
+    "test": "node --test \"scripts/*.test.mjs\" && vitest run",
+    "test:scripts": "node --test \"scripts/*.test.mjs\"",
     "test:e2e": "node scripts/run-e2e.mjs",
     "check:docs": "node scripts/check-docs.mjs",
+    "check:security": "npm audit --audit-level=moderate",
     "benchmark:performance": "node scripts/benchmark-performance.mjs",
     "test:watch": "vitest"
   },

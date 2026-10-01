@@ -487,7 +487,8 @@ not included; the recovered clock becomes the new reset baseline.
 
 Committed edits reuse their existing serialized snapshot. Pause, step/rewind,
 and world replacements also checkpoint. Playback saves at five-second intervals;
-visibility loss and page exit capture the latest live scene. Unchanged writes
+automatic event pauses and solver failure stops checkpoint their final state.
+Visibility loss and page exit capture the latest live scene. Unchanged writes
 are skipped. A one-million-character ceiling bounds the checkpoint's storage
 cost; unavailable/quota-limited storage and oversized scenes report a single
 session warning and retain the previous successfully saved checkpoint.

@@ -1476,6 +1476,7 @@ export class App {
     const prefix = this.perfMode ? "~dE" : "dE";
     const e = this.energyNow().total;
     const base = this.baselineEnergy;
+    if (!Number.isFinite(e) || !Number.isFinite(base)) return `${prefix} unavailable`;
     if (Math.abs(base) < 1e-9) {
       const d = e - base;
       return `${prefix} ${d >= 0 ? "+" : ""}${parseFloat(d.toPrecision(3))} J`;
@@ -1678,6 +1679,9 @@ export class App {
       this.physicsMs = this.physicsMs * 0.85 + physicsCost * 0.15;
       if (capturedVisualState && this.physicsVisualStateChanged()) {
         this.invalidateCanvas();
+      }
+      if (failure !== null || eventStopped) {
+        this.onSceneCheckpoint?.(snap.snapshot(this.world));
       }
     } else {
       this.physicsMs *= 0.85;

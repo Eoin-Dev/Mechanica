@@ -1541,7 +1541,8 @@ export const PRESETS: Preset[] = [
   new Preset("Jelly block", "Soft Bodies",
     "A 9 x 7 lattice of particles joined by structural, shear and bend " +
     "springs - a jelly cube. Drop it, watch it splat, wobble and " +
-    "settle. Grab and throw it with the mouse!",
+    "settle. Drag a particle to stretch it; use its green velocity arrow " +
+    "to launch it.",
     buildJellyBlock, { zoom: 95, centre: [0, 1.4] }),
   new Preset("Squishy ball", "Soft Bodies",
     "A hex-packed disc of particles, each sprung to its six " +

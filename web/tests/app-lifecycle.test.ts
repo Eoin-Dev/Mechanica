@@ -365,6 +365,19 @@ describe("playback and history", () => {
 });
 
 describe("failure containment", () => {
+  it("checkpoints an automatic solver stop once with the final state", () => {
+    const app = makeApp();
+    const checkpoint = vi.fn();
+    app.onSceneCheckpoint = checkpoint;
+    app.world.step = () => { app.world.diverged = ["Alpha"]; };
+    app.playing = true;
+    (app as unknown as { update(dt: number): void }).update(1 / 60);
+    expect(app.playing).toBe(false);
+    expect(checkpoint).toHaveBeenCalledExactlyOnceWith(snapshot(app.world));
+    (app as unknown as { update(dt: number): void }).update(1 / 60);
+    expect(checkpoint).toHaveBeenCalledTimes(1);
+  });
+
   it("stops a batch at the first divergence and emits one diagnostic", () => {
     const app = makeApp();
     const messages: string[] = [];
@@ -502,6 +515,8 @@ describe("event-aware playback", () => {
 
   it("refines an apex stop to the interpolated zero-velocity time", () => {
     const app = makeApp();
+    const checkpoint = vi.fn();
+    app.onSceneCheckpoint = checkpoint;
     app.world.gravity = 9.8;
     const body = new Body(new Vec2(0, 0), 0.16, 1);
     body.vel.y = 14;
@@ -516,6 +531,7 @@ describe("event-aware playback", () => {
     expect(app.world.time).toBeCloseTo(14 / 9.8, 5);
     expect(app.world.bodies[0].vel.y).toBeCloseTo(0, 5);
     expect(app.playbackEvents.events.at(-1)?.kind).toBe("apex");
+    expect(checkpoint).toHaveBeenCalledExactlyOnceWith(snapshot(app.world));
   });
 
   it("bisects a first collision and stops at contact instead of a later frame", () => {
@@ -635,6 +651,19 @@ describe("energy bookkeeping", () => {
     // free fall under the default integrator conserves energy closely
     const pct = parseFloat(app.energyDriftText().replace(/[^\d.+-]/g, ""));
     expect(Math.abs(pct)).toBeLessThan(1);
+  });
+
+  it.each([false, true])("reports unavailable drift for singular current/reference energy (initial=%s)", initiallySingular => {
+    const app = makeApp();
+    app.world.mutualGravity = app.world.pointGravity = true;
+    app.world.softening = 0;
+    const first = new Body(new Vec2(0, 0), 0.2, 1);
+    const second = new Body(new Vec2(initiallySingular ? 0 : 1, 0), 0.2, 1);
+    app.world.bodies.push(first, second);
+    app.ensureInitial();
+    second.pos.x = 0;
+    app.invalidateEnergy();
+    expect(app.energyDriftText()).toBe("dE unavailable");
   });
 
   it("PHYSICS_DT is the quantum the clock actually advances by", () => {

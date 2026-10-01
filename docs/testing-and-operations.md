@@ -20,17 +20,20 @@ npm install
 npx playwright install chromium
 npm run dev
 npm test
+npm run test:scripts
 npm run test:watch
 npm run build
 npm run test:e2e
 npm run check:docs
+npm run check:security
 npm run benchmark:performance -- --quick
 npm run preview
 npm audit
 ```
 
 - `dev` starts Vite with hot reload.
-- `test` runs the complete suite once.
+- `test` runs Node verification-tool tests, then the complete Vitest suite once.
+- `test:scripts` runs only the Node tests for handbook links and benchmark reports.
 - `test:watch` runs Vitest interactively.
 - `build` first executes `tsc --noEmit`, then creates the static Vite bundle in
   `web/dist/`.
@@ -43,10 +46,21 @@ npm audit
   Normal/maximum mode, empty/simple/ramp/stack scenes, gases from 50 to 2,000,
   a spring lattice, rope, and mutual gravity. `--quick` runs empty, two-body,
   and 200-particle gas smoke comparisons at DPR 1. Benchmark values describe
-  the current machine and are intentionally not a flaky CI threshold.
+  the current machine and are intentionally not a flaky CI threshold. File
+  watching and hot reload are disabled during measurement. The runner rejects
+  stopped playback, stalled clocks, invalid telemetry, and browser errors;
+  failures print partial results with `complete: false` and exit unsuccessfully.
+  Each finished case reports progress; the JSON includes Node/browser versions.
+  FPS counts complete frame intervals over their actual elapsed time, so a few
+  long frames reduce the rate. Median and 95th-percentile frame durations remain
+  separate measurements.
 - `preview` serves that production output locally.
 - `check:docs` checks local files and Markdown heading references in the README,
-  contribution guide, and handbook. Fenced examples and external URLs are skipped.
+  contribution guide, and handbook. It checks filename case on every platform,
+  duplicate heading collisions and explicit references. Code examples, comments
+  and external URLs are skipped. Local targets must remain inside the repository.
+- `check:security` fails on known moderate, high, or critical npm advisories.
+  Both GitHub validation workflows run it before the production build.
 - `audit` asks the configured npm registry for known dependency
   vulnerabilities. Keep certificate validation enabled; fix the local trust
   store or use an organization-provided CA when registry TLS cannot be
@@ -196,6 +210,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`accessibility.test.ts`](../web/tests/accessibility.test.ts) | Exact-value preservation on unchanged blur and Escape cancellation for scalar/text/colour controls, text-length boundary enforcement, accessible control names, shortcut-name isolation, play state, value/selected semantics, zero-preserving and softened-log slider mappings, tab helpers, and refresh behavior that avoids redundant ARIA/DOM updates. |
 | [`input-validation.test.ts`](../web/tests/input-validation.test.ts) | Complete decimal/scientific numeric commits, rejected text/number/hex retention and correction, Escape restoration, exact slider endpoints, colour names, and unchanged-swatch DOM writes. |
 | [`mathedit.test.ts`](../web/tests/mathedit.test.ts) | Compiler and conversion rejection retention, correction, Escape, detached and invalid interim upgrade deferral, and usable text fallback when mounted MathLive configuration fails. |
+| [`toasts.test.ts`](../web/tests/toasts.test.ts) | Safe text content, bounded message/timer retention, reading time, hover/focus expiry suspension, explicit dismissal and opener-focus restoration. |
 | [`focus-ring.test.ts`](../web/tests/focus-ring.test.ts) | Stylesheet cascade retains keyboard focus visibility and the TypeScript/CSS phone breakpoints agree. |
 | [`shortcuts.test.ts`](../web/tests/shortcuts.test.ts) | Focused-control ownership, modifier edits, tool keys, playback/view commands, modal/tour/Escape precedence, and unusual event targets. |
 | [`splitter-drag.test.ts`](../web/tests/splitter-drag.test.ts) | Pointer capture plus keyboard 10/32-pixel steps and Home/End limits, separator orientation/value metadata and reveal-time resynchronization, size direction, min/max clamps, commit behavior, and cancellation for inspector/dock resizing. |
@@ -211,6 +226,13 @@ with the behavior it protects rather than an exact assertion count.
 
 ### Real-browser acceptance
 
+[`scripts/check-docs.test.mjs`](../web/scripts/check-docs.test.mjs) uses temporary
+repositories to verify valid and broken links, encoded and parenthesized paths,
+heading collisions, Unicode/HTML anchors, fence lengths, references and filename
+case. [`scripts/performance-report.test.mjs`](../web/scripts/performance-report.test.mjs)
+checks measured percentiles and rejects missing/poisoned samples, stopped
+playback, and stalled clocks. These Node tests run before Vitest under `npm test`.
+
 Tab recovery is covered by
 [`session-recovery.test.ts`](../web/tests/session-recovery.test.ts): edited/empty
 scene round trips, malformed and oversized input, unchanged-write suppression,
@@ -219,7 +241,9 @@ tests check edit, undo/redo, step/rewind, and pause checkpoint values. Productio
 browser tests verify paused reload restoration, independent tabs, and damaged
 recovery fallback without overwriting named scenes. Search acceptance covers
 desktop Light/Studio, phone, and 320px/200% text, including actual focus, clear,
-transparent inner field styling, filtered loading, and axe scans.
+transparent inner field styling, filtered loading, and axe scans. Enlarged-text
+phone notifications also verify full wrapping, bounds, focus retention and
+keyboard dismissal.
 
 | Test file | Protected behavior |
 | --- | --- |
@@ -298,8 +322,9 @@ ignored by Git.
 ## Continuous integration and deployment
 
 `.github/workflows/ci.yml` validates every pull request with only
-`contents: read`: checkout, exact Node 22.23.1 setup, `npm ci`, Vitest plus the
-README-count check, production build, Chromium/system-dependency installation,
+`contents: read`: checkout, exact Node 22.23.1 setup, `npm ci`, Node tool tests,
+Vitest plus the README-count check, documentation/security gates, production build,
+Chromium/system-dependency installation,
 and Playwright/axe acceptance. Every third-party action reference is an
 immutable commit SHA for its documented major version.
 Both workflows also run `check:docs` before building. `playwright-core` is pinned
@@ -312,13 +337,14 @@ The build job:
 1. checks out the repository;
 2. installs Node 22.23.1 with npm caching keyed by `web/package-lock.json`;
 3. runs `npm ci` in `web`;
-4. runs Vitest with human and JSON reporters;
+4. runs Node tool tests, then Vitest with human and JSON reporters;
 5. runs `scripts/check-test-count.mjs` against the generated result so the
    README lower-bound badge cannot become false;
 6. checks documentation files and heading references;
-7. runs the production build;
-8. installs Chromium and runs the browser acceptance suite; and
-9. uploads `web/dist` as the Pages artifact.
+7. checks known dependency advisories;
+8. runs the production build;
+9. installs Chromium and runs the browser acceptance suite; and
+10. uploads `web/dist` as the Pages artifact.
 
 The build job has only `contents: read`. The deploy job alone receives
 `pages: write` and `id-token: write`; it waits for build, uses the GitHub Pages

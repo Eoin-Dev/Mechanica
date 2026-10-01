@@ -34,6 +34,23 @@ function passThroughWorld(pointGravity: boolean): { w: World; a: Body; b: Body }
 }
 
 describe("gravity model", () => {
+  it("retains resting potential energy through sleep and wake while excluding fixed or held bodies", () => {
+    const world = new World();
+    world.gravity = 10;
+    const resting = new Body(new Vec2(0, 5), 0.2, 2);
+    const locked = new Body(new Vec2(1, 8), 0.2, 3);
+    const held = new Body(new Vec2(2, 6), 0.2, 4);
+    locked.locked = true;
+    held.held = true;
+    world.bodies.push(resting, locked, held);
+    expect(world.energy()).toEqual({ ke: 0, pe: 100, total: 100 });
+    resting.perfSleeping = locked.perfSleeping = held.perfSleeping = true;
+    expect(resting.invMass).toBe(0);
+    expect(world.energy()).toEqual({ ke: 0, pe: 100, total: 100 });
+    resting.perfSleeping = false;
+    expect(world.energy()).toEqual({ ke: 0, pe: 100, total: 100 });
+  });
+
   it.each([false, true])("skips coincident unsoftened points in Performance=%s without losing other attraction", performance => {
     const w = new World();
     w.gravity = 0;

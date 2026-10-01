@@ -14,6 +14,7 @@ import { Help, Library, SettingsPanel } from "./ui/overlays";
 import { GraphDock, HintBar, Palette, Toolbar, overlayToggles } from "./ui/panels";
 import { handleShortcut } from "./ui/shortcuts";
 import { Tour } from "./ui/tour";
+import { Toasts } from "./ui/toasts";
 
 const $ = (id: string): HTMLElement => document.getElementById(id)!;
 
@@ -24,19 +25,8 @@ const app = new App(canvas);
 if (import.meta.env.DEV) (window as unknown as { __mech: App }).__mech = app;
 
 // ------------------------------------------------------------------- toasts
-const toastsEl = $("toasts");
-app.toastFn = (msg: string) => {
-  const t = document.createElement("div");
-  t.className = "toast";
-  t.textContent = msg;
-  t.title = msg; // hover reveals the full text if the toast is clipped
-  toastsEl.append(t);
-  while (toastsEl.children.length > 3) toastsEl.firstChild!.remove();
-  setTimeout(() => {
-    t.style.opacity = "0";
-    setTimeout(() => t.remove(), 320);
-  }, 3200);
-};
+const toasts = new Toasts($("toasts"));
+app.toastFn = (message) => toasts.show(message);
 
 // ------------------------------------------------------------------- panels
 const toolbar = new Toolbar(app, $("toolbar"));

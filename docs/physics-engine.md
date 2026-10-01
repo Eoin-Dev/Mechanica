@@ -637,6 +637,10 @@ Energy uses `kEff` for spring potential so it reports the spring actually
 applied by the solver. Locked/held bodies are excluded from dynamic energy and
 momentum. Mutual-gravity energy follows the same softened and solid-interior
 model as the force.
+Performance sleeping keeps a dynamic body's uniform-gravity potential energy;
+sleep/wake alone does not remove or restore that energy. A singular unsoftened
+point-mass overlap can have non-finite potential energy. The drift readout shows
+`unavailable` when its current energy or reference energy is non-finite.
 
 The application caches `world.energy()` by physical-state mutation revision
 because mutual gravity makes it O(n²). Graph sampling and the status bar share

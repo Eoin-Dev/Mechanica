@@ -108,6 +108,37 @@ test("damaged tab recovery does not break startup or overwrite saved scenes", as
     .toBe("keep this payload");
 });
 
+test("long phone notifications wrap, remain readable, and can be dismissed by keyboard", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  await skipFirstRunTour(page, { studio_mode: true });
+  await page.addInitScript(() => {
+    sessionStorage.setItem("mechanica.tab-recovery", '{"notes":"unrelated"}');
+  });
+  await page.goto("/");
+  await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
+  const notice = page.locator(".toast").filter({ hasText: "Could not restore the previous tab" });
+  await expect(notice).toBeVisible();
+  const dimensions = await notice.evaluate(root => {
+    const text = root.querySelector(".toast-message")!;
+    const bounds = root.getBoundingClientRect();
+    const style = getComputedStyle(text);
+    return {
+      inside: bounds.left >= 0 && bounds.right <= innerWidth,
+      textFits: text.scrollWidth <= text.clientWidth,
+      wraps: text.getBoundingClientRect().height > parseFloat(style.lineHeight),
+      overflow: style.textOverflow,
+    };
+  });
+  expect(dimensions).toEqual({ inside: true, textFits: true, wraps: true, overflow: "clip" });
+  const dismiss = notice.getByRole("button", { name: "Dismiss notification" });
+  await dismiss.focus();
+  await page.waitForTimeout(4000);
+  await expect(notice).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("notifications-320.png") });
+  await dismiss.press("Enter");
+  await expect(notice).toHaveCount(0);
+});
+
 test("boots cleanly and has no unwaived automated WCAG A/AA violations", async ({ page }) => {
   const errors: string[] = [];
   page.on("console", (message) => {

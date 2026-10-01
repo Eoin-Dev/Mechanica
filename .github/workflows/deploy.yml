@@ -33,6 +33,8 @@ jobs:
         run: node scripts/check-test-count.mjs
       - name: Check documentation links
         run: npm run check:docs
+      - name: Check dependency advisories
+        run: npm run check:security
       - name: Build
         run: npm run build
       - name: Install Chromium

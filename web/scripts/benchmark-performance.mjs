@@ -1,6 +1,7 @@
 import { chromium } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
+import { summarizeSample } from "./performance-report.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const quick = process.argv.includes("--quick");
@@ -26,23 +27,20 @@ const scenarios = quick ? [
   ["mutual gravity", "preset", "Orbit dance"],
 ];
 
-function percentile(values, fraction) {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1,
-    Math.max(0, Math.ceil(sorted.length * fraction) - 1))];
-}
-
 const server = await createServer({
   root,
   logLevel: "warn",
-  server: { host: "127.0.0.1", port: 4174, strictPort: true },
+  server: { host: "127.0.0.1", port: 4174, strictPort: true, watch: null, hmr: false },
 });
-await server.listen();
-const browser = await chromium.launch({ headless: true });
+let browser;
+let failure = null;
+let activeCase = null;
 const results = [];
+const expected = dprs.length * scenarios.length * 2;
 
 try {
+  await server.listen();
+  browser = await chromium.launch({ headless: true });
   for (const dpr of dprs) {
     const context = await browser.newContext({
       viewport: { width: 1280, height: 720 },
@@ -56,11 +54,14 @@ try {
       }));
     });
     const page = await context.newPage();
+    const pageErrors = [];
+    page.on("pageerror", error => pageErrors.push(error.message));
     await page.goto("http://127.0.0.1:4174/", { waitUntil: "networkidle" });
     await page.waitForFunction(() => window.__mechanica?.benchmark !== undefined);
 
     for (const [scene, kind, arg] of scenarios) {
       for (const mode of ["normal", "maximum"]) {
+        activeCase = { scene, mode, dpr };
         await page.evaluate(({ kind: loader, arg: value, mode: selected }) => {
           const { app, benchmark } = window.__mechanica;
           if (app.playing) app.togglePlay();
@@ -74,17 +75,16 @@ try {
         }, { kind, arg, mode });
         await page.waitForTimeout(warmupMs);
         const sample = await page.evaluate(async (durationMs) => {
-          const frames = [];
+          const timestamps = [];
           const telemetry = [];
           const started = performance.now();
-          let previous = started;
           let lastTelemetry = -Infinity;
           await new Promise((resolve) => {
             const frame = (now) => {
-              frames.push(now - previous);
-              previous = now;
+              timestamps.push(now);
               if (now - lastTelemetry >= 200) {
-                telemetry.push(window.__mechanica.benchmark.snapshot());
+                const { app, benchmark } = window.__mechanica;
+                telemetry.push({ ...benchmark.snapshot(), playing: app.playing, time: app.world.time });
                 lastTelemetry = now;
               }
               if (now - started >= durationMs) resolve();
@@ -92,35 +92,38 @@ try {
             };
             requestAnimationFrame(frame);
           });
-          return { frames, telemetry };
+          return { timestamps, telemetry };
         }, sampleMs);
-        const latest = sample.telemetry.at(-1);
-        results.push({
-          scene,
-          mode,
-          dpr,
-          bodies: latest.bodies,
-          adaptiveLevel: latest.level,
-          fps: Number((1000 / percentile(sample.frames, 0.5)).toFixed(1)),
-          p95FrameMs: Number(percentile(sample.frames, 0.95).toFixed(2)),
-          physicsMs: Number(percentile(sample.telemetry.map((x) => x.physicsMs), 0.5).toFixed(2)),
-          renderMs: Number(percentile(sample.telemetry.map((x) => x.renderMs), 0.5).toFixed(2)),
-          contacts: latest.contacts,
-          canvasMegapixels: Number((latest.canvasPixels / 1_000_000).toFixed(2)),
-        });
+        if (pageErrors.length) throw new Error(`Browser error: ${pageErrors.join("; ")}`);
+        const result = summarizeSample(scene, mode, dpr, sample);
+        results.push(result);
+        console.error(`[${results.length}/${expected}] ${scene}, ${mode}, DPR ${dpr}: ${result.fps} FPS`);
       }
     }
     await context.close();
   }
+} catch (error) {
+  failure = error;
+  process.exitCode = 1;
 } finally {
-  await browser.close();
-  await server.close();
+  const cleanup = await Promise.allSettled([browser?.close(), server.close()]);
+  for (const result of cleanup) {
+    if (result.status === "rejected") {
+      failure ??= result.reason;
+      process.exitCode = 1;
+    }
+  }
 }
 
 console.table(results);
 console.log(JSON.stringify({
+  complete: failure === null && results.length === expected,
+  error: failure?.message ?? null,
+  failedCase: failure === null ? null : activeCase,
   environment: {
     browser: "bundled Chromium",
+    browserVersion: browser?.version() ?? null,
+    nodeVersion: process.version,
     viewport: "1280x720",
     warmupMs,
     sampleMs,
@@ -128,3 +131,4 @@ console.log(JSON.stringify({
   },
   results,
 }, null, 2));
+if (failure !== null) console.error(failure);

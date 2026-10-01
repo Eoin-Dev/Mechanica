@@ -28,6 +28,7 @@ npm run build      # production build into web/dist/
 npx playwright install chromium  # one-time browser-test prerequisite
 npm run test:e2e   # production-preview Chromium and axe checks
 npm run check:docs # local documentation links and heading references
+npm run check:security # known dependency advisories
 npm run benchmark:performance -- --quick  # comparative browser performance smoke matrix
 ```
 
@@ -106,5 +107,6 @@ mouse is held still between pointer events.
 
 ## Units
 
-Everything is SI: metres, kilograms, seconds, newtons. Default gravity is
-9.81 m/s² downward; the space presets use scaled units with G = 1.
+Everything is SI: metres, kilograms, seconds, newtons. New scenes use
+9.8 m/s² downward by default, configurable in Settings; the space presets use
+scaled units with G = 1.

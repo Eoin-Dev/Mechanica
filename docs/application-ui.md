@@ -846,6 +846,9 @@ substitute for browser zoom.
 - Inspector reopen handles are named buttons and both splitters are keyboard-
   operable ARIA separators with value metadata;
 - transient toasts and overload messages are polite live status regions;
+  toast text wraps within the canvas, with scrollable overflow for a tall stack.
+  Each notice has a named dismiss button. Longer notices get more reading time;
+  hover or keyboard focus pauses expiry, and keyboard dismissal restores focus;
 - modal overlays are labelled dialogs with trapped and restored focus;
 - the guided tour additionally inerts the application shell, blocks underlying
   pointer input, announces step changes, and restores its opener;
