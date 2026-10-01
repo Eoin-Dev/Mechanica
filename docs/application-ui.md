@@ -398,7 +398,14 @@ canvas. After stepping, it draws weight, applied, drag, field, driver, link,
 support/contact, and numerical-correction arrows averaged over the same
 interval as the realised resultant, with closure up to floating-point tolerance.
 The Inspector displays that interval and explains `R` (reaction) and `C`
-(numerical correction). Before a recorded step, or after an edit/restore, it
+(numerical correction). Its keyboard-operable Force values and sources
+disclosure lists every named force, signed x/y components in newtons and the
+resultant; a selected slope adds signed parallel/normal components. It uses
+the same ledger and interval as the arrows, retains unchanged rows/focus, and
+remains a complete text alternative when a dense diagram crowds the canvas.
+Each component keeps its axis, value and unit together; paired columns become
+one column in a narrow or enlarged Inspector.
+Before a recorded step, or after an edit/restore, it
 previews current applied forces and prompts a step for link/contact forces.
 It does not reuse old solver multipliers or infer reactions from stale motion.
 Undo/redo preserve surviving particles' diagram/slope choices and surviving
@@ -406,6 +413,17 @@ links' tension-overlay choices while discarding old force intervals.
 Event refinement and time seeking transfer those presentation choices before
 their final simulation pass so the paused result has recorded forces. An optional
 wall reference also shows components parallel and perpendicular to that slope.
+Force captions use opaque themed surfaces, readable neutral text and coloured
+association cues, with bounded attempts to separate nearby captions. Their
+positions stay inside the canvas, including when the force arrow extends
+beyond it. They follow the Font size preference and the same Normal/Performance
+visibility threshold as the arrows. Large and tiny nonzero values use compact
+scientific notation without losing their sign. Diagrams belonging to particles
+outside the visible scene are culled before their captions can pin to an edge.
+Slope cards use measured columns, stack component pairs when space is tight,
+and explicitly indicate
+additional forces when their height is capped; the disclosure lists them all.
+Finite screen space can still crowd diagrams with many enabled forces.
 While this per-particle diagram is active, the selected body's default editable
 green velocity handle is hidden to avoid overlapping the force arrows; the
 View tab's global velocity-vector overlay remains independent.

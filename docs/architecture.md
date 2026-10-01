@@ -263,13 +263,24 @@ dirty render measures cost independently from physics cost and:
 2. Draws the optional world grid; maximum level omits minor lines.
 3. Calls `drawWorld()` with world, camera, view settings, selection, hover,
    Normal-mode trails, viewport dimensions, adaptive trail quality,
-   performance mode, and the in-canvas pointer used by optional force-arrow
-   readouts. Performance mode omits trail drawing entirely. Link-force geometry
+   performance mode, the in-canvas pointer used by optional force-arrow
+   readouts, and the application font scale used by scientific annotations.
+   Performance mode omits trail drawing entirely. Link-force geometry
    receives a second pass only when at least one link enables its transient
    overlay.
 4. Draws interaction previews and the scale bar.
 5. Updates an exponential moving average of draw cost and tunes only the trail
    vertex budget.
+
+`drawWorld` delegates scientific screen-space captions/cards to
+`render/analysis-overlays.ts` after scene geometry and vectors. Its neutral
+opaque surfaces keep force text independent of body colours. Placement uses
+bounded local separation attempts and a finite occupied-box window; it never
+changes force magnitudes or world state. The Inspector's retained Force values
+and sources disclosure uses the same headless ledger for a complete textual
+alternative, including slope projections and forces omitted from a tall card.
+Its refresh control observes the combined note/disclosure box, so visible
+values continue updating after the explanatory note has scrolled away.
 
 Maximum level shows labels/vectors only for the hovered or selected body,
 suppresses contact and spatial-grid diagnostics, and—only after at least 750 ms

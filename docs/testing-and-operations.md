@@ -206,6 +206,14 @@ with the behavior it protects rather than an exact assertion count.
 
 ### Interaction, selection, camera, and trails
 
+Scientific presentation is also covered by
+[`analysis-overlays.test.ts`](../web/tests/analysis-overlays.test.ts): opaque
+theme surfaces, complete edge-contained captions, coincident-force separation,
+large/tiny signed values, compact enlarged-text slope layout, explicit tall-card
+limits, and no overlay work when disabled. The Inspector suite checks every
+force source, retained disclosure focus, safe names, slope components and
+recorded interval averages in the text alternative.
+
 | Test file | Protected behavior |
 | --- | --- |
 | [`drag-velocity.test.ts`](../web/tests/drag-velocity.test.ts) | Primary drag preserves pre-grab velocity across paused/running/release/abort paths while temporary motion remains solver-visible; its progressively stronger speed-sensitive hand response and matching pointer-time rod correction avoid fast-drag and substep-amplified anchor lunges, while linked response is chase-capped only in Performance mode. |
@@ -295,6 +303,18 @@ scene and starts a new import. Releasing the old read must preserve the cleared
 scene and the new action's busy state; releasing the new read must load only
 that file. It also checks picker cancellation, retry and absence of page errors
 in every configured engine.
+
+[`e2e/analysis-rendering.spec.ts`](../web/e2e/analysis-rendering.spec.ts)
+samples the actual canvas text bounds and pre-paint background, checks normal
+text contrast and separate matching-force captions in all base themes, changes
+the real Font size preference, and inspects complete large-force/slope values
+at desktop, phone and 320-CSS-pixel widths. It also opens the source disclosure
+by keyboard, checks signed component/source names and responsive containment,
+and saves screenshots and caption measurements for visual review.
+The short-phone case scrolls the note outside the refresh observer's margin,
+steps a changing field, and verifies the visible source/resultant update to
+their recorded interval averages.
+
 The two-tab editor case changes shared saved data through the actual Library
 controls and verifies that stale description, delete, rename and replacement
 actions preserve the other tab's changes. It checks retained drafts, review

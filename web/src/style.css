@@ -627,6 +627,33 @@ button.pulley-part[aria-current="true"] {
   font-size: calc(11px * var(--fs, 1));
   font-variant-numeric: tabular-nums;
 }
+.force-values { margin: 6px 0 9px; font-size: calc(12px * var(--fs, 1)); }
+.force-values > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 8px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius);
+  background: var(--panel-light);
+  cursor: pointer;
+  list-style: none;
+}
+.force-values > summary::-webkit-details-marker { display: none; }
+.force-values > summary::before { content: "›"; font-size: 1.2em; line-height: 1; }
+.force-values[open] > summary::before { transform: rotate(90deg); }
+.force-value-list { list-style: none; margin: 0; padding: 2px 0; }
+.force-value-list > li { display: grid; gap: 3px; padding: 7px 3px; }
+.force-value-name { font-weight: 600; overflow-wrap: anywhere; }
+.force-value-components {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.force-component { white-space: nowrap; }
+.force-resultant { border-top: 1px solid var(--outline); }
 .rod-attachment-list {
   display: grid;
   gap: 5px;
@@ -808,6 +835,7 @@ button.perf-banner-btn:hover:not(:disabled) {
 /* Keep compact rows at ordinary sizes. At narrow widths or enlarged text,
    move the track below its label and give the exact value room for units. */
 @container inspector-controls (max-width: 18em) {
+  .force-value-components { grid-template-columns: minmax(0, 1fr); }
   .row:has(> input[type="range"]) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;

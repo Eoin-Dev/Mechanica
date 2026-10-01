@@ -65,6 +65,7 @@ function recCtx(): { ctx: CanvasRenderingContext2D; ops: Op[] } {
     fillText(text: string, x: number, y: number) {
       ops.push({ op: "fillText", text, x, y });
     },
+    measureText(text: string) { return { width: text.length * 7 }; },
   };
   const ctx = new Proxy(base, {
     get(t, p) {
@@ -193,6 +194,16 @@ describe("grid rendering", () => {
 });
 
 describe("body rendering", () => {
+  it("does not pin an off-screen particle's force captions to the visible canvas", () => {
+    const body = new Body(new Vec2(10000, 10000), 0.2, 2);
+    body.showForceComponents = true;
+    body.constForce.set(3, 0);
+    const { ctx, ops } = recCtx();
+    drawWorld(ctx, new Camera(800, 600), worldWith(body), new ViewSettings(), [body], null,
+      new Map(), 800, 600);
+    expect(ops.filter(op => op.op === "fillText")).toEqual([]);
+  });
+
   it("retains a sleeping body's weight and contact reaction diagram", () => {
     const body = new Body(new Vec2(0, 0), 0.1, 1);
     body.showForceComponents = true;

@@ -41,6 +41,90 @@ beforeEach(() => {
   localStorage.clear();
 });
 
+describe("Force values and sources", () => {
+  it("names individual forces, exposes signed components and retains the focused disclosure", () => {
+    const { app, panel, inspector } = makeInspector();
+    app.world.gravity = 9.8;
+    const body = new Body(new Vec2(0, 0), 0.2, 2);
+    body.constForce.set(3, -0.0004);
+    body.showForceComponents = true;
+    app.world.bodies.push(body);
+    app.world.fields.push(new ForceField("<img src=x onerror=alert(1)>", "3", "0"));
+    const wall = new Wall(new Vec2(-2, -2), new Vec2(2, -2));
+    app.world.walls.push(wall);
+    body.forceSlopeWallId = wall.id;
+    app.setSelection([body]);
+    inspector.refresh();
+    const details = panel.querySelector<HTMLDetailsElement>(".force-values")!;
+    details.open = true;
+    inspector.refresh();
+    const rows = [...details.querySelectorAll("li")];
+    expect(rows).toHaveLength(4);
+    expect(rows[1].textContent).toContain("Applied force");
+    expect(rows[1].textContent).toContain("Fy -4.00e-4 N");
+    expect(rows[1].textContent).toContain("∥ 3.00 N⊥ -4.00e-4 N");
+    expect(rows[2].textContent).toContain("<img src=x onerror=alert(1)>");
+    expect(details.querySelector("img")).toBeNull();
+    expect(rows[3].textContent).toContain("Resultant");
+    expect(rows[3].textContent).toContain("Fx 6.00 NFy -19.60 N");
+    details.querySelector("summary")!.focus();
+    body.constForce.x = -10;
+    inspector.refresh();
+    expect(panel.querySelector(".force-values")).toBe(details);
+    expect([...details.querySelectorAll("li")]).toEqual(rows);
+    expect(rows[3].textContent).toContain("Fx -7.00 N");
+    expect(document.activeElement).toBe(details.querySelector("summary"));
+    expect(app.undoStack.canUndo).toBe(false);
+  });
+
+  it("shows every source in an overfull force diagram and hides with its view toggle", () => {
+    const { app, panel, inspector } = makeInspector();
+    app.world.gravity = 0;
+    const body = new Body(new Vec2(0, 0));
+    body.showForceComponents = true;
+    app.world.bodies.push(body);
+    for (let i = 0; i < 64; i++) app.world.fields.push(new ForceField(`Source ${i + 1}`, "3", "4"));
+    app.setSelection([body]);
+    inspector.refresh();
+    const details = panel.querySelector<HTMLDetailsElement>(".force-values")!;
+    expect(details.querySelectorAll("li")).toHaveLength(0);
+    details.open = true;
+    inspector.refresh();
+    expect(details.querySelectorAll("li")).toHaveLength(65);
+    expect(details.textContent).toContain("Source 64");
+    expect(details.textContent).toContain("Fx 192.00 NFy 256.00 N");
+    body.showForceComponents = false;
+    inspector.refresh();
+    expect(details.hidden).toBe(true);
+    body.showForceComponents = true;
+    inspector.refresh();
+    expect(details.hidden).toBe(false);
+    expect(details.open).toBe(true);
+  });
+
+  it("uses recorded average forces in the text alternative to the diagram", () => {
+    const { app, panel, inspector } = makeInspector();
+    app.world.gravity = 0;
+    app.world.integrator = "RK4";
+    app.world.substeps = 1;
+    const body = new Body(new Vec2(0, 0), 0.2, 2);
+    body.showForceComponents = true;
+    app.world.bodies.push(body);
+    app.world.fields.push(new ForceField("Changing force", "120*t", "0"));
+    app.setSelection([body]);
+    app.world.step(1 / 60);
+    inspector.refresh();
+    const details = panel.querySelector<HTMLDetailsElement>(".force-values")!;
+    details.open = true;
+    inspector.refresh();
+    expect(details.querySelectorAll("li")).toHaveLength(2);
+    expect(details.textContent).toContain("Changing forceFx 1.00 N");
+    expect(details.textContent).toContain("ResultantFx 1.00 N");
+    expect(details.textContent).not.toContain("Fx 2.00 N");
+    expect(body.forceSnapshot).not.toBeNull();
+  });
+});
+
 describe("Pulley assembly navigation", () => {
   function assembly() {
     const fixture = makeInspector();

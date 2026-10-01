@@ -8,8 +8,9 @@ import { App, GraphMode, Panel } from "../app";
 import { BODY_PALETTE, Body, Color, MATERIALS, Wall } from "../engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
-import { PlaybackEventKind, analysePulley, forceLedger } from "../education/analysis";
+import { PlaybackEventKind, analysePulley, forceLedger, projectForce } from "../education/analysis";
 import { Selectable } from "../render/draw";
+import { analysisNumber } from "../render/analysis-overlays";
 import { isMathRenderable } from "../core/mathfmt";
 import { INSPECTOR_W_MAX, INSPECTOR_W_MIN, PHONE_QUERY, RefreshGroup, button,
          checkbox, colourEdit, countNoun, el, fmt3dp, fmt3g, halfRow, isPhone, isTouch,
@@ -578,16 +579,65 @@ export class Inspector implements Panel {
       (value) => { b.showForceComponents = value; app.invalidateCanvas(); },
       "Draw forces from this particle's centre. After a step, all arrows use the same time interval as the resultant. R is a support/contact reaction; C is a numerical correction."));
 
+    const readout = el("details", { class: "force-values" },
+      el("summary", { text: "Force values and sources" }));
+    const values = el("ul", { class: "force-value-list", "aria-label": "Force values and sources" });
+    readout.append(values);
+    const rows = new Map<string, { root: HTMLElement; name: HTMLElement; components: HTMLElement }>();
+    let rowKey = "";
+    readout.addEventListener("toggle", () => this.refresh());
     const forceNote = el("div", { class: "faint settings-note force-interval-note" });
-    this.add({ root: forceNote, refresh: () => {
+    // The disclosure may remain visible after its note scrolls away. Observe
+    // their combined box so visible scientific values never stop refreshing.
+    const forceReadout = el("div", { class: "force-readout" }, forceNote, readout);
+    this.add({ root: forceReadout, refresh: () => {
       forceNote.hidden = !b.showForceComponents;
+      readout.hidden = forceNote.hidden;
+      forceReadout.hidden = forceNote.hidden;
       if (forceNote.hidden) return;
-      const ledger = forceLedger(app.world, b);
+      const wall = b.forceSlopeWallId === null ? null :
+        app.world.walls.find(candidate => candidate.id === b.forceSlopeWallId) ?? null;
+      const ledger = forceLedger(app.world, b, wall);
       const text = ledger.mode === "step-average" && ledger.interval !== null ?
         `Average forces: ${fmt3dp(ledger.interval.start)}–${fmt3dp(ledger.interval.end)} s. R: reaction; C: numerical correction.` :
         ledger.mode === "resting" ? "Resting forces: weight and support balance." :
           "Current applied forces. Step once to include link forces and contact reactions.";
       if (forceNote.textContent !== text) forceNote.textContent = text;
+      if (!readout.open) return;
+      const entries = [...ledger.entries, { id: "resultant", label: "Resultant",
+        fx: ledger.resultant.fx, fy: ledger.resultant.fy }];
+      const key = entries.map(entry => entry.id).join(",");
+      for (const entry of entries) {
+        let row = rows.get(entry.id);
+        if (row === undefined) {
+          const name = el("span", { class: "force-value-name" });
+          const components = el("span", { class: "force-value-components" });
+          const root = el("li", { class: entry.id === "resultant" ? "force-resultant" : "" }, name, components);
+          row = { root, name, components };
+          rows.set(entry.id, row);
+        }
+        if (row.name.textContent !== entry.label) row.name.textContent = entry.label;
+        const text = [`Fx ${analysisNumber(entry.fx)} N`, `Fy ${analysisNumber(entry.fy)} N`];
+        if (ledger.basis !== null) {
+          const resolved = projectForce(entry, ledger.basis);
+          text.push(`∥ ${analysisNumber(resolved.parallel)} N`, `⊥ ${analysisNumber(resolved.normal)} N`);
+        }
+        for (let i = 0; i < text.length; i++) {
+          let component = row.components.children[i] as HTMLElement | undefined;
+          if (component === undefined) {
+            component = el("span", { class: "force-component" });
+            row.components.append(component);
+          }
+          if (component.textContent !== text[i]) component.textContent = text[i];
+        }
+        while (row.components.children.length > text.length) row.components.lastElementChild!.remove();
+      }
+      if (key !== rowKey) {
+        const live = new Set(entries.map(entry => entry.id));
+        for (const id of rows.keys()) if (!live.has(id)) rows.delete(id);
+        values.replaceChildren(...entries.map(entry => rows.get(entry.id)!.root));
+        rowKey = key;
+      }
     } });
 
     const slope = el("select", { "aria-label": "Resolve forces relative to a slope" });
