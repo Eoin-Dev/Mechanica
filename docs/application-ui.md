@@ -124,7 +124,10 @@ and storage-error results. Cancelling the native picker is silent; malformed,
 resource-limited, damaged saved data, and blocked/full storage receive specific
 feedback. Uploaded files are rejected above 10 MiB, and the import button stays
 disabled while its one file is being read, including if a Library tab rerender
-replaces the button during that read. Quick-save names include local
+replaces the button during that read. Closing the Library cancels the pending
+import and makes the action available on reopening. A cancelled read cannot
+replace a newer scene, report stale errors, or release a newer import's action.
+Quick-save names include local
 milliseconds, and a repeated or DST-colliding timestamp receives `-2`, `-3`,
 and subsequent collision-safe suffixes.
 

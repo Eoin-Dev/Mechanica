@@ -26,7 +26,7 @@ export class Library {
   private search = "";
   private tabBtns = new Map<LibraryTab, HTMLButtonElement>();
   private content!: HTMLElement;
-  private importing = false;
+  private importRequest: AbortController | null = null;
   private importButton: HTMLButtonElement | null = null;
   private sceneEditor: SceneEditor | null = null;
 
@@ -50,6 +50,10 @@ export class Library {
     if (!this.visible) return;
     this.visible = false;
     this.sceneEditor = null;
+    const request = this.importRequest;
+    this.importRequest = null;
+    request?.abort();
+    this.syncImportButton();
     this.root.hidden = true;
     this.focus.exit();
   }
@@ -93,7 +97,7 @@ export class Library {
     refreshTabs(this.tabBtns, this.tab, this.content);
     // Do not retain a detached action when tabs replace the panel. If a file
     // read is still pending, renderScenes binds the new button to the same
-    // instance-level importing state below.
+    // instance-level request below.
     this.importButton = null;
     this.content.replaceChildren();
     if (this.tab === "Examples") this.renderExamples();
@@ -215,11 +219,13 @@ export class Library {
       this.openSceneEditor("save", "", `Scene ${new Date().toISOString().slice(0, 10)}`);
     }, { icon: ICONS.save }).root);
     const imported = button("Import .json", async () => {
-      if (this.importing) return;
-      this.importing = true;
+      if (this.importRequest !== null) return;
+      const request = new AbortController();
+      this.importRequest = request;
       this.syncImportButton();
       try {
-        const result = await snap.uploadScene();
+        const result = await snap.uploadScene(request.signal);
+        if (this.importRequest !== request || request.signal.aborted) return;
         switch (result.status) {
           case "cancelled": return;
           case "loaded":
@@ -235,9 +241,15 @@ export class Library {
             app.toast(`Could not read '${result.name}' as a Mechanica scene`);
             return;
         }
+      } catch {
+        if (this.importRequest === request && !request.signal.aborted) {
+          app.toast("Could not import the scene file. Try again.");
+        }
       } finally {
-        this.importing = false;
-        this.syncImportButton();
+        if (this.importRequest === request) {
+          this.importRequest = null;
+          this.syncImportButton();
+        }
       }
     }, { icon: ICONS.import,
          tooltip: "Load a .json scene saved from this app or the desktop " +
@@ -474,8 +486,9 @@ export class Library {
 
   private syncImportButton(): void {
     if (this.importButton === null) return;
-    this.importButton.disabled = this.importing;
-    this.importButton.setAttribute("aria-busy", String(this.importing));
+    const importing = this.importRequest !== null;
+    this.importButton.disabled = importing;
+    this.importButton.setAttribute("aria-busy", String(importing));
   }
 }
 

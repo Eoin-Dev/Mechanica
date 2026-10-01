@@ -34,6 +34,73 @@ function setup() {
   return { app, root, library, button, field, type, submit };
 }
 
+describe("Library import lifecycle", () => {
+  it("does not install a late file after the Library closes", async () => {
+    let finish!: (result: snap.SceneReadResult) => void;
+    vi.spyOn(snap, "uploadScene").mockImplementation(() =>
+      new Promise(resolve => { finish = resolve; }));
+    const { app, library, button } = setup();
+    app.loadWorld = vi.fn();
+    button("Import .json").click();
+    library.close();
+    finish({ status: "loaded", world: new World(), name: "Old import" });
+    await Promise.resolve();
+    expect(app.loadWorld).not.toHaveBeenCalled();
+    expect(app.toast).not.toHaveBeenCalled();
+    library.open();
+    expect(button("Import .json").disabled).toBe(false);
+  });
+
+  it("keeps a new import busy when an older cancelled request finishes", async () => {
+    const pending: Array<{ signal: AbortSignal | undefined;
+      finish: (result: snap.SceneReadResult) => void }> = [];
+    vi.spyOn(snap, "uploadScene").mockImplementation(signal => new Promise(resolve => {
+      pending.push({ signal, finish: resolve });
+    }));
+    const { app, library, button } = setup();
+    app.loadWorld = vi.fn();
+    button("Import .json").click();
+    library.close();
+    expect(pending[0].signal?.aborted).toBe(true);
+    library.open();
+    button("Import .json").click();
+    expect(pending).toHaveLength(2);
+    pending[0].finish({ status: "invalid", name: "Old import" });
+    await Promise.resolve();
+    expect(app.toast).not.toHaveBeenCalled();
+    expect(button("Import .json").disabled).toBe(true);
+    expect(button("Import .json").getAttribute("aria-busy")).toBe("true");
+    const world = new World();
+    pending[1].finish({ status: "loaded", world, name: "New import" });
+    await Promise.resolve();
+    expect(app.loadWorld).toHaveBeenCalledExactlyOnceWith(world, "New import");
+    expect(library.visible).toBe(false);
+  });
+
+  it("recovers from picker errors and suppresses errors from an old request", async () => {
+    let fail!: (reason: Error) => void;
+    const upload = vi.spyOn(snap, "uploadScene")
+      .mockRejectedValueOnce(new Error("Picker blocked"))
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }))
+      .mockResolvedValue({ status: "cancelled" });
+    const { app, library, button } = setup();
+    button("Import .json").click();
+    await Promise.resolve();
+    expect(app.toast).toHaveBeenCalledExactlyOnceWith("Could not import the scene file. Try again.");
+    expect(button("Import .json").disabled).toBe(false);
+    button("Import .json").click();
+    library.close();
+    library.open();
+    fail(new Error("Old picker failed"));
+    await Promise.resolve();
+    expect(app.toast).toHaveBeenCalledTimes(1);
+    button("Import .json").click();
+    await Promise.resolve();
+    expect(upload).toHaveBeenCalledTimes(3);
+    expect(button("Import .json").disabled).toBe(false);
+  });
+});
+
 describe("saved-scene editor", () => {
   it("previews the stored name and saves without a browser prompt", () => {
     const prompt = vi.spyOn(window, "prompt");

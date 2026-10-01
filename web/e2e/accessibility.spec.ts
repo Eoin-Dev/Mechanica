@@ -12,6 +12,88 @@ function normalizeCssColor(value: string): string {
   return value.replace(/\s+/g, "");
 }
 
+test("closing the Library cancels slow imports without disturbing a newer scene or import", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await skipFirstRunTour(page, { theme: "dark", studio_mode: true });
+  type ImportProbe = { pending: string[]; finish: (index: number) => Promise<void> };
+  await page.addInitScript(() => {
+    const original = File.prototype.text;
+    const releases: Array<() => Promise<void>> = [];
+    const probe: ImportProbe = {
+      pending: [],
+      async finish(index) {
+        await releases[index]();
+        // Let the application's read and load continuations finish before assertions.
+        await new Promise(resolve => setTimeout(resolve, 0));
+      },
+    };
+    (window as unknown as { sceneImportProbe: ImportProbe }).sceneImportProbe = probe;
+    File.prototype.text = function () {
+      const file = this;
+      return new Promise<string>((resolve, reject) => {
+        probe.pending.push(file.name);
+        releases.push(async () => {
+          try { resolve(await original.call(file)); }
+          catch (error) { reject(error); }
+        });
+      });
+    };
+  });
+  await page.goto("/");
+  const open = page.getByRole("button", { name: "Library", exact: true });
+  await open.click();
+  const library = page.getByRole("dialog", { name: "Library", exact: true });
+  await library.getByRole("tab", { name: "My scenes", exact: true }).click();
+  const importing = library.getByRole("button", { name: "Import .json", exact: true });
+  const select = async (name: string, bodies: number): Promise<void> => {
+    const choosing = page.waitForEvent("filechooser");
+    await importing.click();
+    await (await choosing).setFiles({ name, mimeType: "application/json",
+      buffer: Buffer.from(JSON.stringify({ settings: { gravity: 0 },
+        bodies: Array.from({ length: bodies }, (_, index) => ({
+          id: index + 1, pos: [index, 0], radius: 0.2, mass: 1,
+        })) })) });
+  };
+  const finish = async (index: number): Promise<void> => {
+    await page.evaluate(async value => {
+      await (window as unknown as { sceneImportProbe: ImportProbe }).sceneImportProbe.finish(value);
+    }, index);
+  };
+  await select("Old.json", 2);
+  await expect(importing).toBeDisabled();
+  await expect(importing).toHaveAttribute("aria-busy", "true");
+  await library.getByRole("button", { name: "Close (Esc)", exact: true }).click();
+  await page.getByRole("button", { name: "Remove everything from the scene. Ctrl+Z restores it.", exact: true }).click();
+  await expect(page.locator("#status-text")).toContainText("0 bodies");
+  await open.click();
+  await expect(importing).toBeEnabled();
+  await expect(importing).toHaveAttribute("aria-busy", "false");
+  await select("New.json", 1);
+  await expect(importing).toBeDisabled();
+  await finish(0);
+  await expect(library).toBeVisible();
+  await expect(importing).toBeDisabled();
+  await expect(importing).toHaveAttribute("aria-busy", "true");
+  await expect(page.locator("#status-text")).toContainText("0 bodies");
+  await library.screenshot({ path: test.info().outputPath("pending-scene-import.png") });
+  await finish(1);
+  await expect(library).toBeHidden();
+  await expect(page.locator("#status-text")).toContainText("1 body");
+  await open.click();
+  await expect(importing).toBeEnabled();
+  const choosing = page.waitForEvent("filechooser");
+  await importing.click();
+  const chooser = await choosing;
+  await chooser.element().dispatchEvent("cancel");
+  await expect(importing).toBeEnabled();
+  await expect(importing).toHaveAttribute("aria-busy", "false");
+  await expect(library).toBeVisible();
+  expect(await page.evaluate(() =>
+    (window as unknown as { sceneImportProbe: ImportProbe }).sceneImportProbe.pending)).toEqual(["Old.json", "New.json"]);
+  expect(errors).toEqual([]);
+});
+
 for (const layout of [
   { width: 1440, height: 900, theme: "light", scale: 1 },
   { width: 390, height: 844, theme: "dark", scale: 1 },

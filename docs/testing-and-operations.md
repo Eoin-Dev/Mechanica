@@ -237,7 +237,8 @@ with the behavior it protects rather than an exact assertion count.
 | [`tour-spotlight.test.ts`](../web/tests/tour-spotlight.test.ts) | Multi-target spotlight tiling, clipping, rings, viewport placement, and responsive target geometry. |
 | [`panel-accessibility.test.ts`](../web/tests/panel-accessibility.test.ts) | Toolbar/graph icon names, play state labels, unchanged-clock write and seek suppression, Escape cancellation, detached graph zoom at the retained boundary, graph legend focus/node retention and series-scoped visibility, separated grammatical status counts with internal trail/subdivision indicators absent, revealed/dynamically bounded graph-splitter metadata, retained-graph palette invalidation, and shortcut badges excluded from name computation. |
 | [`settings-accessibility.test.ts`](../web/tests/settings-accessibility.test.ts) | Three base-theme choices followed by the independent Studio toggle; full-bleed circular accent-swatch geometry, selection/focus behavior, and 24 px custom-remove targets; fixed-width-free responsive Library header/tab hooks; built-in preset full-card activation, matched keyboard focus, and independent 24 px description expansion; persistent single-flight scene import across rerenders; compact checkbox sizing; and safe new-tab third-party notice behavior. |
-| [`library-scenes.test.ts`](../web/tests/library-scenes.test.ts) | Themed saved-scene forms, stored-name preview, explicit normalized-name replacement confirmation and its invalidation, retained invalid/colliding drafts, storage failure/retry, multiline descriptions, Escape and delete cancellation, focus restoration, section draft retention and close cleanup. |
+| [`library-scenes.test.ts`](../web/tests/library-scenes.test.ts) | Themed saved-scene forms, stored-name preview, explicit normalized-name replacement confirmation and its invalidation, retained invalid/colliding drafts, storage failure/retry, multiline descriptions, Escape and delete cancellation, focus restoration, section draft retention and close cleanup; closed-Library import cancellation, suppression of stale loads/errors/cleanup, new-request ownership and picker-failure retry. |
+| [`scene-upload.test.ts`](../web/tests/scene-upload.test.ts) | File-picker success, native cancellation, empty selection, abort before opening or during a slow read, discarded late text/read errors, single selection, handler/listener release and picker-opening failures. |
 | [`theme-contrast.test.ts`](../web/tests/theme-contrast.test.ts) | Complete Dark/Void/Light surface/text combinations, low-specificity Studio button treatment, safe accent-text wiring for active controls, Studio-layer border invariants, and black, white, and intermediate custom accents meeting text, neutral-focus, accent/accent-dark ink, and filled-control focus-cue thresholds. |
 | [`tour-modal.test.ts`](../web/tests/tour-modal.test.ts) | App-shell inertness, pointer blocking, focus trapping/restoration, active-step progress, live announcements, and modal cleanup. |
 | [`zoom-accessibility.test.ts`](../web/tests/zoom-accessibility.test.ts) | Page-zoom-restricting viewport metadata, global modified wheel/keyboard/gesture suppression, canvas-only unmodified wheel/touch zoom, contrast-safe accented section/guide/preset/tour/Help headings, mobile heading presence, and selectable reference content. |
@@ -280,6 +281,11 @@ A DPR-2 scene-import case checks visible tiny-particle pixels and glyph-copy
 use in the production app, then zooms in and verifies the vector fallback.
 The corresponding unit suite checks exact geometry and resource bounds;
 performance measurements remain outside timing-sensitive acceptance tests.
+Another production case holds real file reads, closes the Library, clears the
+scene and starts a new import. Releasing the old read must preserve the cleared
+scene and the new action's busy state; releasing the new read must load only
+that file. It also checks picker cancellation, retry and absence of page errors
+in every configured engine.
 
 ## Verification philosophy
 

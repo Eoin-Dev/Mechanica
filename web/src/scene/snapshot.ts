@@ -757,16 +757,21 @@ export function downloadScene(world: World, name: string): void {
  * failure behavior are testable without opening a native file picker. */
 export async function readSceneFile(
   file: Pick<File, "name" | "size" | "text">,
+  signal?: AbortSignal,
 ): Promise<SceneReadResult> {
+  if (signal?.aborted) return { status: "cancelled" };
   const name = file.name.replace(/\.json$/i, "");
   if (file.size > MAX_SCENE_FILE_BYTES) {
     return { status: "too-large", name,
              message: `Scene file exceeds the ${MAX_SCENE_FILE_BYTES / (1024 * 1024)} MiB limit` };
   }
   try {
-    const world = restore(await file.text());
+    const text = await file.text();
+    if (signal?.aborted) return { status: "cancelled" };
+    const world = restore(text);
     return { status: "loaded", world, name };
   } catch (exc) {
+    if (signal?.aborted) return { status: "cancelled" };
     if (exc instanceof SceneLimitError) {
       return { status: "too-large", name, message: sceneLimitMessage(exc) };
     }
@@ -774,25 +779,51 @@ export async function readSceneFile(
   }
 }
 
-/** Prompt for a size-bounded .json scene file and parse it into a World. */
-export function uploadScene(): Promise<SceneReadResult> {
-  return new Promise((resolve) => {
+/** Prompt for a size-bounded .json scene file. Aborting releases the picker
+ * handlers immediately and discards a pending read before parsing it. */
+export function uploadScene(signal?: AbortSignal): Promise<SceneReadResult> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      resolve({ status: "cancelled" });
+      return;
+    }
     const input = document.createElement("input");
     input.type = "file";
     input.accept = ".json,application/json";
+    let settled = false;
+    const cleanup = (): void => {
+      input.onchange = null;
+      input.oncancel = null;
+      signal?.removeEventListener("abort", abort);
+    };
+    const finish = (result: SceneReadResult): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+    const abort = (): void => finish({ status: "cancelled" });
+    signal?.addEventListener("abort", abort, { once: true });
     input.onchange = async () => {
       const file = input.files?.[0];
       if (!file) {
-        resolve({ status: "cancelled" });
+        finish({ status: "cancelled" });
         return;
       }
-      resolve(await readSceneFile(file));
+      // Only one selection belongs to this request. The abort listener stays
+      // active while File.text() runs; its result is ignored after cancellation.
+      input.onchange = null;
+      input.oncancel = null;
+      finish(await readSceneFile(file, signal));
     };
-    // Cancelling the picker fires no `change`, only `cancel`. Every current
-    // browser sends it; on one that does not, the promise simply never
-    // settles and the caller's toast never fires - which is the quiet
-    // failure, not a hang: nothing is awaiting it but the toast.
-    input.oncancel = () => resolve({ status: "cancelled" });
-    input.click();
+    input.oncancel = abort;
+    try {
+      input.click();
+    } catch (exc) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(exc);
+    }
   });
 }
