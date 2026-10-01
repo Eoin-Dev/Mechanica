@@ -52,7 +52,7 @@ retrying the bad state.
 `stepBack()` pauses and asks `RewindBuffer` for the previous recorded display
 frame. It reconstructs a new world, resets all live gestures, retains selected
   body IDs where the corresponding reconstructed objects exist, and truncates
-  energy, momentum, distance, velocity, timestamped phase-portrait, event-table,
+  energy, momentum, displacement, distance, velocity, timestamped phase-portrait, event-table,
   and motion-trail samples at the rewound clock. Cumulative distance resumes
   from the restored particle position rather than counting the rewind jump.
 The compact rewind buffer is limited to 3,000 frames and 48 MB. A frame that
@@ -562,9 +562,21 @@ The graph dock shows:
 - energy: kinetic, potential, total;
 - momentum: magnitude, x/y components, and angular momentum;
 - phase space: x-vx or y-vy for the selected body;
+- displacement-time: signed `sx = x - x₀` and `sy = y - y₀` for the selected
+  ordinary particle, with the origin at selection or the latest graph clear;
 - distance-time: cumulative path length travelled by the selected ordinary
   particle from selection or the latest graph clear; and
 - velocity-time: speed plus signed x/y velocity for that particle.
+
+Right and up are positive. For continuous physical motion, each displacement
+component's gradient gives the matching velocity component. Signed velocity
+area gives that component's displacement; speed area gives distance travelled.
+The dock hints, Help and View graph choices distinguish these quantities.
+Empty particle plots ask for a selection inside the canvas as well as in the
+header. Displacement reflects current position relative to its fixed origin,
+including deliberate paused repositioning; those edits do not represent travel
+or continuous physical motion. Opening a graph or committing an edit explicitly
+samples the current state even when the clock has not advanced.
 
 Distance accumulates displacement after each completed live `World.step`,
 including a refined event stop, independently of graph/display sampling.
@@ -587,8 +599,14 @@ sample in place, clears on backward time, rejects non-finite samples, and lets
 legend clicks hide channels. Rendering uses binary search to find the visible
 range and smooths only shrinking y-axis bounds. Reduced motion snaps the range.
 
-Selecting a different ordinary particle clears and seeds both kinematics
-series immediately, including while paused. `PhasePlot` stores bounded
+Selecting a different ordinary particle clears and seeds all three kinematics
+series immediately, including while paused. Clear sets displacement and distance
+to zero at the current position without changing the scene or clock. Rewind
+preserves the measurement origin and truncates future samples; rewinding before
+the selection/clear boundary starts a new measurement at the restored position.
+The graph sampling timestamp is invalidated after rewind so the next completed
+step cannot be suppressed by a timestamp from the discarded future.
+`PhasePlot` stores bounded
 time/x/vx/y/vy tuples, compacts in blocks, draws one
 axis pair in a square region, and marks the latest point. Selecting a different
 body immediately clears the previous phase trajectory and seeds the new body's
@@ -609,6 +627,11 @@ saved height against the current container (subject to its content minimum).
 Legends share the title row when they fit and otherwise wrap into measured rows
 above the plot. Native buttons follow the measured legend bounds with at least
 24-pixel hit height, `aria-pressed` visibility state, and keyboard focus rings.
+Each time-series legend button describes its current value, unit and sample
+time through `aria-description` and a pointer tooltip; displacement descriptions
+also name the horizontal/vertical direction. Descriptions update without a live
+announcement region. Graph-mode changes wake the display poll without treating
+them as a world replacement, preserving the View graph selector and its focus.
 Space or Enter toggles a focused channel without changing playback. Fresh
 samples resize the existing buttons rather than replacing them, preserving
 focus. Switching series replaces only the channel controls; Phase has none.

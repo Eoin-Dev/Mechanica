@@ -188,6 +188,39 @@ describe("status readouts", () => {
 });
 
 describe("graph dock retained state", () => {
+  it.each(["Displacement", "Distance", "Velocity"] as const)("gives a selection instruction inside an empty %s plot", (mode) => {
+    const labels: string[] = [];
+    const ctx = new Proxy({
+      measureText: (text: string) => ({ width: text.length * 6 }),
+      fillText: (text: string) => labels.push(text),
+    } as Record<string, unknown>, {
+      get: (target, key) => key in target ? target[key as string] : () => {},
+      set() { return true; },
+    }) as unknown as CanvasRenderingContext2D;
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue(ctx);
+    try {
+      const app = {
+        graphMode: mode, settings: {}, selection: [],
+        displacementSeries: new TimeSeries(["sx", "sy"]),
+        distanceSeries: new TimeSeries(["Distance"]),
+        velocitySeries: new TimeSeries(["Speed", "vx", "vy"]),
+        world: {}, resizeCanvas() {},
+      } as unknown as App;
+      const root = document.createElement("div");
+      const dock = new GraphDock(app, root, document.createElement("div"));
+      const canvas = root.querySelector("canvas")!;
+      Object.defineProperty(canvas, "clientWidth", { value: 500 });
+      Object.defineProperty(canvas, "clientHeight", { value: 180 });
+      dock.refresh();
+      expect(labels.some(label => label.startsWith("Select a particle"))).toBe(true);
+      expect(labels).not.toContain("Run the simulation to collect data");
+      expect(root.querySelector(".dock-hint")!.textContent).toContain("Select a particle");
+    } finally {
+      getContext.mockRestore();
+    }
+  });
+
   it("retains native legend controls through live samples and clears them on mode changes", () => {
     const ctx = new Proxy({
       measureText: (text: string) => ({ width: text.length * 6 }),
@@ -216,6 +249,7 @@ describe("graph dock retained state", () => {
       dock.refresh();
       const kinetic = root.querySelector<HTMLButtonElement>('[aria-label="KE series"]')!;
       expect(kinetic.getAttribute("aria-pressed")).toBe("true");
+      expect(kinetic.getAttribute("aria-description")).toBe("Current value: 1 J at 0 s.");
       kinetic.focus();
       kinetic.click();
       dock.refresh();
@@ -224,6 +258,7 @@ describe("graph dock retained state", () => {
       dock.refresh();
       expect(root.querySelector('[aria-label="KE series"]')).toBe(kinetic);
       expect(document.activeElement).toBe(kinetic);
+      expect(kinetic.getAttribute("aria-description")).toBe("Current value: 123000 J at 1 s.");
       const hit = app.energySeries.legendEntries.find(entry => entry.channel === "KE")!;
       expect(kinetic.style.left).toBe(`${hit.x}px`);
       expect(kinetic.style.width).toBe(`${hit.w}px`);
@@ -234,6 +269,9 @@ describe("graph dock retained state", () => {
       dock.refresh();
       expect(kinetic.isConnected).toBe(false);
       const horizontal = root.querySelector<HTMLButtonElement>('[aria-label="px series"]')!;
+      expect(horizontal.getAttribute("aria-description")).toBe("Current value: 1 kg m/s at 0 s.");
+      expect(root.querySelector('[aria-label="L series"]')!.getAttribute("aria-description"))
+        .toBe("Current value: 0 kg m²/s at 0 s.");
       horizontal.click();
       dock.refresh();
       expect(app.momentumSeries.hidden.has("px")).toBe(true);

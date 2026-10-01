@@ -58,7 +58,7 @@ const SETTINGS_KEY = "mechanica.settings";
 // gesture ends without keeping the canvas itself repainting.
 const DISPLAY_ACTIVITY_MS = 250;
 
-export type GraphMode = "Off" | "Energy" | "Mom." | "Phase" | "Distance" | "Velocity";
+export type GraphMode = "Off" | "Energy" | "Mom." | "Phase" | "Displacement" | "Distance" | "Velocity";
 
 export interface Settings {
   adaptive_dt?: boolean;
@@ -263,6 +263,7 @@ export class App {
   trails = new Map<number, Trail>();
   energySeries = new TimeSeries(["KE", "PE", "Total"]);
   momentumSeries = new TimeSeries(["|p|", "px", "py", "L"]);
+  displacementSeries = new TimeSeries(["sx", "sy"]);
   distanceSeries = new TimeSeries(["Distance"]);
   velocitySeries = new TimeSeries(["Speed", "vx", "vy"]);
   phasePlot = new PhasePlot();
@@ -275,6 +276,9 @@ export class App {
   private phaseBodyId: number | null = null;
   private kinematicsBodyId: number | null = null;
   private kinematicsDistance = 0;
+  private kinematicsOriginX = 0;
+  private kinematicsOriginY = 0;
+  private kinematicsStartedAt = 0;
   graphMode: GraphMode = "Off";
 
   settings: Settings = {};
@@ -884,10 +888,12 @@ export class App {
     // trim graphs back to the rewound time instead of wiping them
     this.energySeries.truncate(world.time);
     this.momentumSeries.truncate(world.time);
+    this.displacementSeries.truncate(world.time);
     this.distanceSeries.truncate(world.time);
     this.velocitySeries.truncate(world.time);
     this.phasePlot.truncate(world.time);
     this.restoreKinematicsAfterRewind();
+    this.lastGraphSampleT = -Infinity;
     for (const trail of this.trails.values()) trail.truncateAfter(world.time);
     this.playbackEvents.rewindTo(world.time, world);
     this.lastRewindSampleT = world.time;
@@ -1077,6 +1083,7 @@ export class App {
     this.trails.clear();
     this.energySeries.clear();
     this.momentumSeries.clear();
+    this.displacementSeries.clear();
     this.distanceSeries.clear();
     this.velocitySeries.clear();
     this.phasePlot.clear();
@@ -1150,6 +1157,7 @@ export class App {
       this.initialSnapshot = after;
       this.baselineEnergy = this.energyNow().total;
     }
+    if (this.graphMode !== "Off") this.recordGraphSample(true);
     this.onSelectionChange(); // structure may have changed: rebuild inspector
     if (result === "too-large") {
       this.toast("This scene is too large to keep undo history");
@@ -1497,16 +1505,17 @@ export class App {
     this.graphMode = mode;
     // seed the plot with the current state so it draws immediately, even
     // before the simulation is started
-    if (mode !== "Off") this.recordGraphSample();
-    this.onWorldReplaced(); // panels re-check dock visibility
+    if (mode !== "Off") this.recordGraphSample(true);
+    this.scheduleDisplayFrame(true);
   }
 
   /** Clear every graph and restart selected-particle measurements from its
-   * current position. Distance therefore returns to zero without changing the
-   * scene or the simulation clock. */
+   * current position. Displacement and distance return to zero without changing
+   * the scene or the simulation clock. */
   clearGraphData(): void {
     this.energySeries.clear();
     this.momentumSeries.clear();
+    this.displacementSeries.clear();
     this.distanceSeries.clear();
     this.velocitySeries.clear();
     this.phasePlot.clear();
@@ -2107,7 +2116,7 @@ export class App {
     return body;
   }
 
-  /** Bind distance-time and velocity-time history to one ordinary selected
+  /** Bind kinematics history to one ordinary selected
    * particle. Distance is cumulative path length measured from selection (or
    * the most recent graph clear), not radial distance from the origin. */
   private syncKinematicsSelection(): Body | undefined {
@@ -2118,17 +2127,29 @@ export class App {
     if (nextId === this.kinematicsBodyId) return body;
     this.kinematicsBodyId = nextId;
     this.kinematicsDistance = 0;
+    this.kinematicsOriginX = body?.pos.x ?? 0;
+    this.kinematicsOriginY = body?.pos.y ?? 0;
+    this.kinematicsStartedAt = this.world.time;
+    this.displacementSeries.clear();
     this.distanceSeries.clear();
     this.velocitySeries.clear();
-    if (body !== undefined) {
-      this.distanceSeries.add(this.world.time, { Distance: 0 });
-      this.velocitySeries.add(this.world.time, {
-        Speed: Math.hypot(body.vel.x, body.vel.y),
-        vx: body.vel.x,
-        vy: body.vel.y,
-      });
-    }
+    if (body !== undefined) this.recordKinematicsSample(body);
     return body;
+  }
+
+  /** Signed position relative to a fixed measurement origin, alongside path
+   * length and velocity. Moving a paused body changes displacement, not travel. */
+  private recordKinematicsSample(body: Body): void {
+    this.displacementSeries.add(this.world.time, {
+      sx: body.pos.x - this.kinematicsOriginX,
+      sy: body.pos.y - this.kinematicsOriginY,
+    });
+    this.distanceSeries.add(this.world.time, { Distance: this.kinematicsDistance });
+    this.velocitySeries.add(this.world.time, {
+      Speed: Math.hypot(body.vel.x, body.vel.y),
+      vx: body.vel.x,
+      vy: body.vel.y,
+    });
   }
 
   /** Accumulate each completed live solver step, including a refined event
@@ -2146,16 +2167,18 @@ export class App {
    * forward travel when the simulation resumes. */
   private restoreKinematicsAfterRewind(): void {
     const body = this.syncKinematicsSelection();
+    // Selection/Clear can start measurement in the middle of a run. A rewind
+    // before that boundary starts all kinematics afresh at the restored state.
+    if (body !== undefined && this.world.time < this.kinematicsStartedAt - 1e-9) {
+      this.kinematicsBodyId = null;
+      this.syncKinematicsSelection();
+      return;
+    }
     this.kinematicsDistance = this.distanceSeries.count > 0
       ? this.distanceSeries.valueAt("Distance", this.distanceSeries.count - 1)
       : 0;
     if (body !== undefined && this.distanceSeries.count === 0) {
-      this.distanceSeries.add(this.world.time, { Distance: 0 });
-      this.velocitySeries.add(this.world.time, {
-        Speed: Math.hypot(body.vel.x, body.vel.y),
-        vx: body.vel.x,
-        vy: body.vel.y,
-      });
+      this.recordKinematicsSample(body);
     }
   }
 
@@ -2163,7 +2186,7 @@ export class App {
    * physics frame, and immediately when a graph is enabled or the world
    * changes, so an opened graph shows data from the very first frame
    * instead of waiting for the simulation to produce a backlog. */
-  recordGraphSample(): void {
+  recordGraphSample(force = false): void {
     // Selection identity is independent of the sampling cadence: synchronise
     // it before the throttle can return on a paused or just-sampled clock.
     const phaseBody = this.syncPhaseSelection();
@@ -2176,7 +2199,8 @@ export class App {
     // sample so the throttle can never go quiet after a rewind.
     const minDt = GRAPH_WINDOW_S / GRAPH_MAX_POINTS;
     const dt = this.world.time - this.lastGraphSampleT;
-    if (dt >= 0 && dt < minDt) return;
+    // Explicitly opening a graph must reflect paused edits at the same clock.
+    if (!force && dt >= 0 && dt < minDt) return;
     this.lastGraphSampleT = this.world.time;
     // every series records continuously whatever the dock shows, so
     // switching graph views never leaves gaps in the data
@@ -2187,13 +2211,7 @@ export class App {
       "|p|": p.length(), px: p.x, py: p.y, L: this.world.angularMomentum(),
     });
     if (kinematicsBody !== undefined) {
-      this.distanceSeries.add(this.world.time,
-        { Distance: this.kinematicsDistance });
-      this.velocitySeries.add(this.world.time, {
-        Speed: Math.hypot(kinematicsBody.vel.x, kinematicsBody.vel.y),
-        vx: kinematicsBody.vel.x,
-        vy: kinematicsBody.vel.y,
-      });
+      this.recordKinematicsSample(kinematicsBody);
     }
     if (phaseBody !== undefined) {
       this.phasePlot.add(

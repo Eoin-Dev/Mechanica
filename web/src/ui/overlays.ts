@@ -845,7 +845,7 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
     ["W", "Draw wall (Shift snaps the angle)"],
     ["R / E / S / P", "Connect rod / string / spring; add pulley"],
     ["X", "Eraser"],
-    ["Esc", "Cancel a pending link or wall; clear selection"],
+    ["Esc", "Cancel a time jump or pending link/wall; clear selection"],
   ], "pc"],
   ["Editing", [
     ["Ctrl+Z / Ctrl+Y", "Undo / redo"],
@@ -863,8 +863,9 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
     ["D", "Velocity vectors"],
     ["G", "Broadphase debug grid"],
     ["1 / 2 / 3", "Energy / momentum / phase graph"],
+    ["Graph: Displacement", "Signed sx/sy from selection or Clear; gradients give vx/vy"],
     ["Graph: Distance", "Distance travelled by the selected particle over time"],
-    ["Graph: Velocity", "Speed and x/y velocity of the selected particle over time"],
+    ["Graph: Velocity", "Signed vx/vy: gradient gives acceleration, area gives displacement. Speed: area gives distance"],
     ["Scroll / right-drag", "Zoom at cursor / pan"],
     ["\\", "Hide / show the inspector"],
     ["Tab", "Move between controls"],
@@ -886,7 +887,7 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
  * which is the question the help overlay never used to address at all. */
 const GETTING_STARTED: Array<[string, string, string]> = [
   ["1", "Open the Library",
-   "48 worked examples across eight topics, each with a note on what it " +
+   "Browse examples by topic or search, each with a note on what it " +
    "shows. Loading one is the fastest way to see what this can do."],
   ["2", "Run it, then interfere",
    "Play, then drag something mid-flight. Nothing is on rails: lift a " +
@@ -902,10 +903,12 @@ const GETTING_STARTED: Array<[string, string, string]> = [
    "friction. The World tab has gravity, air drag, N-body attraction and " +
    "custom force fields you write as formulas."],
   ["5", "Measure it",
-   "Select a particle for live position, displacement, distance, velocity, " +
-   "acceleration and free-body arrows drawn on the canvas. World records and " +
-    "pauses at events; Graphs adds energy, momentum, phase space, " +
-    "distance–time and velocity–time plots."],
+   "Select a particle to edit its position and velocity or show free-body " +
+   "forces on the canvas. View offers velocity and acceleration arrows. " +
+   "Graphs compares signed displacement, distance travelled and velocity " +
+   "over time, alongside energy, momentum and phase space. World records " +
+   "and pauses at events. Clear graph data to measure from a new zero; " +
+   "right and up are positive."],
   ["6", "Keep it",
    "Refreshing restores this tab's last checkpoint, paused. Ctrl+S saves " +
    "a named scene to this browser; the Library exports and imports .json, " +

@@ -913,7 +913,7 @@ describe("graph recording", () => {
       .toBeCloseTo(app.world.angularMomentum(), 9);
   });
 
-  it("records selected-particle distance and velocity and resets on selection", () => {
+  it("records selected-particle kinematics and resets on selection", () => {
     const app = makeApp();
     app.world.gravity = 0;
     const first = new Body(new Vec2(0, 0), 0.2, 1);
@@ -932,11 +932,141 @@ describe("graph recording", () => {
     expect(app.velocitySeries.values("Speed").at(-1)).toBeCloseTo(5, 9);
     expect(app.velocitySeries.values("vx").at(-1)).toBeCloseTo(3, 9);
     expect(app.velocitySeries.values("vy").at(-1)).toBeCloseTo(4, 9);
+    expect(app.displacementSeries.values("sx").at(-1))
+      .toBeCloseTo(first.pos.x - start.x, 9);
+    expect(app.displacementSeries.values("sy").at(-1))
+      .toBeCloseTo(first.pos.y - start.y, 9);
 
     app.setSelection([second]);
     expect(app.distanceSeries.values("Distance")).toEqual([0]);
+    expect(app.displacementSeries.values("sx")).toEqual([0]);
+    expect(app.displacementSeries.values("sy")).toEqual([0]);
     expect(app.velocitySeries.values("Speed").at(-1))
       .toBeCloseTo(Math.hypot(-2, 0.5), 9);
+  });
+
+  it("measures signed displacement from a translated origin, with graphs closed", () => {
+    const app = makeApp();
+    app.world.gravity = 0;
+    const body = new Body(new Vec2(12, -7), 0.2, 1);
+    body.vel.set(-3, 4);
+    app.world.bodies.push(body);
+    app.setSelection([body]);
+    for (let i = 0; i < 20; i++) app.stepOnce();
+    expect(app.graphMode).toBe("Off");
+    app.setGraphMode("Displacement");
+    expect(app.displacementSeries.count).toBeGreaterThan(1);
+    const t = app.world.time;
+    expect(app.displacementSeries.values("sx").at(-1)).toBeCloseTo(-3 * t, 9);
+    expect(app.displacementSeries.values("sy").at(-1)).toBeCloseTo(4 * t, 9);
+    expect(app.distanceSeries.values("Distance").at(-1)).toBeCloseTo(5 * t, 9);
+  });
+
+  it("matches displacement and velocity to constant-acceleration formulas", () => {
+    const app = makeApp();
+    app.world.gravity = 9.8;
+    app.world.integrator = "Velocity Verlet";
+    const body = new Body(new Vec2(-20, 30), 0.2, 1);
+    body.vel.set(2, 3);
+    app.world.bodies.push(body);
+    app.setSelection([body]);
+    for (let i = 0; i < 60; i++) app.stepOnce();
+    const t = app.world.time;
+    expect(app.displacementSeries.values("sx").at(-1)).toBeCloseTo(2 * t, 8);
+    expect(app.displacementSeries.values("sy").at(-1))
+      .toBeCloseTo(3 * t - 0.5 * 9.8 * t * t, 8);
+    expect(app.velocitySeries.values("vy").at(-1)).toBeCloseTo(3 - 9.8 * t, 8);
+  });
+
+  it("rebases displacement and travel at the current position when graphs are cleared", () => {
+    const app = makeApp();
+    app.world.gravity = 0;
+    const body = new Body(new Vec2(-9, 4), 0.2, 1);
+    body.vel.set(-2, 1);
+    app.world.bodies.push(body);
+    app.setSelection([body]);
+    for (let i = 0; i < 10; i++) app.stepOnce();
+    const state = snapshot(app.world);
+    const start = body.pos.copy();
+    app.clearGraphData();
+    expect(snapshot(app.world)).toBe(state);
+    expect(app.displacementSeries.values("sx")).toEqual([0]);
+    expect(app.displacementSeries.values("sy")).toEqual([0]);
+    expect(app.distanceSeries.values("Distance")).toEqual([0]);
+    app.stepOnce();
+    expect(app.displacementSeries.values("sx").at(-1))
+      .toBeCloseTo(body.pos.x - start.x, 9);
+    expect(app.displacementSeries.values("sy").at(-1))
+      .toBeCloseTo(body.pos.y - start.y, 9);
+  });
+
+  it.each(["opening", "showing"])("samples paused position edits when %s displacement without counting them as travel", (state) => {
+    const app = makeApp();
+    app.world.gravity = 0;
+    const body = new Body(new Vec2(2, 5), 0.2, 1);
+    app.world.bodies.push(body);
+    app.setSelection([body]);
+    app.setGraphMode(state === "opening" ? "Energy" : "Displacement");
+    app.edit(() => body.pos.set(-1, 9));
+    if (state === "opening") app.setGraphMode("Displacement");
+    expect(app.displacementSeries.values("sx")).toEqual([-3]);
+    expect(app.displacementSeries.values("sy")).toEqual([4]);
+    expect(app.distanceSeries.values("Distance")).toEqual([0]);
+    expect(app.world.time).toBe(0);
+  });
+
+  it("keeps the measurement origin on rewind and discards future displacement", () => {
+    const app = makeApp();
+    app.world.gravity = 0;
+    const body = new Body(new Vec2(11, -8), 0.2, 1);
+    body.vel.set(-2, 3);
+    app.world.bodies.push(body);
+    app.setSelection([body]);
+    for (let i = 0; i < 20; i++) app.stepOnce();
+    const future = app.displacementSeries.values("sx").at(-1)!;
+    app.stepBack();
+    app.stepBack();
+    expect(app.displacementSeries.lastT).toBeLessThanOrEqual(app.world.time + 1e-9);
+    app.setGraphMode("Displacement");
+    expect(app.displacementSeries.values("sx").at(-1)).toBeCloseTo(-2 * app.world.time, 9);
+    expect(app.displacementSeries.values("sy").at(-1)).toBeCloseTo(3 * app.world.time, 9);
+    expect(app.displacementSeries.values("sx")).not.toContain(future);
+    app.stepOnce();
+    expect(app.displacementSeries.values("sx").at(-1)).toBeCloseTo(-2 * app.world.time, 9);
+  });
+
+  it.each(["select", "clear"])("starts a fresh origin after rewinding before a later graph %s", (action) => {
+    const app = makeApp();
+    app.world.gravity = 0;
+    const body = new Body(new Vec2(5, -3), 0.2, 1);
+    body.vel.set(2, -1);
+    app.world.bodies.push(body);
+    if (action === "clear") app.setSelection([body]);
+    for (let i = 0; i < 10; i++) app.stepOnce();
+    if (action === "clear") app.clearGraphData();
+    else app.setSelection([body]);
+    app.stepBack();
+    const start = app.world.bodies[0].pos.copy();
+    expect(app.displacementSeries.values("sx")).toEqual([0]);
+    expect(app.displacementSeries.values("sy")).toEqual([0]);
+    expect(app.distanceSeries.values("Distance")).toEqual([0]);
+    app.stepOnce();
+    expect(app.displacementSeries.values("sx").at(-1))
+      .toBeCloseTo(app.world.bodies[0].pos.x - start.x, 9);
+  });
+
+  it("clears particle measurements on deselection or world replacement", () => {
+    const app = makeApp();
+    app.world.bodies.push(new Body(new Vec2(1, 2), 0.2, 1));
+    app.setSelection([app.world.bodies[0]]);
+    app.stepOnce();
+    app.setSelection([]);
+    expect(app.displacementSeries.count).toBe(0);
+    app.setSelection([app.world.bodies[0]]);
+    app.replaceWorld(new World());
+    expect(app.displacementSeries.count).toBe(0);
+    expect(app.distanceSeries.count).toBe(0);
+    expect(app.velocitySeries.count).toBe(0);
   });
 
   it("measures travel through a turnaround inside one displayed batch", () => {
@@ -954,6 +1084,7 @@ describe("graph recording", () => {
     app.recordGraphSample();
     expect(body.pos.y).toBeCloseTo(0, 9);
     expect(app.distanceSeries.values("Distance").at(-1)).toBeCloseTo(PHYSICS_DT, 9);
+    expect(app.displacementSeries.values("sy").at(-1)).toBeCloseTo(0, 9);
   });
 
   it("excludes paused position edits from distance travelled", () => {

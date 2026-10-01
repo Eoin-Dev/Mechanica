@@ -12,6 +12,91 @@ function normalizeCssColor(value: string): string {
   return value.replace(/\s+/g, "");
 }
 
+test("signed displacement, travel and velocity stay distinct and fit responsive graphs", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await skipFirstRunTour(page, { theme: "light", studio_mode: true });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  const library = page.getByRole("dialog", { name: "Library", exact: true });
+  await library.getByRole("tab", { name: "My scenes", exact: true }).click();
+  const choosing = page.waitForEvent("filechooser");
+  await library.getByRole("button", { name: "Import .json", exact: true }).click();
+  await (await choosing).setFiles({ name: "Graph particle.json", mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({ settings: { gravity: 0 }, bodies: [{
+      id: 1, name: "Graph particle", pos: [7, -4], vel: [-3, 4], radius: 0.2, mass: 1,
+    }] })) });
+  await expect(library).toBeHidden();
+  await page.getByRole("tab", { name: "View", exact: true }).click();
+  const graphChoice = page.getByRole("combobox", { name: "Graph shown in the dock", exact: true });
+  await graphChoice.focus();
+  await graphChoice.selectOption("Displacement");
+  await expect(graphChoice).toBeFocused();
+  await expect(graphChoice).toHaveValue("Displacement");
+  const dock = page.locator("#dock");
+  await expect(dock).toBeVisible();
+  await expect(dock.locator(".dock-hint")).toContainText("Select a particle");
+  const canvas = page.locator("#canvas");
+  await canvas.focus();
+  await page.keyboard.press("f");
+  const box = (await canvas.boundingBox())!;
+  await canvas.click({ position: { x: box.width / 2, y: box.height / 2 } });
+  await expect(dock.locator(".dock-hint")).toContainText("sx is positive right");
+  for (let i = 0; i < 20; i++) await page.keyboard.press(".");
+  const sx = dock.getByRole("button", { name: "sx series", exact: true });
+  const sy = dock.getByRole("button", { name: "sy series", exact: true });
+  await expect(sx).toHaveAttribute("aria-description", "Current value: -1 m at 0.333 s. Horizontal displacement; right is positive.");
+  await expect(sy).toHaveAttribute("aria-description", "Current value: 1.33 m at 0.333 s. Vertical displacement; up is positive.");
+  await sy.focus();
+  await sy.press("Space");
+  await expect(sy).toHaveAttribute("aria-pressed", "false");
+  await expect(sy).toBeFocused();
+  await sy.press("Enter");
+  await dock.getByRole("button", { name: "Distance", exact: true }).click();
+  await expect(dock.getByRole("button", { name: "Distance series", exact: true }))
+    .toHaveAttribute("aria-description", "Current value: 1.67 m at 0.333 s.");
+  await dock.getByRole("button", { name: "Velocity", exact: true }).click();
+  await expect(dock.getByRole("button", { name: "Speed series", exact: true }))
+    .toHaveAttribute("aria-description", "Current value: 5 m/s at 0.333 s.");
+  await dock.getByRole("button", { name: "Displacement", exact: true }).click();
+  await page.keyboard.press("f");
+  await canvas.hover();
+  await page.mouse.wheel(0, 1000);
+
+  for (const layout of ["desktop", "phone", "enlarged"] as const) {
+    if (layout !== "desktop") await page.setViewportSize({ width: layout === "phone" ? 390 : 320, height: 844 });
+    if (layout === "enlarged") await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
+    const width = page.viewportSize()!.width;
+    for (const name of ["Displacement", "Distance", "Velocity"]) {
+      const mode = dock.getByRole("button", { name, exact: true });
+      await mode.click();
+      await expect(mode).toBeInViewport({ ratio: 1 });
+      const names = name === "Displacement" ? ["sx", "sy"]
+        : name === "Distance" ? ["Distance"] : ["Speed", "vx", "vy"];
+      await expect(dock.locator(".graph-legend-toggle")).toHaveCount(names.length);
+      for (const channelName of names) {
+        const channel = dock.getByRole("button", { name: `${channelName} series`, exact: true });
+        await expect(channel).toBeVisible();
+        const bounds = (await channel.boundingBox())!;
+        expect(bounds.x).toBeGreaterThanOrEqual(0);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+      }
+    }
+    await dock.getByRole("button", { name: "Displacement", exact: true }).click();
+    const graphCanvas = (await dock.locator("canvas").boundingBox())!;
+    expect(graphCanvas.height).toBeGreaterThanOrEqual(100);
+    const scan = await new AxeBuilder({ page }).include("#dock")
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze();
+    expect(scan.violations).toEqual([]);
+    await page.screenshot({ path: test.info().outputPath(`displacement-${layout}.png`) });
+  }
+  await dock.getByRole("button", { name: "Discard all recorded graph data.", exact: true }).click();
+  await expect(sx).toHaveAttribute("aria-description", "Current value: 0 m at 0.333 s. Horizontal displacement; right is positive.");
+  await expect(sy).toHaveAttribute("aria-description", "Current value: 0 m at 0.333 s. Vertical displacement; up is positive.");
+  expect(errors).toEqual([]);
+});
+
 test("time jumps yield for cancellation and scene replacement", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -649,7 +734,7 @@ test("narrow graph controls remain reachable with enlarged application text", as
   await page.goto("/");
   await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
   const dock = page.locator("#dock");
-  for (const name of ["Energy", "Mom.", "Phase", "Distance", "Velocity"]) {
+  for (const name of ["Energy", "Mom.", "Phase", "Displacement", "Distance", "Velocity"]) {
     const button = dock.getByRole("button", { name, exact: true });
     await button.click();
     const rect = await button.boundingBox();

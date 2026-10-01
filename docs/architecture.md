@@ -75,7 +75,7 @@ driving. Production behavior does not depend on these handles.
 
 | Owner | Long-lived state | Not owned here |
 | --- | --- | --- |
-| `App` | Current `World`, camera, `ViewSettings`, selection, playback speed/accumulator, event tracker/auto-pause rule, adaptive-resolution preference, active edit transaction, undo and rewind objects, initial reset snapshot, trails, energy/momentum/phase/distance/velocity plots, graph mode, clipboard properties, browser settings, canvas invalidation generation, performance observations, panel callbacks. | Physical integration rules, pointer gesture internals, DOM control trees. |
+| `App` | Current `World`, camera, `ViewSettings`, selection, playback speed/accumulator, event tracker/auto-pause rule, adaptive-resolution preference, active edit transaction, undo and rewind objects, initial reset snapshot, trails, energy/momentum/phase/displacement/distance/velocity plots, graph mode, clipboard properties, browser settings, canvas invalidation generation, performance observations, panel callbacks. | Physical integration rules, pointer gesture internals, DOM control trees. |
 | `World` | Bodies, walls, links, fields, drivers, physical settings, simulation clock, contact snapshot, solver caches, adaptive-slice scratch storage, diagnostics. | Camera, selected objects, playback state, browser preferences, storage, rendering. |
 | `CanvasController` | Active tool, hover, pointer coordinates, pending link/wall gestures, drag/pan/box-selection state, touch pointers and pinch state. | Canonical selection and world lists; it edits those through `App`/`World`. |
 | Panels and overlays | DOM nodes, local tab/filter/open state, refresh groups, focus traps, splitter state. | Canonical physical or playback state; controls read/write `App` and `World`. |
@@ -390,9 +390,11 @@ instead of retaining a partial transaction.
   displayed update; Performance levels 0-3 cap rewind capture at 60, 30, 15,
   and 8 samples per simulated second.
 - Frame rewind pops the current recorded frame, reconstructs the previous one,
-  truncates energy, momentum, distance, velocity, timestamped phase/event data,
+  truncates energy, momentum, displacement, distance, velocity, timestamped phase/event data,
   and trails to its clock, rebases cumulative distance at the restored
-  position, and pauses playback.
+  position, invalidates the graph sampling timestamp, and pauses playback.
+  Displacement retains its selection/clear origin unless the restored clock
+  precedes that measurement boundary, when all particle measurements restart.
 - Reset reconstructs the original snapshot but preserves that snapshot so
   repeated reset remains meaningful.
 

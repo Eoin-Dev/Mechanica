@@ -54,7 +54,8 @@ The complete build, CI, Pages, and alternative-host instructions are in
 - **Library** — searchable, annotated simulations across eight
   categories (press `L`), plus saved scenes with rename, description, export,
   and import.
-- **Analysis** — live energy / momentum / phase-space plots, realised net-force
+- **Analysis** — live energy / momentum / phase-space plots and selected-particle
+  displacement / distance / velocity against time, realised net-force
   vectors, per-link spring/string/pulley force vectors with hover readouts,
   motion trails, centre of mass, contact normals, and an energy-drift readout
   in the status bar.
@@ -110,3 +111,11 @@ mouse is held still between pointer events.
 Everything is SI: metres, kilograms, seconds, newtons. New scenes use
 9.8 m/s² downward by default, configurable in Settings; the space presets use
 scaled units with G = 1.
+
+For kinematics, select a particle and compare **Displacement**, **Distance**
+and **Velocity** in the graph dock (or choose a graph in View). Displacement
+uses signed components `sx` and `sy` relative to the position at selection or
+the latest graph clear; right and up are positive. Distance accumulates travel
+even when the particle turns back. During continuous motion, the gradient of each displacement component
+gives its velocity; signed velocity area gives displacement, while speed area
+gives distance. Clear graph data to start measuring from a new position.

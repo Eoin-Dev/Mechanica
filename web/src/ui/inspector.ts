@@ -1567,10 +1567,11 @@ export class Inspector implements Panel {
 
     this.body.append(section("Graph dock"));
     const graph = el("select", { "aria-label": "Graph shown in the dock",
-      title: "Distance and velocity graphs follow the selected particle." });
+      title: "Displacement, distance and velocity graphs follow the selected particle." });
     for (const [label, value] of [
       ["Off", "Off"], ["Energy", "Energy"], ["Momentum", "Mom."],
-      ["Phase space", "Phase"], ["Distance–time", "Distance"],
+      ["Phase space", "Phase"], ["Displacement–time", "Displacement"],
+      ["Distance–time", "Distance"],
       ["Velocity–time", "Velocity"],
     ] as Array<[string, GraphMode]>) {
       graph.append(el("option", { text: label, value }));

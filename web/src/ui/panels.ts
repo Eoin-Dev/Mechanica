@@ -3,7 +3,7 @@ import { App, GraphMode, Panel } from "../app";
 import { Body } from "../engine/body";
 import { SpringLink } from "../engine/links";
 import { TOOL_INFO, TOOL_KEYS, Tool } from "../interact/tools";
-import { DOCK_H_MAX, DOCK_H_MIN, RefreshGroup, button, countNoun, el, isTouch,
+import { DOCK_H_MAX, DOCK_H_MIN, RefreshGroup, button, countNoun, el, fmt3g, isTouch,
          segmented, slider, splitterDrag } from "./dom";
 import { ICONS } from "./icons";
 import { GRAPH_HISTORY_S, GRAPH_WINDOW_S, TimeSeries } from "./plots";
@@ -327,10 +327,10 @@ export class GraphDock implements Panel {
     this.splitter = splitter;
 
     const header = this.header = el("div", { class: "dock-header" });
-    const modes = this.group.add(segmented(["Energy", "Mom.", "Phase", "Distance", "Velocity"],
+    const modes = this.group.add(segmented(["Energy", "Mom.", "Phase", "Displacement", "Distance", "Velocity"],
       () => app.graphMode,
       (v) => app.setGraphMode(v as GraphMode),
-      "Which live graph to display. Distance and velocity follow the selected particle."));
+      "Which live graph to display. Displacement, distance and velocity follow the selected particle."));
     modes.root.classList.add("graph-modes");
     header.append(modes.root);
     this.hintEl = el("span", { class: "dock-hint" });
@@ -499,6 +499,18 @@ export class GraphDock implements Panel {
       if (control.getAttribute("aria-pressed") !== pressed) {
         control.setAttribute("aria-pressed", pressed);
       }
+      const unit = this.app.graphMode === "Energy" ? "J"
+        : this.app.graphMode === "Mom." ? hit.channel === "L" ? "kg m²/s" : "kg m/s"
+        : this.app.graphMode === "Velocity" ? "m/s" : "m";
+      const direction = this.app.graphMode !== "Displacement" ? ""
+        : hit.channel === "sx" ? " Horizontal displacement; right is positive."
+        : " Vertical displacement; up is positive.";
+      const description = series.count === 0 ? "No samples."
+        : `Current value: ${fmt3g(series.valueAt(hit.channel, series.count - 1))} ${unit} at ${fmt3g(series.lastT)} s.${direction}`;
+      if (control.getAttribute("aria-description") !== description) {
+        control.setAttribute("aria-description", description);
+        control.title = description;
+      }
       const position = `left:${hit.x}px;top:${hit.y}px;width:${hit.w}px;height:${hit.h}px`;
       if (control.dataset.position !== position) {
         control.style.cssText = position;
@@ -511,6 +523,7 @@ export class GraphDock implements Panel {
   private activeSeries(): TimeSeries | undefined {
     if (this.app.graphMode === "Energy") return this.app.energySeries;
     if (this.app.graphMode === "Mom.") return this.app.momentumSeries;
+    if (this.app.graphMode === "Displacement") return this.app.displacementSeries;
     if (this.app.graphMode === "Distance") return this.app.distanceSeries;
     if (this.app.graphMode === "Velocity") return this.app.velocitySeries;
     return undefined;
@@ -520,15 +533,20 @@ export class GraphDock implements Panel {
   private hint(): string {
     const app = this.app;
     const w = app.world;
+    if (app.graphMode === "Displacement") {
+      return app.displacementSeries.count === 0
+        ? "Select a particle to plot its signed displacement"
+        : "From selection or Clear: sx is positive right; sy is positive up";
+    }
     if (app.graphMode === "Distance") {
       return app.distanceSeries.count === 0
         ? "Select a particle to plot its distance travelled"
-        : "Distance travelled from the point where this particle was selected";
+        : "Total travel since selection or Clear; turning back still adds distance";
     }
     if (app.graphMode === "Velocity") {
       return app.velocitySeries.count === 0
         ? "Select a particle to plot its velocity"
-        : "Speed and signed x/y velocity of the selected particle";
+        : "Signed vx/vy and speed: right/up are positive; speed is the magnitude";
     }
     if (app.graphMode === "Mom.") {
       const ext: string[] = [];
@@ -639,10 +657,15 @@ export class GraphDock implements Panel {
       const x0 = (w - (2 * side + 12)) / 2;
       app.phasePlot.draw(ctx, x0, top, side, side, "x");
       app.phasePlot.draw(ctx, x0 + side + 12, top, side, side, "y");
+    } else if (app.graphMode === "Displacement") {
+      app.displacementSeries.draw(ctx, w, h, "Displacement (m)", graphView,
+        "Select a particle to plot displacement");
     } else if (app.graphMode === "Distance") {
-      app.distanceSeries.draw(ctx, w, h, "Distance travelled (m)", graphView);
+      app.distanceSeries.draw(ctx, w, h, "Distance travelled (m)", graphView,
+        "Select a particle to plot distance travelled");
     } else if (app.graphMode === "Velocity") {
-      app.velocitySeries.draw(ctx, w, h, "Velocity (m/s)", graphView);
+      app.velocitySeries.draw(ctx, w, h, "Velocity (m/s)", graphView,
+        "Select a particle to plot velocity");
     }
     this.syncLegendControls(series);
   }

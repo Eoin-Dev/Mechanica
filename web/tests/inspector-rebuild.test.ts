@@ -42,6 +42,25 @@ beforeEach(() => {
 });
 
 describe("Inspector structure key", () => {
+  it("selects displacement from View and follows graph changes without replacing its control", () => {
+    const { app, panel, inspector } = makeInspector();
+    [...panel.querySelectorAll<HTMLButtonElement>("[role=tab]")]
+      .find(button => button.textContent === "View")!.click();
+    inspector.refresh();
+    const select = panel.querySelector<HTMLSelectElement>('[aria-label="Graph shown in the dock"]')!;
+    expect([...select.options].find(option => option.value === "Displacement")?.text)
+      .toBe("Displacement–time");
+    select.focus();
+    select.value = "Displacement";
+    select.dispatchEvent(new Event("change"));
+    expect(app.graphMode).toBe("Displacement");
+    app.setGraphMode("Velocity");
+    inspector.refresh();
+    expect(panel.querySelector('[aria-label="Graph shown in the dock"]')).toBe(select);
+    expect(document.activeElement).toBe(select);
+    expect(select.value).toBe("Velocity");
+  });
+
   it("keeps an attachment button focused through unchanged panel refreshes", () => {
     const { app, panel, inspector } = makeInspector();
     const a = new Body(new Vec2(0, 0));

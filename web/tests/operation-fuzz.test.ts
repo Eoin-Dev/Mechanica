@@ -96,7 +96,7 @@ function invariants(app: App): string | null {
 }
 
 describe("random operation sequences keep the app consistent", () => {
-  it("survives 400 random operations from many seeds", () => {
+  it("survives 500 random operations from many seeds", () => {
     // twenty seeds rather than a handful: the two defects this found both
     // needed a delete or a world swap to land inside a multi-step gesture,
     // which is rare per sequence and certain across enough of them
@@ -155,7 +155,7 @@ describe("random operation sequences keep the app consistent", () => {
         ["autoFit", () => app.toggleAutoFit()],
         ["follow", () => app.toggleFollow()],
         ["speed", () => app.bumpSpeed(rand() < 0.5 ? 0.5 : 2)],
-        ["graph", () => app.setGraphMode(pick(["Off", "Energy", "Mom.", "Phase"] as const))],
+        ["graph", () => app.setGraphMode(pick(["Off", "Energy", "Mom.", "Phase", "Displacement", "Distance", "Velocity"] as const))],
         ["trails", () => app.setTrails(rand() < 0.5)],
         ["perfMode", () => app.setPerfMode(rand() < 0.5)],
         ["copyProps", () => app.copyProps()],

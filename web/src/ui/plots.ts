@@ -249,7 +249,7 @@ export class TimeSeries {
   }
 
   draw(ctx: CanvasRenderingContext2D, w: number, h: number, title: string,
-       view?: GraphView): void {
+       view?: GraphView, emptyMessage = "Run the simulation to collect data"): void {
     ctx.clearRect(0, 0, w, h);
     ctx.font = "600 12px system-ui, sans-serif";
     ctx.fillStyle = css(theme.TEXT_DIM);
@@ -259,7 +259,7 @@ export class TimeSeries {
       this.easing = false;
       ctx.fillStyle = css(theme.TEXT_FAINT);
       ctx.textAlign = "center";
-      ctx.fillText("Run the simulation to collect data", w / 2,
+      ctx.fillText(emptyMessage, w / 2,
         Math.max(plotTop + 16, (plotTop + h - 16) / 2), Math.max(1, w - 16));
       ctx.textAlign = "left";
       return;
