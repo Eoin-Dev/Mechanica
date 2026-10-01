@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 
 async function skipFirstRunTour(page: Page, settings: Record<string, unknown> = {}): Promise<void> {
   await page.addInitScript((stored) => {
@@ -9,6 +10,87 @@ async function skipFirstRunTour(page: Page, settings: Record<string, unknown> = 
 
 function normalizeCssColor(value: string): string {
   return value.replace(/\s+/g, "");
+}
+
+for (const layout of [
+  { width: 1440, height: 900, theme: "light", scale: 1 },
+  { width: 390, height: 844, theme: "dark", scale: 1 },
+  { width: 320, height: 844, theme: "light", scale: 2 },
+]) {
+  test(`Saved-scene editing at ${layout.width}px and ${layout.scale * 100}% text`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.setViewportSize({ width: layout.width, height: layout.height });
+    await skipFirstRunTour(page, { theme: layout.theme, studio_mode: true });
+    await page.goto("/");
+    await page.evaluate(scale => document.documentElement.style.setProperty("--fs", String(scale)), layout.scale);
+    await page.getByRole("button", { name: "Library", exact: true }).click();
+    const library = page.getByRole("dialog", { name: "Library", exact: true });
+    await library.getByRole("tab", { name: "My scenes", exact: true }).click();
+    await library.getByRole("button", { name: "Save current scene", exact: true }).click();
+    const name = library.getByRole("textbox", { name: "Scene name", exact: true });
+    await expect(name).toBeFocused();
+    await name.fill("Trial #1");
+    await expect(library.locator("#scene-editor-help")).toContainText("Saved as “Trial 1”");
+    await name.press("Enter");
+    await expect(library.getByRole("button", { name: "Load Trial 1", exact: true })).toBeFocused();
+    const original = await page.evaluate(() => localStorage.getItem("mechanica.scene.Trial 1"));
+    await library.getByRole("button", { name: "Save current scene", exact: true }).click();
+    await name.fill("Trial: 1");
+    await name.press("Enter");
+    await expect(library.getByRole("button", { name: "Replace scene", exact: true })).toBeVisible();
+    await expect(library.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+    await library.getByRole("button", { name: "Cancel", exact: true }).press("Enter");
+    expect(await page.evaluate(() => localStorage.getItem("mechanica.scene.Trial 1"))).toBe(original);
+    await library.getByRole("button", { name: "Close (Esc)", exact: true }).click();
+    await page.getByRole("button", { name: "Remove everything from the scene. Ctrl+Z restores it.", exact: true }).click();
+    await page.getByRole("button", { name: "Library", exact: true }).click();
+    await library.getByRole("button", { name: "Save current scene", exact: true }).click();
+    await name.fill("Trial #1");
+    await name.press("Enter");
+    await library.getByRole("button", { name: "Replace scene", exact: true }).click();
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("mechanica.scene.Trial 1")!).bodies)).toEqual([]);
+    await library.getByRole("button", { name: "Rename Trial 1", exact: true }).click();
+    await name.fill("Trial 2");
+    await name.press("Enter");
+    await library.getByRole("button", { name: "Add description for Trial 2", exact: true }).click();
+    const description = library.getByRole("textbox", { name: "Description", exact: true });
+    await description.fill("My experiment\nCheck the rebound.");
+    const editor = library.locator(".scene-editor");
+    const bounds = (await editor.boundingBox())!;
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(layout.width);
+    const violations = await new AxeBuilder({ page }).include("#library")
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"])
+      .analyze();
+    expect(violations.violations).toEqual([]);
+    await editor.screenshot({ path: test.info().outputPath("saved-scene-editor.png") });
+    await library.screenshot({ path: test.info().outputPath("saved-scenes-library.png") });
+    await library.getByRole("button", { name: "Save description", exact: true }).click();
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("mechanica.scenemeta.Trial 2")!).description))
+      .toBe("My experiment\nCheck the rebound.");
+    const downloading = page.waitForEvent("download");
+    await library.getByRole("button", { name: "Download Trial 2 as a .json file", exact: true }).click();
+    const download = await downloading;
+    expect(download.suggestedFilename()).toBe("Trial 2.json");
+    const file = (await download.path())!;
+    expect(JSON.parse(await readFile(file, "utf8")).bodies).toEqual([]);
+    await library.getByRole("button", { name: "Delete saved scene Trial 2", exact: true }).click();
+    const cancel = library.getByRole("button", { name: "Cancel", exact: true });
+    await expect(cancel).toBeFocused();
+    await cancel.press("Enter");
+    await expect(library.getByRole("button", { name: "Load Trial 2", exact: true })).toBeVisible();
+    await library.getByRole("button", { name: "Delete saved scene Trial 2", exact: true }).click();
+    await library.getByRole("button", { name: "Delete saved scene", exact: true }).click();
+    expect(await page.evaluate(() => localStorage.getItem("mechanica.scene.Trial 2"))).toBeNull();
+    expect(await page.evaluate(() => localStorage.getItem("mechanica.scenemeta.Trial 2"))).toBeNull();
+    const choosing = page.waitForEvent("filechooser");
+    await library.getByRole("button", { name: "Import .json", exact: true }).click();
+    await (await choosing).setFiles(file);
+    await expect(library).toBeHidden();
+    await expect(page.locator("#status-text")).toContainText("0 bodies");
+    expect(errors).toEqual([]);
+  });
 }
 
 for (const layout of [

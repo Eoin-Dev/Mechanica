@@ -512,23 +512,22 @@ export class UndoStack {
  * space/underscore/hyphen. Length is capped so one name cannot fill the
  * storage quota on its own. The .json download path re-sanitizes for the
  * filesystem separately. */
-function safeName(name: string): string {
+export function normalizeSceneName(name: string): string {
   const cleaned = [...name.normalize("NFC").trim()]
     .filter((ch) => /[\p{L}\p{N} _-]/u.test(ch))
     .join("")
     .replace(/\s+/g, " ")
-    .slice(0, 80)
     .trim();
-  return cleaned || "scene";
+  return [...cleaned].slice(0, 80).join("").trim() || "scene";
 }
 
 /** True if a saved scene already uses this (sanitized) name. Callers ask
  * before saving so an existing scene is never silently overwritten -
- * `safeName` strips punctuation, so two different-looking names can also
+ * Name normalization strips punctuation, so two different-looking names can also
  * collide without the user seeing why. */
 export function sceneExists(name: string): boolean {
   try {
-    return localStorage.getItem(SCENE_PREFIX + safeName(name)) !== null;
+    return localStorage.getItem(SCENE_PREFIX + normalizeSceneName(name)) !== null;
   } catch (exc) {
     throw storageError(exc, "read");
   }
@@ -582,7 +581,7 @@ function restoreKeys(entries: ReadonlyArray<readonly [string, string | null]>): 
  * the click handler, which surfaced as nothing at all: the save silently
  * did not happen and the user was told it had. */
 export function saveScene(world: World, name: string): string {
-  const safe = safeName(name);
+  const safe = normalizeSceneName(name);
   const state = serializableScene(world);
   try {
     localStorage.setItem(SCENE_PREFIX + safe, state);
@@ -651,7 +650,7 @@ export function deleteScene(name: string): void {
 /** Rename a saved scene (metadata moves with it). Returns the safe name,
  * or null if the target name is already taken. */
 export function renameScene(oldName: string, newName: string): string | null {
-  const safe = safeName(newName);
+  const safe = normalizeSceneName(newName);
   if (safe === oldName) return safe;
   const oldPayloadKey = SCENE_PREFIX + oldName;
   const oldMetaKey = META_PREFIX + oldName;
@@ -745,7 +744,7 @@ export function downloadScene(world: World, name: string): void {
   // the storage key may hold any script; a download name additionally has
   // to survive a filesystem, so fold anything exotic to an underscore -
   // falling back to "scene" rather than handing over a row of them
-  const folded = safeName(name).replace(/[^A-Za-z0-9 _-]/g, "_");
+  const folded = normalizeSceneName(name).replace(/[^A-Za-z0-9 _-]/g, "_");
   a.download = `${/[A-Za-z0-9]/.test(folded) ? folded : "scene"}.json`;
   a.click();
   // Revoking synchronously races the browser's own fetch of the blob:

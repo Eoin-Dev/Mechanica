@@ -702,10 +702,18 @@ height is unusually small.
   is pinned to the bottom-right, has a minimum 24 by 24 CSS px target, and
   exposes `aria-expanded` and `aria-controls`.
   Saved scenes retain explicit Load, rename, description, download, and delete
-  buttons. Category filters expose `aria-pressed` and retain keyboard focus
-  across a filtered rerender. Save, rename, description, and delete storage
-  failures are caught and shown as toasts; a failed action does not trigger a
-  success re-render. The desktop header centres a dedicated rounded Library
+  buttons, with each action named for its scene. Save, rename, description and
+  delete use themed forms within the Library. Name editing previews the actual
+  normalized key, including the 80-Unicode-character limit. An overwrite needs
+  an explicit Replace scene action, with Cancel initially focused; editing the
+  name cancels that confirmation. Saved-scene actions scroll with their forms
+  so they cannot cover the editor at enlarged text sizes.
+  Inline validation/storage failures preserve the draft. Descriptions accept
+  multiple lines. Delete focuses Cancel initially; Escape cancels a form while
+  leaving the Library open. Section changes preserve its draft, closing clears
+  it, and successful updates focus the saved scene's Load control (or Save when
+  the scene was deleted). Category filters expose `aria-pressed` and retain
+  keyboard focus across a filtered rerender. The desktop header centres a dedicated rounded Library
   tab switcher between the title and Close action. At the phone breakpoint the
   title and Close action occupy the first row and the full-width tab switcher
   occupies the second, keeping all controls reachable without horizontal

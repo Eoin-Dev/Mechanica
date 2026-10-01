@@ -115,6 +115,12 @@ describe("name sanitisation", () => {
     expect(saved.length).toBe(80);
   });
 
+  it("caps Unicode names without splitting an astral letter", () => {
+    const name = "a".repeat(79) + "𠮷𠮷";
+    expect(saveScene(scene(), name)).toBe("a".repeat(79) + "𠮷");
+    expect(saveScene(scene(), "𠮷".repeat(81))).toBe("𠮷".repeat(80));
+  });
+
   it("falls back to 'scene' when nothing survives", () => {
     for (const name of ["", "   ", "###", "!!!"]) {
       expect(saveScene(scene(), name)).toBe("scene");

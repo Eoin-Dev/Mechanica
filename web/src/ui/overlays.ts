@@ -9,6 +9,12 @@ import { ThemeName, css, defaultAccent } from "./theme";
 
 // ------------------------------------------------------------------ library
 type LibraryTab = "Examples" | "My scenes";
+interface SceneEditor {
+  kind: "save" | "rename" | "description" | "delete";
+  name: string;
+  value: string;
+  replacement: string | null;
+}
 
 export class Library {
   visible = false;
@@ -22,6 +28,7 @@ export class Library {
   private content!: HTMLElement;
   private importing = false;
   private importButton: HTMLButtonElement | null = null;
+  private sceneEditor: SceneEditor | null = null;
 
   constructor(app: App, root: HTMLElement) {
     this.app = app;
@@ -42,6 +49,7 @@ export class Library {
   close(): void {
     if (!this.visible) return;
     this.visible = false;
+    this.sceneEditor = null;
     this.root.hidden = true;
     this.focus.exit();
   }
@@ -202,26 +210,9 @@ export class Library {
   // ----------------------------------------------------------- saved scenes
   private renderScenes(): void {
     const app = this.app;
-    const actions = el("div", { class: "cat-chips" });
+    const actions = el("div", { class: "cat-chips library-scenes-actions" });
     actions.append(button("Save current scene", () => {
-      const name = prompt("Scene name:",
-        `Scene ${new Date().toISOString().slice(0, 10)}`);
-      if (!name) return;
-      // Names are sanitized before use, so "Run #1" and "Run 1" land on the
-      // same key: without this the second save replaced the first with no
-      // warning and no way back.
-      try {
-        if (snap.sceneExists(name) &&
-            !confirm(`A saved scene called '${name}' already exists. Replace it?`)) {
-          return;
-        }
-        const saved = snap.saveScene(app.world, name);
-        app.toast(`Saved scene '${saved}'`);
-        this.render();
-      } catch (exc) {
-        app.toast(exc instanceof snap.SceneSaveError ? exc.message
-                                                     : "Could not save the scene");
-      }
+      this.openSceneEditor("save", "", `Scene ${new Date().toISOString().slice(0, 10)}`);
     }, { icon: ICONS.save }).root);
     const imported = button("Import .json", async () => {
       if (this.importing) return;
@@ -255,12 +246,13 @@ export class Library {
     this.syncImportButton();
     actions.append(imported.root);
     this.content.append(actions);
+    if (this.sceneEditor !== null) this.renderSceneEditor(this.sceneEditor);
 
     let names: string[];
     try {
       names = snap.listScenes();
     } catch (exc) {
-      this.content.append(actions, el("div", { class: "faint",
+      this.content.append(el("div", { class: "faint",
         style: "margin-top:14px",
         text: exc instanceof snap.SceneSaveError ? exc.message
                                                  : "Saved scenes are unavailable" }));
@@ -279,7 +271,7 @@ export class Library {
     const grid = el("div", { class: "card-grid" });
     for (const name of names) {
       const desc = snap.sceneDescription(name);
-      const card = el("div", { class: "preset-card scene-card" },
+      const card = el("div", { class: "preset-card scene-card", "data-scene-name": name },
         el("div", { class: "cat", text: "Saved scene" }),
         el("h3", { text: name }));
       if (desc) card.append(el("p", { text: desc }));
@@ -297,31 +289,11 @@ export class Library {
         b.addEventListener("click", stop(fn));
         return b;
       };
-      bar.append(mkBtn(ICONS.rename, "Rename", () => {
-        const newName = prompt("Rename scene:", name);
-        if (!newName || newName === name) return;
-        try {
-          const saved = snap.renameScene(name, newName);
-          if (saved === null) app.toast("A scene with that name already exists");
-          else app.toast(`Renamed to '${saved}'`);
-          this.render();
-        } catch (exc) {
-          app.toast(exc instanceof snap.SceneSaveError ? exc.message
-                                                       : "Could not rename the scene");
-        }
-      }));
-      bar.append(mkBtn(ICONS.describe, desc ? "Edit description" : "Add description", () => {
-        const text = prompt("Description (empty to remove):", desc);
-        if (text === null) return;
-        try {
-          snap.setSceneDescription(name, text);
-          this.render();
-        } catch (exc) {
-          app.toast(exc instanceof snap.SceneSaveError ? exc.message
-                                                       : "Could not update the description");
-        }
-      }));
-      bar.append(mkBtn(ICONS.download, "Download as a .json file", () => {
+      bar.append(mkBtn(ICONS.rename, `Rename ${name}`, () =>
+        this.openSceneEditor("rename", name, name)));
+      bar.append(mkBtn(ICONS.describe, `${desc ? "Edit" : "Add"} description for ${name}`, () =>
+        this.openSceneEditor("description", name, desc)));
+      bar.append(mkBtn(ICONS.download, `Download ${name} as a .json file`, () => {
         const result = snap.loadScene(name);
         if (result.status === "loaded") {
           try {
@@ -337,16 +309,8 @@ export class Library {
           app.toast(`Could not read saved scene '${name}'`);
         }
       }));
-      bar.append(mkBtn(ICONS.trash, "Delete this saved scene", () => {
-        if (!confirm(`Delete saved scene '${name}'?`)) return;
-        try {
-          snap.deleteScene(name);
-          this.render();
-        } catch (exc) {
-          app.toast(exc instanceof snap.SceneSaveError ? exc.message
-                                                       : "Could not delete the scene");
-        }
-      }, true));
+      bar.append(mkBtn(ICONS.trash, `Delete saved scene ${name}`, () =>
+        this.openSceneEditor("delete", name, ""), true));
       card.append(button(`Load ${name}`, () => {
         const result = snap.loadScene(name);
         if (result.status === "loaded") {
@@ -361,6 +325,151 @@ export class Library {
       grid.append(card);
     }
     this.content.append(grid);
+  }
+
+  private openSceneEditor(kind: SceneEditor["kind"], name: string, value: string): void {
+    this.sceneEditor = { kind, name, value, replacement: null };
+    this.render();
+    const field = this.content.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+      ".scene-editor input, .scene-editor textarea");
+    if (field !== null) {
+      field.focus();
+      field.select();
+    } else {
+      this.content.querySelector<HTMLButtonElement>(".scene-editor-cancel")?.focus();
+    }
+  }
+
+  private focusScene(name: string): void {
+    const card = [...this.content.querySelectorAll<HTMLElement>(".scene-card")]
+      .find(candidate => candidate.dataset.sceneName === name);
+    if (card !== undefined) card.querySelector<HTMLButtonElement>(".card-load")?.focus();
+    else [...this.content.querySelectorAll<HTMLButtonElement>("button")]
+      .find(candidate => candidate.textContent === "Save current scene")?.focus();
+  }
+
+  private cancelSceneEditor(): void {
+    const name = this.sceneEditor?.name ?? "";
+    this.sceneEditor = null;
+    this.render();
+    this.focusScene(name);
+  }
+
+  private renderSceneEditor(editor: SceneEditor): void {
+    const titles = { save: "Save current scene", rename: "Rename scene",
+      description: "Scene description", delete: "Delete saved scene" };
+    const labels = { save: "Save scene", rename: "Rename scene",
+      description: "Save description", delete: "Delete saved scene" };
+    const form = el("form", { class: "scene-editor", "aria-labelledby": "scene-editor-title" });
+    form.append(el("h3", { id: "scene-editor-title", text: titles[editor.kind] }));
+    if (editor.name !== "") form.append(el("p", { class: "faint",
+      text: editor.kind === "delete"
+        ? `Delete “${editor.name}” and its description from this browser?`
+        : `Editing “${editor.name}”` }));
+    const help = el("p", { class: "faint", id: "scene-editor-help" });
+    const error = el("p", { class: "scene-editor-error", id: "scene-editor-error",
+      role: "alert", hidden: "" });
+    const warning = el("p", { class: "scene-editor-warning", role: "status", hidden: "" });
+    let field: HTMLInputElement | HTMLTextAreaElement | null = null;
+    const submit = el("button", { type: "submit", class: editor.kind === "delete" ? "danger" : "primary",
+      text: labels[editor.kind] });
+    const cancel = button("Cancel", () => this.cancelSceneEditor(),
+      { class: "scene-editor-cancel" }).root as HTMLButtonElement;
+    cancel.type = "button";
+    if (editor.kind !== "delete") {
+      field = editor.kind === "description"
+        ? el("textarea", { rows: "3" }) : el("input", { type: "text", autocomplete: "off" });
+      field.id = "scene-editor-value";
+      field.value = editor.value;
+      field.setAttribute("aria-describedby", "scene-editor-help scene-editor-error");
+      form.append(el("label", { class: "scene-editor-field" },
+        el("span", { text: editor.kind === "description" ? "Description" : "Scene name" }), field));
+      const update = (): void => {
+        editor.value = field!.value;
+        error.hidden = true;
+        field!.removeAttribute("aria-invalid");
+        if (editor.kind === "description") {
+          help.textContent = "Leave this empty to remove the description.";
+        } else {
+          const normalized = snap.normalizeSceneName(editor.value);
+          help.textContent = editor.value.trim() !== "" && normalized !== editor.value
+            ? `Saved as “${normalized}”. Names keep letters, numbers, spaces, underscores and hyphens, up to 80 characters.`
+            : "Use letters, numbers, spaces, underscores and hyphens, up to 80 characters.";
+        }
+      };
+      field.addEventListener("input", () => {
+        editor.replacement = null;
+        warning.hidden = true;
+        submit.textContent = labels[editor.kind];
+        update();
+      });
+      update();
+      form.append(help);
+    }
+    const showReplacement = (): void => {
+      warning.textContent = `“${editor.replacement}” already exists. Replace its saved scene?`;
+      warning.hidden = false;
+      submit.textContent = "Replace scene";
+    };
+    if (editor.replacement !== null) showReplacement();
+    form.append(warning, error, el("div", { class: "scene-editor-actions" }, cancel, submit));
+    form.addEventListener("keydown", event => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.cancelSceneEditor();
+    });
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      const fail = (message: string, invalid = false): void => {
+        error.textContent = message;
+        error.hidden = false;
+        if (invalid && field !== null) {
+          field.setAttribute("aria-invalid", "true");
+          field.focus();
+        }
+      };
+      if ((editor.kind === "save" || editor.kind === "rename") && editor.value.trim() === "") {
+        fail("Enter a scene name.", true);
+        return;
+      }
+      let name = editor.name;
+      try {
+        switch (editor.kind) {
+          case "save": {
+            const normalized = snap.normalizeSceneName(editor.value);
+            if (snap.sceneExists(normalized) && editor.replacement !== normalized) {
+              editor.replacement = normalized;
+              showReplacement();
+              cancel.focus();
+              return;
+            }
+            name = snap.saveScene(this.app.world, editor.value);
+            this.app.toast(`Saved scene '${name}'`);
+            break;
+          }
+          case "rename": {
+            const renamed = snap.renameScene(editor.name, editor.value);
+            if (renamed === null) {
+              fail("A scene with that name already exists, or the original scene is no longer available.", true);
+              return;
+            }
+            name = renamed;
+            this.app.toast(`Renamed to '${name}'`);
+            break;
+          }
+          case "description": snap.setSceneDescription(name, editor.value); break;
+          case "delete": snap.deleteScene(name); break;
+        }
+      } catch (exc) {
+        fail(exc instanceof snap.SceneSaveError ? exc.message : "Could not update the saved scene");
+        return;
+      }
+      this.sceneEditor = null;
+      this.render();
+      this.focusScene(name);
+    });
+    this.content.append(form);
   }
 
   private syncImportButton(): void {

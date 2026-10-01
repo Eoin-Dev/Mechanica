@@ -436,7 +436,9 @@ Keeping metadata separate preserves scene payload compatibility.
 
 Scene names are normalized to NFC, trimmed, limited to Unicode letters and
 digits plus literal space, underscore, and hyphen, whitespace-collapsed, capped
-at 80 characters, and defaulted to `scene` if empty. `sceneExists()` checks the
+at 80 Unicode code points without splitting an astral character, and defaulted
+to `scene` if empty. The shared `normalizeSceneName()` also supplies the Library
+form's stored-name preview. `sceneExists()` checks the
 sanitized key so differently punctuated inputs cannot silently collide.
 
 `saveScene()` checks the loader's collection limits with
@@ -466,8 +468,15 @@ operations into `SceneSaveError`. Multi-key operations capture their prior
 values and attempt rollback before throwing. Rename performs all
 quota-consuming destination writes before removing the source, clears orphaned
 destination metadata when the source has no description, and restores the old
-keys if any step fails. The library catches these typed failures and reports
-their message without re-rendering a partially successful action.
+keys if any step fails. The Library's themed save/rename/description/delete
+forms catch these typed failures, show inline messages and retain the draft
+without re-rendering a partially successful action. Saving an existing
+normalized name focuses Cancel and requires a second, explicit Replace scene action; changing
+the name clears that pending confirmation. Rename never replaces another
+saved scene. Empty name fields receive correction guidance. Descriptions use
+a multiline editor, and deletion initially focuses Cancel. Escape cancels
+the editor while keeping the Library open; closing the Library discards its
+editor draft. Switching Library sections retains the draft for that opening.
 
 Descriptions are trimmed. An empty description removes metadata; invalid
 metadata JSON reads as an empty description.
