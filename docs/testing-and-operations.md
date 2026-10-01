@@ -239,6 +239,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`settings-accessibility.test.ts`](../web/tests/settings-accessibility.test.ts) | Three base-theme choices followed by the independent Studio toggle; full-bleed circular accent-swatch geometry, selection/focus behavior, and 24 px custom-remove targets; fixed-width-free responsive Library header/tab hooks; built-in preset full-card activation, matched keyboard focus, and independent 24 px description expansion; persistent single-flight scene import across rerenders; compact checkbox sizing; and safe new-tab third-party notice behavior. |
 | [`library-scenes.test.ts`](../web/tests/library-scenes.test.ts) | Themed saved-scene forms, stored-name preview, explicit normalized-name replacement confirmation and its invalidation, retained invalid/colliding drafts, storage failure/retry, multiline descriptions, Escape and delete cancellation, focus restoration, section draft retention and close cleanup; closed-Library import cancellation, suppression of stale loads/errors/cleanup, new-request ownership and picker-failure retry; current-value submission without input events, changed-name confirmation invalidation, retained drafts on cross-tab conflicts, deleted-scene metadata protection, current stale-card descriptions and missing-card refresh. |
 | [`scene-upload.test.ts`](../web/tests/scene-upload.test.ts) | File-picker success, native cancellation, empty selection, abort before opening or during a slow read, discarded late text/read errors, single selection, handler/listener release and picker-opening failures. |
+| [`graph-data.test.ts`](../web/tests/graph-data.test.ts) | Every graph family's exact CSV columns/units, centre-of-mass angular reference, timestamped phase-axis order, logical retention/truncation, snapshot isolation, hidden-channel inclusion, full stored precision, hostile-name exclusion, header quoting and invalid-row rejection; download Blob/filename and failure-path cleanup; bounded table pages, stable controls, 10000-sample DOM cap, text-only names/reference context, opener restoration, close cleanup, recoverable browser errors and empty/Off handling. |
 | [`theme-contrast.test.ts`](../web/tests/theme-contrast.test.ts) | Complete Dark/Void/Light surface/text combinations, low-specificity Studio button treatment, safe accent-text wiring for active controls, Studio-layer border invariants, and black, white, and intermediate custom accents meeting text, neutral-focus, accent/accent-dark ink, and filled-control focus-cue thresholds. |
 | [`tour-modal.test.ts`](../web/tests/tour-modal.test.ts) | App-shell inertness, pointer blocking, focus trapping/restoration, active-step progress, live announcements, and modal cleanup. |
 | [`zoom-accessibility.test.ts`](../web/tests/zoom-accessibility.test.ts) | Page-zoom-restricting viewport metadata, global modified wheel/keyboard/gesture suppression, canvas-only unmodified wheel/touch zoom, contrast-safe accented section/guide/preset/tour/Help headings, mobile heading presence, and selectable reference content. |
@@ -304,6 +305,13 @@ focus, and compares signed displacement, path length and speed after exact
 single steps. It verifies keyboard channel toggles and zeroing without changing
 the clock, then checks actual legend bounds, plot height and axe accessibility
 at desktop, phone and 320-pixel/200%-text layouts in every engine.
+Graph-data cases download real CSV for every graph family and compare the
+values with analytic constant-velocity results, numeric identity/origin metadata,
+hidden channels and centre-of-mass angular momentum. Editing/playback shortcuts
+must yield to the modal, and a snapshot must stay fixed while playback advances.
+Native keyboard paging/focus containment/restoration, real Light/Dark Studio
+themes, 320-pixel/200%-text reflow, scrollable table bounds and axe scans run in
+each browser engine.
 
 ## Verification philosophy
 

@@ -560,7 +560,8 @@ cache.
 The graph dock shows:
 
 - energy: kinetic, potential, total;
-- momentum: magnitude, x/y components, and angular momentum;
+- momentum: magnitude, x/y components, and angular momentum about the system's
+  centre of mass, including spin;
 - phase space: x-vx or y-vy for the selected body;
 - displacement-time: signed `sx = x - x₀` and `sy = y - y₀` for the selected
   ordinary particle, with the origin at selection or the latest graph clear;
@@ -638,6 +639,34 @@ focus. Switching series replaces only the channel controls; Phase has none.
 Detached wheel zoom
 clamps the view using the new span while retaining the time under the cursor
 where the retained history permits it.
+
+The **Data** action opens a themed **Graph data** modal for the active graph.
+It is disabled when that graph has no recorded samples. Opening forces a
+current-state sample and copies every retained row and channel, including hidden
+channels and samples outside the plot's current zoom. Subsequent playback,
+edits, selection changes, history eviction and clearing cannot alter this fixed
+snapshot. Closing releases the copied data and table rows.
+
+The summary names the graph, sample count and simulation-clock window. Particle
+graphs include a text-only name/ID; kinematics also expose the measurement's
+reference time and world position through `App.kinematicsReference`. The getter
+returns a detached value and follows selection, Clear and rewind rebasing.
+Momentum explicitly identifies the centre-of-mass angular reference. A semantic
+table previews twelve significant figures, with exact stored values in cell
+tooltips. Previous/Next show at most 25 sample rows at a time, retain their
+nodes, disable at boundaries, and announce the current range. The table region
+supports keyboard focus and independent two-dimensional scrolling. Surrounding
+controls and summary reflow on narrow layouts and enlarged text. Paging stays
+visible in a persistent footer outside the scrollable body.
+
+**Export CSV** downloads every snapshot row with SI-unit headers and full stored
+number precision. Kinematic rows include body ID and reference time/position;
+phase rows include body ID. Names never enter CSV or filenames. Empty exports
+are disabled. Download failures retain the snapshot and show an inline retry
+message. Temporary anchors are removed and object URLs released after the
+browser can start reading them, including click-failure paths. The modal traps
+focus, restores its Data opener and participates in global shortcut precedence;
+underlying scene edits and playback shortcuts cannot run through it.
 
 ## DOM control system
 

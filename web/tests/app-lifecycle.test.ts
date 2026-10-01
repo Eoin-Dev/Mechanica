@@ -938,6 +938,8 @@ describe("graph recording", () => {
       .toBeCloseTo(first.pos.y - start.y, 9);
 
     app.setSelection([second]);
+    expect(app.kinematicsReference).toEqual({ bodyId: second.id, time: app.world.time,
+      x: second.pos.x, y: second.pos.y });
     expect(app.distanceSeries.values("Distance")).toEqual([0]);
     expect(app.displacementSeries.values("sx")).toEqual([0]);
     expect(app.displacementSeries.values("sy")).toEqual([0]);
@@ -954,6 +956,10 @@ describe("graph recording", () => {
     app.setSelection([body]);
     for (let i = 0; i < 20; i++) app.stepOnce();
     expect(app.graphMode).toBe("Off");
+    const reference = app.kinematicsReference!;
+    expect(reference).toEqual({ bodyId: body.id, time: 0, x: 12, y: -7 });
+    reference.x = 999;
+    expect(app.kinematicsReference!.x).toBe(12);
     app.setGraphMode("Displacement");
     expect(app.displacementSeries.count).toBeGreaterThan(1);
     const t = app.world.time;
@@ -989,6 +995,8 @@ describe("graph recording", () => {
     const state = snapshot(app.world);
     const start = body.pos.copy();
     app.clearGraphData();
+    expect(app.kinematicsReference).toEqual({ bodyId: body.id, time: app.world.time,
+      x: start.x, y: start.y });
     expect(snapshot(app.world)).toBe(state);
     expect(app.displacementSeries.values("sx")).toEqual([0]);
     expect(app.displacementSeries.values("sy")).toEqual([0]);
@@ -1026,6 +1034,7 @@ describe("graph recording", () => {
     const future = app.displacementSeries.values("sx").at(-1)!;
     app.stepBack();
     app.stepBack();
+    expect(app.kinematicsReference).toEqual({ bodyId: body.id, time: 0, x: 11, y: -8 });
     expect(app.displacementSeries.lastT).toBeLessThanOrEqual(app.world.time + 1e-9);
     app.setGraphMode("Displacement");
     expect(app.displacementSeries.values("sx").at(-1)).toBeCloseTo(-2 * app.world.time, 9);
@@ -1047,6 +1056,8 @@ describe("graph recording", () => {
     else app.setSelection([body]);
     app.stepBack();
     const start = app.world.bodies[0].pos.copy();
+    expect(app.kinematicsReference).toEqual({ bodyId: body.id, time: app.world.time,
+      x: start.x, y: start.y });
     expect(app.displacementSeries.values("sx")).toEqual([0]);
     expect(app.displacementSeries.values("sy")).toEqual([0]);
     expect(app.distanceSeries.values("Distance")).toEqual([0]);
@@ -1061,9 +1072,11 @@ describe("graph recording", () => {
     app.setSelection([app.world.bodies[0]]);
     app.stepOnce();
     app.setSelection([]);
+    expect(app.kinematicsReference).toBeNull();
     expect(app.displacementSeries.count).toBe(0);
     app.setSelection([app.world.bodies[0]]);
     app.replaceWorld(new World());
+    expect(app.kinematicsReference).toBeNull();
     expect(app.displacementSeries.count).toBe(0);
     expect(app.distanceSeries.count).toBe(0);
     expect(app.velocitySeries.count).toBe(0);

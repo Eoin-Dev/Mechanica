@@ -2116,6 +2116,16 @@ export class App {
     return body;
   }
 
+  /** A detached reference for interpreting the selected particle's measurements. */
+  get kinematicsReference(): { bodyId: number; time: number; x: number; y: number } | null {
+    return this.kinematicsBodyId === null ? null : {
+      bodyId: this.kinematicsBodyId,
+      time: this.kinematicsStartedAt,
+      x: this.kinematicsOriginX,
+      y: this.kinematicsOriginY,
+    };
+  }
+
   /** Bind kinematics history to one ordinary selected
    * particle. Distance is cumulative path length measured from selection (or
    * the most recent graph clear), not radial distance from the origin. */

@@ -551,6 +551,31 @@ same atomic replacement rule.
 Valid JSON without a scene member is also rejected instead of opening an empty
 world. The low-level `World.fromDict()` remains tolerant of arbitrary shapes.
 
+### Recorded graph CSV
+
+Graph **Data** is a detached, browser-local snapshot of the active graph's
+retained samples, taken after sampling its current state. Its CSV is separate
+from scene JSON: graph history is transient and is not saved or imported with a
+scene. Export uses a fixed `mechanica-<graph>.csv` filename and a UTF-8
+`text/csv` blob; no submission service or network upload is involved.
+
+The first column is `time_s`, the simulation clock. Energy columns are KE, PE
+and total in joules; momentum columns are magnitude, px and py in kg m/s plus
+angular momentum about the centre of mass in kg m²/s. Displacement has sx/sy in
+metres, distance has accumulated travel in metres, velocity has speed/vx/vy in
+m/s, and phase has world x/vx/y/vy. Every retained channel is included, even if
+hidden in the plot. CSV numbers preserve the stored floating-point value,
+whereas the table preview uses twelve significant figures.
+
+Particle exports append numeric `body_id`. Kinematics additionally append
+`reference_time_s`, `reference_x_m` and `reference_y_m` for the selection/Clear
+origin. Names are displayed as text in the modal and are excluded from CSV and
+filenames. Headers quote commas, quotes and line breaks; rows use CRLF endings.
+The serializer rejects non-finite values and mismatched row lengths before
+allocating a download. Empty data cannot be downloaded. Anchor cleanup and
+delayed object-URL revocation cover successful and rejected clicks, and browser
+errors leave the snapshot available for retry.
+
 ## Force-field expression language
 
 The expression language is a restricted Python-like numeric language. User

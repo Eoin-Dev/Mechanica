@@ -119,3 +119,8 @@ the latest graph clear; right and up are positive. Distance accumulates travel
 even when the particle turns back. During continuous motion, the gradient of each displacement component
 gives its velocity; signed velocity area gives displacement, while speed area
 gives distance. Clear graph data to start measuring from a new position.
+
+Use **Data** in the graph dock to inspect a fixed snapshot of its retained
+samples and **Export CSV** to download full stored precision with SI units.
+Exports include hidden channels; particle measurements include their ID and
+reference time/position. Playback can continue while you study the table.

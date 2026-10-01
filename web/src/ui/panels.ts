@@ -340,6 +340,12 @@ export class GraphDock implements Panel {
     this.liveBtn.hidden = true;
     this.liveBtn.addEventListener("click", () => { this.viewEnd = null; });
     header.append(this.liveBtn);
+    const data = this.group.add(button("Data", () => toggleOverlay("graph-data"),
+      { icon: ICONS.table, tooltip: "Inspect recorded samples or export this graph as CSV.",
+        isEnabled: () => app.graphMode === "Phase" ? app.phasePlot.points.length > 0
+          : (this.activeSeries()?.count ?? 0) > 0 }));
+    data.root.setAttribute("aria-haspopup", "dialog");
+    header.append(data.root);
     const clear = this.group.add(button("", () => this.clearData(),
       { icon: ICONS.trash, style: "ghost",
         tooltip: "Discard all recorded graph data." }));

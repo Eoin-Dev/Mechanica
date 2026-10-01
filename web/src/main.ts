@@ -10,6 +10,7 @@ import { TabRecovery } from "./scene/recovery";
 import { snapshot } from "./scene/snapshot";
 import { Inspector } from "./ui/inspector";
 import { FormulaGuide } from "./ui/guide";
+import { GraphDataDialog } from "./ui/graph-data";
 import { Help, Library, SettingsPanel } from "./ui/overlays";
 import { GraphDock, HintBar, Palette, Toolbar, overlayToggles } from "./ui/panels";
 import { handleShortcut } from "./ui/shortcuts";
@@ -41,10 +42,12 @@ const help = new Help($("help"), () => tour.start());
 const settingsPanel = new SettingsPanel(app, $("settings"), () => help.open(),
                                         () => tour.start());
 const formulaGuide = new FormulaGuide(app, $("formula-guide"));
+const graphData = new GraphDataDialog(app, $("graph-data"));
 overlayToggles["library"] = () => library.toggle();
 overlayToggles["help"] = () => help.toggle();
 overlayToggles["settings"] = () => settingsPanel.toggle();
 overlayToggles["formula-guide"] = () => formulaGuide.toggle();
+overlayToggles["graph-data"] = () => graphData.open();
 
 app.panels = [toolbar, palette, inspector, dock, hintbar,
   new OverloadNotice(app, $("overload-warning"))];
@@ -78,7 +81,7 @@ document.addEventListener("keydown", (e) => {
   handleShortcut(e, {
     app,
     tour,
-    overlays: [library, help, settingsPanel, formulaGuide],
+    overlays: [library, help, settingsPanel, formulaGuide, graphData],
     toggleLibrary: () => library.toggle(),
     toggleHelp: () => help.toggle(),
     toggleInspector: () => inspector.toggleCollapsed(),

@@ -6,6 +6,8 @@ function svg(inner: string, viewBox = "0 0 24 24"): string {
 
 export const ICONS: Record<string, string> = {
   search: svg('<circle cx="10.5" cy="10.5" r="6.5" fill="none"/><path d="M15.5 15.5 L21 21" fill="none"/>'),
+  table: svg('<rect x="3.5" y="4.5" width="17" height="15" rx="2" fill="none"/>' +
+             '<path d="M3.5 9.5 H20.5 M3.5 14.5 H20.5 M9 9.5 V19.5 M14.5 9.5 V19.5" fill="none"/>'),
   play: svg('<path class="fill" d="M8 5.5 L8 18.5 L19 12 Z"/>'),
   pause: svg('<rect class="fill" x="7" y="5.5" width="3.4" height="13"/>' +
              '<rect class="fill" x="13.6" y="5.5" width="3.4" height="13"/>'),

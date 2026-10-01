@@ -866,6 +866,7 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
     ["Graph: Displacement", "Signed sx/sy from selection or Clear; gradients give vx/vy"],
     ["Graph: Distance", "Distance travelled by the selected particle over time"],
     ["Graph: Velocity", "Signed vx/vy: gradient gives acceleration, area gives displacement. Speed: area gives distance"],
+    ["Graph: Data", "Inspect a fixed sample table or export all retained channels as full-precision CSV with SI units"],
     ["Scroll / right-drag", "Zoom at cursor / pan"],
     ["\\", "Hide / show the inspector"],
     ["Tab", "Move between controls"],

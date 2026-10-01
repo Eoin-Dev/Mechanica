@@ -12,6 +12,209 @@ function normalizeCssColor(value: string): string {
   return value.replace(/\s+/g, "");
 }
 
+async function loadMeasurementParticle(page: Page): Promise<void> {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await skipFirstRunTour(page, { theme: "light", studio_mode: true });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  const library = page.getByRole("dialog", { name: "Library", exact: true });
+  await library.getByRole("tab", { name: "My scenes", exact: true }).click();
+  const choosing = page.waitForEvent("filechooser");
+  await library.getByRole("button", { name: "Import .json", exact: true }).click();
+  await (await choosing).setFiles({ name: "Measurements.json", mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({ settings: { gravity: 0 }, bodies: [{
+      id: 1, name: "Measurement particle 📐", pos: [7, -4], vel: [-3, 4], radius: 0.2, mass: 2,
+    }] })) });
+  await expect(library).toBeHidden();
+  await page.getByRole("tab", { name: "View", exact: true }).click();
+  await page.getByRole("combobox", { name: "Graph shown in the dock", exact: true }).selectOption("Displacement");
+  await expect(page.locator("#dock")).toBeVisible();
+  const canvas = page.locator("#canvas");
+  await canvas.focus();
+  await page.keyboard.press("f");
+  const box = (await canvas.boundingBox())!;
+  await canvas.click({ position: { x: box.width / 2, y: box.height / 2 } });
+  await expect(page.locator("#dock .dock-hint")).toContainText("sx is positive right");
+}
+
+test("recorded graph data exports every graph family and stays fixed during playback", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await loadMeasurementParticle(page);
+  for (let i = 0; i < 20; i++) await page.keyboard.press(".");
+  const dock = page.locator("#dock");
+  const dataButton = dock.getByRole("button", { name: "Data", exact: true });
+  const dialog = page.getByRole("dialog", { name: "Graph data", exact: true });
+  const clock = page.getByRole("textbox", { name: "Simulation time in seconds", exact: true });
+  for (const [mode, file, values] of [
+    ["Energy", "energy", [25, 0, 25]],
+    ["Mom.", "momentum", [10, -6, 8, 0]],
+    ["Phase", "phase", [6, -3, -8 / 3, 4]],
+    ["Displacement", "displacement", [-1, 4 / 3]],
+    ["Distance", "distance", [5 / 3]],
+    ["Velocity", "velocity", [5, -3, 4]],
+  ] as const) {
+    await dock.getByRole("button", { name: mode, exact: true }).click();
+    if (mode === "Displacement") {
+      await dock.getByRole("button", { name: "sy series", exact: true }).click();
+    }
+    await dataButton.click();
+    await expect(dialog).toBeVisible();
+    const currentTime = await clock.inputValue();
+    await dialog.focus();
+    for (const key of [".", "Delete", "Space", "Control+z", "Control+r"]) await page.keyboard.press(key);
+    await expect(dialog).toBeVisible();
+    await expect(clock).toHaveValue(currentTime);
+    await expect(page.locator("#status-text")).toContainText("1 body");
+    const receiving = page.waitForEvent("download");
+    await dialog.getByRole("button", { name: "Export CSV", exact: true }).click();
+    const download = await receiving;
+    expect(download.suggestedFilename()).toBe(`mechanica-${file}.csv`);
+    expect(await download.failure()).toBeNull();
+    const csv = await readFile((await download.path())!, "utf8");
+    expect(csv.endsWith("\r\n")).toBe(true);
+    const [header, ...samples] = csv.trimEnd().split("\r\n");
+    const last = samples.at(-1)!.split(",").map(Number);
+    expect(last[0]).toBeCloseTo(1 / 3, 12);
+    values.forEach((value, i) => expect(last[i + 1]).toBeCloseTo(value, 9));
+    expect(samples.length).toBeGreaterThan(1);
+    expect(csv).not.toContain("Measurement particle");
+    if (mode === "Mom.") {
+      expect(header).toContain("angular_momentum_about_com_kg_m2_per_s");
+      await expect(dialog).toContainText("about the system's centre of mass, including spin");
+    }
+    if (["Displacement", "Distance", "Velocity"].includes(mode)) {
+      expect(header).toContain("body_id,reference_time_s,reference_x_m,reference_y_m");
+      expect(last.slice(-4)).toEqual([1, 0, 7, -4]);
+      await expect(dialog.locator(".graph-data-summary")).toContainText("t = 0 s · x = 7 m · y = -4 m");
+    }
+    if (mode === "Displacement") {
+      expect(header).toContain("time_s,sx_m,sy_m");
+      await expect(dialog.getByRole("columnheader", { name: "sy (m)", exact: true })).toBeVisible();
+    }
+    await dialog.getByRole("button", { name: "Close graph data", exact: true }).click();
+    await expect(dataButton).toBeFocused();
+  }
+  await page.getByRole("button", { name: "Start the simulation (Space).", exact: true }).click();
+  await expect.poll(async () => Number(await clock.inputValue())).toBeGreaterThan(0.4);
+  await dataButton.click();
+  const fixedRows = await dialog.locator("tbody").textContent();
+  const whenOpened = Number(await clock.inputValue());
+  await dialog.focus();
+  await page.keyboard.press("Space");
+  await expect.poll(async () => Number(await clock.inputValue())).toBeGreaterThan(whenOpened + 0.2);
+  expect(await dialog.locator("tbody").textContent()).toBe(fixedRows);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(dataButton).toBeFocused();
+  await page.getByRole("button", { name: "Pause the simulation (Space).", exact: true }).click();
+  expect(errors).toEqual([]);
+});
+
+test("graph data pages fit themes, phones and enlarged text with keyboard access", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await loadMeasurementParticle(page);
+  for (let i = 0; i < 60; i++) await page.keyboard.press(".");
+  const dataButton = page.locator("#dock").getByRole("button", { name: "Data", exact: true });
+  await dataButton.focus();
+  await dataButton.press("Enter");
+  const dialog = page.getByRole("dialog", { name: "Graph data", exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toBeFocused();
+  await expect(dialog.locator("tbody tr")).toHaveCount(25);
+  const previous = dialog.getByRole("button", { name: "Previous", exact: true });
+  const next = dialog.getByRole("button", { name: "Next", exact: true });
+  await expect(previous).toBeDisabled();
+  await next.focus();
+  await next.press("Enter");
+  await expect(dialog.getByRole("status")).toHaveText("Samples 26–50 of 61");
+  await expect(next).toBeFocused();
+  await next.press("Enter");
+  await expect(dialog.getByRole("status")).toHaveText("Samples 51–61 of 61");
+  await expect(dialog.locator("tbody tr")).toHaveCount(11);
+  await expect(next).toBeDisabled();
+  await previous.click();
+  await previous.click();
+  await expect(dialog.locator("tbody tr")).toHaveCount(25);
+
+  for (const layout of ["desktop", "phone", "enlarged", "classic"] as const) {
+    if (layout !== "desktop") await page.setViewportSize({ width: layout === "phone" ? 390 : 320, height: 844 });
+    if (layout === "phone") {
+      await dialog.getByRole("button", { name: "Close graph data", exact: true }).click();
+      await page.locator("#btn-settings").click();
+      const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+      await settings.getByRole("button", { name: "Dark", exact: true }).click();
+      await page.keyboard.press("Escape");
+      await expect(settings).toBeHidden();
+      await dataButton.click();
+      await expect(dialog).toBeVisible();
+      await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    }
+    if (layout === "enlarged") await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
+    if (layout === "classic") {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.evaluate(() => document.documentElement.style.setProperty("--fs", "1"));
+      await dialog.getByRole("button", { name: "Close graph data", exact: true }).click();
+      await page.locator("#btn-settings").click();
+      const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+      await settings.getByRole("button", { name: "Void", exact: true }).click();
+      await settings.getByRole("checkbox", { name: "Studio mode", exact: true }).uncheck();
+      await page.keyboard.press("Escape");
+      await dataButton.click();
+      await expect(dialog).toBeVisible();
+      await expect(page.locator("html")).toHaveAttribute("data-theme", "void");
+      await expect(page.locator("html")).toHaveAttribute("data-studio", "false");
+    }
+    const geometry = await dialog.evaluate(panel => ({
+      panel: panel.scrollWidth <= panel.clientWidth,
+      body: panel.querySelector<HTMLElement>(".graph-data-body")!.scrollWidth <=
+        panel.querySelector<HTMLElement>(".graph-data-body")!.clientWidth,
+      region: panel.querySelector<HTMLElement>(".graph-data-table-region")!.getBoundingClientRect().right,
+      viewport: innerWidth,
+    }));
+    expect(geometry.panel).toBe(true);
+    expect(geometry.body).toBe(true);
+    expect(geometry.region).toBeLessThanOrEqual(geometry.viewport);
+    await expect(dialog.getByRole("button", { name: "Export CSV", exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(previous).toBeInViewport({ ratio: 1 });
+    await expect(next).toBeInViewport({ ratio: 1 });
+    const region = dialog.getByRole("region", { name: "Recorded graph samples", exact: true });
+    await dialog.getByRole("button", { name: "Export CSV", exact: true }).focus();
+    // Browsers can add a native focus stop for an overflowing body. Walk the
+    // actual tab sequence and require both containment and a reachable table.
+    for (let i = 0; i < 5 && !await region.evaluate(element => element === document.activeElement); i++) {
+      await page.keyboard.press("Tab");
+      expect(await dialog.evaluate(panel => panel.contains(document.activeElement))).toBe(true);
+    }
+    await expect(region).toBeFocused();
+    await expect(region).toBeInViewport({ ratio: 0.25 });
+    if (layout === "enlarged") {
+      const clock = page.getByRole("textbox", { name: "Simulation time in seconds", exact: true });
+      const time = await clock.inputValue();
+      const before = await region.evaluate(element => element.scrollLeft);
+      await region.press("ArrowRight");
+      await expect.poll(() => region.evaluate(element => element.scrollLeft)).toBeGreaterThan(before);
+      await expect(clock).toHaveValue(time);
+    }
+    await expect(dialog).toHaveAttribute("aria-modal", "true");
+    const scan = await new AxeBuilder({ page }).include("#graph-data")
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze();
+    expect(scan.violations).toEqual([]);
+    await page.screenshot({ path: test.info().outputPath(`graph-data-${layout}.png`) });
+  }
+  await dialog.getByRole("button", { name: "Close graph data", exact: true }).focus();
+  await page.keyboard.press("Shift+Tab");
+  await expect(dialog.getByRole("button", { name: "Export CSV", exact: true })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(next).toBeFocused();
+  await next.press("Tab");
+  await expect(dialog.getByRole("button", { name: "Export CSV", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dataButton).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
 test("signed displacement, travel and velocity stay distinct and fit responsive graphs", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));

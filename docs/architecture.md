@@ -42,7 +42,7 @@ runtime module cycle.
 ## Bootstrap sequence
 
 `web/index.html` supplies a fixed shell: toolbar, palette, canvas wrapper,
-canvas, toast/status regions, graph dock, inspector, hint bar, and four modal
+canvas, toast/status regions, graph dock, inspector, hint bar, and modal
 overlay roots. `main.ts` assumes these IDs exist and uses non-null lookups.
 
 Startup proceeds in this order:
@@ -54,7 +54,7 @@ Startup proceeds in this order:
 3. Install the toast callback. Toasts are capped to three visible messages and
    fade after a timeout; the container is an ARIA live region.
 4. Construct toolbar, palette, inspector, graph dock, hint bar, library,
-   settings, help, formula guide, and guided tour.
+   settings, help, formula guide, graph data, and guided tour.
 5. Register overlay toggle callbacks, then assign all per-frame `Panel`
    objects to `app.panels`.
 6. Install document-level focus cleanup, keyboard shortcuts, page-zoom input
@@ -482,7 +482,12 @@ The typeset editor is only a view over the same source string; details are in
   resource caps, angle normalization, duplicate-ID remapping, and link
   reference reconstruction. A collection above its cap throws
   `SceneLimitError` before any objects are constructed.
-- Export creates a formatted JSON blob and clicks a temporary download anchor.
+- Scene export creates a formatted JSON blob and clicks a temporary download anchor.
+- Graph data copies the currently retained numeric samples into a detached
+  snapshot. Its modal shows a bounded page of rows and exports full-precision
+  CSV without requiring playback to pause or transmitting data to a server.
+  The graph-data overlay shares modal keyboard/focus ownership with the other
+  overlays; global editing and playback commands yield while it is open.
 - Import rejects files larger than 10 MiB before reading, then restores one
   selected JSON file and routes only a successful result through the undoable
   replacement and framing paths. Saved-scene and file reads use discriminated

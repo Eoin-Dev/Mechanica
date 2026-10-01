@@ -216,6 +216,9 @@ describe("graph dock retained state", () => {
       expect(labels.some(label => label.startsWith("Select a particle"))).toBe(true);
       expect(labels).not.toContain("Run the simulation to collect data");
       expect(root.querySelector(".dock-hint")!.textContent).toContain("Select a particle");
+      const data = root.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!;
+      expect(data.textContent).toBe("Data");
+      expect(data.disabled).toBe(true);
     } finally {
       getContext.mockRestore();
     }
@@ -248,6 +251,8 @@ describe("graph dock retained state", () => {
       Object.defineProperty(canvas, "clientHeight", { value: 180 });
       dock.refresh();
       const kinetic = root.querySelector<HTMLButtonElement>('[aria-label="KE series"]')!;
+      const data = root.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!;
+      expect(data.disabled).toBe(false);
       expect(kinetic.getAttribute("aria-pressed")).toBe("true");
       expect(kinetic.getAttribute("aria-description")).toBe("Current value: 1 J at 0 s.");
       kinetic.focus();
@@ -278,6 +283,10 @@ describe("graph dock retained state", () => {
       expect(app.energySeries.hidden.has("KE")).toBe(true);
       app.graphMode = "Phase";
       dock.refresh();
+      expect(data.disabled).toBe(true);
+      app.phasePlot.add(1, 1, 2, 3, 4);
+      dock.refresh();
+      expect(data.disabled).toBe(false);
       expect(root.querySelectorAll(".graph-legend-toggle")).toHaveLength(0);
     } finally {
       getContext.mockRestore();
