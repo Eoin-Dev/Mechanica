@@ -7,7 +7,7 @@ import { SCENE_MAX_BODIES, World } from "../src/engine/world";
 import {
   MAX_SCENE_FILE_BYTES, SceneSaveError, deleteScene, listScenes, loadScene,
   readSceneFile, renameScene, saveScene, sceneDescription, sceneExists,
-  setSceneDescription, restore, snapshot, UndoStack,
+  savedSceneVersion, setSceneDescription, restore, snapshot, UndoStack,
 } from "../src/scene/snapshot";
 
 /** Minimal localStorage, with a settable byte budget so the quota path is
@@ -84,6 +84,50 @@ function loaded(name: string): World {
   if (result.status !== "loaded") throw new Error(`Scene '${name}' did not load`);
   return result.world;
 }
+
+describe("saved-scene edit ownership", () => {
+  for (const change of ["payload", "metadata", "deletion"] as const) {
+    it.each(["save", "rename", "description", "delete"] as const)(
+      `rejects stale %s after a ${change} change without mutating stored data`, action => {
+        saveScene(scene(1), "Shared");
+        setSceneDescription("Shared", "Original notes");
+        const expected = savedSceneVersion("Shared");
+        if (change === "payload") saveScene(scene(2), "Shared");
+        else if (change === "metadata") setSceneDescription("Shared", "New notes");
+        else deleteScene("Shared");
+        const latest = savedSceneVersion("Shared");
+        const mutate = () => {
+          if (action === "save") saveScene(scene(3), "Shared", expected);
+          else if (action === "rename") renameScene("Shared", "Moved", expected);
+          else if (action === "description") setSceneDescription("Shared", "Stale draft", expected);
+          else deleteScene("Shared", expected);
+        };
+        expect(mutate).toThrow(/saved scene changed/);
+        expect(savedSceneVersion("Shared")).toEqual(latest);
+        expect(store.getItem("mechanica.scene.Moved")).toBeNull();
+        expect(store.getItem("mechanica.scenemeta.Moved")).toBeNull();
+      },
+    );
+  }
+
+  it("guards creation against a save that appeared after its absence was observed", () => {
+    const expected = savedSceneVersion("New");
+    saveScene(scene(4), "New");
+    expect(() => saveScene(scene(5), "New", expected)).toThrow(/saved scene changed/);
+    expect(loaded("New").bodies[0].pos.x).toBe(4);
+  });
+
+  it("allows a guarded create and rejects a version belonging to another name", () => {
+    const expected = savedSceneVersion("New");
+    expect(saveScene(scene(), "New", expected)).toBe("New");
+    expect(() => saveScene(scene(), "Different", expected)).toThrow(/saved scene changed/);
+    expect(listScenes()).toEqual(["New"]);
+  });
+
+  it("does not report an unchanged-name rename of a missing scene as successful", () => {
+    expect(renameScene("Missing", "Missing")).toBeNull();
+  });
+});
 
 describe("name sanitisation", () => {
   it("keeps letters and digits in any script", () => {

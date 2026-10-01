@@ -478,6 +478,24 @@ a multiline editor, and deletion initially focuses Cancel. Escape cancels
 the editor while keeping the Library open; closing the Library discards its
 editor draft. Switching Library sections retains the draft for that opening.
 
+The editor reads the actual field value at submission, including updates that
+did not emit an input event; such a change clears replacement confirmation.
+Opening rename, description or delete captures a `SavedSceneVersion` containing
+the exact stored payload and metadata. Replacement confirmation captures the
+version being offered for overwrite. These versions are passed to the storage
+mutations, which compare the current saved values before writing. Changes or
+deletion during editing produce inline conflict guidance, retain the draft and
+preserve the newer data. Cancel and reopen to review that data before editing
+again. Opening a description from a stale card reads its current text; actions
+on a missing scene refresh the list with feedback.
+
+`savedSceneVersion()` translates rejected reads into `SceneSaveError`. The
+optional version argument on save, rename, description and delete keeps direct
+storage callers usable without an editor. Comparison uses exact strings rather
+than a hash or persisted schema change. It checks changes observed before the
+write; local storage does not supply an atomic compare-and-set transaction
+across tabs. An unchanged-name rename returns `null` when its source is missing.
+
 Descriptions are trimmed. An empty description removes metadata; invalid
 metadata JSON reads as an empty description.
 

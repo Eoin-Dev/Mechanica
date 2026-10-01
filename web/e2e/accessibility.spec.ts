@@ -12,6 +12,106 @@ function normalizeCssColor(value: string): string {
   return value.replace(/\s+/g, "");
 }
 
+test("saved-scene editors preserve another tab's changes and keep conflict drafts", async ({ page, context }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.setViewportSize({ width: 320, height: 844 });
+  await skipFirstRunTour(page, { theme: "light", studio_mode: true });
+  await page.goto("/");
+  await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  const library = page.getByRole("dialog", { name: "Library", exact: true });
+  await library.getByRole("tab", { name: "My scenes", exact: true }).click();
+  await library.getByRole("button", { name: "Save current scene", exact: true }).click();
+  const name = library.getByRole("textbox", { name: "Scene name", exact: true });
+  await name.fill("Shared");
+  await name.press("Enter");
+  await library.getByRole("button", { name: "Add description for Shared", exact: true }).click();
+  const description = library.getByRole("textbox", { name: "Description", exact: true });
+  await description.fill("My unfinished draft\nKeep this text.");
+
+  const other = await context.newPage();
+  other.on("pageerror", error => errors.push(error.message));
+  await other.goto("/");
+  await other.getByRole("button", { name: "Library", exact: true }).click();
+  const otherLibrary = other.getByRole("dialog", { name: "Library", exact: true });
+  await otherLibrary.getByRole("tab", { name: "My scenes", exact: true }).click();
+  await otherLibrary.getByRole("button", { name: "Add description for Shared", exact: true }).click();
+  const otherDescription = otherLibrary.getByRole("textbox", { name: "Description", exact: true });
+  await otherDescription.fill("Other tab's notes");
+  await otherLibrary.getByRole("button", { name: "Save description", exact: true }).click();
+  await library.getByRole("button", { name: "Save description", exact: true }).click();
+  const conflict = library.locator("#scene-editor-error");
+  await expect(conflict).toBeVisible();
+  await expect(conflict).toContainText("saved scene changed");
+  await expect(description).toHaveValue("My unfinished draft\nKeep this text.");
+  const storedDescription = () => page.evaluate(() =>
+    JSON.parse(localStorage.getItem("mechanica.scenemeta.Shared")!).description);
+  expect(await storedDescription()).toBe("Other tab's notes");
+  const bounds = (await conflict.boundingBox())!;
+  const bodyBounds = (await library.locator(".overlay-body").boundingBox())!;
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(320);
+  // Native scrolling rounds fractional CSS positions to a device pixel.
+  expect(bounds.y).toBeGreaterThanOrEqual(bodyBounds.y - 1);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(bodyBounds.y + bodyBounds.height + 1);
+  const scan = await new AxeBuilder({ page }).include("#library")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze();
+  expect(scan.violations).toEqual([]);
+  await library.screenshot({ path: test.info().outputPath("saved-scene-conflict.png") });
+  await library.getByRole("button", { name: "Cancel", exact: true }).click();
+  await library.getByRole("button", { name: "Edit description for Shared", exact: true }).click();
+  await expect(description).toHaveValue("Other tab's notes");
+  await description.fill("Reviewed notes");
+  await library.getByRole("button", { name: "Save description", exact: true }).click();
+  expect(await storedDescription()).toBe("Reviewed notes");
+
+  await library.getByRole("button", { name: "Delete saved scene Shared", exact: true }).click();
+  await otherLibrary.getByRole("button", { name: "Edit description for Shared", exact: true }).click();
+  await expect(otherDescription).toHaveValue("Reviewed notes");
+  await otherDescription.fill("Protect this latest edit");
+  await otherLibrary.getByRole("button", { name: "Save description", exact: true }).click();
+  await library.getByRole("button", { name: "Delete saved scene", exact: true }).click();
+  await expect(conflict).toContainText("saved scene changed");
+  expect(await storedDescription()).toBe("Protect this latest edit");
+  expect(await page.evaluate(() => localStorage.getItem("mechanica.scene.Shared"))).not.toBeNull();
+  await library.getByRole("button", { name: "Cancel", exact: true }).click();
+
+  await library.getByRole("button", { name: "Save current scene", exact: true }).click();
+  await name.fill("Shared");
+  await name.press("Enter");
+  await expect(library.getByRole("button", { name: "Replace scene", exact: true })).toBeVisible();
+  await otherLibrary.getByRole("button", { name: "Rename Shared", exact: true }).click();
+  const otherName = otherLibrary.getByRole("textbox", { name: "Scene name", exact: true });
+  await otherName.fill("Moved");
+  await otherName.press("Enter");
+  await library.getByRole("button", { name: "Replace scene", exact: true }).click();
+  await expect(conflict).toContainText("saved scene changed");
+  await expect(name).toHaveValue("Shared");
+  expect(await page.evaluate(() => localStorage.getItem("mechanica.scene.Shared"))).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem("mechanica.scenemeta.Shared"))).toBeNull();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("mechanica.scenemeta.Moved")!).description))
+    .toBe("Protect this latest edit");
+  await library.getByRole("button", { name: "Cancel", exact: true }).click();
+
+  await library.getByRole("button", { name: "Rename Moved", exact: true }).click();
+  await name.fill("Mine");
+  await otherLibrary.getByRole("button", { name: "Edit description for Moved", exact: true }).click();
+  await otherDescription.fill("Updated again");
+  await otherLibrary.getByRole("button", { name: "Save description", exact: true }).click();
+  await name.press("Enter");
+  await expect(conflict).toContainText("saved scene changed");
+  await expect(name).toHaveValue("Mine");
+  expect(await page.evaluate(() => localStorage.getItem("mechanica.scene.Mine"))).toBeNull();
+  await library.getByRole("button", { name: "Cancel", exact: true }).click();
+  await library.getByRole("button", { name: "Save current scene", exact: true }).click();
+  await name.evaluate(field => { (field as HTMLInputElement).value = "Visible name"; });
+  await name.press("Enter");
+  await expect(library.getByRole("button", { name: "Load Visible name", exact: true })).toBeFocused();
+  expect(errors).toEqual([]);
+  await other.close();
+});
+
 test("closing the Library cancels slow imports without disturbing a newer scene or import", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));

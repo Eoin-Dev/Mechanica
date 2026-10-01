@@ -535,6 +535,31 @@ export function sceneExists(name: string): boolean {
 
 export class SceneSaveError extends Error {}
 
+/** Exact stored values observed by an editor. No persisted revision field is
+ * needed, and damaged/legacy payloads can still be renamed or deleted. */
+export interface SavedSceneVersion {
+  readonly name: string;
+  readonly payload: string | null;
+  readonly metadata: string | null;
+}
+
+export function savedSceneVersion(name: string): SavedSceneVersion {
+  try {
+    return { name, payload: localStorage.getItem(SCENE_PREFIX + name),
+      metadata: localStorage.getItem(META_PREFIX + name) };
+  } catch (exc) {
+    throw storageError(exc, "read");
+  }
+}
+
+function assertSceneVersion(expected: SavedSceneVersion | undefined,
+                            current: SavedSceneVersion): void {
+  if (expected !== undefined && (expected.name !== current.name ||
+      expected.payload !== current.payload || expected.metadata !== current.metadata)) {
+    throw new SceneSaveError("The saved scene changed. Cancel and reopen this editor to review the latest version.");
+  }
+}
+
 export const MAX_SCENE_FILE_BYTES = 10 * 1024 * 1024;
 
 export type SceneReadResult =
@@ -580,9 +605,10 @@ function restoreKeys(entries: ReadonlyArray<readonly [string, string | null]>): 
  * a blocked origin. It used to throw the raw DOMException straight through
  * the click handler, which surfaced as nothing at all: the save silently
  * did not happen and the user was told it had. */
-export function saveScene(world: World, name: string): string {
+export function saveScene(world: World, name: string, expected?: SavedSceneVersion): string {
   const safe = normalizeSceneName(name);
   const state = serializableScene(world);
+  if (expected !== undefined) assertSceneVersion(expected, savedSceneVersion(safe));
   try {
     localStorage.setItem(SCENE_PREFIX + safe, state);
   } catch (exc) {
@@ -627,7 +653,7 @@ export function loadScene(name: string): SceneReadResult {
   }
 }
 
-export function deleteScene(name: string): void {
+export function deleteScene(name: string, expected?: SavedSceneVersion): void {
   const payloadKey = SCENE_PREFIX + name;
   const metaKey = META_PREFIX + name;
   let payload: string | null;
@@ -638,6 +664,7 @@ export function deleteScene(name: string): void {
   } catch (exc) {
     throw storageError(exc, "delete");
   }
+  assertSceneVersion(expected, { name, payload, metadata: meta });
   try {
     localStorage.removeItem(payloadKey);
     localStorage.removeItem(metaKey);
@@ -649,9 +676,14 @@ export function deleteScene(name: string): void {
 
 /** Rename a saved scene (metadata moves with it). Returns the safe name,
  * or null if the target name is already taken. */
-export function renameScene(oldName: string, newName: string): string | null {
+export function renameScene(oldName: string, newName: string,
+                            expected?: SavedSceneVersion): string | null {
   const safe = normalizeSceneName(newName);
-  if (safe === oldName) return safe;
+  if (safe === oldName) {
+    const current = savedSceneVersion(oldName);
+    assertSceneVersion(expected, current);
+    return current.payload === null ? null : safe;
+  }
   const oldPayloadKey = SCENE_PREFIX + oldName;
   const oldMetaKey = META_PREFIX + oldName;
   const newPayloadKey = SCENE_PREFIX + safe;
@@ -667,6 +699,7 @@ export function renameScene(oldName: string, newName: string): string | null {
   } catch (exc) {
     throw storageError(exc, "rename");
   }
+  assertSceneVersion(expected, { name: oldName, payload, metadata: meta });
   if (payload === null) return null;
   try {
     // Finish every potentially quota-consuming write before deleting the
@@ -696,7 +729,8 @@ export function sceneDescription(name: string): string {
   }
 }
 
-export function setSceneDescription(name: string, description: string): void {
+export function setSceneDescription(name: string, description: string,
+                                   expected?: SavedSceneVersion): void {
   const key = META_PREFIX + name;
   let previous: string | null;
   try {
@@ -704,6 +738,7 @@ export function setSceneDescription(name: string, description: string): void {
   } catch (exc) {
     throw storageError(exc, "update");
   }
+  if (expected !== undefined) assertSceneVersion(expected, savedSceneVersion(name));
   try {
     if (description.trim() === "") {
       localStorage.removeItem(key);

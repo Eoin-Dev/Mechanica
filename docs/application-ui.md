@@ -711,7 +711,11 @@ height is unusually small.
   an explicit Replace scene action, with Cancel initially focused; editing the
   name cancels that confirmation. Saved-scene actions scroll with their forms
   so they cannot cover the editor at enlarged text sizes.
-  Inline validation/storage failures preserve the draft. Descriptions accept
+  Inline validation/storage failures preserve the draft. Submission reads the
+  current field value. Saved payload or description changes during editing
+  block stale writes with guidance to cancel and reopen; the newer data and
+  unfinished draft are preserved. Non-field errors scroll into view within
+  the Library; invalid fields retain their correction focus. Descriptions accept
   multiple lines. Delete focuses Cancel initially; Escape cancels a form while
   leaving the Library open. Section changes preserve its draft, closing clears
   it, and successful updates focus the saved scene's Load control (or Save when

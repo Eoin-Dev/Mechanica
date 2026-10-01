@@ -102,6 +102,98 @@ describe("Library import lifecycle", () => {
 });
 
 describe("saved-scene editor", () => {
+  it("submits the visible field value even if no input event was delivered", () => {
+    const { button, field, submit } = setup();
+    button("Save current scene").click();
+    field().value = "Current visible name";
+    submit();
+    expect(snap.listScenes()).toEqual(["Current visible name"]);
+  });
+
+  it("does not use an old replacement confirmation after a silent field change", () => {
+    snap.saveScene(new World(), "First");
+    snap.saveScene(new World(), "Second");
+    const first = localStorage.getItem("mechanica.scene.First");
+    const second = localStorage.getItem("mechanica.scene.Second");
+    const { app, button, field, type, submit } = setup();
+    app.world.gravity = 3;
+    button("Save current scene").click();
+    type("First");
+    submit();
+    field().value = "Second";
+    submit();
+    expect(localStorage.getItem("mechanica.scene.First")).toBe(first);
+    expect(localStorage.getItem("mechanica.scene.Second")).toBe(second);
+    expect(button("Replace scene")).toBeDefined();
+    submit();
+    expect(localStorage.getItem("mechanica.scene.Second")).toContain('"gravity":3');
+  });
+
+  it.each(["rename", "description", "delete"] as const)(
+    "retains a %s draft when another tab changes the saved scene", kind => {
+      snap.saveScene(new World(), "Shared");
+      snap.setSceneDescription("Shared", "Original notes");
+      const { root, button, field, type, submit } = setup();
+      const action = kind === "rename" ? "Rename Shared"
+        : kind === "description" ? "Edit description for Shared" : "Delete saved scene Shared";
+      button(action).click();
+      if (kind !== "delete") type("My draft");
+      const changed = new World();
+      changed.gravity = 4;
+      snap.saveScene(changed, "Shared");
+      snap.setSceneDescription("Shared", "Other tab's notes");
+      submit();
+      expect(snap.listScenes()).toEqual(["Shared"]);
+      expect(localStorage.getItem("mechanica.scene.Shared")).toContain('"gravity":4');
+      expect(snap.sceneDescription("Shared")).toBe("Other tab's notes");
+      expect(root.querySelector('[role="alert"]')!.textContent).toContain("changed");
+      if (kind !== "delete") expect(field().value).toBe("My draft");
+    },
+  );
+
+  it("does not recreate metadata after another tab deletes the edited scene", () => {
+    snap.saveScene(new World(), "Gone");
+    const { root, button, field, type, submit } = setup();
+    button("Add description for Gone").click();
+    type("Keep my draft");
+    snap.deleteScene("Gone");
+    submit();
+    expect(localStorage.getItem("mechanica.scenemeta.Gone")).toBeNull();
+    expect(field().value).toBe("Keep my draft");
+    expect(root.querySelector('[role="alert"]')!.textContent).toContain("changed");
+  });
+
+  it("does not overwrite changes made after replacement confirmation appeared", () => {
+    snap.saveScene(new World(), "Shared");
+    const { app, root, button, field, type, submit } = setup();
+    app.world.gravity = 8;
+    button("Save current scene").click();
+    type("Shared");
+    submit();
+    const changed = new World();
+    changed.gravity = 5;
+    snap.saveScene(changed, "Shared");
+    submit();
+    expect(localStorage.getItem("mechanica.scene.Shared")).toContain('"gravity":5');
+    expect(field().value).toBe("Shared");
+    expect(root.querySelector('[role="alert"]')!.textContent).toContain("changed");
+  });
+
+  it("opens current descriptions from a stale card and refreshes missing scenes", () => {
+    snap.saveScene(new World(), "Shared");
+    snap.setSceneDescription("Shared", "Old notes");
+    const { app, root, button, field } = setup();
+    snap.setSceneDescription("Shared", "Latest notes");
+    button("Edit description for Shared").click();
+    expect(field().value).toBe("Latest notes");
+    button("Cancel").click();
+    snap.deleteScene("Shared");
+    button("Rename Shared").click();
+    expect(root.querySelector(".scene-editor")).toBeNull();
+    expect(root.querySelector(".scene-card")).toBeNull();
+    expect(app.toast).toHaveBeenCalledExactlyOnceWith("This saved scene is no longer available.");
+  });
+
   it("previews the stored name and saves without a browser prompt", () => {
     const prompt = vi.spyOn(window, "prompt");
     const { root, button, type, submit } = setup();
