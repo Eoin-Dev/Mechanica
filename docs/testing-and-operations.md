@@ -33,7 +33,8 @@ npm audit
 
 - `dev` starts Vite with hot reload.
 - `test` runs Node verification-tool tests, then the complete Vitest suite once.
-- `test:scripts` runs only the Node tests for handbook links and benchmark reports.
+- `test:scripts` runs only the Node tests for handbook links, the test-count gate,
+  and benchmark reports.
 - `test:watch` runs Vitest interactively.
 - `build` first executes `tsc --noEmit`, then creates the static Vite bundle in
   `web/dist/`.
@@ -227,14 +228,20 @@ with the behavior it protects rather than an exact assertion count.
 | [`tour-modal.test.ts`](../web/tests/tour-modal.test.ts) | App-shell inertness, pointer blocking, focus trapping/restoration, active-step progress, live announcements, and modal cleanup. |
 | [`zoom-accessibility.test.ts`](../web/tests/zoom-accessibility.test.ts) | Page-zoom-restricting viewport metadata, global modified wheel/keyboard/gesture suppression, canvas-only unmodified wheel/touch zoom, contrast-safe accented section/guide/preset/tour/Help headings, mobile heading presence, and selectable reference content. |
 
-### Real-browser acceptance
+### Verification tools
 
 [`scripts/check-docs.test.mjs`](../web/scripts/check-docs.test.mjs) uses temporary
 repositories to verify valid and broken links, encoded and parenthesized paths,
 heading collisions, Unicode/HTML anchors, fence lengths, references and filename
 case. [`scripts/performance-report.test.mjs`](../web/scripts/performance-report.test.mjs)
 checks measured percentiles and rejects missing/poisoned samples, stopped
-playback, and stalled clocks. These Node tests run before Vitest under `npm test`.
+playback, and stalled clocks.
+[`scripts/check-test-count.test.mjs`](../web/scripts/check-test-count.test.mjs)
+checks the badge bound, valid complete results, invalid/count-coercion cases,
+unsuccessful and contradictory reports, and the CLI's exit status. These Node
+tests run before Vitest under `npm test`.
+
+### Real-browser acceptance
 
 Tab recovery is covered by
 [`session-recovery.test.ts`](../web/tests/session-recovery.test.ts): edited/empty
@@ -345,7 +352,9 @@ The build job:
 3. runs `npm ci` in `web`;
 4. runs Node tool tests, then Vitest with human and JSON reporters;
 5. runs `scripts/check-test-count.mjs` against the generated result so the
-   README lower-bound badge cannot become false;
+   README lower-bound badge cannot become false. The gate requires a successful
+   run, valid integer counts and every collected test passed; failed, skipped,
+   pending, todo, inconsistent or malformed reports fail;
 6. checks documentation files and heading references;
 7. checks known dependency advisories;
 8. runs the production build;
