@@ -8,6 +8,7 @@ import * as theme from "../ui/theme";
 import { css, lighten } from "../ui/theme";
 import { Camera, niceNumber } from "./camera";
 import { Trail } from "./trail";
+import { ParticleAtlas } from "./particle-atlas";
 
 // world metres of arrow length per unit of the quantity, at vector scale 1
 export const VEL_ARROW_SCALE = 0.15;
@@ -302,37 +303,17 @@ function lineXY(ctx: CanvasRenderingContext2D, ax: number, ay: number,
 // ------------------------------------------------------------- draw batching
 /** Same-styled connected geometry collected into one Path2D per style.
  *
- * A `stroke()` or `fill()` costs on the order of microseconds however little
- * geometry is in it, so what bounds the cost of a scene is the NUMBER of
- * calls. Drawing each object separately made that number the object count:
- * the Jelly block spent hundreds of calls on its spring lattice. Link and
- * vector batches collapse those calls while bodies remain bounded current
- * paths: disjoint body batches can span the full canvas and trigger the same
- * Chromium raster cliff as a batched grid on large high-DPI surfaces.
- *
- * Trails choose between colour batches and bounded per-trail current paths
- * according to scene density and mode.
+ * Connected link/vector batches reduce draw calls. Disjoint body batches
+ * can span the full high-DPI canvas and incur expensive raster bounds, so
+ * bodies use individual paths or bounded tiny-disc glyphs instead. Trails
+ * choose colour batches or bounded current paths according to scene density.
  *
  * Line widths are keyed in quarter-pixel buckets so visually equivalent
  * vector/link widths share the same path without string keys.
  *
- * What batching changes is z-order WITHIN a pass: all of one style draws
- * before all of the next, rather than in world order. Measured against the
- * unbatched renderer on the same scenes and the same physics state, that
- * comes to 0.1-1.6% of pixels, and every difference falls into one of three
- * groups, none of them a regression:
- *
- *   - Body labels now sit above every disc instead of being painted over by
- *     whichever body was drawn next. This is the largest share and it is a
- *     fix; it is only visible with body labels turned on.
- *   - Where two grid lines round onto the same pixel (far zoomed out), the
- *     major or axis line wins rather than whichever came later in the scan.
- *   - Overlapping strokes of one style composite once instead of twice, so
- *     an antialiased edge crossing another is no longer slightly darkened.
- *
- * Selection rings and hover highlights are batched into the stroke pass,
- * which runs after every fill, so nothing that marks a specific object can
- * be hidden behind a body.
+ * Within a batch, style insertion order determines stroke order and
+ * overlapping strokes of one style composite once. Body selection rings
+ * remain in world order; body labels draw after the complete body pass.
  */
 class StyleBatch {
   private entries = new Map<number, { path: Path2D; style: string; width: number }>();
@@ -710,6 +691,7 @@ const PICKED = new Set<Selectable>();
 const LABEL_NAMES: string[] = [];
 const LABEL_X: number[] = [];
 const LABEL_Y: number[] = [];
+const PARTICLE_ATLAS = new ParticleAtlas();
 
 /** `simplify` drops the decorative geometry that costs the most to build:
  * spring coils become plain lines (a coil is up to twenty segments), spin
@@ -888,9 +870,10 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   }
 
   // --- bodies ---------------------------------------------------------------------
-  // Discs, edges, spin markers and hubs all batch by style; labels are text
-  // and have to wait until the fills beneath them are down, so they are
-  // collected and drawn after the flush.
+  // Tiny high-DPI discs share bounded glyphs; larger discs, edges, spin
+  // markers and hubs keep their individual paths. Labels wait until all
+  // bodies beneath them are drawn.
+  PARTICLE_ATLAS.begin(ctx, zoom, world, world.bodies.length);
   LABEL_NAMES.length = 0;
   LABEL_X.length = 0;
   LABEL_Y.length = 0;
@@ -982,24 +965,25 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
       }
       continue;
     }
-    const edgeStyle = scaledRgb(color, 0.55);
     // Keep each body's path spatially bounded, but combine its disc edge and
     // optional spin marker into one stroke. This avoids both Chromium's
     // disjoint-Path2D cliff and a redundant call per rotating body.
-    ctx.beginPath();
-    ctx.arc(sx, sy, pr, 0, 2 * Math.PI);
-    ctx.fillStyle = css(color);
-    ctx.fill();
-    if (pr >= 5 && !body.locked && !simplify) {
-      // rotation marker so spin/rolling is visible
-      const ex = sx + Math.cos(body.angle) * pr * 0.85;
-      const ey = sy - Math.sin(body.angle) * pr * 0.85;
-      ctx.moveTo(sx, sy);
-      ctx.lineTo(ex, ey);
+    if (body.locked || !PARTICLE_ATLAS.draw(ctx, sx, sy, pr, color)) {
+      ctx.beginPath();
+      ctx.arc(sx, sy, pr, 0, 2 * Math.PI);
+      ctx.fillStyle = css(color);
+      ctx.fill();
+      if (pr >= 5 && !body.locked && !simplify) {
+        // rotation marker so spin/rolling is visible
+        const ex = sx + Math.cos(body.angle) * pr * 0.85;
+        const ey = sy - Math.sin(body.angle) * pr * 0.85;
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(ex, ey);
+      }
+      ctx.strokeStyle = scaledRgb(color, 0.55);
+      ctx.lineWidth = Math.max(1, pr / 9);
+      ctx.stroke();
     }
-    ctx.strokeStyle = edgeStyle;
-    ctx.lineWidth = Math.max(1, pr / 9);
-    ctx.stroke();
     if (body.locked) {
       const hub = Math.max(2, pr / 3);
       fillCircle(ctx, sx, sy, hub, BODY_HUB);

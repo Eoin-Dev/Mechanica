@@ -644,3 +644,68 @@ test("320 CSS pixels and 200% application text remain contained", async ({ page 
   }));
   expect(settingsLayout).toEqual({ dialogFits: true, fontScaleDisplay: "grid" });
 });
+
+test.describe("dense particle rendering", () => {
+  test.use({ deviceScaleFactor: 2 });
+
+  test("imported tiny particles stay visible and return to vector drawing when enlarged", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await skipFirstRunTour(page, { inspector_visible: false });
+    await page.addInitScript(() => {
+      const counts = { copies: 0, arcs: 0 };
+      (window as unknown as { particleDrawing: typeof counts }).particleDrawing = counts;
+      const prototype = CanvasRenderingContext2D.prototype;
+      const copy = prototype.drawImage;
+      prototype.drawImage = function (...args: Parameters<typeof copy>) {
+        if (this.canvas.id === "canvas" && args.length === 9 && args[0] instanceof HTMLCanvasElement) counts.copies++;
+        return copy.apply(this, args);
+      };
+      const arc = prototype.arc;
+      prototype.arc = function (...args: Parameters<typeof arc>) {
+        if (this.canvas.id === "canvas") counts.arcs++;
+        return arc.apply(this, args);
+      };
+    });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Library", exact: true }).click();
+    await page.getByRole("tab", { name: "My scenes", exact: true }).click();
+    const choosing = page.waitForEvent("filechooser");
+    await page.getByRole("button", { name: "Import .json", exact: true }).click();
+    const chooser = await choosing;
+    await chooser.setFiles({ name: "Dense particles.json", mimeType: "application/json",
+      buffer: Buffer.from(JSON.stringify({ settings: { gravity: 0 }, bodies: Array.from({ length: 600 }, (_, index) => ({
+        id: index + 1, pos: [index % 40 * 0.1, Math.floor(index / 40) * 0.1],
+        radius: 0.005, mass: 1, collides: false, color: [86, 156, 214],
+      })) })) });
+    await expect(page.locator("#status-text")).toContainText("600 bodies");
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as { particleDrawing: { copies: number } }).particleDrawing.copies)).toBeGreaterThanOrEqual(500);
+    // Read pixels only after drawing; GPU/readback timing is not a performance assertion.
+    const bluePixels = await page.locator("#canvas").evaluate(element => {
+      const canvas = element as HTMLCanvasElement;
+      const pixels = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
+      let count = 0;
+      for (let index = 0; index < pixels.length; index += 4) {
+        if (pixels[index] === 86 && pixels[index + 1] === 156 && pixels[index + 2] === 214) count++;
+      }
+      return count;
+    });
+    expect(bluePixels).toBeGreaterThan(600 * 10);
+    await page.screenshot({ path: test.info().outputPath("dense-particles.png") });
+    const canvas = await page.locator("#canvas").boundingBox();
+    await page.mouse.move(canvas!.x + canvas!.width / 2, canvas!.y + canvas!.height / 2);
+    await page.mouse.wheel(0, -5000);
+    await page.waitForTimeout(100);
+    await page.evaluate(() => {
+      const counts = (window as unknown as { particleDrawing: { copies: number; arcs: number } }).particleDrawing;
+      counts.copies = counts.arcs = 0;
+    });
+    await page.mouse.wheel(0, 20);
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as { particleDrawing: { arcs: number } }).particleDrawing.arcs)).toBeGreaterThan(0);
+    expect(await page.evaluate(() =>
+      (window as unknown as { particleDrawing: { copies: number } }).particleDrawing.copies)).toBe(0);
+    expect(errors).toEqual([]);
+  });
+});

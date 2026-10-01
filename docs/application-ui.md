@@ -449,8 +449,12 @@ Major behavior includes:
   DOM readouts without repainting the full high-DPI canvas;
 - visible-bounds culling for bodies, walls, links, and whole trails;
 - reusable numeric-keyed `Path2D` batches for connected link and vector
-  geometry, while each disjoint body uses one bounded current fill/stroke so
-  Chromium does not raster a viewport-sized multi-body path;
+  geometry, while disjoint bodies use bounded individual paths or tiny-disc
+  glyphs so Chromium does not raster a viewport-sized multi-body path;
+- bounded subpixel glyph reuse in dense views at effective DPR 1.5-2.5 for
+  ordinary unlocked bodies below 5 CSS pixels in radius. Larger bodies and
+  unsupported styles/contexts retain vector drawing. Zoom, DPR and world
+  replacement release the old cache, and physics remains unchanged;
 - reused selection, label, and trail-index scratch collections so a displayed
   frame does not allocate replacement lookup containers for the same pass;
 - optional minor/major/axis grid and spatial-hash overlay, each skipped if zoom

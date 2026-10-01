@@ -289,6 +289,16 @@ buffers and skips sampling, maintenance, and drawing. Every Normal-mode draw
 removes colour groups absent from the current world and ignores stale body IDs;
 world and history replacement also clear per-body trail buffers.
 
+Dense views with at least 500 bodies and effective DPR from 1.5 through 2.5
+reuse tiny-disc glyphs for ordinary unlocked bodies with screen radius from
+2 up to 5 CSS pixels. Eight subpixel phases per axis preserve centres within
+one sixteenth of a device pixel; integer-device-pixel copies avoid resampling
+blur. The cache retains at most two radii and sixteen colours per radius,
+under two million bitmap pixels in total. Zoom, DPR and world replacement
+release the old bitmaps. Larger bodies, special body glyphs, excess styles,
+unsupported canvas transforms/compositing and unavailable bitmap allocation
+retain individual vector drawing. This display cache never changes physics.
+
 The overload warning distinguishes a render-bound frame from a physics-bound
 one. Lower Performance profiles suppress it while the adaptive controller can
 still respond; it appears in Performance mode only after maximum approximation

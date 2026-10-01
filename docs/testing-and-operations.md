@@ -199,6 +199,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`interaction-behaviour.test.ts`](../web/tests/interaction-behaviour.test.ts) | Cancelled eraser/wall gestures and tool switching without later unintended edits, click activation threshold, asymptotically bounded speed-sensitive drag energy, continuously maintained parked velocity aims, selected-body FBD velocity-handle suppression independent from View vectors, standalone rod creation, unified Anchor support placement, slow-acquire/hysteretic body attachment, filtered box select, pick ordering/tolerance, distance-based trail sampling, plot restart/non-finite rejection, auto-fit guarantees, and deleted gesture targets. |
 | [`selection-delete.test.ts`](../web/tests/selection-delete.test.ts) | Selection/hover/pending-state reconciliation after removal, linear batched deletion with cascades, one-transaction continuous eraser scrubs, and duplication of bodies/walls/links/drivers. |
 | [`camera.test.ts`](../web/tests/camera.test.ts) | World/screen inverse transforms, panning, cursor-anchored zoom/clamps, visible bounds, and nice scale-bar formatting. |
+| [`particle-atlas.test.ts`](../web/tests/particle-atlas.test.ts) | Subpixel centre/radius accuracy, cached glyph reuse, bounded radius/colour/bitmap capacity, release on zoom/DPR/world changes, invalid geometry/colour exclusion, mutable-colour identity, unsupported-context fallback and allocation-failure recovery. |
 | [`body-culling.test.ts`](../web/tests/body-culling.test.ts) | Scene-centred runaway classification, outward-motion requirement, orbit/furniture/held protections, and non-finite cleanup. |
 | [`trail.test.ts`](../web/tests/trail.test.ts) | Ring-buffer order/capacity, timestamps, expiration, resize, serial continuity, and conservative bounds. |
 | [`trail-render.test.ts`](../web/tests/trail-render.test.ts) | Narrow non-`Path2D` full/coarse world-grid, spatial-debug and disjoint-body strokes, square-root-free link slack classification, four-arrow pulley tension geometry and hover column values, Normal/Performance analytical-vector visibility cutoffs, dense-lattice coil caps, Performance-mode trail omission, visible/off-screen Normal-mode trail drawing, bounded dense paths, budgets, fading, stable decimation, endpoint/corner retention, and curve fidelity. |
@@ -261,6 +262,11 @@ checks at 200% text. These cases also protect a usable speed-slider track and
 | Test file | Protected behavior |
 | --- | --- |
 | [`e2e/accessibility.spec.ts`](../web/e2e/accessibility.spec.ts) | Production boot without console/page errors; axe WCAG A/AA scans at boot and with Library open, with only the deliberate browser-page-zoom `meta-viewport` exception waived; keyboard play/tabs/splitters/full-card library activation; undo after scene replacement; rendered-canvas pointer alignment; paused Jelly zoom paint-FPS/idle reporting with stable Performance quality; incline-pulley preset/tool/status/Inspector editing and tension toggle; 390 x 844 transient inspector and Studio Library behavior; extreme-accent safe text/button states; full-disc swatch geometry; modal-tour focus/inertness/restoration; modal modifier-shortcut isolation, real MathLive Escape cancellation, light-theme destructive-hover contrast, and contained Library/Settings plus usable graph canvas at 320 CSS px with 200% application text. |
+
+A DPR-2 scene-import case checks visible tiny-particle pixels and glyph-copy
+use in the production app, then zooms in and verifies the vector fallback.
+The corresponding unit suite checks exact geometry and resource bounds;
+performance measurements remain outside timing-sensitive acceptance tests.
 
 ## Verification philosophy
 
