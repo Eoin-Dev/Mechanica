@@ -9,7 +9,7 @@ import { css } from "./theme";
 // runtime theme change is picked up by the next draw.
 const EXTRA_SERIES: readonly Color[] = [[170, 140, 230], [110, 200, 210]];
 
-interface LegendHit {
+export interface LegendHit {
   x: number;
   y: number;
   w: number;
@@ -186,14 +186,23 @@ export class TimeSeries {
   legendClick(x: number, y: number): boolean {
     for (const hit of this.legendHits) {
       if (x >= hit.x && x <= hit.x + hit.w && y >= hit.y && y <= hit.y + hit.h) {
-        if (this.hidden.has(hit.channel)) this.hidden.delete(hit.channel);
-        else this.hidden.add(hit.channel);
-        this.rev++;
-        return true;
+        return this.toggleChannel(hit.channel);
       }
     }
     return false;
   }
+
+  /** Toggle only a known channel, shared by pointer and native button input. */
+  toggleChannel(channel: string): boolean {
+    if (!this.data.has(channel)) return false;
+    if (this.hidden.has(channel)) this.hidden.delete(channel);
+    else this.hidden.add(channel);
+    this.rev++;
+    return true;
+  }
+
+  /** Geometry from the latest draw, in CSS pixels, for native legend controls. */
+  get legendEntries(): readonly LegendHit[] { return this.legendHits; }
 
   private drawLegend(ctx: CanvasRenderingContext2D, w: number, titleWidth: number): number {
     this.legendHits = [];
@@ -202,7 +211,7 @@ export class TimeSeries {
       const d = this.data.get(c)!;
       return `${c}: ${fmt(this.count > 0 ? d[d.length - 1] : 0)}`;
     });
-    const widths = labels.map(label => ctx.measureText(label).width + 24);
+    const widths = labels.map(label => ctx.measureText(label).width + 28);
     const total = widths.reduce((sum, width) => sum + width, 0);
     const inline = titleWidth + total + 30 <= w;
     let lx = inline ? w - total - 10 : 10;
@@ -214,17 +223,17 @@ export class TimeSeries {
       const width = widths[ci];
       if (!inline && lx > 10 && lx + width > w - 10) {
         lx = 10;
-        y += 22;
+        y += 26;
       }
       const col = seriesColor(ci);
       ctx.fillStyle = css(off ? theme.TEXT_FAINT : col);
       ctx.fillRect(lx, y - 5, 10, 3);
       ctx.fillStyle = css(off ? theme.TEXT_FAINT : theme.TEXT_DIM);
       ctx.fillText(lbl, lx + 14, y);
-      this.legendHits.push({ x: lx - 4, y: y - 12, w: width, h: 20, channel: c });
+      this.legendHits.push({ x: lx - 4, y: y - 14, w: width, h: 24, channel: c });
       lx += width;
     }
-    return y + 12;
+    return y + 16;
   }
 
   /** First LIVE index with t >= tv (binary search; times ascending). */
@@ -250,7 +259,8 @@ export class TimeSeries {
       this.easing = false;
       ctx.fillStyle = css(theme.TEXT_FAINT);
       ctx.textAlign = "center";
-      ctx.fillText("Run the simulation to collect data", w / 2, h / 2);
+      ctx.fillText("Run the simulation to collect data", w / 2,
+        Math.max(plotTop + 16, (plotTop + h - 16) / 2), Math.max(1, w - 16));
       ctx.textAlign = "left";
       return;
     }
@@ -260,7 +270,8 @@ export class TimeSeries {
       ctx.fillStyle = css(theme.TEXT_FAINT);
       ctx.textAlign = "center";
       ctx.fillText(`All channels hidden - ${isTouch() ? "tap" : "click"} the ` +
-                   "legend to show one", w / 2, h / 2);
+                   "legend to show one", w / 2,
+                   Math.max(plotTop + 16, (plotTop + h - 16) / 2), Math.max(1, w - 16));
       ctx.textAlign = "left";
       return;
     }

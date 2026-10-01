@@ -156,6 +156,64 @@ describe("status readouts", () => {
 });
 
 describe("graph dock retained state", () => {
+  it("retains native legend controls through live samples and clears them on mode changes", () => {
+    const ctx = new Proxy({
+      measureText: (text: string) => ({ width: text.length * 6 }),
+    } as Record<string, unknown>, {
+      get: (target, key) => key in target ? target[key as string] : () => {},
+      set() { return true; },
+    }) as unknown as CanvasRenderingContext2D;
+    const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue(ctx);
+    try {
+      const app = {
+        graphMode: "Energy", settings: {}, selection: [],
+        world: { gravity: 0, bodies: [], walls: [], links: [], fields: [], drivers: [],
+          dragLinear: 0, dragQuadratic: 0, globalDamping: 0 },
+        energySeries: new TimeSeries(["KE", "PE", "Total"]),
+        momentumSeries: new TimeSeries(["|p|", "px", "py", "L"]),
+        phasePlot: new PhasePlot(), resizeCanvas() {}, saveSettings() {},
+      } as unknown as App;
+      app.energySeries.add(0, { KE: 1, PE: 2, Total: 3 });
+      const root = document.createElement("div");
+      document.body.replaceChildren(root);
+      const dock = new GraphDock(app, root, document.createElement("div"));
+      const canvas = root.querySelector("canvas")!;
+      Object.defineProperty(canvas, "clientWidth", { value: 300 });
+      Object.defineProperty(canvas, "clientHeight", { value: 180 });
+      dock.refresh();
+      const kinetic = root.querySelector<HTMLButtonElement>('[aria-label="KE series"]')!;
+      expect(kinetic.getAttribute("aria-pressed")).toBe("true");
+      kinetic.focus();
+      kinetic.click();
+      dock.refresh();
+      expect(kinetic.getAttribute("aria-pressed")).toBe("false");
+      app.energySeries.add(1, { KE: 123456, PE: 2, Total: 123458 });
+      dock.refresh();
+      expect(root.querySelector('[aria-label="KE series"]')).toBe(kinetic);
+      expect(document.activeElement).toBe(kinetic);
+      const hit = app.energySeries.legendEntries.find(entry => entry.channel === "KE")!;
+      expect(kinetic.style.left).toBe(`${hit.x}px`);
+      expect(kinetic.style.width).toBe(`${hit.w}px`);
+      expect(kinetic.style.height).toBe("24px");
+
+      app.graphMode = "Mom.";
+      app.momentumSeries.add(0, { "|p|": 1, px: 1, py: 0, L: 0 });
+      dock.refresh();
+      expect(kinetic.isConnected).toBe(false);
+      const horizontal = root.querySelector<HTMLButtonElement>('[aria-label="px series"]')!;
+      horizontal.click();
+      dock.refresh();
+      expect(app.momentumSeries.hidden.has("px")).toBe(true);
+      expect(app.energySeries.hidden.has("KE")).toBe(true);
+      app.graphMode = "Phase";
+      dock.refresh();
+      expect(root.querySelectorAll(".graph-legend-toggle")).toHaveLength(0);
+    } finally {
+      getContext.mockRestore();
+    }
+  });
+
   it("keeps the oldest time under the cursor when zooming detached history", () => {
     const getContext = vi.spyOn(HTMLCanvasElement.prototype, "getContext")
       .mockReturnValue({} as CanvasRenderingContext2D);

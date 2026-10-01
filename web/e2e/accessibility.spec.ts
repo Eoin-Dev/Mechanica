@@ -351,6 +351,79 @@ test("narrow graph controls remain reachable with enlarged application text", as
   await expect(dock).toBeHidden();
 });
 
+test("graph legends retain keyboard focus and expose channel visibility", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 844 });
+  await skipFirstRunTour(page, { theme: "light", studio_mode: true });
+  await page.goto("/");
+  const dock = page.locator("#dock");
+  await dock.getByRole("button", { name: "Energy", exact: true }).click();
+  const kinetic = dock.getByRole("button", { name: "KE series", exact: true });
+  await expect(kinetic).toBeVisible();
+  const closeGraph = dock.getByRole("button", { name: "Close the graph dock.", exact: true });
+  await closeGraph.focus();
+  await page.keyboard.press("Tab");
+  await expect(kinetic).toBeFocused();
+  await kinetic.press("Space");
+  await expect(kinetic).toHaveAttribute("aria-pressed", "false");
+  await expect(kinetic).toBeFocused();
+  await expect(page.getByRole("button", { name: /^Start the simulation/ }))
+    .toHaveAttribute("aria-pressed", "false");
+  await kinetic.press("Enter");
+  await expect(kinetic).toHaveAttribute("aria-pressed", "true");
+  await expect(kinetic).toBeFocused();
+  await page.getByRole("button", { name: /^Start the simulation/ }).click();
+  await kinetic.focus();
+  await expect.poll(async () => Number(await page.getByRole("textbox", {
+    name: "Simulation time in seconds", exact: true,
+  }).inputValue())).toBeGreaterThanOrEqual(0.25);
+  await expect(kinetic).toBeFocused();
+  await kinetic.press("Space");
+  await expect(kinetic).toHaveAttribute("aria-pressed", "false");
+  await expect(page.getByRole("button", { name: /^Pause the simulation/ }))
+    .toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: /^Pause the simulation/ }).click();
+  await closeGraph.focus();
+  await page.keyboard.press("Tab");
+  await expect(kinetic).toBeFocused();
+  await kinetic.press("Enter");
+  await expect(kinetic).toHaveAttribute("aria-pressed", "true");
+  for (const channel of ["KE", "PE", "Total"]) {
+    const bounds = await dock.getByRole("button", { name: `${channel} series`, exact: true }).boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+    expect(bounds!.height).toBeGreaterThanOrEqual(24);
+  }
+  await expect.poll(async () => dock.locator("canvas").evaluate(canvas => {
+    const controls = [...canvas.parentElement!.querySelectorAll<HTMLElement>(".graph-legend-toggle")];
+    const bottom = Math.max(...controls.map(control => control.offsetTop + control.offsetHeight));
+    return canvas.clientHeight - bottom;
+  })).toBeGreaterThanOrEqual(70);
+  const paintedChart = await dock.locator("canvas").evaluate(element => {
+    const canvas = element as HTMLCanvasElement;
+    const ctx = canvas.getContext("2d")!;
+    const controls = [...canvas.parentElement!.querySelectorAll<HTMLElement>(".graph-legend-toggle")];
+    const bottom = Math.max(...controls.map(control => control.offsetTop + control.offsetHeight));
+    const start = Math.ceil((bottom + 6) * canvas.height / canvas.clientHeight);
+    const pixels = ctx.getImageData(0, start, canvas.width, canvas.height - start).data;
+    return pixels.some((value, index) => index % 4 === 3 && value > 0);
+  });
+  expect(paintedChart).toBe(true);
+  const canvasBounds = (await dock.locator("canvas").boundingBox())!;
+  const dockBounds = (await dock.boundingBox())!;
+  expect(canvasBounds.y + canvasBounds.height).toBeLessThanOrEqual(dockBounds.y + dockBounds.height);
+  const graphAxe = await new AxeBuilder({ page }).include("#dock")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"])
+    .analyze();
+  expect(graphAxe.violations).toEqual([]);
+  await dock.screenshot({ path: test.info().outputPath("keyboard-graph-legend.png") });
+  await dock.getByRole("button", { name: "Mom.", exact: true }).click();
+  await expect(kinetic).toHaveCount(0);
+  await expect(dock.getByRole("button", { name: "px series", exact: true }))
+    .toHaveAttribute("aria-pressed", "true");
+  await dock.getByRole("button", { name: "Phase", exact: true }).click();
+  await expect(dock.locator(".graph-legend-toggle")).toHaveCount(0);
+});
+
 test("pulley preset and tool expose a complete editable-string assembly", async ({ page }) => {
   await skipFirstRunTour(page, { theme: "dark", studio_mode: true });
   await page.goto("/");

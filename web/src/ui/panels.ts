@@ -288,6 +288,11 @@ export class GraphDock implements Panel {
   private splitter: HTMLElement;
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
+  private canvasWrap: HTMLElement;
+  private header: HTMLElement;
+  private legendControls: HTMLElement;
+  private legendButtons = new Map<string, HTMLButtonElement>();
+  private legendSeries: TimeSeries | undefined;
   private hintEl: HTMLElement;
   private liveBtn: HTMLButtonElement;
   private clearBtn!: HTMLButtonElement;
@@ -302,7 +307,7 @@ export class GraphDock implements Panel {
     this.root = root;
     this.splitter = splitter;
 
-    const header = el("div", { class: "dock-header" });
+    const header = this.header = el("div", { class: "dock-header" });
     const modes = this.group.add(segmented(["Energy", "Mom.", "Phase", "Distance", "Velocity"],
       () => app.graphMode,
       (v) => app.setGraphMode(v as GraphMode),
@@ -326,9 +331,11 @@ export class GraphDock implements Panel {
         tooltip: "Close the graph dock." })).root);
 
     this.canvas = el("canvas");
-    const wrap = el("div", { class: "dock-canvas-wrap" }, this.canvas);
+    this.legendControls = el("div", { class: "graph-legend-controls",
+      role: "group", "aria-label": "Graph channels" });
+    this.canvasWrap = el("div", { class: "dock-canvas-wrap" }, this.canvas, this.legendControls);
     this.ctx = this.canvas.getContext("2d")!;
-    root.append(header, wrap);
+    root.append(header, this.canvasWrap);
 
     this.attachViewControls();
 
@@ -439,6 +446,48 @@ export class GraphDock implements Panel {
     this.viewEnd = null;
   }
 
+  /** Match native controls to the painted legend without replacing focused
+   * buttons when fresh samples change their values or measured widths. */
+  private syncLegendControls(series: TimeSeries | undefined): void {
+    if (series !== this.legendSeries) {
+      this.legendControls.replaceChildren();
+      this.legendButtons.clear();
+      this.legendSeries = series;
+    }
+    this.legendControls.hidden = series === undefined;
+    const legendBottom = Math.max(0, ...series?.legendEntries.map(hit => hit.y + hit.h) ?? []);
+    const minimumHeight = `${Math.max(100, legendBottom + 70)}px`;
+    if (this.canvasWrap.style.minHeight !== minimumHeight) {
+      this.canvasWrap.style.minHeight = minimumHeight;
+    }
+    const style = getComputedStyle(this.root);
+    const number = (value: string): number => parseFloat(value) || 0;
+    const dockMinimum = `${this.header.offsetHeight + parseFloat(minimumHeight) +
+      number(style.paddingTop) + number(style.paddingBottom) + number(style.rowGap) +
+      number(style.borderTopWidth) + number(style.borderBottomWidth)}px`;
+    if (this.root.style.minHeight !== dockMinimum) this.root.style.minHeight = dockMinimum;
+    if (series === undefined) return;
+    for (const hit of series.legendEntries) {
+      let control = this.legendButtons.get(hit.channel);
+      if (control === undefined) {
+        control = el("button", { type: "button", class: "graph-legend-toggle",
+          "aria-label": `${hit.channel} series` });
+        control.addEventListener("click", () => series.toggleChannel(hit.channel));
+        this.legendButtons.set(hit.channel, control);
+        this.legendControls.append(control);
+      }
+      const pressed = String(!series.hidden.has(hit.channel));
+      if (control.getAttribute("aria-pressed") !== pressed) {
+        control.setAttribute("aria-pressed", pressed);
+      }
+      const position = `left:${hit.x}px;top:${hit.y}px;width:${hit.w}px;height:${hit.h}px`;
+      if (control.dataset.position !== position) {
+        control.style.cssText = position;
+        control.dataset.position = position;
+      }
+    }
+  }
+
   /** The time series the current mode plots, or undefined for Phase/Off. */
   private activeSeries(): TimeSeries | undefined {
     if (this.app.graphMode === "Energy") return this.app.energySeries;
@@ -514,6 +563,7 @@ export class GraphDock implements Panel {
       this.hintEl.textContent = dockHint;
       this.hintEl.title = dockHint; // hover reveals the full text when clipped
     }
+    this.syncLegendControls(this.activeSeries());
 
     const dpr = window.devicePixelRatio || 1;
     const w = this.canvas.clientWidth;
@@ -575,5 +625,6 @@ export class GraphDock implements Panel {
     } else if (app.graphMode === "Velocity") {
       app.velocitySeries.draw(ctx, w, h, "Velocity (m/s)", graphView);
     }
+    this.syncLegendControls(series);
   }
 }

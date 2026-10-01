@@ -589,10 +589,16 @@ is still active. Empty, undersized, or all-hidden plots cancel easing, and the
 retained draw signature includes the live palette revision so a theme/accent
 change repaints a paused graph exactly once.
 The header and mode controls wrap on narrow layouts. The dock reserves at least
-100 CSS pixels for its canvas, grows to fit wrapped controls, and limits a
+100 CSS pixels for its canvas and enough extra height beneath wrapped legends
+to preserve the plot, grows to fit wrapped controls, and limits a
 saved height against the current container (subject to its content minimum).
 Legends share the title row when they fit and otherwise wrap into measured rows
-above the plot; their click targets follow those rows. Detached wheel zoom
+above the plot. Native buttons follow the measured legend bounds with at least
+24-pixel hit height, `aria-pressed` visibility state, and keyboard focus rings.
+Space or Enter toggles a focused channel without changing playback. Fresh
+samples resize the existing buttons rather than replacing them, preserving
+focus. Switching series replaces only the channel controls; Phase has none.
+Detached wheel zoom
 clamps the view using the new span while retaining the time under the cursor
 where the retained history permits it.
 
@@ -661,13 +667,12 @@ have separate accessible names, and unchanged colour refreshes avoid DOM writes.
   `aria-pressed` and changes its accessible name between Start and Pause.
 - **Palette:** grouped tool buttons, programmatic pressed state, visually shown
   but accessibility-hidden shortcut badges, and tool descriptions.
-- **Hint bar:** active gesture hint plus current time, body/contact counts,
-  Normal-mode trail-quality factor when it is meaningfully away from `1x`,
-  active Performance quality label, exact `dE` or approximate `~dE`, and
-  pointer coordinates where appropriate. Performance mode suppresses both
-  trail drawing and the saved Normal-mode trail-factor readout.
-- **Graph dock:** graph mode, view controls, canvas rendering, legend hit
-  testing, splitter, and contextual gesture hint.
+- **Hint bar:** active gesture hint plus grammatical body, anchor, link, and
+  contact counts, optional rod-anchor/pulley counts, active Performance quality
+  label, exact `dE` or approximate `~dE`, and pointer coordinates where
+  appropriate. Internal trail-quality and step-subdivision values are omitted.
+- **Graph dock:** graph mode, view controls, canvas rendering, native keyboard
+  legend controls aligned with canvas hit testing, splitter, and contextual hint.
 - **Inspector:** object/world/view editing described above.
 
 `OverloadNotice`, wired by `main.ts`, shows advice for the physics or drawing

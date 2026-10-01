@@ -40,6 +40,22 @@ function dataVertices(series: TimeSeries, w: number, h: number) {
 }
 
 describe("time-series rendering", () => {
+  it("shares channel visibility between native controls and measured legend hits", () => {
+    const series = new TimeSeries(["KE", "PE"]);
+    series.add(0, { KE: 1, PE: 2 });
+    const revision = series.rev;
+    expect(series.toggleChannel("unknown")).toBe(false);
+    expect(series.rev).toBe(revision);
+    expect(series.toggleChannel("KE")).toBe(true);
+    expect(series.hidden.has("KE")).toBe(true);
+    const { ctx } = recCtx();
+    series.draw(ctx, 300, 120, "Energy");
+    const hit = series.legendEntries.find(entry => entry.channel === "KE")!;
+    expect(hit.h).toBeGreaterThanOrEqual(24);
+    expect(series.legendClick(hit.x + hit.w / 2, hit.y + hit.h / 2)).toBe(true);
+    expect(series.hidden.has("KE")).toBe(false);
+  });
+
   it("wraps legends below the title on narrow plots and keeps every channel clickable", () => {
     const series = new TimeSeries(["|p|", "px", "py", "L"]);
     series.add(0, { "|p|": 12345, px: 2345, py: -5678, L: 98765 });
@@ -57,6 +73,24 @@ describe("time-series rendering", () => {
       expect(series.legendClick(label.x, label.y)).toBe(true);
     }
     expect(series.hidden.size).toBe(4);
+  });
+
+  it("places empty and all-hidden guidance below wrapped legends", () => {
+    const series = new TimeSeries(["|p|", "px", "py", "L"]);
+    const { ctx } = recCtx();
+    ctx.measureText = text => ({ width: text.length * 6 }) as TextMetrics;
+    const labels: Array<{ text: string; y: number }> = [];
+    ctx.fillText = (text, _x, y) => { labels.push({ text, y }); };
+    series.draw(ctx, 260, 180, "Momentum");
+    const legendBottom = Math.max(...series.legendEntries.map(hit => hit.y + hit.h));
+    expect(labels.find(label => label.text.startsWith("Run the simulation"))!.y)
+      .toBeGreaterThan(legendBottom + 10);
+    series.add(0, { "|p|": 1, px: 1, py: 0, L: 0 });
+    for (const channel of series.channels) series.toggleChannel(channel);
+    labels.length = 0;
+    series.draw(ctx, 260, 180, "Momentum");
+    expect(labels.find(label => label.text.startsWith("All channels hidden"))!.y)
+      .toBeGreaterThan(legendBottom + 10);
   });
   it("keeps a sharp peak at a stable height while the window scrolls", () => {
     const s = new TimeSeries(["E"]);
