@@ -818,7 +818,8 @@ button.perf-banner-btn:hover:not(:disabled) {
   line-height: 1.45;
 }
 .guide-formula { min-width: 0; }
-.guide-math { font-size: calc(14px * var(--fs, 1)); overflow-x: auto; }
+.guide-math { font-size: calc(14px * var(--fs, 1)); overflow-x: auto;
+  padding: 2px 1px; }
 /* while (or if) the typeset renderer hasn't loaded, the source shows in
    the math slot; once typeset markup lands, the small source line under
    it keeps the plain-text spelling visible */
@@ -833,12 +834,14 @@ button.perf-banner-btn:hover:not(:disabled) {
 }
 .guide-math[data-latex] + .guide-src { display: none; }
 .guide-src.only { font-size: calc(12px * var(--fs, 1)); color: var(--text); }
-.guide-recipes { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.card-grid.guide-recipes {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); }
 .guide-recipe { min-height: 0; display: flex; flex-direction: column; }
-.guide-recipe p { flex: 1; -webkit-line-clamp: unset; overflow: visible; }
+.preset-card.guide-recipe p { display: block; flex: 1;
+  -webkit-line-clamp: unset; overflow: visible; }
 .guide-recipe-row { display: flex; gap: 8px; align-items: center; margin: 3px 0; }
 .guide-recipe-lbl { color: var(--text-faint);
-  font-size: calc(11px * var(--fs, 1)); flex: none; width: 16px; }
+  font-size: calc(11px * var(--fs, 1)); flex: none; width: 2ch; }
 .guide-add-hint {
   margin-top: 8px;
   color: var(--accent-text);
@@ -1803,6 +1806,14 @@ kbd {
 
 @media (max-width: 760px) {
   .overlay { padding: 12px; }
+  /* Keep reference expressions with their explanations in reading order
+     when two table columns would force tiny strips of text or page overflow. */
+  .guide-table { display: block; width: 100%; }
+  .guide-table tr { display: block; padding-bottom: 6px; margin-bottom: 6px;
+    border-bottom: 1px solid var(--outline); }
+  .guide-table td { display: block; }
+  .guide-table .code { white-space: normal; overflow-wrap: anywhere; padding: 3px 0; }
+  .guide-table .desc { padding: 3px 0; }
   .library-header {
     grid-template-columns: minmax(0, 1fr) auto;
     row-gap: 10px;

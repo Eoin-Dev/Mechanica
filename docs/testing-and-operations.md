@@ -198,7 +198,8 @@ with the behavior it protects rather than an exact assertion count.
 | Test file | Protected behavior |
 | --- | --- |
 | [`expr-semantics.test.ts`](../web/tests/expr-semantics.test.ts) | Python-like modulo/division/logic/comparisons, precedence/associativity, variables/constants/functions/arity, prototype sandbox, invalid/deep input behavior, closure purity, and compiler/typesetter table agreement. |
-| [`mathfmt.test.ts`](../web/tests/mathfmt.test.ts) | Source/LaTeX/source round trips, MathLive-shaped input, invalid LaTeX rejection, typeset-subset gate, all shipped formula content, and precedence-preserving AST emission. |
+| [`mathfmt.test.ts`](../web/tests/mathfmt.test.ts) | Source/LaTeX/source round trips, MathLive-shaped input, invalid LaTeX rejection, typeset-subset gate, shipped and gravity-resolved recipe content, exact numeric values with exponential-text fallback, and precedence-preserving AST emission. |
+| [`guide-recipes.test.ts`](../web/tests/guide-recipes.test.ts) | Drag direction, magnitude, energy dissipation, rotational invariance, built-in and analytic trajectory agreement; mass-independent gravity cancellation, precise finite context capture and scene portability; origin regularity, shifted spring equilibrium, softened central attraction, vortex torque, smooth tails, gust periods, strict ceiling boundaries and timed switching. |
 | [`expr-roundtrip-fuzz.test.ts`](../web/tests/expr-roundtrip-fuzz.test.ts) | Seeded generated AST/source/LaTeX round trips preserve both structure and evaluated meaning across nested constructs. |
 | [`expression-limits.test.ts`](../web/tests/expression-limits.test.ts) | Exact source/token/node/depth/argument budgets, no truncation, `ExprError` normalization, formatter/compiler agreement, and atomic two-axis field installation without stale closures. |
 
@@ -312,6 +313,14 @@ must yield to the modal, and a snapshot must stay fixed while playback advances.
 Native keyboard paging/focus containment/restoration, real Light/Dark Studio
 themes, 320-pixel/200%-text reflow, scrollable table bounds and axe scans run in
 each browser engine.
+Recipe acceptance adds fields through the real guide, checks current-gravity
+previews, keyboard activation and undo/redo, modal shortcut isolation, portable
+saved/downloaded/reloaded sources and analytic off-axis quadratic-drag data.
+Typeset cards are checked with native keyboard scrolling and axe at desktop,
+phone and enlarged-text widths with Studio and classic presentation.
+All other guide sections also undergo production geometry and axe checks at
+desktop, phone and 200% text, including reflowed reference rows. Recipe copy is
+checked for complete visible height and absence of a line clamp.
 
 ## Verification philosophy
 

@@ -12,7 +12,7 @@ function normalizeCssColor(value: string): string {
   return value.replace(/\s+/g, "");
 }
 
-async function loadMeasurementParticle(page: Page): Promise<void> {
+async function loadMeasurementParticle(page: Page, settings: Record<string, unknown> = {}): Promise<void> {
   await page.setViewportSize({ width: 1440, height: 900 });
   await skipFirstRunTour(page, { theme: "light", studio_mode: true });
   await page.goto("/");
@@ -22,7 +22,7 @@ async function loadMeasurementParticle(page: Page): Promise<void> {
   const choosing = page.waitForEvent("filechooser");
   await library.getByRole("button", { name: "Import .json", exact: true }).click();
   await (await choosing).setFiles({ name: "Measurements.json", mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify({ settings: { gravity: 0 }, bodies: [{
+    buffer: Buffer.from(JSON.stringify({ settings: { gravity: 0, ...settings }, bodies: [{
       id: 1, name: "Measurement particle 📐", pos: [7, -4], vel: [-3, 4], radius: 0.2, mass: 2,
     }] })) });
   await expect(library).toBeHidden();
@@ -36,6 +36,179 @@ async function loadMeasurementParticle(page: Page): Promise<void> {
   await canvas.click({ position: { x: box.width / 2, y: box.height / 2 } });
   await expect(page.locator("#dock .dock-hint")).toContainText("sx is positive right");
 }
+
+test("force-field recipes capture gravity, undo, save and follow analytic drag", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await loadMeasurementParticle(page, { integrator: "RK4" });
+  await page.getByRole("tab", { name: "World", exact: true }).click();
+  await page.getByRole("button", { name: "9.8", exact: true }).click();
+  const open = page.getByRole("button", { name: "Formula guide", exact: true });
+  await open.click();
+  const guide = page.getByRole("dialog", { name: "Force-field formula guide", exact: true });
+  await guide.getByRole("tab", { name: "Recipes", exact: true }).click();
+  const antiGravity = guide.locator(".guide-recipe").filter({ has: page.getByRole("heading", { name: "Anti-gravity", exact: true }) });
+  await expect(antiGravity.locator(".guide-src").last()).toHaveText("m*(9.8)");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "10", exact: true }).click();
+  await open.click();
+  await expect(antiGravity.locator(".guide-src").last()).toHaveText("m*(10)");
+  const addAnti = guide.getByRole("button", { name: "Add Anti-gravity", exact: true });
+  await addAnti.focus();
+  await addAnti.press("Enter");
+  await expect(addAnti).toBeFocused();
+  await page.keyboard.press("Escape");
+  const names = page.locator('#inspector input[aria-label="Force field name"]');
+  await expect(names).toHaveCount(1);
+  await expect(names).toHaveValue("Anti-gravity");
+  await page.keyboard.press("Control+z");
+  await expect(names).toHaveCount(0);
+  await page.keyboard.press("Control+Shift+z");
+  await expect(names).toHaveCount(1);
+  await open.click();
+  await guide.getByRole("button", { name: "Add Quadratic drag", exact: true }).click();
+  const clock = page.getByRole("textbox", { name: "Simulation time in seconds", exact: true });
+  const time = await clock.inputValue();
+  await guide.focus();
+  for (const key of [".", "Control+z", "Delete"]) await page.keyboard.press(key);
+  await expect(guide).toBeVisible();
+  await expect(clock).toHaveValue(time);
+  await page.keyboard.press("Escape");
+  await expect(names).toHaveCount(2);
+  await page.getByRole("tab", { name: "View", exact: true }).click();
+  await page.getByRole("combobox", { name: "Graph shown in the dock", exact: true }).selectOption("Velocity");
+  await page.locator("#canvas").click();
+  for (let i = 0; i < 60; i++) await page.keyboard.press(".");
+  await page.locator("#dock").getByRole("button", { name: "Data", exact: true }).click();
+  const data = page.getByRole("dialog", { name: "Graph data", exact: true });
+  const receiving = page.waitForEvent("download");
+  await data.getByRole("button", { name: "Export CSV", exact: true }).click();
+  const csv = await readFile((await (await receiving).path())!, "utf8");
+  const values = csv.trimEnd().split("\r\n").at(-1)!.split(",").map(Number);
+  expect(values[0]).toBeCloseTo(1, 12);
+  expect(values[1]).toBeCloseTo(20 / 7, 7);
+  expect(values[2]).toBeCloseTo(-12 / 7, 7);
+  expect(values[3]).toBeCloseTo(16 / 7, 7);
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  const library = page.getByRole("dialog", { name: "Library", exact: true });
+  await library.getByRole("tab", { name: "My scenes", exact: true }).click();
+  await library.getByRole("button", { name: "Save current scene", exact: true }).click();
+  const name = library.getByRole("textbox", { name: "Scene name", exact: true });
+  await name.fill("Recipe probe");
+  await name.press("Enter");
+  const downloading = page.waitForEvent("download");
+  await library.getByRole("button", { name: "Download Recipe probe as a .json file", exact: true }).click();
+  const scene = JSON.parse(await readFile((await (await downloading).path())!, "utf8"));
+  expect(scene.settings.gravity).toBe(10);
+  expect(scene.fields).toEqual([
+    { name: "Anti-gravity", fx: "0", fy: "m*(10)", enabled: true },
+    { name: "Quadratic drag", fx: "-0.3*hypot(vx,vy)*vx", fy: "-0.3*hypot(vx,vy)*vy", enabled: true },
+  ]);
+  expect(scene.bodies[0].pos[0]).toBeCloseTo(7 - 4 * Math.log(1.75), 7);
+  expect(scene.bodies[0].pos[1]).toBeCloseTo(-4 + 16 / 3 * Math.log(1.75), 7);
+  await library.getByRole("button", { name: "Load Recipe probe", exact: true }).click();
+  await page.getByRole("tab", { name: "World", exact: true }).click();
+  await expect(names).toHaveCount(2);
+  await expect(names.nth(0)).toHaveValue("Anti-gravity");
+  await expect(names.nth(1)).toHaveValue("Quadratic drag");
+  expect(errors).toEqual([]);
+});
+
+test("force-field recipe formulas fit responsive themes and enlarged text", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await loadMeasurementParticle(page);
+  await page.getByRole("tab", { name: "World", exact: true }).click();
+  await page.getByRole("button", { name: "Formula guide", exact: true }).click();
+  const guide = page.getByRole("dialog", { name: "Force-field formula guide", exact: true });
+  await guide.getByRole("tab", { name: "Recipes", exact: true }).click();
+  for (const layout of ["desktop", "phone", "enlarged", "classic"] as const) {
+    if (layout === "phone") await page.setViewportSize({ width: 390, height: 844 });
+    if (layout === "enlarged") {
+      await page.setViewportSize({ width: 320, height: 844 });
+      await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
+    }
+    if (layout === "classic") {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.evaluate(() => document.documentElement.style.setProperty("--fs", "1"));
+      await page.keyboard.press("Escape");
+      await page.locator("#btn-settings").click();
+      const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+      await settings.getByRole("button", { name: "Void", exact: true }).click();
+      await settings.getByRole("checkbox", { name: "Studio mode", exact: true }).uncheck();
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "Formula guide", exact: true }).click();
+    }
+    await expect(guide.locator(".guide-math[data-latex]")).toHaveCount(0);
+    const quad = guide.locator(".guide-recipe").filter({ has: page.getByRole("heading", { name: "Quadratic drag", exact: true }) });
+    await quad.scrollIntoViewIfNeeded();
+    const geometry = await guide.evaluate(panel => ({
+      panel: panel.scrollWidth <= panel.clientWidth,
+      body: panel.querySelector<HTMLElement>(".guide-body")!.scrollWidth <= panel.querySelector<HTMLElement>(".guide-body")!.clientWidth,
+      cards: [...panel.querySelectorAll<HTMLElement>(".guide-recipe")].every(card => card.scrollWidth <= card.clientWidth),
+      descriptions: [...panel.querySelectorAll<HTMLElement>(".guide-recipe p")].every(text =>
+        getComputedStyle(text).webkitLineClamp === "none" && text.scrollHeight <= text.clientHeight),
+    }));
+    expect(geometry).toEqual({ panel: true, body: true, cards: true, descriptions: true });
+    const math = quad.getByRole("math").first();
+    await math.focus();
+    await expect(math).toBeFocused();
+    const overflows = await math.evaluate(element => element.scrollWidth > element.clientWidth);
+    if (overflows) {
+      // Focus can reveal the right edge of a formula. Start at the left edge
+      // before asking the native arrow key to move through its content.
+      await math.evaluate(element => { element.scrollLeft = 0; });
+      await math.press("ArrowRight");
+      await expect.poll(() => math.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+    }
+    await math.press("Tab");
+    await expect(quad.getByRole("math").nth(1)).toBeFocused();
+    await quad.getByRole("button", { name: "Add Quadratic drag", exact: true }).focus();
+    await expect(quad.getByRole("button", { name: "Add Quadratic drag", exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(guide).toHaveAttribute("aria-modal", "true");
+    const scan = await new AxeBuilder({ page }).include("#formula-guide")
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze();
+    expect(scan.violations).toEqual([]);
+    await page.screenshot({ path: test.info().outputPath(`force-recipes-${layout}.png`) });
+  }
+  await guide.getByRole("tab", { name: "Basics", exact: true }).click();
+  await expect(guide).toContainText("changing world gravity does not change this constant");
+  await guide.getByRole("tab", { name: "Logic", exact: true }).click();
+  await expect(guide).toContainText("0.5 at y = 2 m");
+  expect(errors).toEqual([]);
+});
+
+test("formula guide reference pages remain readable at phone and enlarged text", async ({ page }) => {
+  test.setTimeout(60_000);
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await loadMeasurementParticle(page);
+  await page.getByRole("tab", { name: "World", exact: true }).click();
+  await page.getByRole("button", { name: "Formula guide", exact: true }).click();
+  const guide = page.getByRole("dialog", { name: "Force-field formula guide", exact: true });
+  for (const [layout, width, scale] of [["desktop", 1440, 1], ["phone", 390, 1], ["enlarged", 320, 2]] as const) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.evaluate(value => document.documentElement.style.setProperty("--fs", String(value)), scale);
+    for (const section of ["Basics", "Functions", "Logic", "Math editor"] as const) {
+      await guide.getByRole("tab", { name: section, exact: true }).click();
+      await expect(guide.locator(".guide-math[data-latex]")).toHaveCount(0);
+      const geometry = await guide.evaluate(panel => ({
+        panel: panel.scrollWidth <= panel.clientWidth,
+        body: panel.querySelector<HTMLElement>(".guide-body")!.scrollWidth <= panel.querySelector<HTMLElement>(".guide-body")!.clientWidth,
+        tables: [...panel.querySelectorAll<HTMLElement>(".guide-table")].every(table => table.getBoundingClientRect().right <= innerWidth),
+      }));
+      expect(geometry).toEqual({ panel: true, body: true, tables: true });
+      const scan = await new AxeBuilder({ page }).include("#formula-guide")
+        .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze();
+      expect(scan.violations).toEqual([]);
+      const heading = { Basics: "Operators", Functions: "Powers & growth", Logic: "Smooth alternatives", "Math editor": "Typing math" }[section];
+      await guide.getByRole("heading", { name: heading, exact: true }).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: test.info().outputPath(`guide-${section.replace(" ", "-").toLowerCase()}-${layout}.png`) });
+    }
+  }
+  expect(errors).toEqual([]);
+});
 
 test("recorded graph data exports every graph family and stays fixed during playback", async ({ page }) => {
   const errors: string[] = [];

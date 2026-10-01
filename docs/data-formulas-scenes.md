@@ -707,6 +707,29 @@ rounded display value.
 The formula guide uses the same lazy chunk for static markup. If it cannot
 load, plain source remains visible and a later guide opening can retry. Detached
 guide content is not typeset after loading completes.
+Typeset formula containers are named and keyboard-focusable so long expressions
+can be scrolled. Phone reference rows stack code above its explanation, and
+recipe descriptions are not line-clamped.
+
+### Force-field recipes
+
+The guide resolves each recipe with `recipeSources()` both for its preview and
+when its Add button is activated. Anti-gravity captures the world's current
+uniform gravity as an ordinary numeric `Fy = m*(value)` source. Its saved field
+does not track later gravity edits; users update Fy when changing that setting.
+The language constant `g` stays fixed at 9.81 and existing scenes keep their
+stored sources and meaning. Exponential notation uses the normal text fallback.
+
+Recipe fields add to gravity and every other active force. Setting world gravity
+to zero and disabling other fields and forces isolates the examples. Linear drag
+uses `F = -0.5*v`; quadratic drag uses
+`F = -0.3*hypot(vx,vy)*v`, so its magnitude is proportional to total speed squared
+and its direction opposes velocity in a stationary medium. Both apply forces,
+so acceleration depends on body mass. The spring-to-centre equilibrium is the
+origin only when uniform gravity is zero. The softened gravity well approaches
+inverse-square behaviour far from the origin; the vortex applies torque about
+the origin without applying spin torque to a body's centre. Smooth radial and
+sigmoid weights have gradual transitions rather than exact on/off regions.
 
 ## Preset system
 

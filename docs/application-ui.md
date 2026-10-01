@@ -803,7 +803,16 @@ height is unusually small.
   cannot navigate the live in-memory scene away.
   The Keep it step explains refresh recovery and durable scene saving.
 - **Formula guide:** variables, operators, functions, logic, math-editor help,
-  and recipe cards with explicit `Add <recipe>` buttons.
+  and recipe cards with explicit, undoable `Add <recipe>` buttons. Previews and
+  additions resolve Anti-gravity against the current world setting; the card
+  explains that the captured value needs editing after later gravity changes.
+  The guide distinguishes fixed formula `g`, total-speed drag, other active
+  forces, shifted spring equilibrium and gradual smooth-zone transitions.
+  Typeset reference formulas have named, focusable math containers so overflow
+  remains reachable with keyboard scrolling; component labels scale with text.
+  Recipe descriptions are fully visible, with card columns that fit the body.
+  On phones, reference rows stack each expression above its description to
+  prevent table overflow and preserve a comfortable reading width.
 
 Clicking an overlay backdrop closes it. Modal focus returns to the prior
 element on close. Shortcut handling gives open overlays and the guided tour

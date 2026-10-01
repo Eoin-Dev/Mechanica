@@ -10,7 +10,7 @@ import { Env, ExprError, compileExpr, parseSource } from "../src/core/expr";
 import { astToSource, isMathRenderable, latexToAst, latexToSource,
          sourceToLatex } from "../src/core/mathfmt";
 import { PRESETS } from "../src/scene/presets";
-import { RECIPES } from "../src/ui/guide-recipes";
+import { RECIPES, recipeSources } from "../src/ui/guide-recipes";
 
 /** Environments the equivalence checks sample — off-axis, signed, mixed
  * magnitudes, so precedence mistakes can't hide behind symmetry. */
@@ -286,6 +286,16 @@ describe("shipped content", () => {
     // the two advertised text-only recipes really are text-only
     expect(isMathRenderable("-0.4*m*(y > 2)")).toBe(false);
     expect(isMathRenderable("4 if floor(t) % 2 == 0 else -4")).toBe(false);
+  });
+
+  it("round-trips contextual recipe values exactly and keeps small exponents as text", () => {
+    const antiGravity = RECIPES.find(recipe => recipe.name === "Anti-gravity")!;
+    for (const gravity of [0, 9.8, 9.81, 10, -4.2, 123.45678901234567, 1e-7, -1e-7]) {
+      const { fy } = recipeSources(antiGravity, gravity);
+      expect(() => compileExpr(fy)).not.toThrow();
+      if (isMathRenderable(fy)) expectSameValue(fy, latexToSource(sourceToLatex(fy)));
+      else expect(fy).toContain("e-7");
+    }
   });
 });
 

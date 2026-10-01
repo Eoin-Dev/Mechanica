@@ -12,7 +12,7 @@ import { App } from "../app";
 import { isMathRenderable, sourceToLatex } from "../core/mathfmt";
 import { ForceField } from "../engine/world";
 import { ModalFocus, button, el, isTouch, refreshTabs, wireTabs } from "./dom";
-import { RECIPES } from "./guide-recipes";
+import { RECIPES, recipeSources } from "./guide-recipes";
 import { ICONS } from "./icons";
 
 // ------------------------------------------------------- typeset rendering
@@ -42,7 +42,8 @@ function loadTypeset(): Promise<Typeset> {
 function formula(source: string): HTMLElement {
   const wrap = el("div", { class: "guide-formula" });
   if (isMathRenderable(source)) {
-    const math = el("div", { class: "guide-math", text: source });
+    const math = el("div", { class: "guide-math", text: source,
+      tabindex: "0", role: "math", "aria-label": `Formula: ${source}` });
     math.dataset.latex = sourceToLatex(source);
     wrap.append(math, el("div", { class: "guide-src", text: source }));
   } else {
@@ -180,10 +181,9 @@ export class FormulaGuide {
   // ------------------------------------------------------------------ pages
   private buildBasics(): void {
     this.body.append(
-      para("A force field applies a force, in newtons, to every body on " +
-           "every physics step. Each field is two formulas - Fx and Fy, " +
-           "the force components - re-evaluated for each body, so the " +
-           "variables below describe the body currently being pushed."),
+      para("For each movable body, a force field evaluates two formulas, " +
+           "Fx and Fy, in newtons. They use that body's position, velocity " +
+           "and mass and the current simulation time."),
       para("Because it is a force (F = ma), the same field accelerates a " +
            "light body more than a heavy one. Multiply by m when you want " +
            "every body to accelerate equally."),
@@ -200,7 +200,7 @@ export class FormulaGuide {
         ["pi", "3.14159... (half a turn, in radians)"],
         ["tau", "6.28318... = 2*pi (one full turn)"],
         ["e", "2.71828... (Euler's number)"],
-        ["g", "9.81 (standard gravity, m/s^2)"],
+        ["g", "Fixed at 9.81 m/s^2; changing world gravity does not change this constant"],
       ]),
       heading("Operators"),
       refTable([
@@ -253,6 +253,8 @@ export class FormulaGuide {
                                            "of arguments"],
       ]),
       heading("Worked examples"),
+      example("hypot(vx,vy)", "Speed in m/s: sqrt(vx^2 + vy^2), always " +
+              "non-negative. Use both velocity components for quadratic drag."),
       example("sin(atan2(y, x))", "The y-component of the unit vector " +
               "pointing at the body - handy for direction-only forces."),
       example("min(r, 3)/3", "Ramps from 0 at the origin up to 1 at r = 3, " +
@@ -283,7 +285,7 @@ export class FormulaGuide {
                     "(x > 0) and 5 is 5 or 0"],
         ["not a", "1 when a is zero, else 0"],
       ]),
-      example("5 if y > 2 else -5", "Push up above the line, down below it - " +
+      example("5 if y > 2 else -5", "Push up above the line, down otherwise - " +
               "a hard switch."),
       heading("Cycles and steps"),
       refTable([
@@ -294,10 +296,10 @@ export class FormulaGuide {
       para("A hard switch kicks bodies discontinuously, and it keeps the " +
            "formula out of the typeset editor. These stay smooth - and " +
            "typeset - while doing nearly the same job:"),
-      example("exp(-(r/0.7)^4)", "Nearly 1 inside r = 0.7, nearly 0 " +
-              "outside: a smooth (r < 0.7). The Cyclone preset uses this."),
-      example("1/(1+exp(-10*(y-2)))", "A sigmoid: 0 below y = 2, 1 above, " +
-              "with a soft transition. Raise the 10 to sharpen it."));
+      example("exp(-(r/0.7)^4)", "A soft radial zone: 1 at the origin, " +
+              "1/e at r = 0.7 m, rapidly fading beyond it without a hard cutoff."),
+      example("1/(1+exp(-10*(y-2)))", "A sigmoid: 0.5 at y = 2 m, " +
+              "approaching 0 below and 1 above. Raise the 10 to sharpen the transition."));
   }
 
   private buildMathEditor(): void {
@@ -363,18 +365,23 @@ export class FormulaGuide {
     this.body.append(para(
       "Ready-made fields to drop into the world and take apart. Choose Add " +
       "on a recipe to create it as a new force field (undo removes it); " +
-      "open the World tab to see and edit what arrived."));
+      "open the World tab to see and edit what arrived."), para(
+      "Fields add to world gravity and other forces. Set gravity to 0 and " +
+      "turn off other fields and forces to investigate a recipe on its own. " +
+      "Drag recipes assume a stationary medium."));
     const grid = el("div", { class: "card-grid guide-recipes" });
     for (const r of RECIPES) {
+      const sources = recipeSources(r, this.app.world.gravity);
       const card = el("div", { class: "preset-card guide-recipe" },
         el("h3", { text: r.name }));
       const fx = el("div", { class: "guide-recipe-row" },
-        el("span", { class: "guide-recipe-lbl", text: "Fx" }), formula(r.fx));
+        el("span", { class: "guide-recipe-lbl", text: "Fx" }), formula(sources.fx));
       const fy = el("div", { class: "guide-recipe-row" },
-        el("span", { class: "guide-recipe-lbl", text: "Fy" }), formula(r.fy));
+        el("span", { class: "guide-recipe-lbl", text: "Fy" }), formula(sources.fy));
       const add = button(`Add ${r.name}`, () => {
+        const current = recipeSources(r, this.app.world.gravity);
         this.app.edit(() => {
-          this.app.world.fields.push(new ForceField(r.name, r.fx, r.fy));
+          this.app.world.fields.push(new ForceField(r.name, current.fx, current.fy));
         });
         this.app.toast(`Added force field "${r.name}" - see the World tab`);
         // flash the card border as the in-place cue; restart the
