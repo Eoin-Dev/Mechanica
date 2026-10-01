@@ -500,12 +500,20 @@ the next substep.
 Only bodies with `collides` and at least one movable side can create a body
 pair. The broadphase derives a size split once per world step:
 
-- typical bodies enter a uniform spatial hash whose cell size follows the
+- typical bodies enter a uniform spatial grid whose cell size follows the
   largest small-body diameter;
 - each occupied cell is compared with itself and four forward neighbors, so
   pairs are considered once;
 - unusually large bodies are tested separately so a planet among dust does
   not make every grid cell planet-sized.
+
+Compact cell ranges use a direct row-major lookup table when the occupied
+bounding rectangle needs at most sixteen slots per small body (or 64 slots
+for a tiny scene). Sparse ranges retain open-addressed integer hashing.
+Reused buffers keep allocation bounded by body count. Both paths retain
+first-seen cell and body order, so the lookup choice does not reorder contacts
+or change the sequential impulse solve. Float64 cell identities remain exact
+when small radii put coordinates beyond the signed 32-bit range.
 
 Body-wall detection computes an expanded wall bounding box from the largest
 moving radius before running circle-capsule narrowphase tests. Performance

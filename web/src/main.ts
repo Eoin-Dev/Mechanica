@@ -15,6 +15,7 @@ import { GraphDock, HintBar, Palette, Toolbar, overlayToggles } from "./ui/panel
 import { handleShortcut } from "./ui/shortcuts";
 import { Tour } from "./ui/tour";
 import { Toasts } from "./ui/toasts";
+import { OverloadNotice } from "./ui/overload";
 
 const $ = (id: string): HTMLElement => document.getElementById(id)!;
 
@@ -45,26 +46,8 @@ overlayToggles["help"] = () => help.toggle();
 overlayToggles["settings"] = () => settingsPanel.toggle();
 overlayToggles["formula-guide"] = () => formulaGuide.toggle();
 
-// The warning names which half is short of time, because the advice differs:
-// a heavy solver wants fewer substeps or bodies, a heavy renderer wants fewer
-// trails or a smaller window, and telling someone to cut substeps when the
-// solver was never the problem sends them to fix the wrong thing.
-const overloadEl = $("overload-warning");
-const SLOW_TEXT = {
-  physics: "Slow: physics can't keep up — reduce substeps, iterations or bodies",
-  render: "Slow: drawing can't keep up — try fewer trails, a smaller window, " +
-          "or Performance mode in Settings",
-};
-let lastSlow: string | null = null;
-app.panels = [toolbar, palette, inspector, dock, hintbar, {
-  refresh() {
-    const why = app.slowReason();
-    if (why === lastSlow) return; // no per-frame DOM writes
-    lastSlow = why;
-    overloadEl.hidden = why === null;
-    if (why !== null) overloadEl.textContent = SLOW_TEXT[why];
-  },
-}];
+app.panels = [toolbar, palette, inspector, dock, hintbar,
+  new OverloadNotice(app, $("overload-warning"))];
 
 // A mouse-clicked button keeps focus, so the next global shortcut key flips
 // the browser's :focus-visible heuristic into "keyboard mode" and paints a

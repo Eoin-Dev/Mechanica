@@ -663,7 +663,14 @@ have separate accessible names, and unchanged colour refreshes avoid DOM writes.
   testing, splitter, and contextual gesture hint.
 - **Inspector:** object/world/view editing described above.
 
-`main.ts` adds a lightweight panel for the physics/render overload message.
+`OverloadNotice`, wired by `main.ts`, shows advice for the physics or drawing
+bottleneck in a polite live region. It refreshes when the message changes,
+including a mode change, and hides after overload ends. Normal-mode advice
+names the relevant accuracy/trail or Performance controls; maximum
+Performance advice suggests reducing the scene or drawing area instead.
+The notice uses a themed panel with a warning border and normal text contrast,
+wraps within the canvas at increased text scales, and scrolls if its available
+height is unusually small.
 
 ### Modal overlays
 
@@ -812,7 +819,9 @@ On phones, the inspector becomes a transiently closed drawer with a persistent
 handle; its open/closed state does not overwrite the desktop/tablet visibility
 preference. The toolbar brand becomes visually hidden but remains the level-one
 heading, toolbar content is trimmed/scrollable, and the graph/overlay layout
-adapts. Library and Help headers split across two rows, category controls wrap,
+adapts. The speed editor and readout grow with the text multiplier so the label
+cannot consume the slider track; range controls retain a 24-pixel hit height.
+Library and Help headers split across two rows, category controls wrap,
 Settings font-scale choices use a compact grid, and footer actions wrap rather
 than widening their dialogs. Splitter sizes are clamped both while dragging and
 while sanitizing stored preferences. Application and open-overlay content stay

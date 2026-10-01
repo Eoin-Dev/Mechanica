@@ -159,6 +159,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`preset-invariants.test.ts`](../web/tests/preset-invariants.test.ts) | Catalogue uniqueness/completeness, finite sane structures, pulley-axle ownership invariants, link identity, deterministic builders/steps, and exact save/load continuation. |
 | [`preset-descriptions.test.ts`](../web/tests/preset-descriptions.test.ts) | Educational card claims agree with measured scene properties, including Friction ramp non-rotation/spacing, incline-pulley wall/string/mass geometry, and Trampoline anchor/suspension/ball geometry, and every preset is covered by the description audit. |
 | [`determinism.test.ts`](../web/tests/determinism.test.ts) | Bit-identical repeated runs and independence from performance scheduling for demanding scenes. |
+| [`contact-broadphase.test.ts`](../web/tests/contact-broadphase.test.ts) | Exhaustive pair-oracle comparisons across compact/sparse layouts, negative boundaries, tangency, coincident centres, mixed sizes, exclusions and locked/disabled colliders; exact large cell identities, grid reuse after membership/size/layout changes, non-finite position exclusion, and Performance sleeping wakeups. |
 | [`lifecycle-stress.test.ts`](../web/tests/lifecycle-stress.test.ts) | Continuous create/delete, integrator switching, repeated preset loads, violent reset, and sustained high-body-count consistency without cost drift. |
 | [`operation-fuzz.test.ts`](../web/tests/operation-fuzz.test.ts) | Seeded random application operations, running interleavings, and gestures that outlive deleted/replaced targets. |
 | [`soak.test.ts`](../web/tests/soak.test.ts) | Rewind/undo/history memory bounds, keyframe reclamation, long orbit/pendulum/contact stability, and bounded snapshot size. |
@@ -211,8 +212,10 @@ with the behavior it protects rather than an exact assertion count.
 | [`input-validation.test.ts`](../web/tests/input-validation.test.ts) | Complete decimal/scientific numeric commits, rejected text/number/hex retention and correction, Escape restoration, exact slider endpoints, colour names, and unchanged-swatch DOM writes. |
 | [`mathedit.test.ts`](../web/tests/mathedit.test.ts) | Compiler and conversion rejection retention, correction, Escape, detached and invalid interim upgrade deferral, and usable text fallback when mounted MathLive configuration fails. |
 | [`toasts.test.ts`](../web/tests/toasts.test.ts) | Safe text content, bounded message/timer retention, reading time, hover/focus expiry suspension, explicit dismissal and opener-focus restoration. |
+| [`overload-notice.test.ts`](../web/tests/overload-notice.test.ts) | Bottleneck/mode-specific advice, mode changes while the bottleneck persists, ending overload and avoiding repeated live-region writes. |
 | [`focus-ring.test.ts`](../web/tests/focus-ring.test.ts) | Stylesheet cascade retains keyboard focus visibility and the TypeScript/CSS phone breakpoints agree. |
 | [`shortcuts.test.ts`](../web/tests/shortcuts.test.ts) | Focused-control ownership, modifier edits, tool keys, playback/view commands, modal/tour/Escape precedence, and unusual event targets. |
+| [`shortcuts-dom.test.ts`](../web/tests/shortcuts-dom.test.ts) | Real DOM editable ancestry, empty/plaintext-only/case-insensitive attributes, non-editable islands, nested re-enabled editors, invalid inherited attributes, and authoritative native editability. |
 | [`splitter-drag.test.ts`](../web/tests/splitter-drag.test.ts) | Pointer capture plus keyboard 10/32-pixel steps and Home/End limits, separator orientation/value metadata and reveal-time resynchronization, size direction, min/max clamps, commit behavior, and cancellation for inspector/dock resizing. |
 | [`refresh-culling.test.ts`](../web/tests/refresh-culling.test.ts) | Scrolled controls skip refresh while hidden zero-rect controls remain eligible to reveal themselves. |
 | [`inspector-rebuild.test.ts`](../web/tests/inspector-rebuild.test.ts) | Inspector structure keys, attachment-button focus through unchanged refreshes, pulley-particle radius hiding and clipboard protection, body counts independent from cascading link deletion, semantic tabs/reopen/splitter metadata, desktop visibility persistence, accessible driver removal, Performance-mode solver/trail disabled states and banner copy, and exact delayed-input transactions after intervening simulation. |
@@ -243,7 +246,10 @@ recovery fallback without overwriting named scenes. Search acceptance covers
 desktop Light/Studio, phone, and 320px/200% text, including actual focus, clear,
 transparent inner field styling, filtered loading, and axe scans. Enlarged-text
 phone notifications also verify full wrapping, bounds, focus retention and
-keyboard dismissal.
+keyboard dismissal. Overload notices are checked on desktop and phones across
+base themes, including canvas containment, Light-theme text contrast and axe
+checks at 200% text. These cases also protect a usable speed-slider track and
+24-pixel range hit height when text grows.
 
 | Test file | Protected behavior |
 | --- | --- |

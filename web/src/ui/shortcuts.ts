@@ -40,9 +40,14 @@ function ownsKey(target: EventTarget | null | undefined, key: string): boolean {
                          isContentEditable?: boolean;
                          closest?: (selector: string) => Element | null;
                          getAttribute?: (name: string) => string | null };
-  if (el.isContentEditable || el.closest?.('[contenteditable="true"], [contenteditable=""], [contenteditable="plaintext-only"]')) {
-    return true;
-  }
+  // Native editability includes inheritance and non-editable islands. The
+  // fallback supports DOM implementations without that property: use the
+  // nearest valid attribute, including false, rather than skipping a false
+  // island and accidentally finding its editable ancestor.
+  const editable = typeof el.isContentEditable === "boolean"
+    ? el.isContentEditable
+    : el.closest?.('[contenteditable="true" i], [contenteditable=""], [contenteditable="plaintext-only" i], [contenteditable="false" i]');
+  if (editable === true || (editable && editable.getAttribute("contenteditable")?.toLowerCase() !== "false")) return true;
   const tag = el.tagName;
   // text entry of every kind keeps all of its keys
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "MATH-FIELD" ||

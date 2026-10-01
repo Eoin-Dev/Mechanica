@@ -139,6 +139,52 @@ test("long phone notifications wrap, remain readable, and can be dismissed by ke
   await expect(notice).toHaveCount(0);
 });
 
+for (const layout of [
+  { width: 1440, height: 900, theme: "dark", scale: 1 },
+  { width: 390, height: 844, theme: "void", scale: 1 },
+  { width: 320, height: 844, theme: "light", scale: 2 },
+]) {
+  test(`overload notice fits the canvas at ${layout.width}px and ${layout.scale * 100}% text`, async ({ page }) => {
+    await page.setViewportSize({ width: layout.width, height: layout.height });
+    await skipFirstRunTour(page, { theme: layout.theme, studio_mode: true, inspector_visible: false });
+    await page.goto("/");
+    await page.evaluate(scale => {
+      document.documentElement.style.setProperty("--fs", String(scale));
+      // Exercise the production notice's longest text without relying on
+      // machine-dependent overload timing to make the presentation visible.
+      const notice = document.getElementById("overload-warning")!;
+      notice.textContent = "Drawing is running slowly at maximum Performance speed. Try fewer bodies or a smaller window.";
+      notice.hidden = false;
+    }, layout.scale);
+    const notice = page.locator("#overload-warning");
+    await expect(notice).toBeVisible();
+    const dimensions = await notice.evaluate(root => {
+      const wrap = document.getElementById("canvas-wrap")!.getBoundingClientRect();
+      const bounds = root.getBoundingClientRect();
+      const style = getComputedStyle(root);
+      return {
+        inside: bounds.left >= wrap.left && bounds.right <= wrap.right && bounds.top >= wrap.top && bounds.bottom <= wrap.bottom,
+        fits: root.scrollWidth <= root.clientWidth,
+        fontSize: parseFloat(style.fontSize),
+        textColor: style.color,
+        themeText: getComputedStyle(document.documentElement).getPropertyValue("--text").trim(),
+      };
+    });
+    expect(dimensions.inside).toBe(true);
+    expect(dimensions.fits).toBe(true);
+    expect(dimensions.fontSize).toBe(12 * layout.scale);
+    expect(normalizeCssColor(dimensions.textColor)).toBe(normalizeCssColor(dimensions.themeText));
+    const speed = page.getByRole("slider", { name: "Speed", exact: true });
+    const speedBounds = await speed.boundingBox();
+    expect(speedBounds!.width).toBeGreaterThanOrEqual(64);
+    expect(speedBounds!.height).toBeGreaterThanOrEqual(24);
+    const result = await new AxeBuilder({ page }).disableRules(["meta-viewport"])
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze();
+    expect(result.violations).toEqual([]);
+    await page.screenshot({ path: test.info().outputPath(`overload-${layout.width}.png`) });
+  });
+}
+
 test("boots cleanly and has no unwaived automated WCAG A/AA violations", async ({ page }) => {
   const errors: string[] = [];
   page.on("console", (message) => {

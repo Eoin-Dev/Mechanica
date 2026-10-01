@@ -116,9 +116,11 @@ body {
 
 .brand { font-size: calc(16px * var(--fs, 1)); font-weight: 600; margin-right: 10px; white-space: nowrap; }
 .toolbar-spacer { flex: 1; min-width: 4px; }
-/* Speed control: trim the label and readout so the slider track gets the room. */
+/* Scale the speed editor as a unit so larger labels/readouts cannot consume
+   the whole track. The toolbar remains scrollable on narrow screens. */
+.speed-ctrl { width: calc(200px * var(--fs, 1)); flex: none; }
 .speed-ctrl .row .lbl { width: auto; }
-.speed-ctrl .row .val { width: 48px; }
+.speed-ctrl .row .val { width: calc(48px * var(--fs, 1)); }
 #fps { color: var(--text-faint); font-size: calc(12px * var(--fs, 1)); min-width: 48px; text-align: right; white-space: nowrap; }
 
 /* -------------------------------------------------------------- layout */
@@ -373,7 +375,7 @@ input[type="range"] {
   appearance: none;
   flex: 1;
   min-width: 0;
-  height: 18px;
+  height: 24px;
   background: transparent;
   cursor: pointer;
 }
@@ -877,13 +879,26 @@ button.perf-banner-btn:hover:not(:disabled) {
 .toast-close { flex: none; width: 24px; height: 24px; padding: 4px; border-radius: 5px; }
 #overload-warning {
   position: absolute;
-  top: 10px;
+  top: 12px;
   left: 50%;
   transform: translateX(-50%);
-  color: var(--warn);
+  width: max-content;
+  max-width: min(640px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--warn-edge);
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.2);
+  color: var(--text);
   font-size: calc(12px * var(--fs, 1));
+  line-height: 1.45;
   z-index: 4;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* ------------------------------------------------------------- overlays */
@@ -1783,7 +1798,7 @@ kbd {
 
   /* tighter chrome so the important controls stay on screen */
   #toolbar { gap: 4px; padding: 0 6px; }
-  .speed-ctrl { width: 132px !important; }
+  .speed-ctrl { width: calc(160px * var(--fs, 1)); }
   #hintbar { gap: 8px; padding: 0 8px; }
   :root[data-studio="true"] #inspector.mobile-open {
     top: 50px;

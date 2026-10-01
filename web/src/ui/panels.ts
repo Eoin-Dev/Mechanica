@@ -45,7 +45,7 @@ export class Toolbar implements Panel {
       { icon: ICONS.reset,
         tooltip: "Return the scene to its starting state (Ctrl+R)." })).root);
 
-    const speedWrap = el("div", { class: "speed-ctrl", style: "width:200px;flex:none;" });
+    const speedWrap = el("div", { class: "speed-ctrl" });
     speedWrap.append(g.add(slider("Speed", () => app.speed,
       (v) => { app.speed = v; }, 0.01, 16.0,
       { unit: "x", log: true, logBlend: 0.6, fmt: (v) => v.toFixed(2),

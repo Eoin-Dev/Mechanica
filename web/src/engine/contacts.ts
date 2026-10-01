@@ -1,11 +1,12 @@
 /** Collision detection and response.
  *
- * Broadphase: uniform spatial hash rebuilt per substep. Bodies of typical
+ * Broadphase: uniform spatial grid rebuilt per substep. Bodies of typical
  * size are binned into cells (one cell each, cell = largest small-body
  * diameter) and pairs are found by scanning each cell against itself and its
  * four forward neighbours, so no pair is tested twice. The few bodies much
  * larger than the median (planets among dust, the Brownian grain) would
- * bloat the cells, so they are tested by brute force instead.
+ * bloat the cells, so they are tested by brute force instead. Compact cell
+ * ranges use direct lookup; sparse ranges use integer hashing.
  *
  * Narrowphase: circle-circle and circle-capsule (wall) tests.
  *
@@ -17,10 +18,6 @@
  * Penetration is removed afterwards by split-impulse positional projection,
  * which does not change velocities and therefore cannot inject kinetic
  * energy.
- *
- * The desktop version had a second, numpy-vectorized candidate search for
- * dense scenes; JIT-compiled JS loops make the scalar path fast enough that
- * the engine needs only one code path here.
  */
 import { Body, Wall } from "./body";
 
@@ -734,16 +731,12 @@ function placed(b: Body): boolean {
 const OFF_X = [1, 1, 0, -1];
 const OFF_Y = [0, 1, 1, 1];
 
-/** Uniform spatial hash over the small bodies, in flat integer arrays.
+/** Uniform spatial grid over the small bodies, in reusable flat arrays.
  *
- * Replaces a `Map` keyed by `"gx,gy"` strings. That map was the single
- * most expensive thing in the densest scenes: the 200-particle gas built
- * 200 key strings and then did ~750 string-hashed lookups (four
- * neighbours per occupied cell) at roughly 120 ns each, which came to
- * 0.12 ms per substep to discover 182 candidate pairs and two actual
- * contacts. Integer hashing with open addressing does the same work
- * without allocating anything at all, and every buffer here is reused
- * between calls.
+ * Compact cell ranges use direct row-major lookup when their rectangle has
+ * at most sixteen slots per body (with a minimum of 64). Sparse ranges use
+ * an integer hash with open addressing. Both avoid coordinate strings and
+ * reuse buffers.
  *
  * Cell coordinates are kept as float64 rather than int32 so the identity
  * check is exact even for the enormous indices a tiny body's cell size can
@@ -762,14 +755,22 @@ class SpatialHash {
   cellStart = new Int32Array(0); // first slot of the cell's run in `items`
   cellEnd = new Int32Array(0);   // one past its last slot
   items = new Int32Array(0);     // body indices, grouped by cell
-  private table = new Int32Array(0); // hash slot -> cell index, -1 empty
+  private table = new Int32Array(0); // lookup slot -> cell index, -1 empty
   private mask = 0;
   private bodyCell = new Int32Array(0);
+  private bodyGx = new Float64Array(0);
+  private bodyGy = new Float64Array(0);
+  private denseWidth = 0;
+  private denseHeight = 0;
+  private denseMinX = 0;
+  private denseMinY = 0;
 
   private ensure(n: number): void {
     if (this.bodyCell.length >= n && this.mask + 1 >= 2 * n) return;
     const cap = Math.max(32, 1 << (32 - Math.clz32(Math.max(1, n) - 1)));
     this.bodyCell = new Int32Array(cap);
+    this.bodyGx = new Float64Array(cap);
+    this.bodyGy = new Float64Array(cap);
     this.items = new Int32Array(cap);
     this.cellGx = new Float64Array(cap);
     this.cellGy = new Float64Array(cap);
@@ -782,6 +783,12 @@ class SpatialHash {
 
   /** Cell index holding (gx, gy), or -1. */
   find(gx: number, gy: number): number {
+    if (this.denseWidth > 0) {
+      const x = gx - this.denseMinX;
+      const y = gy - this.denseMinY;
+      if (x < 0 || y < 0 || x >= this.denseWidth || y >= this.denseHeight) return -1;
+      return this.table[x + y * this.denseWidth];
+    }
     let h = (Math.imul(gx | 0, 73856093) ^ Math.imul(gy | 0, 19349663)) & this.mask;
     const table = this.table;
     for (;;) {
@@ -796,26 +803,60 @@ class SpatialHash {
   build(small: Body[], invCell: number): void {
     const n = small.length;
     this.ensure(n);
-    const table = this.table;
-    table.fill(-1);
     const bodyCell = this.bodyCell;
+    const bodyGx = this.bodyGx;
+    const bodyGy = this.bodyGy;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const px = small[i].pos.x;
+      const py = small[i].pos.y;
+      const gx = Math.floor(px * invCell);
+      const gy = Math.floor(py * invCell);
+      if (!Number.isFinite(gx) || !Number.isFinite(gy)) {
+        bodyCell[i] = -1;
+        continue;
+      }
+      bodyCell[i] = 0;
+      bodyGx[i] = gx;
+      bodyGy[i] = gy;
+      if (gx < minX) minX = gx;
+      if (gy < minY) minY = gy;
+      if (gx > maxX) maxX = gx;
+      if (gy > maxY) maxY = gy;
+    }
+    const width = maxX - minX + 1;
+    const height = maxY - minY + 1;
+    const area = width * height;
+    // A compact table avoids hashing four neighbours per occupied cell.
+    // Sparse or enormous ranges retain the hash; allocation stays linear
+    // in the body count and both paths keep first-seen visitation order.
+    const dense = Number.isSafeInteger(minX) && Number.isSafeInteger(minY) &&
+      Number.isSafeInteger(maxX) && Number.isSafeInteger(maxY) &&
+      Number.isSafeInteger(width) && Number.isSafeInteger(height) &&
+      area > 0 && area <= Math.max(64, n * 16);
+    if (dense && this.table.length < area) {
+      let slots = this.table.length;
+      while (slots < area) slots *= 2;
+      this.table = new Int32Array(slots);
+    }
+    this.denseWidth = dense ? width : 0;
+    this.denseHeight = dense ? height : 0;
+    this.denseMinX = minX;
+    this.denseMinY = minY;
+    const table = this.table;
+    table.fill(-1, 0, dense ? area : this.mask + 1);
     const cellGx = this.cellGx;
     const cellGy = this.cellGy;
     const cellEnd = this.cellEnd;
     let cells = 0;
     for (let i = 0; i < n; i++) {
-      const b = small[i];
-      const px = b.pos.x;
-      const py = b.pos.y;
-      if (!Number.isFinite(px) || !Number.isFinite(py)) {
-        bodyCell[i] = -1;
-        continue;
-      }
-      const gx = Math.floor(px * invCell);
-      const gy = Math.floor(py * invCell);
-      let h = (Math.imul(gx | 0, 73856093) ^ Math.imul(gy | 0, 19349663)) & this.mask;
+      if (bodyCell[i] < 0) continue;
+      const gx = bodyGx[i];
+      const gy = bodyGy[i];
+      let h = dense ? gx - minX + (gy - minY) * width
+        : (Math.imul(gx | 0, 73856093) ^ Math.imul(gy | 0, 19349663)) & this.mask;
       let c = table[h];
-      while (c !== -1 && (cellGx[c] !== gx || cellGy[c] !== gy)) {
+      while (!dense && c !== -1 && (cellGx[c] !== gx || cellGy[c] !== gy)) {
         h = (h + 1) & this.mask;
         c = table[h];
       }
@@ -846,7 +887,7 @@ class SpatialHash {
   }
 }
 
-// One hash reused for the whole session. Contact detection is never
+// One grid reused for the whole session. Contact detection is never
 // re-entered (no workers, no recursion), so a module-level instance is
 // safe and keeps every buffer warm across frames.
 const GRID = new SpatialHash();
