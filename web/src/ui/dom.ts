@@ -858,7 +858,7 @@ export function colourEdit(label: string, get: () => readonly number[],
                             "aria-label": `${label} hex colour`,
                             spellcheck: "false", maxlength: "7",
                             title: "Type or paste a hex colour" });
-  const row = el("div", { class: "row" },
+  const row = el("div", { class: "row colour-row" },
                  el("span", { class: "lbl", text: label }), input, hex);
   if (opts.tooltip) row.title = opts.tooltip;
 
@@ -927,6 +927,11 @@ export function colourEdit(label: string, get: () => readonly number[],
   const refresh = (): void => {
     const cur = rgbToHex(get());
     if (input.value !== cur) input.value = cur;
+    // Some native colour controls show their value as text. Keep the same
+    // visible swatch there while retaining the platform picker and its label.
+    if (input.style.getPropertyValue("--picked-colour") !== cur) {
+      input.style.setProperty("--picked-colour", cur);
+    }
     if (!typing && !invalid && hex.value !== cur) {
       hex.value = cur;
       hex.classList.remove("error");

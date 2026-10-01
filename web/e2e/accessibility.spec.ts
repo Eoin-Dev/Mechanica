@@ -38,6 +38,176 @@ async function loadMeasurementParticle(page: Page, settings: Record<string, unkn
   await expect(page.locator("#dock .dock-hint")).toContainText("sx is positive right");
 }
 
+test("shared Inspector colour and select controls fit themes and enlarged text", async ({ page }, testInfo) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await loadMeasurementParticle(page);
+  const inspector = page.locator("#inspector-panel");
+  let previousWidth = 1440;
+  for (const [layout, width, scale, theme, studio] of [
+    ["desktop-light", 1440, 1, "light", true],
+    ["desktop-dark", 1440, 1, "dark", true],
+    ["phone-enlarged", 390, 2, "light", true],
+    ["narrow-classic", 320, 2, "dark", false],
+  ] as const) {
+    await page.locator("#btn-settings").click();
+    const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+    await settings.getByRole("button", { name: theme === "light" ? "Light" : "Dark", exact: true }).click();
+    await settings.getByRole("checkbox", { name: "Studio mode", exact: true }).setChecked(studio);
+    await page.keyboard.press("Escape");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    await expect(page.locator("html")).toHaveAttribute("data-studio", String(studio));
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(scale => document.documentElement.style.setProperty("--fs", String(scale)), scale);
+    const open = page.getByRole("button", { name: "Open Inspector", exact: true });
+    if (width <= 760 && previousWidth > 760) await expect(open).toBeVisible();
+    if (await open.isVisible()) await open.click();
+    previousWidth = width;
+    await page.getByRole("tab", { name: "Selection", exact: true }).click();
+    const hex = inspector.getByRole("textbox", { name: "Colour hex colour", exact: true });
+    await hex.fill("#1a7ab2");
+    await hex.press("Enter");
+    const well = inspector.locator(".colour-well");
+    await expect(well).toHaveValue("#1a7ab2");
+    await well.scrollIntoViewIfNeeded();
+    const colour = await inspector.locator(".colour-row").evaluate(row => {
+      const label = row.querySelector(".lbl")!.getBoundingClientRect();
+      const well = row.querySelector<HTMLInputElement>(".colour-well")!;
+      const swatch = well.getBoundingClientRect();
+      const hex = row.querySelector(".colour-hex")!.getBoundingClientRect();
+      return { labelBottom: label.bottom, swatchTop: swatch.top, swatchRight: swatch.right,
+        hexLeft: hex.left, hexRight: hex.right, rowRight: row.getBoundingClientRect().right,
+        background: getComputedStyle(well).backgroundColor };
+    });
+    expect(colour.swatchTop).toBeGreaterThanOrEqual(colour.labelBottom);
+    expect(colour.hexLeft).toBeGreaterThanOrEqual(colour.swatchRight);
+    expect(colour.hexRight).toBeLessThanOrEqual(colour.rowRight + 1);
+    expect(normalizeCssColor(colour.background)).toBe("rgb(26,122,178)");
+    await inspector.screenshot({ path: testInfo.outputPath(`inspector-colour-${layout}.png`) });
+    const slope = inspector.getByRole("combobox", { name: "Resolve forces relative to a slope", exact: true });
+    await slope.scrollIntoViewIfNeeded();
+    const control = await slope.evaluate(select => {
+      const label = select.parentElement!.querySelector(".lbl")!.getBoundingClientRect();
+      const box = select.getBoundingClientRect();
+      return { font: parseFloat(getComputedStyle(select).fontSize), top: box.top,
+        labelBottom: label.bottom, right: box.right,
+        parentRight: select.parentElement!.getBoundingClientRect().right };
+    });
+    expect(control.font).toBeCloseTo(12 * scale, 1);
+    expect(control.top).toBeGreaterThanOrEqual(control.labelBottom);
+    expect(control.right).toBeLessThanOrEqual(control.parentRight + 1);
+    expect(await inspector.evaluate(panel => panel.scrollWidth <= panel.clientWidth + 1)).toBe(true);
+    if (scale === 2) {
+      const sliders = await inspector.locator('.row:has(> input[type="range"])').evaluateAll(rows => {
+        const probe = document.createElement("canvas").getContext("2d")!;
+        return rows.map(row => {
+          const labelNode = row.querySelector<HTMLElement>(".lbl")!;
+          const label = labelNode.getBoundingClientRect();
+          const track = row.querySelector('input[type="range"]')!.getBoundingClientRect();
+          const value = row.querySelector<HTMLInputElement>(".val")!;
+          const labelCss = getComputedStyle(labelNode);
+          probe.font = `${labelCss.fontSize} ${labelCss.fontFamily}`;
+          const labelFits = probe.measureText(labelNode.textContent!).width <= labelNode.clientWidth + 1;
+          const css = getComputedStyle(value);
+          probe.font = `${css.fontSize} ${css.fontFamily}`;
+          return { labelBottom: label.bottom, trackTop: track.top,
+            labelFits,
+            textWidth: probe.measureText(value.value).width,
+            available: value.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight) };
+        });
+      });
+      expect(sliders.length).toBeGreaterThan(0);
+      for (const slider of sliders) {
+        expect(slider.labelFits).toBe(true);
+        expect(slider.trackTop).toBeGreaterThanOrEqual(slider.labelBottom);
+        expect(slider.textWidth).toBeLessThanOrEqual(slider.available + 1);
+      }
+      const materialsFit = await inspector.locator(".btn-grid > button").evaluateAll(buttons => {
+        const probe = document.createElement("canvas").getContext("2d")!;
+        return buttons.every(button => {
+          const css = getComputedStyle(button);
+          probe.font = `${css.fontSize} ${css.fontFamily}`;
+          return probe.measureText(button.textContent!).width <=
+            button.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight) + 1;
+        });
+      });
+      expect(materialsFit).toBe(true);
+    }
+    await inspector.screenshot({ path: testInfo.outputPath(`inspector-select-${layout}.png`) });
+    await page.getByRole("tab", { name: "View", exact: true }).click();
+    const graph = inspector.getByRole("combobox", { name: "Graph shown in the dock", exact: true });
+    await graph.selectOption("Velocity");
+    await graph.focus();
+    await expect(graph).toBeFocused();
+    await expect(page.locator("#dock .dock-hint")).toContainText("right/up are positive");
+    expect(await inspector.evaluate(panel => panel.scrollWidth <= panel.clientWidth + 1)).toBe(true);
+  }
+  expect(errors).toEqual([]);
+});
+
+test("pulley assembly navigation edits both masses and works with keyboard and phone layouts", async ({ page }, testInfo) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await skipFirstRunTour(page, { theme: "light", studio_mode: true });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Remove everything from the scene. Ctrl+Z restores it.", exact: true }).click();
+  await page.getByRole("button", { name: /Add pulley \(P\)/ }).click();
+  const canvas = page.locator("#canvas");
+  const box = (await canvas.boundingBox())!;
+  await canvas.click({ position: { x: box.width / 2, y: box.height * 0.3 } });
+  const inspector = page.locator("#inspector-panel");
+  await expect(inspector.locator(".pulley-part")).toHaveCount(4);
+  await expect(inspector.getByRole("slider", { name: "String length", exact: true })).toBeVisible();
+  await inspector.getByRole("button", { name: /^Select particle A:/ }).click();
+  await inspector.getByRole("textbox", { name: "Name", exact: true }).fill("Block A — mechanics investigation 📐");
+  await inspector.getByRole("textbox", { name: "Name", exact: true }).press("Enter");
+  await inspector.getByRole("textbox", { name: "Mass (type an exact value)", exact: true }).fill("2");
+  await inspector.getByRole("textbox", { name: "Mass (type an exact value)", exact: true }).press("Enter");
+  await inspector.getByRole("button", { name: /^Select particle B:/ }).click();
+  await inspector.getByRole("textbox", { name: "Name", exact: true }).fill("Block B");
+  await inspector.getByRole("textbox", { name: "Name", exact: true }).press("Enter");
+  await inspector.getByRole("textbox", { name: "Mass (type an exact value)", exact: true }).fill("3");
+  await inspector.getByRole("textbox", { name: "Mass (type an exact value)", exact: true }).press("Enter");
+  await inspector.getByRole("button", { name: "Select pulley wheel", exact: true }).click();
+  await expect(inspector).toContainText("Pulley wheel");
+  const partA = inspector.getByRole("button", { name: "Select particle A: Block A — mechanics investigation 📐", exact: true });
+  await expect(partA).toContainText("2 kg");
+  await expect(inspector.getByRole("button", { name: "Select particle B: Block B", exact: true })).toContainText("3 kg");
+  await partA.focus();
+  await partA.press("Enter");
+  await expect(inspector).toBeFocused();
+  await expect(inspector.getByRole("textbox", { name: "Mass (type an exact value)", exact: true })).toHaveValue("2 kg");
+  await inspector.getByRole("button", { name: "Select pulley string", exact: true }).click();
+  let previousWidth = 1440;
+  for (const [layout, width, scale] of [["desktop", 1440, 1], ["phone", 390, 1], ["enlarged", 320, 2]] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(scale => document.documentElement.style.setProperty("--fs", String(scale)), scale);
+    const open = page.getByRole("button", { name: "Open Inspector", exact: true });
+    if (width <= 760 && previousWidth > 760) await expect(open).toBeVisible();
+    if (await open.isVisible()) await open.click();
+    previousWidth = width;
+    const parts = inspector.locator(".pulley-part");
+    await parts.first().scrollIntoViewIfNeeded();
+    const bounds = await parts.evaluateAll(rows => rows.map(row => {
+      const parent = row.parentElement!.getBoundingClientRect();
+      const box = row.getBoundingClientRect();
+      return { right: box.right, parentRight: parent.right, scroll: row.scrollWidth, client: row.clientWidth };
+    }));
+    for (const bound of bounds) {
+      expect(bound.right).toBeLessThanOrEqual(bound.parentRight + 1);
+      expect(bound.scroll).toBeLessThanOrEqual(bound.client + 1);
+    }
+    await inspector.screenshot({ path: testInfo.outputPath(`pulley-assembly-${layout}.png`) });
+    await inspector.getByRole("button", { name: /^Select particle B:/ }).click();
+    await expect(inspector.getByRole("textbox", { name: "Mass (type an exact value)", exact: true })).toHaveValue("3 kg");
+    await inspector.getByRole("button", { name: "Select pulley string", exact: true }).click();
+  }
+  const axe = await new AxeBuilder({ page }).include("#inspector").withTags(["wcag2a", "wcag2aa"]).analyze();
+  expect(axe.violations).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
 test("free-body diagrams use one interval and retain their view choice through undo", async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -287,6 +457,9 @@ test("recorded graph data exports every graph family and stays fixed during play
   const dataButton = dock.getByRole("button", { name: "Data", exact: true });
   const dialog = page.getByRole("dialog", { name: "Graph data", exact: true });
   const clock = page.getByRole("textbox", { name: "Simulation time in seconds", exact: true });
+  // The throttled clock must catch up with the twenty exact single steps
+  // before its value becomes the modal shortcut-isolation baseline.
+  await expect(clock).toHaveValue("0.33");
   for (const [mode, file, values] of [
     ["Energy", "energy", [25, 0, 25]],
     ["Mom.", "momentum", [10, -6, 8, 0]],
@@ -1283,7 +1456,7 @@ test("pulley preset and tool expose a complete editable-string assembly", async 
   await expect(page.locator("#status-text")).toContainText("2 pulleys");
   await expect(page.locator("#status-text")).toContainText("2 links");
   await expect(page.locator("#inspector-panel")).toContainText("Pulley string (inelastic)");
-  await expect(page.getByText("Nat. len", { exact: true })).toBeVisible();
+  await expect(page.getByText("String length", { exact: true })).toBeVisible();
   const tensionVectors = page.getByRole("checkbox", { name: "Tension vectors" });
   await expect(tensionVectors).toBeVisible();
   await tensionVectors.check();

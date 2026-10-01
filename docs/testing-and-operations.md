@@ -234,7 +234,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`shortcuts-dom.test.ts`](../web/tests/shortcuts-dom.test.ts) | Real DOM editable ancestry, empty/plaintext-only/case-insensitive attributes, non-editable islands, nested re-enabled editors, invalid inherited attributes, and authoritative native editability. |
 | [`splitter-drag.test.ts`](../web/tests/splitter-drag.test.ts) | Pointer capture plus keyboard 10/32-pixel steps and Home/End limits, separator orientation/value metadata and reveal-time resynchronization, size direction, min/max clamps, commit behavior, and cancellation for inspector/dock resizing. |
 | [`refresh-culling.test.ts`](../web/tests/refresh-culling.test.ts) | Scrolled controls skip refresh while hidden zero-rect controls remain eligible to reveal themselves. |
-| [`inspector-rebuild.test.ts`](../web/tests/inspector-rebuild.test.ts) | Inspector structure keys, retained View graph selector and focus across graph changes, attachment-button focus through unchanged refreshes, pulley-particle radius hiding and clipboard protection, body counts independent from cascading link deletion, semantic tabs/reopen/splitter metadata, desktop visibility persistence, accessible driver removal, Performance-mode solver/trail disabled states and banner copy, and exact delayed-input transactions after intervening simulation. |
+| [`inspector-rebuild.test.ts`](../web/tests/inspector-rebuild.test.ts) | Inspector structure keys, retained View graph selector and focus across graph changes, attachment-button focus through unchanged refreshes, pulley-particle radius hiding and clipboard protection, navigation from every pulley part with retained names/masses/focus and force intervals, assembly removal under a selected particle, body counts independent from cascading link deletion, semantic tabs/reopen/splitter metadata, desktop visibility persistence, accessible driver removal, Performance-mode solver/trail disabled states and banner copy, and exact delayed-input transactions after intervening simulation. |
 | [`tour.test.ts`](../web/tests/tour.test.ts) | Tour construction, first-visit behavior, progress/finish, settings persistence, and cleanup. |
 | [`tour-spotlight.test.ts`](../web/tests/tour-spotlight.test.ts) | Multi-target spotlight tiling, clipping, rings, viewport placement, and responsive target geometry. |
 | [`panel-accessibility.test.ts`](../web/tests/panel-accessibility.test.ts) | Toolbar/graph icon names, play/cancel-seek state labels, clock progress and aria-busy, retained seeking drafts, unchanged-clock write and seek suppression, Escape cancellation, detached graph zoom at the retained boundary, graph legend focus/node retention, accessible current values/units/timestamps, series-scoped visibility and contextual empty-canvas instructions, separated grammatical status counts with internal trail/subdivision indicators absent, revealed/dynamically bounded graph-splitter metadata, retained-graph palette invalidation, and shortcut badges excluded from name computation. |
@@ -284,6 +284,12 @@ A DPR-2 scene-import case checks visible tiny-particle pixels and glyph-copy
 use in the production app, then zooms in and verifies the vector fallback.
 The corresponding unit suite checks exact geometry and resource bounds;
 performance measurements remain outside timing-sensitive acceptance tests.
+Inspector acceptance navigates every pulley part through its actual controls,
+edits both particle names/masses, checks keyboard focus and enlarged phone
+containment, and scans its final accessibility state. Shared colour/select
+checks edit a real colour and choose a graph in Light/Dark Studio and classic
+presentation, measuring label/control separation and scaled fonts at desktop,
+phone and 320-CSS-pixel/200%-text widths. Captures accompany those measurements.
 Another production case holds real file reads, closes the Library, clears the
 scene and starts a new import. Releasing the old read must preserve the cleared
 scene and the new action's busy state; releasing the new read must load only

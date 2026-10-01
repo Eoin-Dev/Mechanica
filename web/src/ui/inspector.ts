@@ -12,7 +12,7 @@ import { PlaybackEventKind, analysePulley, forceLedger } from "../education/anal
 import { Selectable } from "../render/draw";
 import { isMathRenderable } from "../core/mathfmt";
 import { INSPECTOR_W_MAX, INSPECTOR_W_MIN, PHONE_QUERY, RefreshGroup, button,
-         checkbox, colourEdit, countNoun, el, fmt3dp, halfRow, isPhone, isTouch,
+         checkbox, colourEdit, countNoun, el, fmt3dp, fmt3g, halfRow, isPhone, isTouch,
          numEdit, onMediaChange, pluralNoun, refreshTabs, section, segmented,
          slider, splitterDrag, textEdit, wireTabs } from "./dom";
 import { ICONS } from "./icons";
@@ -135,6 +135,7 @@ export class Inspector implements Panel {
       if (this.tab === "View") return;
       const target = event.target instanceof Element ? event.target : null;
       if (target === null || target.closest("button") === null) return;
+      if (target.closest("[data-inspector-navigation]") !== null) return;
       app.beginEdit();
       // Mutation buttons synchronously commit in their own handler. A tab,
       // collapse or guide button does not; clear that speculative boundary
@@ -211,10 +212,9 @@ export class Inspector implements Panel {
       decreaseKeys: ["ArrowRight"],
     });
 
-    app.onSelectionChange = () => {
-      if (this.tab === "Selection") this.markDirty();
-      else this.refreshStructure();
-    };
+    // Commits also notify this callback. An ordinary value edit must not
+    // detach the next field while the user is already typing into it.
+    app.onSelectionChange = () => this.refreshStructure();
     app.onWorldReplaced = () => this.markDirty();
 
     // Phones: the panel becomes a slide-over drawer. It starts closed, and
@@ -331,7 +331,17 @@ export class Inspector implements Panel {
       inventory = `:${bodies}:${anchors}:${app.world.walls.length}:` +
                   `${pulleys}:${springs}:${rods}`;
     }
-    return `sel:${ids}:${drivers}:w${app.world.walls.length}${inventory}`;
+    let pulleyMembership = "";
+    let bodyRole = "";
+    if (sel.length === 1 && sel[0] instanceof Body) {
+      const body = sel[0];
+      bodyRole = `${body.isAnchor}:${body.isPulley}:${body.isPivot}:${body.rodAttachmentId}`;
+      pulleyMembership = app.world.links.filter((link) =>
+        link instanceof PulleyLink &&
+        (link.a === body || link.b === body || link.pulley === body))
+        .map((link) => link.id).join(",");
+    }
+    return `sel:${ids}:${drivers}:w${app.world.walls.length}${inventory}:p${pulleyMembership}:${bodyRole}`;
   }
 
   private refreshStructure(): void {
@@ -531,6 +541,11 @@ export class Inspector implements Panel {
 
     this.buildParticleAnalysis(b);
     this.buildRodAttachment(b);
+    for (const link of app.world.links) {
+      if (link instanceof PulleyLink && (link.a === b || link.b === b)) {
+        this.buildPulleyAssembly(link);
+      }
+    }
 
     const drv = this.app.world.drivers.find((d) => d.bodyId === b.id);
     this.sub("Driving force");
@@ -576,7 +591,7 @@ export class Inspector implements Panel {
     } });
 
     const slope = el("select", { "aria-label": "Resolve forces relative to a slope" });
-    slope.append(el("option", { value: "", text: "No slope components" }));
+    slope.append(el("option", { value: "", text: "No slope selected" }));
     for (const wall of app.world.walls) {
       slope.append(el("option", { value: String(wall.id), text: wall.name }));
     }
@@ -882,7 +897,7 @@ export class Inspector implements Panel {
       const pf = pulleyStrings[0];
       this.typeGroup(pluralNoun(pulleyStrings.length, "Pulley string"),
                      pulleyStrings.length, "pulley");
-      this.add(slider("Nat. len", () => pf.length,
+      this.add(slider("String length", () => pf.length,
         (v) => pulleyStrings.forEach((p) => { p.length = v; }), 0.01, 100.0,
         { unit: "m", log: true, onCommit: this.commit,
           tooltip: "Total inextensible string length: both straight legs " +
@@ -1037,7 +1052,7 @@ export class Inspector implements Panel {
     if (link instanceof PulleyLink) {
       this.body.append(el("div", { text: "Pulley string (inelastic)",
         style: "font-weight:600;margin-bottom:6px" }));
-      this.add(slider("Nat. len", () => link.length, (v) => { link.length = v; },
+      this.add(slider("String length", () => link.length, (v) => { link.length = v; },
         0.01, 100.0, { unit: "m", log: true, onCommit: this.commit,
           tooltip: "Total length of both legs and the wrapped section. The " +
                    "string is rigid in tension and free when slack." }));
@@ -1045,6 +1060,7 @@ export class Inspector implements Panel {
         text: "The wheel is fixed and non-colliding. A mounted wheel follows " +
               "its wall endpoint; both particles remain ordinary colliding " +
               "bodies and may slide or swing freely." }));
+      this.buildPulleyAssembly(link);
     } else if (link instanceof SpringLink) {
       const isString = link.tensionOnly;
       this.body.append(el("div", { text: isString ? "String (elastic)" : "Spring",
@@ -1142,6 +1158,7 @@ export class Inspector implements Panel {
     const link = this.app.world.links.find((candidate) =>
       candidate instanceof PulleyLink && candidate.pulley === this.app.selection[0]);
     if (link instanceof PulleyLink) {
+      this.buildPulleyAssembly(link);
       this.sub("Analysis");
       this.addTensionToggle([link], "Show four equal-tension force vectors: " +
         "two on the particles and two on the pulley contacts.");
@@ -1159,6 +1176,48 @@ export class Inspector implements Panel {
     this.sub("Actions");
     this.add(button("Delete wheel", () => this.app.controller.deleteSelection(),
       { icon: ICONS.trash, style: "danger", class: "inspector-action" }));
+  }
+
+  /** Retained navigation between the wheel, string and both editable masses. */
+  private buildPulleyAssembly(link: PulleyLink): void {
+    this.sub("Pulley assembly");
+    const group = el("div", { class: "pulley-assembly", role: "group",
+      "aria-label": "Pulley assembly", "data-inspector-navigation": "" });
+    const parts: Array<{ target: Selectable; label: () => string; detail: () => string;
+                        name: () => string }> = [
+      { target: link.a, label: () => `Particle A · ${link.a.name}`,
+        detail: () => `${fmt3g(link.a.mass)} kg`, name: () => `particle A: ${link.a.name}` },
+      { target: link.b, label: () => `Particle B · ${link.b.name}`,
+        detail: () => `${fmt3g(link.b.mass)} kg`, name: () => `particle B: ${link.b.name}` },
+      { target: link.pulley, label: () => "Wheel", detail: () => "Fixed axle",
+        name: () => "pulley wheel" },
+      { target: link, label: () => "String", detail: () => `${fmt3g(link.length)} m`,
+        name: () => "pulley string" },
+    ];
+    for (const part of parts) {
+      const title = el("span", { class: "pulley-part-label" });
+      const detail = el("span", { class: "pulley-part-detail" });
+      const row = el("button", { type: "button", class: "pulley-part" }, title, detail);
+      const current = this.app.selection[0] === part.target;
+      row.disabled = current;
+      if (current) row.setAttribute("aria-current", "true");
+      row.addEventListener("click", () => {
+        this.app.setSelection([part.target]);
+        this.refresh();
+        this.body.scrollTop = 0;
+        this.body.focus({ preventScroll: true });
+      });
+      group.append(row);
+      this.group.add({ root: row, refresh: () => {
+        const label = part.label();
+        const value = part.detail();
+        const name = `Select ${part.name()}`;
+        if (title.textContent !== label) title.textContent = label;
+        if (detail.textContent !== value) detail.textContent = value;
+        if (row.getAttribute("aria-label") !== name) row.setAttribute("aria-label", name);
+      } });
+    }
+    this.body.append(group);
   }
 
   private addTensionToggle(links: Array<SpringLink | DistanceLink | PulleyLink>,

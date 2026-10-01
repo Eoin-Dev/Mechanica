@@ -325,10 +325,12 @@ treated as hidden rather than scrolled away, because some controls must refresh
 themselves to become visible again.
 
 The inspector separately tracks a structure key. It rebuilds its DOM only when
-the active tab, selection types/IDs, world structure, field/driver structure,
-or responsive layout requires it. Ordinary changing values are handled by
-control refreshes. `App.onSelectionChange` and `App.onWorldReplaced` notify it
-when a structural check is needed.
+the active tab, selection types/IDs, body roles and attachment/pulley ownership,
+world structure, field/driver structure, or responsive layout requires it.
+`App.onSelectionChange` checks that key synchronously, including notifications
+from ordinary value commits, retaining controls when it is unchanged.
+`App.onWorldReplaced` explicitly invalidates controls that hold the replaced
+object references. Ordinary changing values refresh within retained nodes.
 
 ## World replacement protocol
 

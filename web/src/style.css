@@ -482,7 +482,12 @@ label.checkbox.disabled input { cursor: default; }
   stroke-linejoin: round;
 }
 
-.inspector-body { flex: 1; overflow-y: auto; padding: 10px 12px 20px; }
+.inspector-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px 20px;
+  container: inspector-controls / inline-size;
+}
 
 .section {
   color: var(--accent-text);
@@ -581,6 +586,33 @@ label.checkbox.disabled input { cursor: default; }
   padding: 4px 6px;
 }
 .row > input.error { border-color: var(--bad) !important; }
+.row:has(> select) { flex-wrap: wrap; gap: 5px; }
+.row:has(> select) > .lbl { width: auto; flex-basis: 100%; }
+.row > select {
+  font-family: var(--font);
+  font-size: calc(12px * var(--fs, 1));
+  min-height: 28px;
+  width: 100%;
+}
+.pulley-assembly { display: grid; gap: 5px; margin: 5px 0 9px; }
+button.pulley-part {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 10px;
+  min-width: 0;
+  padding: 7px 8px;
+  text-align: left;
+  white-space: normal;
+  font-size: calc(12px * var(--fs, 1));
+}
+.pulley-part-label { min-width: 0; overflow-wrap: anywhere; }
+.pulley-part-detail { color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+button.pulley-part[aria-current="true"] {
+  opacity: 1;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel-light));
+}
 .pulley-readout {
   display: grid;
   grid-template-columns: 1fr;
@@ -763,9 +795,30 @@ button.perf-banner-btn:hover:not(:disabled) {
 .dim { color: var(--text-dim); }
 .faint { color: var(--text-faint); }
 .error-text { color: var(--bad); font-size: calc(11px * var(--fs, 1)); margin: 2px 0; }
-.btn-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin: 4px 0; }
-.btn-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 4px 0; }
-.btn-grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin: 4px 0; }
+.btn-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin: 4px 0; }
+.btn-grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; margin: 4px 0; }
+.btn-grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin: 4px 0; }
+.btn-grid > button, .btn-grid-2 > button, .btn-grid-4 > button,
+.inspector-body > button, .type-group > button {
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* Keep compact rows at ordinary sizes. At narrow widths or enlarged text,
+   move the track below its label and give the exact value room for units. */
+@container inspector-controls (max-width: 18em) {
+  .row:has(> input[type="range"]) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 6px;
+  }
+  .row:has(> input[type="range"]) > .lbl { width: auto; overflow-wrap: anywhere; }
+  .row:has(> input[type="range"]) > .val { width: calc(74px * var(--fs, 1)); }
+  .row > input[type="range"] { grid-column: 1 / -1; grid-row: 2; width: 100%; }
+  .btn-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .btn-grid > button { padding: 6px 8px; }
+}
 .inspector-action {
   display: flex;
   width: 100%;
@@ -1380,11 +1433,12 @@ button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--t
 .colour-well {
   flex: none;
   width: 46px;
-  height: 24px;
+  height: max(28px, calc(24px * var(--fs, 1)));
   padding: 0;
   border: 1px solid var(--outline);
   border-radius: var(--radius);
-  background: transparent;
+  background: var(--picked-colour);
+  color: transparent;
   cursor: pointer;
 }
 .colour-well::-webkit-color-swatch-wrapper { padding: 2px; }
@@ -1397,8 +1451,14 @@ button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--t
   font-family: Consolas, monospace;
   text-transform: lowercase;
 }
-/* the palette chips sit under the well, indented to the control column */
-.colour-presets { margin: 5px 0 2px 76px; gap: 6px; }
+/* Palette chips align below the labelled swatch and exact-value field. */
+.colour-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  gap: 5px 8px;
+}
+.colour-row > .lbl { grid-column: 1 / -1; width: auto; }
+.colour-presets { margin: 5px 0 2px; gap: 6px; }
 .colour-presets button.swatch { width: 20px; height: 20px; }
 .colour-presets button.swatch.active {
   box-shadow: 0 0 0 1px var(--panel), 0 0 0 3px var(--focus);

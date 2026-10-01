@@ -41,6 +41,81 @@ beforeEach(() => {
   localStorage.clear();
 });
 
+describe("Pulley assembly navigation", () => {
+  function assembly() {
+    const fixture = makeInspector();
+    const wheel = new Body(new Vec2(0, 1), PULLEY_RADIUS);
+    const a = new Body(new Vec2(-0.22, -0.5), 0.2, 2);
+    const b = new Body(new Vec2(0.22, -0.5), 0.2, 3);
+    a.name = "Slope mass";
+    b.name = "Hanging mass";
+    const link = new PulleyLink(a, b, wheel);
+    fixture.app.world.bodies.push(wheel, a, b);
+    fixture.app.world.links.push(link);
+    fixture.app.undoStack.reset(fixture.app.world);
+    return { ...fixture, wheel, a, b, link };
+  }
+
+  it.each(["wheel", "link", "a", "b"] as const)("exposes all four parts from the selected %s", selected => {
+    const fixture = assembly();
+    const { app, panel, inspector, b } = fixture;
+    app.setSelection([fixture[selected]]);
+    inspector.refresh();
+    const parts = [...panel.querySelectorAll<HTMLButtonElement>(".pulley-part")];
+    expect(parts).toHaveLength(4);
+    expect(parts.filter(part => part.disabled)).toHaveLength(1);
+    expect(parts.find(part => part.disabled)?.getAttribute("aria-current")).toBe("true");
+    const destination = selected === "b" ? fixture.a : b;
+    parts.find(part => part.getAttribute("aria-label") ===
+      `Select particle ${selected === "b" ? "A" : "B"}: ${destination.name}`)!.click();
+    expect(app.selection).toEqual([destination]);
+    expect(document.activeElement).toBe(panel.querySelector("[role=tabpanel]"));
+    expect(app.undoStack.canUndo).toBe(false);
+  });
+
+  it("updates names and masses without replacing or defocusing navigation buttons", () => {
+    const { app, panel, inspector, a, wheel } = assembly();
+    app.setSelection([wheel]);
+    inspector.refresh();
+    const part = panel.querySelector<HTMLButtonElement>('[aria-label="Select particle A: Slope mass"]')!;
+    part.focus();
+    a.name = "<b>Mass 📐</b>";
+    a.mass = 4;
+    for (let i = 0; i < 5; i++) inspector.refresh();
+    expect(document.activeElement).toBe(part);
+    expect(part.textContent).toContain("<b>Mass 📐</b>");
+    expect(part.textContent).toContain("4 kg");
+    expect(part.querySelector("b")).toBeNull();
+    expect(part.getAttribute("aria-label")).toBe("Select particle A: <b>Mass 📐</b>");
+  });
+
+  it("does not discard a recorded force interval when navigating the assembly", () => {
+    const { app, panel, inspector, a, wheel } = assembly();
+    a.showForceComponents = true;
+    app.world.step(1 / 120);
+    const snapshot = a.forceSnapshot;
+    expect(snapshot).not.toBeNull();
+    app.setSelection([wheel]);
+    inspector.refresh();
+    panel.querySelector<HTMLButtonElement>('[aria-label="Select particle A: Slope mass"]')!.click();
+    expect(a.forceSnapshot).toBe(snapshot);
+    expect(panel.textContent).toContain("Average forces:");
+    expect(app.undoStack.canUndo).toBe(false);
+  });
+
+  it("removes stale assembly navigation when the string is removed under a selected particle", () => {
+    const { app, panel, inspector, a, link } = assembly();
+    app.setSelection([a]);
+    inspector.refresh();
+    expect(panel.querySelectorAll(".pulley-part")).toHaveLength(4);
+    app.world.removeLink(link);
+    inspector.refresh();
+    expect(app.selection).toEqual([a]);
+    expect(panel.querySelector(".pulley-part")).toBeNull();
+    expect(panel.querySelector('input[aria-label="Radius"]')).not.toBeNull();
+  });
+});
+
 describe("Inspector structure key", () => {
   it("explains current versus averaged force diagrams while retaining the focused checkbox", () => {
     const { app, panel, inspector } = makeInspector();
@@ -320,6 +395,33 @@ describe("Inspector accessibility and persisted visibility", () => {
 });
 
 describe("Inspector edit transactions", () => {
+  it("retains committed fields so subsequent edits cannot target detached controls", () => {
+    const { app, panel, inspector } = makeInspector();
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    app.world.bodies.push(body);
+    app.undoStack.reset(app.world);
+    app.setSelection([body]);
+    inspector.refresh();
+    const name = panel.querySelector<HTMLInputElement>('[aria-label="Name"]')!;
+    const mass = panel.querySelector<HTMLInputElement>('[aria-label="Mass (type an exact value)"]')!;
+    name.focus();
+    name.value = "Renamed";
+    name.blur();
+    mass.focus();
+    mass.value = "3";
+    mass.dispatchEvent(new Event("input", { bubbles: true }));
+    inspector.refresh();
+    expect(panel.querySelector('[aria-label="Name"]')).toBe(name);
+    expect(panel.querySelector('[aria-label="Mass (type an exact value)"]')).toBe(mass);
+    expect(document.activeElement).toBe(mass);
+    mass.blur();
+    expect(body.mass).toBe(3);
+    expect(body.name).toBe("Renamed");
+    app.undo();
+    expect(app.world.bodies[0].mass).toBe(1);
+    expect(app.world.bodies[0].name).toBe("Renamed");
+  });
+
   it("captures a delayed text commit after intervening simulation", () => {
     const { app, panel, inspector } = makeInspector();
     const body = new Body(new Vec2(0, 0), 0.2, 1);

@@ -372,6 +372,27 @@ For a single object it exposes type-specific state:
 - a read-only pulley-wheel explanation with position dragging and deletion as
   its only physical editing actions, plus the pulley tension-overlay toggle.
 
+Selecting either pulley particle, its wheel or its string exposes a Pulley
+assembly group. Its four labelled rows navigate directly to Particle A,
+Particle B, Wheel and String, showing the particle names/masses, fixed-axle
+status and total string length. The current row is disabled and marked with
+`aria-current`; the other rows support ordinary button keyboard activation.
+Names and values refresh within retained nodes. Navigation rebuilds the
+destination Inspector, scrolls it to the top and focuses its tab panel. The
+navigation handler does not create an edit boundary, clear recorded forces or
+add undo history; an outstanding field edit follows its normal commit/cancel
+lifecycle.
+Pulley membership participates in the particle's structure key so dismantling
+an assembly removes its navigation and restores ordinary radius editing.
+Single- and multi-selected pulley strings label their slider String length;
+its tooltip explains that both straight legs and the wrapped arc are included.
+
+Ordinary name, mass, colour and other value commits keep the current controls
+when the structure key is unchanged. A subsequent focused edit therefore
+cannot be detached by the preceding commit's notification. Object roles,
+rod-attachment ownership and pulley membership participate in that key;
+world replacement still explicitly invalidates the panel's object references.
+
 An ordinary selected particle can enable a free-body diagram directly on the
 canvas. After stepping, it draws weight, applied, drag, field, driver, link,
 support/contact, and numerical-correction arrows averaged over the same
@@ -729,6 +750,17 @@ commits require a complete finite decimal or scientific-notation value; trailing
 characters and incomplete exponents are rejected. Slider endpoints remain exact
 when their bounds are not multiples of the step. Native colour and hex controls
 have separate accessible names, and unchanged colour refreshes avoid DOM writes.
+Colour rows place the label above a swatch and exact hex field, with palette
+chips aligned below; the layout keeps enlarged labels out of neighbouring
+controls. The swatch also receives its current colour as a guarded CSS property
+so native controls that render a text value still show a colour surface. Select
+rows place their label above the full-width dropdown and use the same scalable
+font as the other fields.
+The Inspector is an inline-size query container: below 18 em of available
+width, slider tracks move below their label/value row and exact-value inputs
+scale wide enough for their units. Material grids use two columns there to
+retain complete words; action grids use shrinkable tracks and wrapping button
+text, keeping the selection controls inside narrow panes.
 
 ## Panels and overlays
 
