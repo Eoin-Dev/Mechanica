@@ -12,6 +12,54 @@ function normalizeCssColor(value: string): string {
   return value.replace(/\s+/g, "");
 }
 
+test("time jumps yield for cancellation and scene replacement", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await skipFirstRunTour(page, { theme: "dark", studio_mode: true, adaptive_dt: false });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  const library = page.getByRole("dialog", { name: "Library", exact: true });
+  await library.getByRole("tab", { name: "My scenes", exact: true }).click();
+  const choosing = page.waitForEvent("filechooser");
+  await library.getByRole("button", { name: "Import .json", exact: true }).click();
+  await (await choosing).setFiles({ name: "Seek load.json", mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({ settings: { gravity: 0 },
+      bodies: Array.from({ length: 2000 }, (_, index) => ({ id: index + 1,
+        pos: [index % 50 * 0.2, Math.floor(index / 50) * 0.2],
+        vel: [0.1, 0], radius: 0.04, mass: 1 })) })) });
+  await expect(library).toBeHidden();
+  const clock = page.getByRole("textbox", { name: "Simulation time in seconds", exact: true });
+  const cancel = page.getByRole("button", { name: "Cancel", exact: true });
+  await clock.fill("400");
+  await clock.press("Enter");
+  await expect(cancel).toBeVisible();
+  await expect(cancel).toBeInViewport({ ratio: 1 });
+  await expect(clock).toBeInViewport({ ratio: 1 });
+  await expect(clock).toHaveAttribute("aria-busy", "true");
+  await expect(page.locator("#fps")).toHaveText("Seeking…");
+  await page.screenshot({ path: test.info().outputPath("time-jump-pending-phone.png") });
+  await cancel.click();
+  await expect(clock).toHaveAttribute("aria-busy", "false");
+  await expect(clock).toHaveValue("0.00");
+  await expect(page.locator("#status-text")).toContainText("2000 bodies");
+  await clock.fill("0.05");
+  await clock.press("Enter");
+  await expect(clock).toHaveValue("0.05");
+  await expect(clock).toHaveAttribute("aria-busy", "false");
+  await clock.fill("400");
+  await clock.press("Enter");
+  await expect(cancel).toBeVisible();
+  await page.getByRole("button", { name: "Remove everything from the scene. Ctrl+Z restores it.", exact: true }).click();
+  await expect(clock).toHaveAttribute("aria-busy", "false");
+  await expect(clock).toHaveValue("0.00");
+  await expect(page.locator("#status-text")).toContainText("0 bodies");
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await expect(clock).toHaveValue("0.00");
+  await expect(page.locator("#status-text")).toContainText("0 bodies");
+  expect(errors).toEqual([]);
+});
+
 test("saved-scene editors preserve another tab's changes and keep conflict drafts", async ({ page, context }) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));

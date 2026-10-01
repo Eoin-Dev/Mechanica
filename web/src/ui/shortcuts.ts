@@ -139,8 +139,8 @@ export function handleShortcut(e: KeyboardEvent, host: ShortcutHost): boolean {
       app.controller.deleteSelection();
       break;
     case "Escape":
-      // cancel an in-progress link/wall first, then clear the selection
-      if (!app.controller.cancelPending()) app.setSelection([]);
+      // Cancel detached seek work before a pending tool or the selection.
+      if (!app.cancelTimeJump?.() && !app.controller.cancelPending()) app.setSelection([]);
       break;
     // NOT Tab. Binding Tab here (and preventing its default) meant focus
     // could never leave the document body, so nothing in the app was

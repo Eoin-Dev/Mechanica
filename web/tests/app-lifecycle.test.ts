@@ -5,9 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, PHYSICS_DT } from "../src/app";
 import { Body } from "../src/engine/body";
 import { DistanceLink } from "../src/engine/links";
+import { World } from "../src/engine/world";
 import { PRESETS } from "../src/scene/presets";
 import { Vec2 } from "../src/core/vec";
-import { listScenes, snapshot } from "../src/scene/snapshot";
+import { listScenes, restoreSnapshot, snapshot } from "../src/scene/snapshot";
 
 /** The handful of 2D-context members construction and resizing touch. */
 function stubCanvas(): HTMLCanvasElement {
@@ -36,6 +37,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -124,6 +126,143 @@ describe("new workspace defaults", () => {
 });
 
 describe("time jump", () => {
+  it("contains the first numerical failure and stops detached stepping", async () => {
+    vi.useFakeTimers();
+    const app = makeApp();
+    const messages: string[] = [];
+    app.toastFn = message => messages.push(message);
+    const step = World.prototype.step;
+    const calls = vi.spyOn(World.prototype, "step").mockImplementation(function (this: World, dt: number) {
+      step.call(this, dt);
+      this.diverged = ["Test particle"];
+    });
+    const seeking = app.requestTimeJump("1");
+    await vi.runAllTimersAsync();
+    await expect(seeking).resolves.toBe(true);
+    expect(calls).toHaveBeenCalledOnce();
+    expect(app.world.time).toBeCloseTo(PHYSICS_DT, 9);
+    expect(app.seeking).toBe(false);
+    expect(app.playing).toBe(false);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("Test particle");
+  });
+
+  it("installs bounded progress when the cooperative attempt exhausts its budget", async () => {
+    vi.useFakeTimers();
+    const app = makeApp();
+    const messages: string[] = [];
+    app.toastFn = message => messages.push(message);
+    let elapsed = 0;
+    vi.stubGlobal("performance", { now: () => elapsed });
+    const step = World.prototype.step;
+    vi.spyOn(World.prototype, "step").mockImplementation(function (this: World, dt: number) {
+      step.call(this, dt);
+      elapsed += 3001;
+    });
+    const seeking = app.requestTimeJump("10");
+    await vi.runAllTimersAsync();
+    await expect(seeking).resolves.toBe(true);
+    expect(app.world.time).toBeCloseTo(PHYSICS_DT, 9);
+    expect(messages[0]).toContain("enter that time again");
+    expect(app.seeking).toBe(false);
+  });
+
+  it("shares strict validation and backward baseline planning with cooperative seeking", async () => {
+    vi.useFakeTimers();
+    const app = makeApp();
+    app.world.time = 5;
+    app.ensureInitial();
+    for (const value of ["", "1x", "Infinity", "4.9"]) {
+      await expect(app.requestTimeJump(value)).resolves.toBe(false);
+      expect(app.seeking).toBe(false);
+      expect(app.world.time).toBe(5);
+    }
+    app.world.time = 6;
+    const seeking = app.requestTimeJump("5");
+    await vi.runAllTimersAsync();
+    await expect(seeking).resolves.toBe(true);
+    expect(app.world.time).toBe(5);
+  });
+
+  it("can cancel after a slice advances the detached world", async () => {
+    vi.useFakeTimers();
+    const app = makeApp();
+    const before = snapshot(app.world);
+    let elapsed = 0;
+    vi.stubGlobal("performance", { now: () => elapsed });
+    const step = World.prototype.step;
+    vi.spyOn(World.prototype, "step").mockImplementation(function (this: World, dt: number) {
+      step.call(this, dt);
+      elapsed += 9;
+    });
+    const seeking = app.requestTimeJump("10");
+    await vi.advanceTimersToNextTimerAsync();
+    expect(app.seekingTime).toBeGreaterThan(0);
+    expect(snapshot(app.world)).toBe(before);
+    app.cancelTimeJump();
+    await expect(seeking).resolves.toBe(false);
+    await vi.runAllTimersAsync();
+    expect(snapshot(app.world)).toBe(before);
+    expect(app.seeking).toBe(false);
+  });
+
+  it("yields detached seek work and installs the same fixed-step result", async () => {
+    vi.useFakeTimers();
+    const reference = makeApp();
+    reference.world.bodies.push(new Body(new Vec2(0, 5), 0.2, 1));
+    const initial = snapshot(reference.world);
+    reference.commitTimeJump("0.5");
+    const expected = snapshot(reference.world);
+    const app = makeApp();
+    app.loadWorld(restoreSnapshot(initial));
+    const before = snapshot(app.world);
+    const seeking = app.requestTimeJump("0.5");
+    expect(app.seeking).toBe(true);
+    expect(snapshot(app.world)).toBe(before);
+    expect(app.seekingTarget).toBe(0.5);
+    await vi.runAllTimersAsync();
+    await expect(seeking).resolves.toBe(true);
+    expect(app.seeking).toBe(false);
+    expect(snapshot(app.world)).toBe(expected);
+    expect(app.playing).toBe(false);
+  });
+
+  it.each(["cancel", "clear", "edit", "reset", "play", "step", "rewind", "mode"] as const)(
+    "discards a pending seek on %s without installing late state", async action => {
+      vi.useFakeTimers();
+      const app = makeApp();
+      app.world.bodies.push(new Body(new Vec2(0, 5), 0.2, 1));
+      app.ensureInitial();
+      const seeking = app.requestTimeJump("10");
+      if (action === "cancel") app.cancelTimeJump();
+      else if (action === "clear") app.newScene();
+      else if (action === "edit") app.edit(() => { app.world.gravity = 4; });
+      else if (action === "reset") app.resetSim();
+      else if (action === "play") app.togglePlay();
+      else if (action === "step") app.stepOnce();
+      else if (action === "rewind") app.stepBack();
+      else app.setPerfMode(true);
+      const authoritative = snapshot(app.world);
+      await vi.runAllTimersAsync();
+      await expect(seeking).resolves.toBe(false);
+      expect(snapshot(app.world)).toBe(authoritative);
+      expect(app.seeking).toBe(false);
+    },
+  );
+
+  it("a new request owns its state when a cancelled continuation resumes", async () => {
+    vi.useFakeTimers();
+    const app = makeApp();
+    const old = app.requestTimeJump("10");
+    const current = app.requestTimeJump("0.25");
+    await expect(old).resolves.toBe(false);
+    expect(app.seeking).toBe(true);
+    expect(app.seekingTarget).toBe(0.25);
+    await vi.runAllTimersAsync();
+    await expect(current).resolves.toBe(true);
+    expect(app.world.time).toBeCloseTo(0.25, 9);
+  });
+
   it("continues from the CURRENT state, not the start snapshot", () => {
     // The root of the bug, stated without reference to any budget: a
     // forward jump must carry the world it is looking at forward. Proven by

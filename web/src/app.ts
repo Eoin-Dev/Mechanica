@@ -185,6 +185,10 @@ export class App {
   controller: CanvasController;
 
   playing = false;
+  private timeJumpRequest: { controller: AbortController; world: World; target: number } | null = null;
+  get seeking(): boolean { return this.timeJumpRequest !== null; }
+  get seekingTime(): number { return this.timeJumpRequest?.world.time ?? this.world.time; }
+  get seekingTarget(): number | null { return this.timeJumpRequest?.target ?? null; }
   speed = 1.0;
   accumulator = 0.0;
   fpsNow = 0.0;
@@ -397,6 +401,7 @@ export class App {
   }
 
   setPerfMode(on: boolean): void {
+    this.cancelTimeJump();
     if (on) {
       // Performance mode removes the trail workload altogether. Preserve the
       // view preference so turning the mode off restores the user's choice,
@@ -547,6 +552,7 @@ export class App {
 
   // --------------------------------------------------------------- playback
   togglePlay(): void {
+    if (this.cancelTimeJump()) return;
     if (!this.playing) {
       const warning = this.rodConfigurationWarning();
       if (warning !== null) {
@@ -828,6 +834,7 @@ export class App {
   }
 
   stepOnce(): void {
+    this.cancelTimeJump();
     this.ensureInitial();
     this.playing = false;
     this.capturePhysicsVisualState();
@@ -851,6 +858,7 @@ export class App {
 
   /** Rewind the simulation by one displayed frame (,). */
   stepBack(): void {
+    this.cancelTimeJump();
     this.cancelEdit();
     this.playing = false;
     const previousWorld = this.world;
@@ -896,6 +904,7 @@ export class App {
   }
 
   resetSim(): void {
+    this.cancelTimeJump();
     if (this.initialSnapshot === null) return;
     // keepInitial: resetting must not consume the thing it resets TO.
     // Without it the second Ctrl+R in a row did nothing at all (no toast,
@@ -910,18 +919,106 @@ export class App {
    * bounded by both step count and wall-clock time. Repeating an incomplete
    * forward seek continues from the reached state. */
   commitTimeJump(text: string): boolean {
+    this.cancelTimeJump();
+    const plan = this.prepareTimeJump(text);
+    if (plan === null) return false;
+    const { target, world, quantum, steps } = plan;
+    const t0 = performance.now();
+    let ran = 0;
+    let failure: PhysicsFailure | null = null;
+    const allowed = Math.min(steps, App.TIME_JUMP_MAX_STEPS);
+    while (ran < allowed && failure === null) {
+      const block = Math.min(64, allowed - ran);
+      const result = this.runPhysicsBatch(world, block, quantum);
+      ran += result.completed;
+      failure = result.failure;
+      if (performance.now() - t0 > App.TIME_JUMP_BUDGET_MS) break;
+    }
+    this.finishTimeJump(world, target, ran, steps, failure);
+    return true;
+  }
+
+  /** Cancel detached seek work. The installed scene remains authoritative. */
+  cancelTimeJump(): boolean {
+    const request = this.timeJumpRequest;
+    if (request === null) return false;
+    this.timeJumpRequest = null;
+    request.controller.abort();
+    this.scheduleDisplayFrame(true);
+    return true;
+  }
+
+  /** Browser seek path: yield before work and between small fixed-step slices.
+   * Display time controls scheduling only, never a solver step's duration. */
+  async requestTimeJump(text: string): Promise<boolean> {
+    this.cancelTimeJump();
+    const plan = this.prepareTimeJump(text);
+    if (plan === null) return false;
+    const { target, world, quantum, steps } = plan;
+    const request = { controller: new AbortController(), world, target };
+    this.timeJumpRequest = request;
+    if (this.playing) this.onSceneCheckpoint?.(snap.snapshot(this.world));
+    this.playing = false;
+    this.accumulator = 0;
+    this.scheduleDisplayFrame(true);
+    const started = performance.now();
+    let ran = 0;
+    let failure: PhysicsFailure | null = null;
+    const allowed = Math.min(steps, App.TIME_JUMP_MAX_STEPS);
+    try {
+      do {
+        await this.yieldTimeJump(request.controller.signal);
+        if (this.timeJumpRequest !== request) return false;
+        const sliceStarted = performance.now();
+        while (ran < allowed && failure === null) {
+          const result = this.runPhysicsBatch(world, 1, quantum);
+          ran += result.completed;
+          failure = result.failure;
+          if (performance.now() - sliceStarted >= App.TIME_JUMP_SLICE_MS) break;
+        }
+        this.scheduleDisplayFrame(true);
+      } while (ran < allowed && failure === null &&
+               performance.now() - started < App.TIME_JUMP_BUDGET_MS);
+      if (this.timeJumpRequest !== request) return false;
+      this.timeJumpRequest = null;
+      this.finishTimeJump(world, target, ran, steps, failure);
+      return true;
+    } finally {
+      if (this.timeJumpRequest === request) {
+        this.timeJumpRequest = null;
+        request.controller.abort();
+        this.scheduleDisplayFrame(true);
+      }
+    }
+  }
+
+  private yieldTimeJump(signal: AbortSignal): Promise<void> {
+    return new Promise(resolve => {
+      const finish = (): void => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, 0);
+      signal.addEventListener("abort", finish, { once: true });
+      if (signal.aborted) finish();
+    });
+  }
+
+  private prepareTimeJump(text: string): { target: number; world: World;
+    quantum: number; steps: number } | null {
     const trimmed = text.trim();
-    if (trimmed === "") return false;
+    if (trimmed === "") return null;
     if (!/^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) {
-      return false;
+      return null;
     }
     const target = Number(trimmed);
-    if (!Number.isFinite(target)) return false;
+    if (!Number.isFinite(target)) return null;
     this.ensureInitial();
     const baseline = snap.restoreSnapshot(this.initialSnapshot!);
     if (target < baseline.time) {
       this.toast(`This scene starts at ${baseline.time.toFixed(2)} s`);
-      return false;
+      return null;
     }
     // Work on a copy either way, so a blow-up part-way through cannot leave
     // the live scene half-stepped.
@@ -933,19 +1030,11 @@ export class App {
     // from the requested value.
     const quantum = this.activePhysicsQuantum();
     const steps = Math.max(0, Math.round((target - world.time) / quantum));
-    const t0 = performance.now();
-    let ran = 0;
-    let failure: PhysicsFailure | null = null;
-    const allowed = Math.min(steps, App.TIME_JUMP_MAX_STEPS);
-    while (ran < allowed && failure === null) {
-      // Check wall time once per small deterministic block instead of once
-      // per engine step. The batch still stops on the first failure.
-      const block = Math.min(64, allowed - ran);
-      const result = this.runPhysicsBatch(world, block, quantum);
-      ran += result.completed;
-      failure = result.failure;
-      if (performance.now() - t0 > App.TIME_JUMP_BUDGET_MS) break;
-    }
+    return { target, world, quantum, steps };
+  }
+
+  private finishTimeJump(world: World, target: number, ran: number, steps: number,
+                         failure: PhysicsFailure | null): void {
     // Even a zero-step backward jump installs the restored baseline instead
     // of leaving the later live scene visible.
     this.replaceWorld(world, true);
@@ -959,20 +1048,19 @@ export class App {
       this.toast(`Reached ${world.time.toFixed(2)} s of ${target.toFixed(2)} s ` +
                  "- enter that time again to carry on from here");
     }
-    return true;
   }
 
-  /** Wall-clock ceiling on one time jump. The tab is frozen for this long,
-   * so it trades responsiveness against how far a single press gets: an
-   * interrupted jump now resumes, so the ceiling costs presses rather than
-   * reach. */
+  /** Wall-clock ceiling on an attempt. An interrupted jump can continue from
+   * the reached state; the browser path yields within this total budget. */
   private static TIME_JUMP_BUDGET_MS = 3000;
+  private static TIME_JUMP_SLICE_MS = 8;
 
   /** Hard ceiling on a time jump's steps, on top of the wall-clock budget:
    * a cheap scene must not be able to buy an unbounded jump either. */
   private static TIME_JUMP_MAX_STEPS = 20000;
 
   replaceWorld(world: World, keepInitial = false, preserveEdit = false): void {
+    this.cancelTimeJump();
     if (!preserveEdit) this.cancelEdit();
     this.world = world;
     this.applySolverMode(world);
@@ -1027,6 +1115,7 @@ export class App {
   // -------------------------------------------------------------- undo/redo
   /** Capture the exact live state before an immediate or continuous edit. */
   beginEdit(): void {
+    this.cancelTimeJump();
     if (this.editBefore === null) this.editBefore = snap.snapshot(this.world);
     this.world.wakePerformanceBodies();
     // Continuous controls call beginEdit for each live input even though the
@@ -1090,6 +1179,7 @@ export class App {
   }
 
   undo(): void {
+    this.cancelTimeJump();
     this.cancelEdit();
     const world = this.undoStack.undo();
     if (world !== null) {
@@ -1099,6 +1189,7 @@ export class App {
   }
 
   redo(): void {
+    this.cancelTimeJump();
     this.cancelEdit();
     const world = this.undoStack.redo();
     if (world !== null) {
@@ -1429,6 +1520,7 @@ export class App {
   }
 
   setAdaptiveDt(on: boolean): void {
+    this.cancelTimeJump();
     this.adaptiveDt = on;
     this.settings.adaptive_dt = on;
     this.saveSettings();

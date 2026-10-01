@@ -116,6 +116,7 @@ body {
 
 .brand { font-size: calc(16px * var(--fs, 1)); font-weight: 600; margin-right: 10px; white-space: nowrap; }
 .toolbar-spacer { flex: 1; min-width: 4px; }
+.time-ctrl { display: flex; align-items: center; gap: inherit; flex: none; }
 /* Scale the speed editor as a unit so larger labels/readouts cannot consume
    the whole track. The toolbar remains scrollable on narrow screens. */
 .speed-ctrl { width: calc(200px * var(--fs, 1)); flex: none; }

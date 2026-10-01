@@ -79,14 +79,25 @@ cancels the edit without changing simulation time.
   clock differs by at most half a quantum;
 - a backward jump that rounds to zero steps still installs the restored
   baseline instead of leaving the later live state visible;
-- stepping is synchronous but limited by both a wall-clock budget and a hard
-  step count;
+- browser stepping yields before work and between short groups of fixed
+  quanta, within a wall-clock budget and hard step count;
 - an incomplete jump installs the reached state and explains that entering the
   target again continues from there;
 - a divergence or exception stops the shared physics batch at its first
   failure and installs only the bounded result; and
 - work occurs on a copy so an exception cannot leave the visible scene
   half-advanced.
+
+While seeking, the clock shows the working copy's progress with `aria-busy`,
+the FPS readout shows Seeking, and the playback button becomes Cancel time jump.
+A themed Cancel action sits beside the clock; their group scrolls into view
+on a narrow toolbar so progress and cancellation remain together.
+Space or Escape cancels while retaining the installed scene. Edits, playback
+steps, reset, undo/redo, scene replacement and solver-mode changes also discard
+pending work. A new target owns its own request, so an old continuation cannot
+install a stale world or clear the new request's state. The clock's uncommitted
+draft still keeps keyboard ownership. Cancelling an active seek leaves playback
+paused; press Play separately to start again.
 
 ## Scene and edit operations
 

@@ -15,9 +15,12 @@ export class Toolbar implements Panel {
   private group = new RefreshGroup();
   private playBtn: HTMLButtonElement;
   private timeInput: HTMLInputElement;
+  private timeControls: HTMLElement;
+  private timeJumpCancel: HTMLButtonElement;
   private fps: HTMLElement;
   private app: App;
   private lastPlaying: boolean | null = null;
+  private lastSeeking: boolean | null = null;
   private lastFps = "";
 
   constructor(app: App, root: HTMLElement) {
@@ -74,7 +77,9 @@ export class Toolbar implements Panel {
     this.timeInput.addEventListener("blur", () => {
       timeFocused = false;
       if (!timeCancelled && this.timeInput.value !== timeEditText) {
-        app.commitTimeJump(this.timeInput.value);
+        void app.requestTimeJump(this.timeInput.value).catch(() => {
+          app.toast("Could not seek to that time. Try again.");
+        });
       }
       this.timeInput.value = app.world.time.toFixed(2);
     });
@@ -82,18 +87,27 @@ export class Toolbar implements Panel {
       if (e.key === "Enter") this.timeInput.blur();
       else if (e.key === "Escape") {
         timeCancelled = true;
+        app.cancelTimeJump();
         this.timeInput.blur();
       }
       e.stopPropagation();
     });
     this.group.add({ root: this.timeInput, refresh: () => {
       if (!timeFocused) {
-        const value = app.world.time.toFixed(2);
+        const value = (app.seeking ? app.seekingTime : app.world.time).toFixed(2);
         if (this.timeInput.value !== value) this.timeInput.value = value;
       }
     } });
-    root.append(el("span", { class: "dim", text: "t =" }), this.timeInput,
-                el("span", { class: "dim", text: "s" }));
+    this.timeControls = el("div", { class: "time-ctrl", role: "group",
+      "aria-label": "Simulation time" });
+    this.timeControls.append(el("span", { class: "dim", text: "t =" }), this.timeInput,
+                             el("span", { class: "dim", text: "s" }));
+    this.timeJumpCancel = button("Cancel", () => app.cancelTimeJump(),
+      { icon: ICONS.close, style: "ghost",
+        tooltip: "Cancel time jump and keep the current scene." }).root as HTMLButtonElement;
+    this.timeJumpCancel.hidden = true;
+    this.timeControls.append(this.timeJumpCancel);
+    root.append(this.timeControls);
 
     root.append(el("div", { class: "toolbar-spacer" }));
 
@@ -132,20 +146,25 @@ export class Toolbar implements Panel {
     // only touch the DOM when state changes: replacing the icon while the
     // user's pointer is mid-click would destroy the element under the
     // cursor and make the browser swallow the click
-    if (this.lastPlaying !== this.app.playing) {
+    if (this.lastPlaying !== this.app.playing || this.lastSeeking !== this.app.seeking) {
       this.lastPlaying = this.app.playing;
-      this.playBtn.innerHTML = this.app.playing ? ICONS.pause : ICONS.play;
-      const action = this.app.playing
-        ? "Pause the simulation (Space)." : "Start the simulation (Space).";
+      this.lastSeeking = this.app.seeking;
+      this.playBtn.innerHTML = this.app.seeking ? ICONS.close
+        : this.app.playing ? ICONS.pause : ICONS.play;
+      const action = this.app.seeking ? "Cancel time jump (Space or Escape)."
+        : this.app.playing ? "Pause the simulation (Space)." : "Start the simulation (Space).";
       this.playBtn.title = action;
       this.playBtn.setAttribute("aria-label", action);
+      this.timeInput.setAttribute("aria-busy", String(Boolean(this.app.seeking)));
+      this.timeJumpCancel.hidden = !this.app.seeking;
+      if (this.app.seeking) this.timeControls.scrollIntoView?.({ block: "nearest", inline: "center" });
     }
     // Simulation playback and canvas presentation are separate. A paused,
     // unchanged canvas is genuinely Idle; while zooming/panning/editing it
     // reports the cadence of actual paints rather than the 20 Hz idle timer.
     const measured = this.app.playing ? this.app.fpsNow : this.app.displayFpsNow;
     const active = this.app.playing || this.app.displayActive;
-    const fps = active
+    const fps = this.app.seeking ? "Seeking…" : active
       ? measured > 0 ? `${measured.toFixed(0)} fps` : "Rendering"
       : "Idle";
     if (fps !== this.lastFps) {

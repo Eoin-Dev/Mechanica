@@ -440,6 +440,18 @@ baseline copy. Work is bounded by both 20,000 steps and a 3,000 ms wall-clock
 budget; an incomplete jump reports the reached time and can be continued, and
 the shared batch runner stops immediately on numerical failure.
 
+The toolbar calls `requestTimeJump()`, which yields before its first step and
+after roughly 8 ms of fixed-quantum work. Each quantum remains indivisible;
+elapsed time chooses when to yield rather than changing solver duration.
+The detached copy is installed only if its request still owns the operation.
+Cancellation settles its scheduled yield, discards the copy and retains the
+live scene. Editing, scene replacement and playback commands cancel it, while
+the paused display loop keeps processing input and progress controls.
+`commitTimeJump()` retains the synchronous bounded path for direct callers and
+deterministic comparisons; both routes share target planning and finalization.
+The total browser budget includes yielding, so an attempt can advance fewer
+quanta than the synchronous route before offering continuation.
+
 ### Formula editing and evaluation
 
 1. Inspector formula controls edit the stored `fxSrc`/`fySrc` strings.

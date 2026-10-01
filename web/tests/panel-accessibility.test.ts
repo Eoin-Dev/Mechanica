@@ -17,16 +17,48 @@ function appStub(): App {
     view: { autoFit: false },
     controller: { tool: "select", setTool() {} },
     togglePlay() {}, stepBack() {}, stepOnce() {}, resetSim() {}, resetSpeed() {},
+    async requestTimeJump() { return true; }, cancelTimeJump() { return false; },
+    seeking: false, seekingTime: 0, seekingTarget: null,
     commitTimeJump() {}, undo() {}, redo() {}, newScene() {}, zoomToFit() {},
     toggleAutoFit() {}, setSelection() {},
   } as unknown as App;
 }
 
 describe("toolbar and palette semantics", () => {
+  it("shows seek progress and exposes cancellation without changing the clock's draft", () => {
+    const app = appStub();
+    Object.assign(app, { seeking: true, seekingTime: 2.5, seekingTarget: 10 });
+    const cancel = vi.spyOn(app, "cancelTimeJump");
+    const root = document.createElement("div");
+    document.body.replaceChildren(root);
+    const toolbar = new Toolbar(app, root);
+    toolbar.refresh();
+    const clock = root.querySelector<HTMLInputElement>('input[aria-label="Simulation time in seconds"]')!;
+    expect(clock.value).toBe("2.50");
+    expect(clock.getAttribute("aria-busy")).toBe("true");
+    expect(root.querySelector("#fps")!.textContent).toBe("Seeking…");
+    expect(root.querySelector('button[aria-label="Cancel time jump (Space or Escape)."]')).not.toBeNull();
+    clock.focus();
+    clock.value = "20";
+    toolbar.refresh();
+    expect(clock.value).toBe("20");
+    clock.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    expect(cancel).toHaveBeenCalledOnce();
+    const adjacentCancel = root.querySelector<HTMLButtonElement>('button[title="Cancel time jump and keep the current scene."]')!;
+    expect(adjacentCancel.hidden).toBe(false);
+    adjacentCancel.click();
+    expect(cancel).toHaveBeenCalledTimes(2);
+    Object.assign(app, { seeking: false });
+    toolbar.refresh();
+    expect(adjacentCancel.hidden).toBe(true);
+    expect(clock.getAttribute("aria-busy")).toBe("false");
+    expect(clock.value).toBe("0.00");
+  });
+
   it("only seeks when the clock text is changed and committed", () => {
     const app = appStub();
     app.world.time = 1.23456789;
-    const seek = vi.spyOn(app, "commitTimeJump");
+    const seek = vi.spyOn(app, "requestTimeJump");
     const root = document.createElement("div");
     document.body.replaceChildren(root);
     const toolbar = new Toolbar(app, root);
