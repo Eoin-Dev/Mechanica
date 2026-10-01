@@ -624,8 +624,11 @@ where the retained history permits it.
   the containing layout changes.
 - media predicates reuse live `MediaQueryList` objects and safely degrade when
   `matchMedia` is unavailable.
-- `ModalFocus` labels the dialog, captures/restores prior focus, traps Tab
-  navigation, and keeps focus inside an open overlay.
+- `ModalFocus` labels the dialog, restores its button opener even in browsers
+  that do not focus clicked buttons, traps Tab navigation, and keeps focus
+  inside an open overlay. Button callbacks retain the opener only for their
+  synchronous scope; detached or hidden-panel buttons are ignored when one
+  dialog replaces another. Shortcut openings retain the previous focus.
 
 Buttons derive accessible names from visible labels or tooltips; icon-only
 buttons receive an explicit `aria-label`. Toggle buttons expose
@@ -885,5 +888,5 @@ theme/custom-accent contrast, page-zoom suppression, modal-tour inertness and
 focus restoration, device wording, responsive inspector state, Studio swatch
 geometry and Library contrast/containment, open-overlay 320 px/200% reflow,
 pointer alignment, scene-replacement undo, tour spotlights, and shortcut
-ownership. Chromium axe checks cover WCAG A/AA rules at boot and with the
+ownership. Chromium, Firefox and WebKit axe checks cover WCAG A/AA rules at boot and with the
 Library open. See [testing and operations](testing-and-operations.md).

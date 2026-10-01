@@ -2,14 +2,14 @@
 
 Mechanica uses a headless Vitest verification suite for analytic physics,
 behavioral contracts, rendering helpers, persistence, UI semantics,
-fuzz/stress sequences, and long-run bounds. A pinned Chromium Playwright suite
+fuzz/stress sequences, and long-run bounds. A pinned three-engine Playwright suite
 uses axe-core and real browser layout, focus, input, and Canvas behavior.
 TypeScript compilation and the Vite production build are separate required
 checks.
 
 Use Node.js 22.23.1 from [`.node-version`](../.node-version). The package engine
 accepts Node `>=22.22.2 <23`. Browser acceptance also requires the pinned
-Playwright Chromium binary; install it once after installing packages.
+Playwright Chromium, Firefox and WebKit binaries; install them after packages.
 
 ## Local commands
 
@@ -17,7 +17,7 @@ Run commands from `web/`:
 
 ```sh
 npm install
-npx playwright install chromium
+npx playwright install chromium firefox webkit
 npm run dev
 npm test
 npm run test:scripts
@@ -42,7 +42,7 @@ npm audit
 - `build` first runs `check:types`, then creates the static Vite bundle in
   `web/dist/`.
 - `test:e2e` starts a production preview of the existing `web/dist/`, runs the
-  serial Chromium/axe acceptance suite, then closes the preview. Run `build`
+  serial Chromium/Firefox/WebKit/axe acceptance suite, then closes the preview. Run `build`
   first.
 - `benchmark:performance` starts a development server and bundled headless
   Chromium, then prints frame-time, physics-time, render-time, contact, body,
@@ -126,12 +126,14 @@ Most physics/core tests run directly in Node. DOM-oriented tests install the
 minimum jsdom or hand-written browser stubs they need. The suite does not need a
 running Vite server.
 
-`playwright.config.ts` runs only Chromium, serially, because every page owns a
+`playwright.config.ts` runs Chromium, Firefox and WebKit serially, because every page owns a
 continuous animation loop. It records a trace on the first CI retry and a
 screenshot on failure. `scripts/run-e2e.mjs` starts Vite preview through its
 API, invokes the pinned Playwright CLI, forwards termination signals and closes
-the server reliably. CI installs Chromium with its Linux system dependencies;
-local installations normally use `npx playwright install chromium`.
+the server reliably. CI installs all three engines with Linux system dependencies;
+local installations use `npx playwright install chromium firefox webkit`.
+For a focused local check, append `-- --project=chromium` (or `firefox`/`webkit`)
+to `npm run test:e2e`. Required delivery validation runs all three projects.
 
 ## Test suite map
 
@@ -208,6 +210,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`interaction-behaviour.test.ts`](../web/tests/interaction-behaviour.test.ts) | Cancelled eraser/wall gestures and tool switching without later unintended edits, click activation threshold, asymptotically bounded speed-sensitive drag energy, continuously maintained parked velocity aims, selected-body FBD velocity-handle suppression independent from View vectors, standalone rod creation, unified Anchor support placement, slow-acquire/hysteretic body attachment, filtered box select, pick ordering/tolerance, distance-based trail sampling, plot restart/non-finite rejection, auto-fit guarantees, and deleted gesture targets. |
 | [`selection-delete.test.ts`](../web/tests/selection-delete.test.ts) | Selection/hover/pending-state reconciliation after removal, linear batched deletion with cascades, one-transaction continuous eraser scrubs, and duplication of bodies/walls/links/drivers. |
 | [`camera.test.ts`](../web/tests/camera.test.ts) | World/screen inverse transforms, panning, cursor-anchored zoom/clamps, visible bounds, and nice scale-bar formatting. |
+| [`modal-focus.test.ts`](../web/tests/modal-focus.test.ts) | Logical opener restoration without native click focus, shortcut focus, hidden/detached opener fallback, dialog replacement and nested callback ownership without leaking a previous opener. |
 | [`particle-atlas.test.ts`](../web/tests/particle-atlas.test.ts) | Subpixel centre/radius accuracy, cached glyph reuse, bounded radius/colour/bitmap capacity, release on zoom/DPR/world changes, invalid geometry/colour exclusion, mutable-colour identity, unsupported-context fallback and allocation-failure recovery. |
 | [`body-culling.test.ts`](../web/tests/body-culling.test.ts) | Scene-centred runaway classification, outward-motion requirement, orbit/furniture/held protections, and non-finite cleanup. |
 | [`trail.test.ts`](../web/tests/trail.test.ts) | Ring-buffer order/capacity, timestamps, expiration, resize, serial continuity, and conservative bounds. |
@@ -294,7 +297,7 @@ The suite combines several kinds of evidence:
   geometry/budgets/semantics.
 - **DOM tests** isolate helpers/components so accessibility and event
   precedence remain fast and diagnostically precise.
-- **Browser tests** exercise the built application with Chromium and axe so
+- **Browser tests** exercise the built application with three engines and axe so
   computed accessibility trees, focus, reflow, pointer coordinates and runtime
   console failures are covered across subsystem boundaries.
 
@@ -353,7 +356,7 @@ ignored by Git.
 `.github/workflows/ci.yml` validates every pull request with only
 `contents: read`: checkout, exact Node 22.23.1 setup, `npm ci`, Node tool tests,
 Vitest plus the README-count check, documentation/security gates, production build,
-Chromium/system-dependency installation,
+Chromium/Firefox/WebKit and system-dependency installation,
 and Playwright/axe acceptance. Every third-party action reference is an
 immutable commit SHA for its documented major version.
 Both workflows also run `check:docs` before building. `playwright-core` is pinned
@@ -374,7 +377,7 @@ The build job:
 6. checks documentation files and heading references;
 7. checks known dependency advisories;
 8. runs the production build;
-9. installs Chromium and runs the browser acceptance suite; and
+9. installs Chromium, Firefox and WebKit and runs all browser acceptance projects; and
 10. uploads `web/dist` as the Pages artifact.
 
 The build job has only `contents: read`. The deploy job alone receives

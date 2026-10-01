@@ -25,8 +25,8 @@ npm run dev        # dev server, live reload
 ```
 npm test           # verification suite (physics, rendering, robustness)
 npm run build      # production build into web/dist/
-npx playwright install chromium  # one-time browser-test prerequisite
-npm run test:e2e   # production-preview Chromium and axe checks
+npx playwright install chromium firefox webkit  # browser-test prerequisites
+npm run test:e2e   # production-preview checks in all three engines, with axe
 npm run check:docs # local documentation links and heading references
 npm run check:security # known dependency advisories
 npm run benchmark:performance -- --quick  # comparative browser performance smoke matrix

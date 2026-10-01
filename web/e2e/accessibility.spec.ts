@@ -48,6 +48,11 @@ for (const layout of [
     await library.getByRole("button", { name: "All", exact: true }).click();
     await expect(cards).toHaveCount(allCount);
     await search.fill("moon");
+    const inputBox = await search.boundingBox();
+    await page.mouse.click(inputBox!.x + inputBox!.width - 8, inputBox!.y + inputBox!.height / 2);
+    // Clicking the end of the text field places the caret; only the themed
+    // Clear button should clear it, without a second native cancel affordance.
+    await expect(search).toHaveValue("moon");
     const dimensions = await library.locator(".library-search").evaluate(row => ({
       fits: row.scrollWidth <= row.clientWidth,
       fieldWidth: row.querySelector("input")!.getBoundingClientRect().width,
@@ -148,6 +153,9 @@ for (const layout of [
     await page.setViewportSize({ width: layout.width, height: layout.height });
     await skipFirstRunTour(page, { theme: layout.theme, studio_mode: true, inspector_visible: false });
     await page.goto("/");
+    // The first panel refresh initializes the real notice. Wait for that
+    // pass before injecting presentation text so it cannot clear the fixture.
+    await expect(page.locator("#status-text")).toContainText("bodies");
     await page.evaluate(scale => {
       document.documentElement.style.setProperty("--fs", String(scale));
       // Exercise the production notice's longest text without relying on

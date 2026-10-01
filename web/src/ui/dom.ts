@@ -315,15 +315,13 @@ const FOCUSABLE = [
   "textarea:not([disabled])", "a[href]", "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-/** Keyboard containment for an overlay.
- *
- * A modal has to hold the focus ring while it is up: without this, tabbing
- * out of an open dialog walks invisibly through the toolbar and inspector
- * underneath it, and closing the dialog drops focus back to the document
- * body so the next Tab restarts from the top of the page. Marks the panel
- * as a dialog for assistive tech at the same time, which the overlays were
- * missing entirely.
- */
+// A mouse click does not focus buttons in every browser. Keep the logical
+// opener only while its callback runs, including nested button callbacks.
+let buttonOpener: HTMLElement | null = null;
+
+/** Label a dialog, contain keyboard focus and restore its opener on close.
+ * Button callbacks supply a connected opener outside hidden panels;
+ * shortcut openings return to the previously focused element. */
 export class ModalFocus {
   private previous: Element | null = null;
   private panel: HTMLElement;
@@ -354,7 +352,8 @@ export class ModalFocus {
   }
 
   enter(): void {
-    this.previous = document.activeElement;
+    this.previous = buttonOpener?.isConnected && !buttonOpener.closest("[hidden]")
+      ? buttonOpener : document.activeElement;
     document.addEventListener("keydown", this.onKey, true);
     // focus the panel itself rather than its first control: landing on a
     // button makes Enter feel pre-armed, and on a scrollable body it also
@@ -406,7 +405,12 @@ export function button(label: string, onClick: () => void,
   // is appended to an icon button. Give every icon-only control an explicit
   // name while keeping the tooltip as its mouse affordance.
   if (!label && opts.tooltip) b.setAttribute("aria-label", opts.tooltip);
-  b.addEventListener("click", onClick);
+  b.addEventListener("click", () => {
+    const previous = buttonOpener;
+    buttonOpener = b;
+    try { onClick(); }
+    finally { buttonOpener = previous; }
+  });
   // A button that reports an active state is a TOGGLE, and its state was
   // carried by a CSS class alone - visible to a viewer, invisible to
   // assistive tech. That covers every tool in the palette and the auto-fit

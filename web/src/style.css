@@ -1003,7 +1003,11 @@ input.library-search-input,
   box-shadow: none;
 }
 .library-search-input::placeholder { color: var(--text-dim); opacity: 1; }
-.library-search-input::-webkit-search-cancel-button { appearance: none; }
+.library-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
 .library-search-clear { flex: none; width: 30px; height: 30px; padding: 6px; border-radius: 7px; }
 .library-result-count {
   flex-shrink: 0;
