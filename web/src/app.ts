@@ -718,6 +718,7 @@ export class App {
       return null;
     }
     const refined = snap.restoreSnapshot(before);
+    this.transferAnalysisPresentation(this.world, refined);
     this.applySolverMode(refined);
     refined.step(dt * fraction);
     return refined;
@@ -1031,6 +1032,7 @@ export class App {
     const forward = target >= this.world.time;
     const world = snap.restoreSnapshot(forward ? snap.snapshot(this.world)
                                                : snap.snapshot(baseline));
+    this.transferAnalysisPresentation(this.world, world);
     // The engine advances fixed quanta, so the closest representable clock
     // is used. This keeps a jump deterministic and at most half a quantum
     // from the requested value.
@@ -1125,6 +1127,7 @@ export class App {
     this.cancelTimeJump();
     if (this.editBefore === null) this.editBefore = snap.snapshot(this.world);
     this.world.wakePerformanceBodies();
+    this.world.clearForceDiagnostics();
     // Continuous controls call beginEdit for each live input even though the
     // transaction snapshot is captured only once. Each input may have changed
     // a rendered property, so keep the canvas live throughout the gesture.
@@ -1134,6 +1137,7 @@ export class App {
 
   cancelEdit(): void {
     this.editBefore = null;
+    this.world.clearForceDiagnostics();
     // Cancellation drops the transaction boundary, not necessarily the live
     // mutation (for example, cancelling an auto-created link endpoint removes
     // that endpoint). Treat the resulting state as authoritative.
@@ -1147,6 +1151,7 @@ export class App {
     // Continuous gestures can span panel refreshes. Even if energy was read
     // after beginEdit(), the final mutation at the boundary must win.
     this.invalidateEnergy();
+    this.world.clearForceDiagnostics();
     const after = snap.snapshot(this.world);
     const before = this.editBefore;
     this.editBefore = null;
@@ -1191,6 +1196,7 @@ export class App {
     this.cancelEdit();
     const world = this.undoStack.undo();
     if (world !== null) {
+      this.transferAnalysisPresentation(this.world, world);
       this.replaceWorld(world);
       this.playing = false;
     }
@@ -1201,6 +1207,7 @@ export class App {
     this.cancelEdit();
     const world = this.undoStack.redo();
     if (world !== null) {
+      this.transferAnalysisPresentation(this.world, world);
       this.replaceWorld(world);
       this.playing = false;
     }

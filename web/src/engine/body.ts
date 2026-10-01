@@ -1,6 +1,7 @@
 /** Physical objects: dynamic circular bodies and static wall segments. */
 import { boolOr, clamp01, colorOr, idOr, numIn, numOr as num, strOr } from "../core/guards";
 import { Vec2 } from "../core/vec";
+import type { ForceSnapshot } from "./force-diagnostics";
 
 export type Color = [number, number, number];
 
@@ -185,6 +186,9 @@ export class Body {
   /** Realised step-average net force, including contact and constraint
    * impulses. This is transient analysis state and is never serialized. */
   netForce = new Vec2();
+  /** Optional named forces averaged over the same interval as netForce.
+   * Transient, immutable analysis state; never included in a scene snapshot. */
+  forceSnapshot: ForceSnapshot | null = null;
   prev = new Vec2();
   corrX = 0.0;
   corrY = 0.0;

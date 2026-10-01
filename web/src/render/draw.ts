@@ -1063,13 +1063,14 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
 
   // --- selected per-particle free-body diagrams -----------------------------
   // This is opt-in per body. The ordinary render path pays only the boolean
-  // field check; named-force reconstruction runs solely for particles whose
-  // Inspector toggle is active.
+  // field check; force-ledger access runs solely for particles whose Inspector
+  // toggle is active and uses the recorded interval after a completed step.
   const fbdLabels: Array<{ text: string; x: number; y: number; color: Color }> = [];
   const slopeCards: Array<{ x: number; y: number; rows: Array<{ text: string; color: Color }> }> = [];
   const forceColour = (entry: ForceEntry): Color => {
     if (entry.kind === "weight") return theme.BAD;
     if (entry.kind === "reaction") return theme.GOOD;
+    if (entry.kind === "correction") return theme.TEXT_DIM;
     if (entry.kind === "spring" || entry.kind === "string" ||
         entry.kind === "pulley" || entry.kind === "rod") return theme.WARN;
     return theme.ACCENT_HOT;
@@ -1077,6 +1078,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   const forceSymbol = (entry: ForceEntry): string => {
     if (entry.kind === "weight") return "W";
     if (entry.kind === "reaction") return "R";
+    if (entry.kind === "correction") return "C";
     if (entry.kind === "string" || entry.kind === "pulley") return "T";
     if (entry.kind === "spring") return "Fₛ";
     if (entry.kind === "rod") return entry.label.includes("thrust") ? "S" : "T";

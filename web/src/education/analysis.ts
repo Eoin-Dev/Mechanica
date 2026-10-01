@@ -8,18 +8,8 @@ import { Body, Wall } from "../engine/body";
 import { closestOnSegment, Contact } from "../engine/contacts";
 import { DistanceLink, PulleyLink, SpringLink } from "../engine/links";
 import { World } from "../engine/world";
-
-export type ForceKind =
-  "weight" | "applied" | "drag" | "gravity" | "driver" | "field" |
-  "spring" | "string" | "rod" | "pulley" | "reaction";
-
-export interface ForceEntry {
-  id: string;
-  label: string;
-  kind: ForceKind;
-  fx: number;
-  fy: number;
-}
+import type { ForceEntry, ForceKind } from "../engine/force-diagnostics";
+export type { ForceEntry, ForceKind } from "../engine/force-diagnostics";
 
 export interface SlopeBasis {
   wallId: number;
@@ -31,9 +21,11 @@ export interface SlopeBasis {
 }
 
 export interface ForceLedger {
-  entries: ForceEntry[];
+  entries: readonly ForceEntry[];
   resultant: { fx: number; fy: number };
   basis: SlopeBasis | null;
+  mode: "current" | "step-average" | "resting";
+  interval: { start: number; end: number } | null;
 }
 
 function finiteForce(fx: number, fy: number): boolean {
@@ -81,19 +73,23 @@ export function projectForce(entry: Pick<ForceEntry, "fx" | "fy">,
   };
 }
 
-/** Named forces acting on one body at the latest completed solver step.
- *
- * Smooth authored forces and analytical link reactions are listed directly.
- * The realised m*delta-v/dt resultant is authoritative; any remainder is a
- * combined contact/constraint reaction, which includes normal/friction
- * impulses and the small position-level constraint correction. This residual
- * makes the vector sum exact without pretending an impulse is an
- * instantaneous smooth force.
- */
+/** Use one completed interval for both named forces and m*delta-v/dt.
+ * Before a recorded step (or after an edit), show current authored forces;
+ * this preview cannot infer a contact reaction from an old resultant. */
 export function forceLedger(world: World, body: Body,
                             referenceWall: Wall | null = null): ForceLedger {
+  const basis = referenceWall === null ? null : slopeBasis(referenceWall, body);
+  const sample = body.forceSnapshot;
+  if (body.showForceComponents && sample !== null && body.invMass !== 0 &&
+      sample.stepCount === world.stepCount && sample.endTime === world.time &&
+      sample.x === body.pos.x && sample.y === body.pos.y &&
+      sample.vx === body.vel.x && sample.vy === body.vel.y && sample.mass === body.mass &&
+      sample.fx === body.netForce.x && sample.fy === body.netForce.y) {
+    return { entries: sample.entries, resultant: { fx: sample.fx, fy: sample.fy },
+      basis, mode: "step-average", interval: { start: sample.startTime, end: sample.endTime } };
+  }
   const entries: ForceEntry[] = [];
-  if (!body.locked && Number.isFinite(body.mass) && body.mass > 0) {
+  if (!body.isRodEndpoint && !body.isAnchor && !body.locked && Number.isFinite(body.mass) && body.mass > 0) {
     add(entries, "weight", "Weight", "weight", 0, -body.mass * world.gravity);
     add(entries, "applied", "Applied force", "applied",
       body.constForce.x, body.constForce.y);
@@ -103,12 +99,12 @@ export function forceLedger(world: World, body: Body,
       -drag * body.vel.x, -drag * body.vel.y);
   }
 
-  if (world.mutualGravity && world.G !== 0 && !body.isAnchor) {
+  if (world.mutualGravity && world.G !== 0 && !body.isAnchor && !body.isRodEndpoint) {
     let fx = 0;
     let fy = 0;
     const eps2 = world.softening * world.softening;
     for (const other of world.bodies) {
-      if (other === body || other.isAnchor) continue;
+      if (other === body || other.isAnchor || other.isRodEndpoint) continue;
       const dx = other.pos.x - body.pos.x;
       const dy = other.pos.y - body.pos.y;
       const r2 = dx * dx + dy * dy;
@@ -132,7 +128,7 @@ export function forceLedger(world: World, body: Body,
 
   for (let i = 0; i < world.drivers.length; i++) {
     const driver = world.drivers[i];
-    if (!driver.enabled || driver.bodyId !== body.id || body.invMass === 0) continue;
+    if (!driver.enabled || driver.bodyId !== body.id || body.invMass === 0 || body.isRodEndpoint) continue;
     const magnitude = driver.amplitude * Math.sin(
       2 * Math.PI * driver.frequency * world.time + driver.phase);
     add(entries, `driver-${i}`, "Driving force", "driver",
@@ -145,49 +141,15 @@ export function forceLedger(world: World, body: Body,
   };
   for (let i = 0; i < world.fields.length; i++) {
     const field = world.fields[i];
-    if (!field.enabled || field.fx === null || field.fy === null) continue;
+    if (!field.enabled || field.fx === null || field.fy === null || body.invMass === 0 || body.isRodEndpoint) continue;
     try {
       const fx = field.fx(env);
       const fy = field.fy(env);
-      add(entries, `field-${i}`, field.name || `Field ${i + 1}`, "field", fx, fy);
+      if (Number.isFinite(fx * body.invMass) && Number.isFinite(fy * body.invMass)) {
+        add(entries, `field-${i}`, field.name || `Field ${i + 1}`, "field", fx, fy);
+      }
     } catch {
       // The engine skips a singular sample for this body; the ledger agrees.
-    }
-  }
-
-  for (const link of world.links) {
-    if (link instanceof DistanceLink && (link.a === body || link.b === body)) {
-      const dx = link.b.pos.x - link.a.pos.x;
-      const dy = link.b.pos.y - link.a.pos.y;
-      const d = Math.hypot(dx, dy);
-      if (d > 1e-12) {
-        const side = link.a === body ? 1 : -1;
-        const fx = side * link.mu * dx / d;
-        const fy = side * link.mu * dy / d;
-        const label = link.isRope ? "String tension" :
-          link.mu >= 0 ? "Rod tension" : "Rod thrust";
-        add(entries, `distance-${link.id}`, label,
-          link.isRope ? "string" : "rod", fx, fy);
-      }
-    } else if (link instanceof SpringLink && (link.a === body || link.b === body)) {
-      const dx = link.b.pos.x - link.a.pos.x;
-      const dy = link.b.pos.y - link.a.pos.y;
-      const d = Math.hypot(dx, dy);
-      if (d > 1e-12) {
-        const side = link.a === body ? 1 : -1;
-        add(entries, `spring-${link.id}`,
-          link.tensionOnly ? "Elastic-string tension" :
-            link.axialForce >= 0 ? "Spring tension" : "Spring thrust",
-          link.tensionOnly ? "string" : "spring",
-          side * link.axialForce * dx / d,
-          side * link.axialForce * dy / d);
-      }
-    } else if (link instanceof PulleyLink && (link.a === body || link.b === body)) {
-      const geometry = link.geometry();
-      const nx = link.a === body ? geometry.nax : geometry.nbx;
-      const ny = link.a === body ? geometry.nay : geometry.nby;
-      add(entries, `pulley-${link.id}`, "Pulley-string tension", "pulley",
-        -link.mu * nx, -link.mu * ny);
     }
   }
 
@@ -200,17 +162,17 @@ export function forceLedger(world: World, body: Body,
   // Before the first solver step there is no realised delta-v diagnostic yet.
   // Use the authored analytical sum rather than inventing an equal-and-
   // opposite residual that would make a freshly loaded force diagram read 0.
-  const resultantX = world.stepCount === 0 ? namedX : body.netForce.x;
-  const resultantY = world.stepCount === 0 ? namedY : body.netForce.y;
-  const residualX = resultantX - namedX;
-  const residualY = resultantY - namedY;
-  add(entries, "reaction", "Contact / solver reaction", "reaction",
-    residualX, residualY);
+  const resting = body.perfSleeping;
+  const resultantX = resting ? 0 : namedX;
+  const resultantY = resting ? 0 : namedY;
+  if (resting) add(entries, "resting-support", "Resting support reaction", "reaction", -namedX, -namedY);
 
   return {
     entries,
     resultant: { fx: resultantX, fy: resultantY },
-    basis: referenceWall === null ? null : slopeBasis(referenceWall, body),
+    basis,
+    mode: resting ? "resting" : "current",
+    interval: null,
   };
 }
 

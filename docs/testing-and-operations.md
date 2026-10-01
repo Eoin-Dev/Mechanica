@@ -192,6 +192,7 @@ with the behavior it protects rather than an exact assertion count.
 | Test file | Protected behavior |
 | --- | --- |
 | [`education-analysis.test.ts`](../web/tests/education-analysis.test.ts) | Named free-body force ledgers that close to realised resultants, slope bases/components, ideal pulley tension/rate/acceleration/axle diagnostics, bounded transition detection, chronological event interpolation, unordered body versus wall contact identity including zero IDs, and rewind-safe event history. |
+| [`force-ledger.test.ts`](../web/tests/force-ledger.test.ts) | Integrator/substep-consistent force averages, changing fields and drag without false reactions, singular-vector rejection, earlier-contact impulses, damping/limits, string/rod/spring/Atwood forces, mounted supports, actual approximate gravity, hidden source exclusion, immutable transient intervals, no extra expression evaluations, edit/restore/no-op lifecycle, and bit-identical physics with recording on/off in Normal/Performance/adaptive modes. App and Inspector suites also protect edit invalidation, history view retention, interval guidance and checkbox focus. Production acceptance checks actual painted force labels plus desktop/phone/enlarged layouts. |
 
 ### Expressions and math editing
 

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "../src/app";
 import { Body, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS, Wall } from "../src/engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
-import { Driver } from "../src/engine/world";
+import { Driver, ForceField } from "../src/engine/world";
 import { Vec2 } from "../src/core/vec";
 import { Inspector } from "../src/ui/inspector";
 
@@ -42,6 +42,35 @@ beforeEach(() => {
 });
 
 describe("Inspector structure key", () => {
+  it("explains current versus averaged force diagrams while retaining the focused checkbox", () => {
+    const { app, panel, inspector } = makeInspector();
+    const body = new Body(new Vec2(0, 1), 0.2, 2);
+    app.world.gravity = 0;
+    app.world.bodies.push(body);
+    app.world.fields.push(new ForceField("Ramping", "120*t", "0"));
+    app.setSelection([body]);
+    inspector.refresh();
+    const checkbox = [...panel.querySelectorAll("label.checkbox")]
+      .find(label => label.textContent === "Free-body forces on canvas")!.querySelector<HTMLInputElement>("input")!;
+    const note = panel.querySelector<HTMLElement>(".force-interval-note")!;
+    expect(note.hidden).toBe(true);
+    checkbox.click();
+    checkbox.focus();
+    inspector.refresh();
+    expect(note.textContent).toContain("Step once");
+    app.world.step(1 / 60);
+    inspector.refresh();
+    expect(note.textContent).toContain("Average forces: 0.000–0.017 s");
+    expect(note.textContent).toContain("C: numerical correction");
+    expect(document.activeElement).toBe(checkbox);
+    expect(panel.querySelector(".force-interval-note")).toBe(note);
+    app.beginEdit();
+    body.constForce.x = 3;
+    app.commitEdit();
+    inspector.refresh();
+    expect(panel.querySelector(".force-interval-note")?.textContent).toContain("Current applied forces");
+  });
+
   it("selects displacement from View and follows graph changes without replacing its control", () => {
     const { app, panel, inspector } = makeInspector();
     [...panel.querySelectorAll<HTMLButtonElement>("[role=tab]")]

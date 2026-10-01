@@ -101,6 +101,9 @@ position, constraint corrections, performance packing slots/stamps, and prior
 acceleration samples. The per-particle free-body-diagram toggle and slope
 reference are view state and are absent too. These values are interaction,
 analysis, solver scratch, or preset-only hints and are rebuilt as needed.
+The realised `netForce` and optional immutable named-force `forceSnapshot`
+are also absent. Restoring a scene starts with a current-force preview until
+another recorded step supplies a consistent force interval.
 
 ## Wall documents
 

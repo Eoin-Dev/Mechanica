@@ -12,7 +12,8 @@ function normalizeCssColor(value: string): string {
   return value.replace(/\s+/g, "");
 }
 
-async function loadMeasurementParticle(page: Page, settings: Record<string, unknown> = {}): Promise<void> {
+async function loadMeasurementParticle(page: Page, settings: Record<string, unknown> = {},
+    fields: Array<{ name: string; fx: string; fy: string; enabled: boolean }> = []): Promise<void> {
   await page.setViewportSize({ width: 1440, height: 900 });
   await skipFirstRunTour(page, { theme: "light", studio_mode: true });
   await page.goto("/");
@@ -22,7 +23,7 @@ async function loadMeasurementParticle(page: Page, settings: Record<string, unkn
   const choosing = page.waitForEvent("filechooser");
   await library.getByRole("button", { name: "Import .json", exact: true }).click();
   await (await choosing).setFiles({ name: "Measurements.json", mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify({ settings: { gravity: 0, ...settings }, bodies: [{
+    buffer: Buffer.from(JSON.stringify({ settings: { gravity: 0, ...settings }, fields, bodies: [{
       id: 1, name: "Measurement particle 📐", pos: [7, -4], vel: [-3, 4], radius: 0.2, mass: 2,
     }] })) });
   await expect(library).toBeHidden();
@@ -36,6 +37,73 @@ async function loadMeasurementParticle(page: Page, settings: Record<string, unkn
   await canvas.click({ position: { x: box.width / 2, y: box.height / 2 } });
   await expect(page.locator("#dock .dock-hint")).toContainText("sx is positive right");
 }
+
+test("free-body diagrams use one interval and retain their view choice through undo", async ({ page }, testInfo) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.addInitScript(() => {
+    const labels: string[] = [];
+    Object.defineProperty(window, "forceDiagramLabels", { value: labels });
+    const original = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function(text, x, y, maxWidth) {
+      if (/^[FRCD] \d/.test(text)) {
+        labels.push(text);
+        if (labels.length > 100) labels.shift();
+      }
+      if (maxWidth === undefined) original.call(this, text, x, y);
+      else original.call(this, text, x, y, maxWidth);
+    };
+  });
+  await loadMeasurementParticle(page, { integrator: "RK4", substeps: 1 }, [
+    { name: "Changing horizontal force", fx: "120*t", fy: "0", enabled: true },
+  ]);
+  await page.getByRole("tab", { name: "Selection", exact: true }).click();
+  const toggle = page.getByRole("checkbox", { name: "Free-body forces on canvas", exact: true });
+  await toggle.check();
+  const note = page.locator(".force-interval-note");
+  await expect(note).toContainText("Step once");
+  await page.locator("#canvas").focus();
+  await page.keyboard.press(".");
+  await expect(note).toContainText("Average forces: 0.008–0.017 s");
+  const labels = await page.evaluate(() =>
+    (window as unknown as { forceDiagramLabels: string[] }).forceDiagramLabels);
+  expect(labels).toContain("F 1.50 N");
+  expect(labels.some(label => label.startsWith("R ") || label.startsWith("C "))).toBe(false);
+  await page.screenshot({ path: testInfo.outputPath("force-diagram-desktop.png") });
+  await page.getByRole("textbox", { name: "Mass (type an exact value)", exact: true }).fill("3");
+  await page.getByRole("textbox", { name: "Mass (type an exact value)", exact: true }).press("Enter");
+  await expect(note).toContainText("Current applied forces");
+  await page.locator("#canvas").focus();
+  await page.keyboard.press("Control+z");
+  // Undo clears selection while retaining presentation on surviving particles.
+  await page.keyboard.press("f");
+  const canvasBox = (await page.locator("#canvas").boundingBox())!;
+  await page.locator("#canvas").click({ position: { x: canvasBox.width / 2, y: canvasBox.height / 2 } });
+  await expect(toggle).toBeChecked();
+  await expect(note).toContainText("Step once");
+  await page.locator("#canvas").focus();
+  await page.keyboard.press(".");
+  await expect(note).toContainText("Average forces");
+  for (const [layout, width, height] of [["phone", 390, 844], ["enlarged", 1100, 850]] as const) {
+    await page.setViewportSize({ width, height });
+    if (layout === "phone") {
+      await page.getByRole("button", { name: "Open Inspector", exact: true }).click();
+    } else {
+      await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
+    }
+    await note.scrollIntoViewIfNeeded();
+    await expect(note).toBeVisible();
+    const bounds = await note.evaluate(element => ({
+      client: element.clientWidth, scroll: element.scrollWidth,
+      x: element.getBoundingClientRect().x, right: element.getBoundingClientRect().right,
+    }));
+    expect(bounds.scroll).toBeLessThanOrEqual(bounds.client + 1);
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.right).toBeLessThanOrEqual(width);
+    await page.screenshot({ path: testInfo.outputPath(`force-diagram-${layout}.png`) });
+  }
+  expect(errors).toEqual([]);
+});
 
 test("force-field recipes capture gravity, undo, save and follow analytic drag", async ({ page }) => {
   const errors: string[] = [];

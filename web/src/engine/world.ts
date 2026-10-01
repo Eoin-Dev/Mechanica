@@ -32,6 +32,7 @@
 import { CompiledExpr, ExprError, compileExpr } from "../core/expr";
 import { arrayOr, boolOr, idOr, intIn, numIn, numOr, strOr } from "../core/guards";
 import { Vec2 } from "../core/vec";
+import { ForceRecorder } from "./force-diagnostics";
 import {
   Body, BodyDict, SCENE_MAX_COORDINATE, SCENE_MAX_FORCE,
   SCENE_MAX_SURFACE_SPEED, SCENE_MAX_VELOCITY, Wall, WallDict,
@@ -428,12 +429,18 @@ export class World {
   // The array grows geometrically and is reused; the ordinary force path pays
   // no allocation even when the overlay is enabled or a scene is large.
   private diagnosticVel = new Float64Array(0);
+  private forceRecorder = new ForceRecorder();
+
+  /** Discard completed force intervals after an edit. Headless callers can
+   * use this when changing authored forces without advancing the world. */
+  clearForceDiagnostics(): void { this.forceRecorder.clear(this.bodies); }
   // Enabled drivers, resolved against their (movable) body and flattened
   // once per step: the id->body lookup, the inverse mass and the direction's
   // sine and cosine are all fixed for the step, and a force evaluation
   // happens up to four times per slice.
   private driven: Array<{
     body: Body; amplitude: number; frequency: number; phase: number;
+    index: number;
     ax: number; ay: number; // unit direction already divided by mass
   }> = [];
   private noCollide = new Set<string>();
@@ -624,7 +631,8 @@ export class World {
       const byId = this.driverBodies;
       byId.clear();
       for (const b of this.bodies) byId.set(b.id, b);
-      for (const drv of this.drivers) {
+      for (let index = 0; index < this.drivers.length; index++) {
+        const drv = this.drivers[index];
         if (!drv.enabled) continue;
         const b = byId.get(drv.bodyId);
         if (b === undefined || b.isRodEndpoint) continue;
@@ -634,6 +642,7 @@ export class World {
         // taken once here rather than on every force evaluation
         this.driven.push({
           body: b, amplitude: drv.amplitude, frequency: drv.frequency,
+          index,
           phase: drv.phase,
           ax: Math.cos(drv.angle) * invM, ay: Math.sin(drv.angle) * invM,
         });
@@ -730,12 +739,13 @@ export class World {
   }
 
   /** Fill body.acc with the total smooth acceleration at the current state. */
-  private accumulateForces(t: number): void {
+  private accumulateForces(t: number, diagnosticWeight = 0): void {
     const g = this.gravity;
     const c1 = this.dragLinear;
     const c2 = this.dragQuadratic;
     const movers = this.movers;
     const invMass = this.moverInvMass;
+    const recorder = diagnosticWeight !== 0 && this.forceRecorder.active ? this.forceRecorder : null;
     // Immovable bodies contribute nothing and are simply cleared; the
     // movers below assign outright, so zeroing them here is redundant but
     // costs two stores against a getter call it avoids.
@@ -753,6 +763,11 @@ export class World {
       const invM = invMass[i];
       let ax = b.constForce.x * invM;
       let ay = b.constForce.y * invM - g;
+      if (recorder !== null) {
+        recorder.add(b, "weight", "Weight", "weight", 0, -b.mass * g, diagnosticWeight);
+        recorder.add(b, "applied", "Applied force", "applied",
+          b.constForce.x, b.constForce.y, diagnosticWeight);
+      }
       if (drag) {
         const vx = b.vel.x;
         const vy = b.vel.y;
@@ -760,20 +775,39 @@ export class World {
         const d = (c1 + c2 * speed) * invM;
         ax -= d * vx;
         ay -= d * vy;
+        if (recorder !== null) recorder.add(b, "drag", "Air resistance", "drag",
+          -d * vx * b.mass, -d * vy * b.mass, diagnosticWeight);
       }
       b.acc.x = ax;
       b.acc.y = ay;
     }
 
-    if (this.mutualGravity && this.G !== 0.0) this.accumulateGravity();
+    if (this.mutualGravity && this.G !== 0.0) {
+      recorder?.captureAcceleration();
+      this.accumulateGravity();
+      recorder?.accelerationChange("mutual-gravity", "Mutual gravity", "gravity", diagnosticWeight);
+    }
 
     // Performance mode's springs are position constraints solved after the
     // integrator, not forces fed into it - which is the whole reason it can
     // no longer be exploded by a stiffness setting. See perf.ts.
     if (!this.performance) {
-      for (const s of this.springs) s.applyForces();
+      for (const s of this.springs) {
+        s.applyForces();
+        if (recorder !== null && s.axialForce !== 0) {
+          const dx = s.b.pos.x - s.a.pos.x;
+          const dy = s.b.pos.y - s.a.pos.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          const fx = s.axialForce * dx / distance;
+          const fy = s.axialForce * dy / distance;
+          const kind = s.tensionOnly ? "string" : "spring";
+          const label = s.tensionOnly ? "Elastic-string tension" : "Spring force";
+          recorder.add(s.a, `spring-${s.id}`, label, kind, fx, fy, diagnosticWeight, s.axialForce);
+          recorder.add(s.b, `spring-${s.id}`, label, kind, -fx, -fy, diagnosticWeight, s.axialForce);
+        }
+      }
     }
-    this.applyDriversAndFields(t);
+    this.applyDriversAndFields(t, diagnosticWeight);
   }
 
   // Flat scratch for the O(n^2) attraction pass, grown geometrically and
@@ -936,7 +970,8 @@ export class World {
   /** Sinusoidal drivers, user force fields and the rod tension solve - the
    * tail of accumulateForces, split out only to keep that function short
    * enough to read alongside the packed attraction pass above. */
-  private applyDriversAndFields(t: number): void {
+  private applyDriversAndFields(t: number, diagnosticWeight: number): void {
+    const recorder = diagnosticWeight !== 0 && this.forceRecorder.active ? this.forceRecorder : null;
     if (this.driven.length > 0) {
       const TAU = 2 * Math.PI;
       for (const d of this.driven) {
@@ -947,12 +982,25 @@ export class World {
         const b = d.body;
         b.acc.x += f * d.ax;
         b.acc.y += f * d.ay;
+        recorder?.add(b, `driver-${d.index}`, "Driving force", "driver",
+          f * d.ax * b.mass, f * d.ay * b.mass, diagnosticWeight);
       }
     }
 
-    if (this.fields.length > 0) this.applyFields(t);
-    this.solveRodForces();
-    this.solvePulleyForces();
+    if (this.fields.length > 0) this.applyFields(t, diagnosticWeight);
+    if (this.rods.length > 0 || this.rodAttachments.length > 0) {
+      recorder?.captureAcceleration();
+      this.solveRodForces(diagnosticWeight);
+      const mounted = this.rodAttachments.length > 0;
+      recorder?.accelerationChange(mounted ? "rod-support" : "rod-roundoff",
+        mounted ? "Rod attachment reaction" : "Rod numerical correction",
+        mounted ? "reaction" : "correction", diagnosticWeight);
+    }
+    if (this.pulleys.length > 0) {
+      recorder?.captureAcceleration();
+      this.solvePulleyForces(diagnosticWeight);
+      recorder?.accelerationChange("pulley-stop", "Pulley-frame reaction", "reaction", diagnosticWeight);
+    }
   }
 
   // One environment record, refilled per body rather than rebuilt. It is
@@ -968,12 +1016,14 @@ export class World {
    * getter three times, and a single environment record refilled in place
    * instead of an object literal allocated per body per field per
    * evaluation. */
-  private applyFields(t: number): void {
+  private applyFields(t: number, diagnosticWeight: number): void {
     const movers = this.movers;
     const invMass = this.moverInvMass;
     const env = this.fieldEnv;
+    const recorder = diagnosticWeight !== 0 && this.forceRecorder.active ? this.forceRecorder : null;
     env.t = t;
-    for (const field of this.fields) {
+    for (let fieldIndex = 0; fieldIndex < this.fields.length; fieldIndex++) {
+      const field = this.fields[fieldIndex];
       if (!field.enabled || field.fx === null || field.fy === null) continue;
       const fx = field.fx;
       const fy = field.fy;
@@ -997,6 +1047,8 @@ export class World {
           if (Number.isFinite(ax) && Number.isFinite(ay)) {
             b.acc.x += ax;
             b.acc.y += ay;
+            recorder?.add(b, `field-${fieldIndex}`, field.name || `Field ${fieldIndex + 1}`, "field",
+              ax * b.mass, ay * b.mass, diagnosticWeight);
           }
         } catch {
           // singular point (e.g. overflow): skip this sample
@@ -1044,7 +1096,7 @@ export class World {
       2 * tangentCoeff * vr * vt / d;
   }
 
-  private solveRodForces(): void {
+  private solveRodForces(diagnosticWeight: number): void {
     const links = this.rods;
     const attachments = this.rodAttachments;
     if (links.length === 0 && attachments.length === 0) return;
@@ -1157,7 +1209,20 @@ export class World {
       }
       if (worst < 1e-9) break;
     }
-    for (let i = 0; i < n; i++) rodLink[i].mu = num[i * W + 6];
+    const recorder = diagnosticWeight !== 0 && this.forceRecorder.active ? this.forceRecorder : null;
+    for (let i = 0; i < n; i++) {
+      const link = rodLink[i];
+      const o = i * W;
+      link.mu = num[o + 6];
+      if (recorder !== null) {
+        const fx = link.mu * num[o + 3];
+        const fy = link.mu * num[o + 4];
+        const kind = link.isRope ? "string" : "rod";
+        const label = link.isRope ? "String tension" : "Rod force";
+        recorder.add(link.a, `distance-${link.id}`, label, kind, fx, fy, diagnosticWeight, link.mu);
+        recorder.add(link.b, `distance-${link.id}`, label, kind, -fx, -fy, diagnosticWeight, link.mu);
+      }
+    }
     // deliberately NOT truncated: emptying and regrowing these every call
     // makes V8 reallocate the backing store each time, which cost more
     // than the row objects they replaced. `n` alone bounds what is live.
@@ -1173,8 +1238,9 @@ export class World {
    * keep swinging legs accurate at speed; clamping the multiplier at zero
    * prevents a slack string pushing.
    */
-  private solvePulleyForces(): void {
+  private solvePulleyForces(diagnosticWeight: number): void {
     const links = this.pulleys;
+    const recorder = diagnosticWeight !== 0 && this.forceRecorder.active ? this.forceRecorder : null;
     if (links.length === 0) return;
     for (const ln of links) {
       // A routed leg is not allowed to change sides. Suppress the force row
@@ -1231,6 +1297,10 @@ export class World {
         if (Math.abs(dmu) < 1e-9) break;
       }
       ln.mu = mu;
+      recorder?.add(a, `pulley-${ln.id}`, "Pulley-string tension", "pulley",
+        -mu * nax, -mu * nay, diagnosticWeight);
+      recorder?.add(b, `pulley-${ln.id}`, "Pulley-string tension", "pulley",
+        -mu * nbx, -mu * nby, diagnosticWeight);
     }
     // The wheel is deliberately absent from the ordinary collision system,
     // but each particle still has to stop at the pulley frame. Cancel only
@@ -1424,7 +1494,7 @@ export class World {
     if (name === "RK4") {
       this.integrateRk4(h, t0);
     } else if (name === "Symplectic Euler") {
-      this.accumulateForces(t0);
+      this.accumulateForces(t0, h);
       for (const b of movers) {
         b.angle += b.omega * h;
         b.vel.x += b.acc.x * h;
@@ -1433,7 +1503,7 @@ export class World {
         b.pos.y += b.vel.y * h;
       }
     } else { // Velocity Verlet
-      this.accumulateForces(t0);
+      this.accumulateForces(t0, 0.5 * h);
       const half = 0.5 * h;
       this.verletEnsure(movers.length);
       const halfVel = this.verletHalfVelocity;
@@ -1453,7 +1523,7 @@ export class World {
         b.vel.x += b.acc.x * half;
         b.vel.y += b.acc.y * half;
       }
-      this.accumulateForces(t0 + h);
+      this.accumulateForces(t0 + h, half);
       for (let i = 0; i < movers.length; i++) {
         const b = movers[i];
         b.vel.x = halfVel[2 * i] + b.acc.x * half;
@@ -1492,8 +1562,8 @@ export class World {
 
   /** One RK4 stage: evaluate the derivative of [px, py, vx, vy] at time
    * `t` into `out`. */
-  private rkDeriv(t: number, out: Float64Array): void {
-    this.accumulateForces(t);
+  private rkDeriv(t: number, out: Float64Array, diagnosticWeight: number): void {
+    this.accumulateForces(t, diagnosticWeight);
     const movers = this.movers;
     for (let i = 0; i < movers.length; i++) {
       const b = movers[i];
@@ -1534,13 +1604,13 @@ export class World {
       x0[o + 3] = b.vel.y;
     }
 
-    this.rkDeriv(t0, k1);
+    this.rkDeriv(t0, k1, h / 6);
     this.rkLoad(x0, k1, 0.5 * h);
-    this.rkDeriv(t0 + 0.5 * h, k2);
+    this.rkDeriv(t0 + 0.5 * h, k2, h / 3);
     this.rkLoad(x0, k2, 0.5 * h);
-    this.rkDeriv(t0 + 0.5 * h, k3);
+    this.rkDeriv(t0 + 0.5 * h, k3, h / 3);
     this.rkLoad(x0, k3, h);
-    this.rkDeriv(t0 + h, k4);
+    this.rkDeriv(t0 + h, k4, h / 6);
 
     const sixth = h / 6.0;
     for (let i = 0; i < n; i++) {
@@ -1581,7 +1651,10 @@ export class World {
       this.diagnosticVel[2 * i] = b.vel.x;
       this.diagnosticVel[2 * i + 1] = b.vel.y;
     }
+    this.forceRecorder.begin(this.bodies, this.time);
+    const recorder = this.forceRecorder.active ? this.forceRecorder : null;
     this.prepareStep(h);
+    recorder?.velocityChange("initial-constraint", "Initial constraint correction", "correction");
     this.contacts = [];
     this.diverged = [];
     for (const b of this.bodies) {
@@ -1625,6 +1698,7 @@ export class World {
       // torque only arises from contacts, applied there)
       if (adaptive) this.integrateAdaptive(h, this.time);
       else this.integrate(h, this.time);
+      recorder?.captureVelocity();
 
       // Springs first, rods second: a rod is an exact constraint and must
       // have the final say where an assembly mixes the two.
@@ -1632,6 +1706,8 @@ export class World {
         const level = performanceLevel(this.performanceLevel);
         this.perf.solve(projected, h, PERF_SPRING_PASSES_BY_LEVEL[level]);
       }
+      recorder?.velocityChange("projected-springs", "Performance spring force", "spring");
+      recorder?.captureVelocity();
       if (this.pulleys.length > 0) {
         // A pulley row is cheap (two live tangent legs) but nonlinear.
         // Keep eight refinement passes even in the most aggressive tier so
@@ -1653,6 +1729,8 @@ export class World {
           rod.a.isRodEndpoint && rod.b.isRodEndpoint);
         this.solveRodPositions(rigid, invH, standalone ? Math.max(32, iters) : iters);
       }
+      recorder?.velocityChange("constraint-correction", "Constraint correction", "correction");
+      recorder?.captureVelocity();
 
       // `contacts` is a snapshot of the contacts that exist NOW, for the
       // overlay and the status-bar count - so each substep replaces the
@@ -1661,6 +1739,8 @@ export class World {
       solveContacts(this.bodies, this.walls, this.contacts, iters,
                     this.contactStatic.simplified ? null : this.contactCache,
                     this.contactStatic);
+      recorder?.velocityChange("contact", "Contact reaction", "reaction");
+      recorder?.captureVelocity();
       // A contact impulse is computed on the particle that touched the wall or
       // another body. Mounted particles must immediately hand the incompatible
       // part of that impulse to their massless beam/support; otherwise they
@@ -1671,6 +1751,8 @@ export class World {
       // particle stop after every other position solver so no later correction
       // can leave a particle inside the wheel for the next force evaluation.
       if (this.pulleys.length > 0) this.enforcePulleyStops(this.pulleys, true);
+      recorder?.velocityChange("constraint-stop", "Constraint / frame impulse", "reaction");
+      recorder?.captureVelocity();
 
       if (this.globalDamping > 0.0) {
         const decay = Math.max(0.0, 1.0 - this.globalDamping * h);
@@ -1680,6 +1762,8 @@ export class World {
           b.omega *= decay;
         }
       }
+      recorder?.velocityChange("global-damping", "Global damping", "drag");
+      recorder?.captureVelocity();
 
       // interactive speed caps (drag tone-down): clamping at the end of
       // every substep bounds whatever the integrator, springs, rods and
@@ -1701,11 +1785,14 @@ export class World {
       // substep did rather than only the springs: a hard speed ceiling, so
       // nothing can walk out to the range sanitize() has to freeze.
       if (projected !== null) clampSpeeds(this.bodies, PERF_MAX_SPEED);
+      recorder?.velocityChange("speed-limit", "Speed-limit correction", "correction");
 
       this.time += h;
     }
+    recorder?.captureVelocity();
     this.updatePerformanceSleep();
     this.sanitize();
+    recorder?.velocityChange("stability-guard", "Stability correction", "correction");
     // `acc` is the last smooth-force sample taken by the integrator. It does
     // not include wall/body impulses or the velocity feedback of positional
     // constraints, so m*acc was not a net-force vector. Publish m*delta-v/dt
@@ -1724,6 +1811,7 @@ export class World {
       }
     }
     this.stepCount++;
+    recorder?.finish(dt, this.time, this.stepCount);
   }
 
   /** XPBD position solve for the residual link drift, with the

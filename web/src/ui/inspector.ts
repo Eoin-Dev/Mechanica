@@ -8,7 +8,7 @@ import { App, GraphMode, Panel } from "../app";
 import { BODY_PALETTE, Body, Color, MATERIALS, Wall } from "../engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
-import { PlaybackEventKind, analysePulley } from "../education/analysis";
+import { PlaybackEventKind, analysePulley, forceLedger } from "../education/analysis";
 import { Selectable } from "../render/draw";
 import { isMathRenderable } from "../core/mathfmt";
 import { INSPECTOR_W_MAX, INSPECTOR_W_MIN, PHONE_QUERY, RefreshGroup, button,
@@ -561,7 +561,19 @@ export class Inspector implements Panel {
     this.sub("Forces on canvas");
     this.add(checkbox("Free-body forces on canvas", () => b.showForceComponents,
       (value) => { b.showForceComponents = value; app.invalidateCanvas(); },
-      "Draw every named force from this particle's centre. The final solver/contact reaction closes the arrows to the realised net force."));
+      "Draw forces from this particle's centre. After a step, all arrows use the same time interval as the resultant. R is a support/contact reaction; C is a numerical correction."));
+
+    const forceNote = el("div", { class: "faint settings-note force-interval-note" });
+    this.add({ root: forceNote, refresh: () => {
+      forceNote.hidden = !b.showForceComponents;
+      if (forceNote.hidden) return;
+      const ledger = forceLedger(app.world, b);
+      const text = ledger.mode === "step-average" && ledger.interval !== null ?
+        `Average forces: ${fmt3dp(ledger.interval.start)}–${fmt3dp(ledger.interval.end)} s. R: reaction; C: numerical correction.` :
+        ledger.mode === "resting" ? "Resting forces: weight and support balance." :
+          "Current applied forces. Step once to include link forces and contact reactions.";
+      if (forceNote.textContent !== text) forceNote.textContent = text;
+    } });
 
     const slope = el("select", { "aria-label": "Resolve forces relative to a slope" });
     slope.append(el("option", { value: "", text: "No slope components" }));

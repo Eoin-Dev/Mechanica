@@ -67,9 +67,10 @@ describe("education analysis", () => {
     const body = new Body(new Vec2(0, 1), 0.2, 2);
     body.vel.set(4, 0);
     body.constForce.set(3, 5);
-    body.netForce.set(1, -14.6);
+    body.showForceComponents = true;
+    body.collides = false;
     world.bodies.push(body);
-    world.stepCount = 1;
+    world.step(1 / 60);
 
     const ledger = forceLedger(world, body);
     const sum = ledger.entries.reduce(

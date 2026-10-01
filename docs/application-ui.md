@@ -373,8 +373,17 @@ For a single object it exposes type-specific state:
   its only physical editing actions, plus the pulley tension-overlay toggle.
 
 An ordinary selected particle can enable a free-body diagram directly on the
-canvas. It draws named weight, applied, drag, field, driver, link, contact, and
-solver-reaction arrows whose sum equals the realised resultant. An optional
+canvas. After stepping, it draws weight, applied, drag, field, driver, link,
+support/contact, and numerical-correction arrows averaged over the same
+interval as the realised resultant, with closure up to floating-point tolerance.
+The Inspector displays that interval and explains `R` (reaction) and `C`
+(numerical correction). Before a recorded step, or after an edit/restore, it
+previews current applied forces and prompts a step for link/contact forces.
+It does not reuse old solver multipliers or infer reactions from stale motion.
+Undo/redo preserve surviving particles' diagram/slope choices and surviving
+links' tension-overlay choices while discarding old force intervals.
+Event refinement and time seeking transfer those presentation choices before
+their final simulation pass so the paused result has recorded forces. An optional
 wall reference also shows components parallel and perpendicular to that slope.
 While this per-particle diagram is active, the selected body's default editable
 green velocity handle is hidden to avoid overlapping the force arrows; the

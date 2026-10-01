@@ -39,7 +39,7 @@ by the headless test suite.
 | External force | `constForce`, applied in newtons on every force evaluation. |
 | Modes | `locked`, `collides`, `noRotation`, `isAnchor`, `isPulley`, internal rod-support `isPivot`, hidden-coordinate `isRodEndpoint`, and optional `rodAttachmentId`/affine `rodAttachmentT`. |
 | Interaction transient | `held` makes the body infinite-mass during direct manipulation; `kinematicCorrectionRate` carries the pointer-derived rod feedback rate; `speedCap` bounds a dragged connected assembly in Performance mode. |
-| Solver transient | acceleration, realised step-average `netForce`, previous position, position-correction totals, contact/spring flags, performance-solver slots, contact mass gain, and prior acceleration samples. |
+| Solver transient | acceleration, realised step-average `netForce`, optional immutable `forceSnapshot`, previous position, position-correction totals, contact/spring flags, performance-solver slots, contact mass gain, and prior acceleration samples. |
 
 An anchor is represented by a body because links need the same endpoint shape.
 It is always locked, is named `Anchor`, does not participate in mutual gravity,
@@ -219,6 +219,36 @@ caches, scratch state, `time`, and `stepCount` unchanged.
 Every force evaluation clears body acceleration and accumulates terms in a
 fixed order.
 
+### Force-diagram interval accounting
+
+For particles with `showForceComponents` enabled, the headless `ForceRecorder`
+records the forces already evaluated during `World.step`. Euler samples carry
+weight `h`, Verlet samples `h/2`, and RK4 stages `h/6`, `h/3`, `h/3`, `h/6`.
+Adaptive slices use their own duration; extra adaptive seed evaluations carry
+zero weight. No expression is re-evaluated and recording never changes motion.
+The gravity row uses the actual acceleration change, including Performance
+mode's approximation and the exclusion of anchors and hidden rod coordinates.
+Link rows use their solved stage geometry and multipliers. Mounted-rod support
+and pulley-frame acceleration reactions are recorded separately.
+
+Post-integration velocity changes contribute impulses: projected Performance
+springs, contact normal/friction impulses, constraints/stops, global damping,
+and speed/stability guards. Dividing the accumulated impulses by the whole
+step's duration produces named forces over the same interval as `netForce`.
+Contact reactions remain available even when the contact ended before the last
+substep. Constraint projection and guard effects are identified as numerical
+corrections rather than unexplained contact reactions; floating-point closure
+noise is suppressed with an absolute and scale-relative tolerance.
+
+`Body.forceSnapshot` is immutable, transient, and allocated only for enabled
+particles. Recorder working references are released after a step. Edits call
+`World.clearForceDiagnostics`; headless editors should do the same after
+changing authored forces without stepping. `forceLedger` rejects intervals
+whose time/count or body position, velocity, mass, or resultant no longer match.
+Without a valid interval it previews current authored forces and asks the user
+to step for link/contact forces; it never balances them against a stale
+resultant. Resting Performance bodies retain their balanced support preview.
+
 ### Constant force, uniform gravity, and drag
 
 For each movable body:
@@ -235,7 +265,8 @@ and angular velocity by `max(0, 1 - globalDamping * h)` per substep.
 
 ### Mutual gravity
 
-Mutual gravity is an O(n²) symmetric pair pass over non-anchor bodies. Body
+Mutual gravity is an O(n²) symmetric pair pass excluding anchors and hidden rod
+endpoints. Body
 position, mass, radius, movability, and accumulated acceleration are packed
 into reusable typed arrays. Packing removes repeated getters/object hops while
 preserving pair order and therefore bit-for-bit accumulation order.

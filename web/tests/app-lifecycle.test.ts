@@ -6,6 +6,7 @@ import { App, PHYSICS_DT } from "../src/app";
 import { Body } from "../src/engine/body";
 import { DistanceLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
+import { forceLedger } from "../src/education/analysis";
 import { PRESETS } from "../src/scene/presets";
 import { Vec2 } from "../src/core/vec";
 import { listScenes, restoreSnapshot, snapshot } from "../src/scene/snapshot";
@@ -43,6 +44,64 @@ afterEach(() => {
 });
 
 describe("App construction", () => {
+  it("records forces during forward and backward time seeking with retained analysis choices", () => {
+    const app = makeApp();
+    app.newScene();
+    app.world.gravity = 0;
+    const body = new Body(new Vec2(0, 1), 0.2, 2);
+    body.showForceComponents = true;
+    body.collides = false;
+    body.constForce.x = 3;
+    app.edit(() => app.world.bodies.push(body));
+    expect(app.commitTimeJump("0.2")).toBe(true);
+    const forward = app.world.bodies[0];
+    expect(forward.showForceComponents).toBe(true);
+    expect(forceLedger(app.world, forward).mode).toBe("step-average");
+    expect(forceLedger(app.world, forward).entries[0].fx).toBeCloseTo(3, 12);
+    expect(app.commitTimeJump("0.1")).toBe(true);
+    const backward = app.world.bodies[0];
+    expect(backward.showForceComponents).toBe(true);
+    expect(forceLedger(app.world, backward).mode).toBe("step-average");
+    expect(forceLedger(app.world, backward).interval!.end).toBe(app.world.time);
+    expect(forceLedger(app.world, backward).entries[0].fx).toBeCloseTo(3, 12);
+  });
+
+  it("invalidates recorded forces across edit boundaries and preserves them through ordinary playback", () => {
+    const app = makeApp();
+    app.newScene();
+    app.world.gravity = 0;
+    const body = new Body(new Vec2(0, 1), 0.2, 2);
+    body.collides = false;
+    body.showForceComponents = true;
+    body.constForce.x = 3;
+    app.world.bodies.push(body);
+    app.stepOnce();
+    expect(forceLedger(app.world, body).mode).toBe("step-average");
+    app.beginEdit();
+    body.constForce.x = 7;
+    expect(body.forceSnapshot).toBeNull();
+    expect(forceLedger(app.world, body).resultant.fx).toBe(7);
+    app.commitEdit();
+    app.stepOnce();
+    expect(forceLedger(app.world, body).mode).toBe("step-average");
+    app.beginEdit();
+    body.constForce.x = 9;
+    app.cancelEdit();
+    expect(forceLedger(app.world, body).mode).toBe("current");
+    expect(forceLedger(app.world, body).resultant.fx).toBe(9);
+    app.stepOnce();
+    app.undo();
+    const restored = app.world.bodies[0];
+    expect(restored.showForceComponents).toBe(true);
+    expect(restored.forceSnapshot).toBeNull();
+    app.redo();
+    expect(app.world.bodies[0].showForceComponents).toBe(true);
+    expect(app.world.bodies[0].forceSnapshot).toBeNull();
+    const redone = app.world.bodies[0];
+    app.stepOnce();
+    expect(forceLedger(app.world, redone).mode).toBe("step-average");
+  });
+
   it("checkpoints edit, undo, redo, and pause states for recovery", () => {
     const app = makeApp();
     const checkpoint = vi.fn();
@@ -660,6 +719,7 @@ describe("event-aware playback", () => {
     const body = new Body(new Vec2(0, 0), 0.16, 1);
     body.vel.y = 14;
     body.collides = false;
+    body.showForceComponents = true;
     app.world.bodies.push(body);
     app.playbackEvents.selectedBodyId = body.id;
     app.playbackEvents.clear(app.world);
@@ -671,6 +731,9 @@ describe("event-aware playback", () => {
     expect(app.world.bodies[0].vel.y).toBeCloseTo(0, 5);
     expect(app.playbackEvents.events.at(-1)?.kind).toBe("apex");
     expect(checkpoint).toHaveBeenCalledExactlyOnceWith(snapshot(app.world));
+    const ledger = forceLedger(app.world, app.world.bodies[0]);
+    expect(ledger.mode).toBe("step-average");
+    expect(ledger.entries.map(entry => entry.kind)).toEqual(["weight"]);
   });
 
   it("bisects a first collision and stops at contact instead of a later frame", () => {
@@ -679,6 +742,7 @@ describe("event-aware playback", () => {
     const moving = new Body(new Vec2(-1, 0), 0.2, 1);
     const target = new Body(new Vec2(0, 0), 0.2, 1);
     moving.vel.x = 1;
+    moving.showForceComponents = true;
     moving.restitution = target.restitution = 0;
     app.world.bodies.push(moving, target);
     app.playbackEvents.clear(app.world);
@@ -689,6 +753,9 @@ describe("event-aware playback", () => {
     expect(app.world.time).toBeCloseTo(0.6, 4);
     expect(app.world.contacts.length).toBeGreaterThan(0);
     expect(app.playbackEvents.events.at(-1)?.kind).toBe("contact");
+    const ledger = forceLedger(app.world, app.world.bodies.find(body => body.id === moving.id)!);
+    expect(ledger.mode).toBe("step-average");
+    expect(ledger.entries.some(entry => entry.id === "contact")).toBe(true);
   });
 });
 

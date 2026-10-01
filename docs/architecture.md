@@ -237,6 +237,12 @@ smooth `acc` sample cannot represent. `stepCount` then advances. Contacts
 stored on `World` are only the latest substep's contacts, which is what the
 renderer and status bar display.
 
+An optional headless force recorder uses the existing integrator samples and
+measured solver impulses to publish immutable named-force intervals for enabled
+particle diagrams. These use the same time interval as the realised resultant;
+they never feed back into physics. Edits invalidate them, scene JSON omits them,
+and undo/redo retain only surviving objects' analysis presentation choices.
+
 ## Rendering lifecycle
 
 `App` keeps a coalescing canvas generation. Resize, appearance/view changes,
