@@ -122,7 +122,8 @@ export class ForceRecorder {
   }
 
   add(body: Body, id: string, label: string, kind: ForceKind,
-      fx: number, fy: number, weight: number, axial = 0): void {
+      fx: number, fy: number, weight: number, axial = 0,
+      contactNx?: number, contactNy?: number): void {
     const record = this.records.get(body);
     if (record === undefined || weight === 0 ||
         !Number.isFinite(fx) || !Number.isFinite(fy)) return;
@@ -137,6 +138,9 @@ export class ForceRecorder {
     entry.x += x;
     entry.y += y;
     entry.axial += axial * weight;
+    if (contactNx !== undefined && contactNy !== undefined) {
+      entry.contactNx = contactNx; entry.contactNy = contactNy;
+    }
     record.x += x;
     record.y += y;
   }

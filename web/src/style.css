@@ -2115,3 +2115,61 @@ kbd {
     scroll-behavior: auto !important;
   }
 }
+
+/* Detached scientific graphs keep the app's panel, button and focus styling. */
+#graph-data.overlay { padding-inline: 24px; }
+.graph-data-panel { position: relative; overflow: visible; }
+.graph-data-header { border-radius: 10px 10px 0 0; }
+.graph-data-toolbar { display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.graph-data-view-buttons, .graph-data-variants { display: flex; gap: 4px; flex-wrap: wrap; }
+.graph-data-view-buttons { padding: 3px; border: 1px solid var(--outline);
+  border-radius: var(--radius); background: var(--bg); }
+.graph-data-view-buttons > button { border: 0; border-radius: 5px; background: transparent; }
+.graph-data-view-buttons > button.active { background: var(--accent-dark); color: var(--accent-dark-ink); }
+.graph-data-variants button.active { border-color: var(--accent); background: var(--accent-dark); color: var(--accent-dark-ink); }
+.graph-switch { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2;
+  width: 40px; min-height: 64px; padding: 8px; justify-content: center;
+  background: var(--panel); border-color: var(--outline); box-shadow: 0 3px 12px #0002; }
+.graph-switch-previous { left: -21px; border-radius: 9px 4px 4px 9px; }
+.graph-switch-next { right: -21px; border-radius: 4px 9px 9px 4px; }
+.graph-switch svg { width: 22px; height: 22px; }
+.graph-chart { min-width: 0; }
+.graph-chart-tools { display: flex; justify-content: flex-end; align-items: center;
+  gap: 5px; flex-wrap: wrap; margin-bottom: 8px; }
+.graph-chart-tools > button { min-width: 34px; justify-content: center; }
+.graph-zoom-level { min-width: 3em; text-align: right; font-variant-numeric: tabular-nums; }
+.graph-chart-surface { height: clamp(280px, 42vh, 440px); width: 100%; min-width: 0;
+  overflow: hidden; border: 1px solid var(--outline); border-radius: var(--radius);
+  background: var(--panel-light); touch-action: pan-y; }
+.graph-chart-surface > svg { display: block; width: 100%; height: 100%; }
+.graph-chart-surface:focus-visible { outline-offset: 3px; }
+.graph-chart-legend { display: flex; flex-wrap: wrap; gap: 7px; padding-top: 10px; }
+.graph-chart-channel { font-size: calc(12px * var(--fs, 1)); justify-content: flex-start; }
+.graph-chart-channel[aria-pressed="false"] { color: var(--text-dim); text-decoration: line-through; }
+.graph-chart-channel[aria-pressed="false"] .graph-chart-key { opacity: 0.35; }
+.graph-chart-key { display: inline-block; flex: none; width: 22px; border-top: 3px solid; }
+.graph-chart-reading { display: flex; flex-wrap: wrap; gap: 8px 16px; min-height: 45px;
+  align-items: center; padding: 10px 0 12px; font-size: calc(12px * var(--fs, 1));
+  font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.graph-chart-reading strong { font-weight: 600; }
+.graph-data-summary { margin-top: 14px; }
+.graph-data-pager { border-radius: 0 0 10px 10px; }
+.inspector-object-card { margin-top: 16px; padding: 12px;
+  border: 1px solid var(--outline); border-top: 3px solid var(--accent);
+  border-radius: var(--radius); background: var(--panel); min-width: 0; }
+.inspector-object-head { display: flex; align-items: center; gap: 10px;
+  padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--outline); }
+.inspector-object-head > h3 { font-size: calc(13px * var(--fs, 1)); margin: 0; }
+.inspector-particle-cue { width: 24px; height: 24px; flex: none; border-radius: 50%;
+  border: 2px solid var(--text); outline: 2px solid var(--accent); outline-offset: 2px;
+  position: relative; }
+.inspector-particle-cue::after { content: ""; position: absolute; left: 50%; top: 50%;
+  right: 2px; height: 2px; background: var(--bg); }
+@media (max-width: 600px) {
+  .graph-data-body { padding: 12px; }
+  :root[data-studio="true"] .graph-data-body { padding: 12px; }
+  .graph-data-actions { gap: 6px; }
+  .graph-data-actions > button:not(:last-child) { flex: 1 1 auto; justify-content: center; }
+  .graph-chart-surface { height: 320px; }
+}

@@ -168,6 +168,39 @@ test("a floor-supported pulley displays its coupled tension and reaction without
   expect(errors).toEqual([]);
 });
 
+test("a terminal pulley stop displays matching tensions and its rim reaction immediately", async ({ page }, testInfo) => {
+  const stoppedY = 1 - Math.sqrt(0.38 ** 2 - 0.22 ** 2);
+  await loadScene(page, { settings: { gravity: 9.81, substeps: 8, integrator: "Velocity Verlet" },
+    bodies: [
+      { id: 1, name: "Free mass", pos: [-0.22, -2.5], mass: 2, collides: false,
+        color: [50, 170, 150] },
+      { id: 2, name: "Stopped mass", pos: [0.22, stoppedY], mass: 1, collides: false,
+        color: [220, 130, 90] },
+      { id: 3, name: "Wheel", pos: [0, 1], is_pulley: true },
+    ], links: [{ type: "pulley", id: 1, a: 1, b: 2, pulley: 3 }] });
+  const toggle = page.getByRole("checkbox", { name: "Free-body forces on canvas", exact: true });
+  const sources = page.getByRole("list", { name: "Force values and sources", exact: true });
+  const summary = page.locator(".force-values > summary");
+  await pickParticle(page, [50, 170, 150]); await toggle.check(); await summary.click();
+  await expect(sources.getByRole("listitem").filter({ hasText: "Pulley-string tension" })).toContainText("Fy 19.62 N");
+  await pickParticle(page, [220, 130, 90]); await toggle.check(); await summary.click();
+  const tension = sources.getByRole("listitem").filter({ hasText: "Pulley-string tension" });
+  const reaction = sources.getByRole("listitem").filter({ hasText: "Pulley-frame reaction" });
+  await expect(tension).toContainText("Fy 19.62 N");
+  await expect(reaction).toContainText("Fy -9.81 N");
+  await expect(sources).not.toContainText("correction");
+  const clock = page.getByRole("textbox", { name: "Simulation time in seconds", exact: true });
+  await expect(clock).toHaveValue("0.00");
+  await page.locator("#canvas").focus(); await page.keyboard.press(".");
+  await expect(clock).toHaveValue("0.02");
+  await expect(tension).toContainText("Fy 19.62 N");
+  await expect(reaction).toContainText("Fy -9.81 N");
+  await expect(sources).not.toContainText("correction");
+  await page.screenshot({ path: testInfo.outputPath("terminal-pulley-forces.png") });
+  expect((await new AxeBuilder({ page }).include("#inspector")
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze()).violations).toEqual([]);
+});
+
 test("rewinding restores completed impact captions and their measured interval after separation", async ({ page }, testInfo) => {
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(() => {

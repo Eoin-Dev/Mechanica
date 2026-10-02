@@ -402,6 +402,9 @@ destination Inspector, scrolls it to the top and focuses its tab panel. The
 navigation handler does not create an edit boundary, clear recorded forces or
 add undo history; an outstanding field edit follows its normal commit/cancel
 lifecycle.
+An endpoint's own controls sit in a separate bordered card beneath navigation.
+Its Particle A/B header includes a selected disc in that particle's colour,
+so the properties remain visually associated with the selected endpoint.
 Pulley membership participates in the particle's structure key so dismantling
 an assembly removes its navigation and restores ordinary radius editing.
 Single- and multi-selected pulley strings label their slider String length;
@@ -774,31 +777,62 @@ Detached wheel zoom
 clamps the view using the new span while retaining the time under the cursor
 where the retained history permits it.
 
-The **Data** action opens a themed **Graph data** modal for the active graph.
-It is disabled when that graph has no recorded samples. Opening forces a
-current-state sample and copies every retained row and channel, including hidden
-channels and samples outside the plot's current zoom. Subsequent playback,
-edits, selection changes, history eviction and clearing cannot alter this fixed
-snapshot. Closing releases the copied data and table rows.
+The **Data** action opens a themed **Graph data** modal, initially showing the
+active graph. It is disabled when that graph has no recorded samples. Opening
+forces one current-state sample and copies all six graph families, including
+hidden channels and samples outside the dock's current zoom. The protruding
+Previous graph/Next graph tabs navigate those fixed measurements without
+changing the live dock. Subsequent playback, edits, selection changes, history
+eviction and clearing cannot alter them. Closing releases all copied families,
+chart content and table rows, and disconnects resize and appearance-preference
+observation.
+
+The default **Graph** view labels both axes with physical quantities and units.
+Momentum separates Linear and Angular dimensions; Phase separates x–vx and
+y–vy pairs. Channel buttons use distinct colours and line patterns and only
+change the detached chart. Hover selects an actual stored coordinate, with a
+crosshair, marker and precise readout. The chart is keyboard focusable: Left/Right
+move between samples, Up/Down select channels, and Home/End reach the retained
+boundaries. Keyboard inspection announces values; pointer inspection avoids
+continuous live announcements. Phase readouts include the sample's clock.
+Time plots retain bucket extrema and endpoints when drawing bounded paths;
+hover, numbers and CSV still use full retained rows. No graph animation or
+background sampling is added by this viewer. Visible axis labels follow the
+application's text scale and inherited font. Appearance changes refresh the
+curves and legend keys while the snapshot is open; image exports use explicit
+system fonts so the SVG can render independently of the page.
+
+The graph's name is the modal's main heading, with its position among the six
+families beneath it. **Zoom in**, **Zoom out** and **Fit** adjust both axes of
+the detached plot. The mouse wheel zooms around the pointer inside the plot;
+outside it, normal scrolling remains available. Focused charts also accept
+`+`/`-` for zoom and `0` for Fit. Curves and coordinate markers clip to the plot,
+and PNG export preserves its current visible range. Switching graph families
+or physical dimensions restores the full range.
 
 The summary names the graph, sample count and simulation-clock window. Particle
 graphs include a text-only name/ID; kinematics also expose the measurement's
 reference time and world position through `App.kinematicsReference`. The getter
 returns a detached value and follows selection, Clear and rewind rebasing.
-Momentum explicitly identifies the centre-of-mass angular reference. A semantic
-table previews twelve significant figures, with exact stored values in cell
+Momentum explicitly identifies the centre-of-mass angular reference. **Numbers**
+reveals a semantic table previewing twelve significant figures, with exact stored values in cell
 tooltips. Previous/Next show at most 25 sample rows at a time, retain their
 nodes, disable at boundaries, and announce the current range. The table region
 supports keyboard focus and independent two-dimensional scrolling. Surrounding
-controls and summary reflow on narrow layouts and enlarged text. Paging stays
-visible in a persistent footer outside the scrollable body.
+controls and summary reflow on narrow layouts and enlarged text. In Numbers
+view, paging stays visible in a persistent footer outside the scrollable body.
 
 **Export CSV** downloads every snapshot row with SI-unit headers and full stored
-number precision. Kinematic rows include body ID and reference time/position;
+number precision, including channels hidden in the detached chart. Kinematic rows include body ID and reference time/position;
 phase rows include body ID. Names never enter CSV or filenames. Empty exports
 are disabled. Download failures retain the snapshot and show an inline retry
 message. Temporary anchors are removed and object URLs released after the
-browser can start reading them, including click-failure paths. The modal traps
+browser can start reading them, including click-failure paths. **Export PNG**
+renders the visible channels at 2400 by 1440 pixels with axes, legend, sample
+count and numeric particle/reference context. Rendering failures retain the
+snapshot for retry; closing prevents an unfinished export from downloading.
+An export already started keeps its original graph and filename if navigation
+changes the displayed family. The modal traps
 focus, restores its Data opener and participates in global shortcut precedence;
 underlying scene edits and playback shortcuts cannot run through it.
 

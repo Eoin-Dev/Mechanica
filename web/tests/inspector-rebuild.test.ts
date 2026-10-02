@@ -524,6 +524,22 @@ describe("Pulley assembly navigation", () => {
     expect(part.getAttribute("aria-label")).toBe("Select particle A: <b>Mass 📐</b>");
   });
 
+  it("separates the selected particle's controls with a retained matching colour cue", () => {
+    const { app, panel, inspector, a, b } = assembly();
+    app.setSelection([a]); inspector.refresh();
+    const card = panel.querySelector<HTMLElement>('[aria-label="Particle A properties"]')!;
+    expect(card).not.toBeNull();
+    expect(card.previousElementSibling!.classList.contains("pulley-assembly")).toBe(true);
+    expect(card.querySelector('input[aria-label="Name"]')).not.toBeNull();
+    const cue = card.querySelector<HTMLElement>(".inspector-particle-cue")!;
+    a.color = [22, 44, 66]; inspector.refresh();
+    expect(cue.style.backgroundColor).toBe("rgb(22, 44, 66)");
+    expect(panel.querySelector(".inspector-particle-cue")).toBe(cue);
+    app.setSelection([b]); inspector.refresh();
+    expect(panel.querySelector('[aria-label="Particle A properties"]')).toBeNull();
+    expect(panel.querySelector('[aria-label="Particle B properties"]')).not.toBeNull();
+  });
+
   it("explains colon-separated pulley values without replacing a focused label", () => {
     const { app, panel, inspector, wheel, a } = assembly();
     app.setSelection([wheel]); inspector.refresh();

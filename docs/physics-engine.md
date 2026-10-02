@@ -256,9 +256,14 @@ instantaneous peak impact. Smooth forces retain their centre origin.
 Velocity-change accounting subtracts individually named impulses;
 support anchoring/roundoff residuals remain numerical corrections.
 Contact reactions remain available even when the contact ended before the last
-substep. Constraint projection and guard effects are identified as numerical
-corrections rather than unexplained contact reactions; floating-point closure
-noise is suppressed with an absolute and scale-relative tolerance.
+substep. Pulley position and velocity rows record their common string impulse
+as tension on both legs. A frame or routing stop records the opposing part
+removed by its feasible gradient, separately from tension. These measured rows
+are subtracted from the remaining velocity change, so enforcing a taut string
+does not appear as an extra numerical force beside an incomplete tension.
+Unassigned projection, guard and floating-point effects remain numerical
+corrections; closure noise is suppressed with an absolute and scale-relative
+tolerance.
 
 `Body.forceSnapshot` is immutable, transient, and allocated only for enabled
 particles. Recorder working references are released after a step. Edits call
@@ -273,7 +278,17 @@ forces, predicts velocities over one nominal solver interval at fixed geometry
 and calculates loaded contact impulses. A microscopic query-only skin includes
 exact tangencies. Tighter query-only contact tolerances and at most 24 coupled
 link/support iterations improve static load estimates; live solver settings
-remain unchanged. Current resultants sum the calculated forces directly,
+remain unchanged. Query-only pulley rows include active terminal-frame and
+routing projections in their response derivative. This shares the stopped
+endpoint's load with its partner without requiring slow iteration through an
+extreme mass ratio. Resting contacts with fixed walls or particles supply a
+query-only projected response when friction is zero or string tension is normal
+to the contact. Their named reaction and measured impulse share the load,
+including when the supported particle's diagram is disabled. General oblique
+friction, rotating contacts and mobile support networks retain the bounded
+coupled contact iteration; this specialized response does not replace them. The copied frame also constrains predicted velocities, and
+its measured support feeds the next coupled iteration even if that endpoint's
+diagram is disabled. Current resultants sum the calculated forces directly,
 avoiding cancellation from subtracting large nearly equal velocities.
 
 The query neither integrates positions nor calls the live stepper, changes
@@ -540,6 +555,20 @@ tangent calculations, it keeps at least eight nonlinear refinement passes even
 when the general Performance iteration budget falls further, including while a
 particle is at the wheel stop; tiered substeps, contact work, rendering
 simplification, and global speed guards still apply.
+
+After contact impulses and wheel stops, an inextensible pulley string also
+projects positive path velocity onto its non-stretching constraint. Position
+projection alone cannot guarantee a compatible final velocity, particularly
+after Verlet/RK4 trial accelerations or a contact impulse. Up to eight coupled
+passes remove the positive path derivative in the mass metric, using the
+feasible frame/routing gradients and recording the common tension impulse and
+blocked support separately. This projection cannot increase kinetic energy in
+a free assembly. A held endpoint may supply external work. Shortening velocity
+is allowed to make a string slack; slack strings and nonzero-compliance rows
+receive no velocity impulse. The tautness skin is `1e-7` m and the positive
+rate cutoff is `1e-10` m/s. Gradient scratch vectors are reused, and the pass
+exits immediately when no row requires an impulse. Performance mode retains
+this constraint at every quality level.
 
 ### Performance-mode spring projection
 

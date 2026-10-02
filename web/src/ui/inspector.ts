@@ -480,15 +480,18 @@ export class Inspector implements Panel {
       }
       return;
     }
+    let selectedPulley: PulleyLink | null = null;
     if (sel.length === 1) {
       const selected = sel[0];
       for (const link of app.world.links) {
         if (link instanceof PulleyLink &&
             (link === selected || link.a === selected || link.b === selected || link.pulley === selected)) {
           this.buildPulleyAssembly(link);
+          selectedPulley = link;
         }
       }
     }
+    const objectStart = this.body.childElementCount;
     if (sel.length === 1 && sel[0] instanceof Body) {
       if (sel[0].isPulley) this.buildSinglePulley();
       else if (sel[0].isPivot) this.buildSinglePivot(sel[0]);
@@ -499,6 +502,20 @@ export class Inspector implements Panel {
       this.buildLink(sel[0] as DistanceLink | SpringLink | PulleyLink);
     }
     else this.buildMulti(sel);
+    const particle = sel[0];
+    if (selectedPulley && sel.length === 1 && particle instanceof Body &&
+        (particle === selectedPulley.a || particle === selectedPulley.b)) {
+      const part = particle === selectedPulley.a ? "Particle A" : "Particle B";
+      const cue = el("span", { class: "inspector-particle-cue", "aria-hidden": "true" });
+      const head = el("div", { class: "inspector-object-head" }, cue, el("h3", { text: part }));
+      const card = el("div", { class: "inspector-object-card", role: "group",
+        "aria-label": `${part} properties` }, head, ...[...this.body.children].slice(objectStart));
+      this.body.append(card);
+      this.group.add({ root: head, refresh: () => {
+        const colour = `rgb(${particle.color.join(", ")})`;
+        if (cue.style.backgroundColor !== colour) cue.style.backgroundColor = colour;
+      } });
+    }
   }
 
   private nameEdit(obj: { name: string }): void {

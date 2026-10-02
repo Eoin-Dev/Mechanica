@@ -512,6 +512,7 @@ test("recorded graph data exports every graph family and stays fixed during play
     }
     if (mode === "Displacement") {
       expect(header).toContain("time_s,sx_m,sy_m");
+      await dialog.getByRole("button", { name: "Numbers", exact: true }).click();
       await expect(dialog.getByRole("columnheader", { name: "sy (m)", exact: true })).toBeVisible();
     }
     await dialog.getByRole("button", { name: "Close graph data", exact: true }).click();
@@ -544,6 +545,7 @@ test("graph data pages fit themes, phones and enlarged text with keyboard access
   const dialog = page.getByRole("dialog", { name: "Graph data", exact: true });
   await expect(dialog).toBeVisible();
   await expect(dialog).toBeFocused();
+  await dialog.getByRole("button", { name: "Numbers", exact: true }).click();
   await expect(dialog.locator("tbody tr")).toHaveCount(25);
   const previous = dialog.getByRole("button", { name: "Previous", exact: true });
   const next = dialog.getByRole("button", { name: "Next", exact: true });
@@ -571,6 +573,7 @@ test("graph data pages fit themes, phones and enlarged text with keyboard access
       await expect(settings).toBeHidden();
       await dataButton.click();
       await expect(dialog).toBeVisible();
+      await dialog.getByRole("button", { name: "Numbers", exact: true }).click();
       await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     }
     if (layout === "enlarged") await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
@@ -585,17 +588,20 @@ test("graph data pages fit themes, phones and enlarged text with keyboard access
       await page.keyboard.press("Escape");
       await dataButton.click();
       await expect(dialog).toBeVisible();
+      await dialog.getByRole("button", { name: "Numbers", exact: true }).click();
       await expect(page.locator("html")).toHaveAttribute("data-theme", "void");
       await expect(page.locator("html")).toHaveAttribute("data-studio", "false");
     }
     const geometry = await dialog.evaluate(panel => ({
-      panel: panel.scrollWidth <= panel.clientWidth,
+      tabs: [...panel.querySelectorAll(".graph-switch")].every(tab => {
+        const bounds = tab.getBoundingClientRect(); return bounds.left >= 0 && bounds.right <= innerWidth;
+      }),
       body: panel.querySelector<HTMLElement>(".graph-data-body")!.scrollWidth <=
         panel.querySelector<HTMLElement>(".graph-data-body")!.clientWidth,
       region: panel.querySelector<HTMLElement>(".graph-data-table-region")!.getBoundingClientRect().right,
       viewport: innerWidth,
     }));
-    expect(geometry.panel).toBe(true);
+    expect(geometry.tabs).toBe(true);
     expect(geometry.body).toBe(true);
     expect(geometry.region).toBeLessThanOrEqual(geometry.viewport);
     await expect(dialog.getByRole("button", { name: "Export CSV", exact: true })).toBeInViewport({ ratio: 1 });
@@ -605,7 +611,7 @@ test("graph data pages fit themes, phones and enlarged text with keyboard access
     await dialog.getByRole("button", { name: "Export CSV", exact: true }).focus();
     // Browsers can add a native focus stop for an overflowing body. Walk the
     // actual tab sequence and require both containment and a reachable table.
-    for (let i = 0; i < 5 && !await region.evaluate(element => element === document.activeElement); i++) {
+    for (let i = 0; i < 10 && !await region.evaluate(element => element === document.activeElement); i++) {
       await page.keyboard.press("Tab");
       expect(await dialog.evaluate(panel => panel.contains(document.activeElement))).toBe(true);
     }
@@ -626,6 +632,8 @@ test("graph data pages fit themes, phones and enlarged text with keyboard access
     await page.screenshot({ path: test.info().outputPath(`graph-data-${layout}.png`) });
   }
   await dialog.getByRole("button", { name: "Close graph data", exact: true }).focus();
+  await page.keyboard.press("Shift+Tab");
+  await expect(dialog.getByRole("button", { name: "Export PNG", exact: true })).toBeFocused();
   await page.keyboard.press("Shift+Tab");
   await expect(dialog.getByRole("button", { name: "Export CSV", exact: true })).toBeFocused();
   await page.keyboard.press("Shift+Tab");

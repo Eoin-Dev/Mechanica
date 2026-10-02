@@ -93,6 +93,18 @@ test("wall dragging defaults on and pulley navigation, readings and contact choi
     for (const destination of ["Select pulley string", "Select particle B: Right mass", "Select particle A: Left mass", "Select pulley wheel"]) {
       await inspector.getByRole("button", { name: destination, exact: true }).click();
       expect(await panel.locator(":scope > *").first().textContent()).toBe("Pulley assembly");
+      if (destination.includes("particle A")) {
+        const card = inspector.getByRole("group", { name: "Particle A properties", exact: true });
+        await expect(card.getByRole("heading", { name: "Particle A", exact: true })).toBeVisible();
+        await expect(card.locator(".inspector-particle-cue")).toBeVisible();
+        expect(await card.evaluate(element => {
+          const previous = element.previousElementSibling!;
+          return element.getBoundingClientRect().top - previous.getBoundingClientRect().bottom;
+        })).toBeGreaterThanOrEqual(15);
+        expect((await new AxeBuilder({ page }).include("#inspector")
+          .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze()).violations).toEqual([]);
+        await inspector.screenshot({ path: testInfo.outputPath(`pulley-particle-card-${layout}.png`) });
+      }
     }
     const scan = await new AxeBuilder({ page }).include("#inspector")
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze();

@@ -6,6 +6,7 @@ import { Vec2 } from "../src/core/vec";
 import { PhasePlot, TimeSeries } from "../src/ui/plots";
 import { GraphDataDialog, captureGraphData, downloadGraphData, graphCSV } from "../src/ui/graph-data";
 import { button } from "../src/ui/dom";
+import { GraphSnapshotChart } from "../src/ui/graph-view";
 
 function source(mode: GraphMode = "Energy"): App {
   const body = new Body(new Vec2(7, -4), 0.2, 1);
@@ -96,6 +97,13 @@ describe("recorded graph data", () => {
     expect(captureGraphData(source("Off"))).toBeNull();
   });
 
+  it("captures another graph family without changing the live dock", () => {
+    const app = source();
+    app.velocitySeries.add(2, { Speed: 5, vx: -3, vy: 4 });
+    expect(captureGraphData(app, "Velocity")!.rows).toEqual([[2, 5, -3, 4]]);
+    expect(app.graphMode).toBe("Energy");
+  });
+
   it("quotes CSV header delimiters and rejects malformed or non-finite rows", () => {
     const data = captureGraphData(source())!;
     const columns = [{ label: "Quoted", csv: 'x,"value"' }];
@@ -182,6 +190,7 @@ describe("graph data dialog", () => {
     const { dialog, root, status, pageButtons: [previous, next] } = view(app);
     dialog.open();
     expect(app.recordGraphSample).toHaveBeenCalledExactlyOnceWith(true);
+    root.querySelectorAll<HTMLButtonElement>(".graph-data-view-buttons button")[1].click();
     expect(status.textContent).toBe("Samples 1–25 of 51");
     expect(previous.disabled).toBe(true);
     expect(root.querySelectorAll("tbody tr")).toHaveLength(25);
@@ -274,5 +283,123 @@ describe("graph data dialog", () => {
     dialog.open();
     expect(dialog.visible).toBe(false);
     expect(root.hidden).toBe(true);
+  });
+
+  function click(root: HTMLElement, name: string): void {
+    const control = [...root.querySelectorAll<HTMLButtonElement>("button")]
+      .find(item => item.textContent === name || item.getAttribute("aria-label") === name);
+    expect(control, name).toBeDefined(); control!.click();
+  }
+
+  it("opens a labelled graph and exposes numbers only on request", () => {
+    const { app, dialog, root } = view();
+    app.energySeries.add(0, { KE: 1, PE: -2, Total: -1 });
+    dialog.open();
+    expect(root.querySelector<HTMLElement>(".graph-chart")!.hidden).toBe(false);
+    expect(root.querySelector<HTMLElement>(".graph-data-table-region")!.hidden).toBe(true);
+    expect(root.querySelector(".graph-chart-surface svg")!.getAttribute("aria-label"))
+      .toContain("Time (s) against Energy (J)");
+    click(root, "Numbers");
+    expect(root.querySelector<HTMLElement>(".graph-data-table-region")!.hidden).toBe(false);
+    expect(root.querySelector<HTMLElement>(".graph-chart")!.hidden).toBe(true);
+    click(root, "Graph");
+    expect(root.querySelector<HTMLElement>(".graph-chart")!.hidden).toBe(false);
+  });
+
+  it("navigates six fixed graph families without changing playback data or dock mode", () => {
+    const { app, dialog, root } = view();
+    app.energySeries.add(0, { KE: 1, PE: 2, Total: 3 });
+    app.momentumSeries.add(0, { "|p|": 5, px: -3, py: 4, L: -7 });
+    app.phasePlot.add(0, 7, -3, -4, 4);
+    dialog.open(); app.momentumSeries.clear(); app.phasePlot.clear();
+    for (const title of ["Momentum", "Phase space", "Displacement", "Distance travelled", "Velocity", "Energy"]) {
+      click(root, "Next graph");
+      expect(root.querySelector(".graph-data-heading h2")!.textContent).toBe(title);
+    }
+    click(root, "Previous graph");
+    expect(root.querySelector(".graph-data-heading h2")!.textContent).toBe("Velocity");
+    expect(app.graphMode).toBe("Energy");
+    expect(app.recordGraphSample).toHaveBeenCalledOnce();
+    click(root, "Next graph"); click(root, "Next graph");
+    expect(root.querySelector("tbody td")!.textContent).toBe("5");
+    expect(root.querySelectorAll("[data-channel]")).toHaveLength(3);
+    click(root, "Angular");
+    expect(root.querySelectorAll("[data-channel]")).toHaveLength(1);
+    expect(root.querySelector(".graph-chart-surface svg")!.getAttribute("aria-label"))
+      .toContain("Angular momentum (kg m²/s)");
+    click(root, "Next graph"); click(root, "y–vy");
+    expect(root.querySelector(".graph-chart-surface svg")!.getAttribute("aria-label"))
+      .toContain("y (m) against vy (m/s)");
+    root.querySelector(".graph-chart-surface")!.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Home", bubbles: true, cancelable: true }));
+    expect(root.querySelector(".graph-chart-reading")!.textContent).toContain("y (m): -4");
+    expect(root.querySelector(".graph-chart-reading")!.textContent).toContain("Time (s): 0");
+  });
+
+  it("hides chart channels without removing numbers or changing live visibility", () => {
+    const { app, dialog, root } = view();
+    app.energySeries.add(0, { KE: 1, PE: 2, Total: 3 }); dialog.open();
+    click(root, "KE (J)");
+    expect(root.querySelectorAll("[data-channel]")).toHaveLength(2);
+    expect(root.querySelectorAll("tbody td")).toHaveLength(3);
+    expect(app.energySeries.hidden.size).toBe(0);
+    click(root, "PE (J)"); click(root, "Total (J)");
+    expect(root.querySelector<HTMLButtonElement>(".graph-data-actions button:nth-child(2)")!.disabled).toBe(true);
+    expect(root.querySelector<HTMLButtonElement>("button.primary")!.disabled).toBe(false);
+    expect(root.querySelector(".graph-chart-reading")!.textContent).toContain("Choose a channel");
+  });
+
+  function imageDownloads() {
+    const create = vi.fn(() => "blob:graph-png"), revoke = vi.fn();
+    vi.stubGlobal("URL", { createObjectURL: create, revokeObjectURL: revoke });
+    vi.useFakeTimers();
+    const files: string[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      files.push(this.download);
+    });
+    return { create, files };
+  }
+
+  it("deduplicates PNG work and keeps the clicked graph's filename during navigation", async () => {
+    const { files } = imageDownloads();
+    let finish!: (blob: Blob) => void;
+    const image = vi.spyOn(GraphSnapshotChart.prototype, "image").mockImplementation(
+      () => new Promise(resolve => { finish = resolve; }));
+    const { app, dialog, root } = view();
+    app.energySeries.add(0, { KE: 1, PE: 2, Total: 3 });
+    app.momentumSeries.add(0, { "|p|": 5, px: -3, py: 4, L: -7 });
+    dialog.open(); click(root, "Export PNG"); click(root, "Export PNG");
+    expect(image).toHaveBeenCalledOnce();
+    click(root, "Next graph"); click(root, "Angular");
+    finish(new Blob(["image"], { type: "image/png" })); await Promise.resolve();
+    expect(files).toEqual(["mechanica-energy.png"]);
+  });
+
+  it("discards an unfinished PNG when its dialog closes and reopens", async () => {
+    const { files } = imageDownloads();
+    let finish!: (blob: Blob) => void;
+    vi.spyOn(GraphSnapshotChart.prototype, "image").mockImplementation(
+      () => new Promise(resolve => { finish = resolve; }));
+    const { app, dialog, root } = view();
+    app.energySeries.add(0, { KE: 1, PE: 2, Total: 3 });
+    dialog.open(); click(root, "Export PNG"); dialog.close(); dialog.open();
+    finish(new Blob(["image"])); await Promise.resolve();
+    expect(files).toEqual([]);
+    expect(root.querySelector<HTMLButtonElement>(".graph-data-actions button:nth-child(2)")!.disabled).toBe(false);
+  });
+
+  it("retains recorded data and permits retry after image rendering fails", async () => {
+    const { files } = imageDownloads();
+    vi.spyOn(GraphSnapshotChart.prototype, "image")
+      .mockRejectedValueOnce(new Error("Rendering failed"))
+      .mockResolvedValueOnce(new Blob(["image"]));
+    const { app, dialog, root } = view();
+    app.energySeries.add(0, { KE: 1, PE: 2, Total: 3 });
+    dialog.open(); click(root, "Export PNG"); await Promise.resolve();
+    expect(root.querySelector<HTMLElement>('[role="alert"]')!.hidden).toBe(false);
+    expect(root.querySelectorAll("tbody tr")).toHaveLength(1);
+    click(root, "Export PNG"); await Promise.resolve();
+    expect(files).toEqual(["mechanica-energy.png"]);
+    expect(root.querySelector<HTMLElement>('[role="alert"]')!.hidden).toBe(true);
   });
 });
