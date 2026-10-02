@@ -651,11 +651,17 @@ export function slider(label: string, get: () => number,
 }
 
 // ------------------------------------------------------------------ numEdit
-/** Small numeric field committing on Enter/blur; shows live value otherwise. */
+export interface NumEditOpts {
+  disabled?: () => boolean;
+  tooltip?: string;
+}
+
+/** Small numeric field; a setter may reject a finite value by returning false. */
 export function numEdit(label: string, get: () => number,
-                        set: (v: number) => void, unit = "",
+                        set: (v: number) => void | boolean, unit = "",
                         onCommit?: () => void,
-                        fmt: (v: number) => string = fmt3g): Control {
+                        fmt: (v: number) => string = fmt3g,
+                        opts: NumEditOpts = {}): Control {
   // same reasoning as slider(): the caption beside it is a plain <span>, so
   // without this the field has no name for assistive tech at all
   const input = el("input", { type: "text", inputmode: "decimal",
@@ -663,6 +669,7 @@ export function numEdit(label: string, get: () => number,
   const wrap = el("div", { class: "num-row" },
                   el("span", { class: "lbl", text: label }), input,
                   unit ? el("span", { class: "unit", text: unit }) : null);
+  if (opts.tooltip) wrap.title = opts.tooltip;
   let focused = false;
   let editText = "";
   let cancelled = false;
@@ -675,20 +682,17 @@ export function numEdit(label: string, get: () => number,
   });
   const commit = () => {
     const v = readNumber(input.value);
-    invalid = !Number.isFinite(v);
+    invalid = !Number.isFinite(v) || set(v) === false;
     inputError(input, invalid);
-    if (!invalid) {
-      set(v);
-      onCommit?.();
-    }
+    if (!invalid) onCommit?.();
   };
   input.addEventListener("blur", () => {
     focused = false;
-    if (cancelled) {
+    if (cancelled || input.disabled) {
       invalid = false;
       inputError(input, false);
     }
-    if (!cancelled && input.value !== editText) commit();
+    if (!cancelled && !input.disabled && input.value !== editText) commit();
     refresh();
   });
   input.addEventListener("keydown", (e) => {
@@ -700,6 +704,16 @@ export function numEdit(label: string, get: () => number,
     e.stopPropagation();
   });
   const refresh = () => {
+    const disabled = opts.disabled?.() ?? false;
+    if (input.disabled !== disabled) {
+      input.disabled = disabled;
+      wrap.classList.toggle("disabled", disabled);
+      if (disabled) {
+        focused = false;
+        invalid = false;
+        inputError(input, false);
+      }
+    }
     if (focused || invalid) return;
     const s = fmt(get());
     if (input.value !== s) {

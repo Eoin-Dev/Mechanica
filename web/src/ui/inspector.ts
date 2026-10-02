@@ -9,6 +9,7 @@ import { BODY_PALETTE, Body, Color, MATERIALS, Wall } from "../engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
 import { PlaybackEventKind, analysePulley, forceLedger, projectForce } from "../education/analysis";
+import { analyseElasticLink, elasticModulus, stiffnessForModulus } from "../education/elasticity";
 import { Selectable } from "../render/draw";
 import { analysisNumber } from "../render/analysis-overlays";
 import { isMathRenderable } from "../core/mathfmt";
@@ -928,6 +929,7 @@ export class Inspector implements Panel {
         { unit: "Ns/m", fmt: (v) => v.toFixed(2), onCommit: this.commit,
           tooltip: "Resistance to stretching and compressing, which bleeds " +
                    "energy out of the oscillation." }));
+      this.buildElasticModel(springs);
       this.addTensionToggle(springs);
     }
 
@@ -1115,7 +1117,7 @@ export class Inspector implements Panel {
       const isString = link.tensionOnly;
       this.body.append(el("div", { text: isString ? "String (elastic)" : "Spring",
         style: "font-weight:600;margin-bottom:6px" }));
-      this.add(slider("Nat. len", () => link.restLength, (v) => { link.restLength = v; },
+      this.add(slider("Natural length", () => link.restLength, (v) => { link.restLength = v; },
         0.01, 50.0, { unit: "m", log: true, onCommit: this.commit,
           tooltip: "Length at which it exerts no force." }));
       this.add(slider("Stiffness", () => link.stiffness, (v) => { link.stiffness = v; },
@@ -1125,6 +1127,7 @@ export class Inspector implements Panel {
         0.0, 500.0, { unit: "Ns/m", fmt: (v) => v.toFixed(2), onCommit: this.commit,
           tooltip: "Resistance to stretching and compressing, which bleeds " +
                    "energy out of the oscillation." }));
+      this.buildElasticModel([link]);
       if (isString) {
         this.add(checkbox("Inelastic (fixed length)", () => false,
           () => this.replaceLink(link,
@@ -1166,6 +1169,97 @@ export class Inspector implements Panel {
     this.sub("Actions");
     this.add(button("Delete", () => app.controller.deleteSelection(),
       { icon: ICONS.trash, style: "danger", class: "inspector-action" }));
+  }
+
+  /** Modulus entry and the ideal law alongside the canonical stiffness controls. */
+  private buildElasticModel(links: SpringLink[]): void {
+    const first = links[0];
+    const multiple = links.length > 1;
+    const helpId = "elastic-modulus-help";
+    const errorId = "elastic-modulus-error";
+    const help = el("p", { id: helpId, class: "elastic-help" });
+    const error = el("p", { id: errorId, class: "error-text", role: "alert",
+      text: "Enter a non-negative modulus that gives stiffness no greater than 1e9 N/m." });
+    error.hidden = true;
+    const currentModulus = (): number => {
+      const value = elasticModulus(first) ?? 0;
+      // λ/l then k*l can differ by a few ulps for unequal natural lengths.
+      const same = links.every(link => {
+        const other = elasticModulus(link);
+        return other !== null && Math.abs(other - value) <=
+          4 * Number.EPSILON * Math.max(Math.abs(other), Math.abs(value));
+      });
+      return same ? value : NaN;
+    };
+    const modulus = numEdit("Modulus λ", currentModulus, value => {
+      // Validate every conversion before writing any selected link.
+      const values = links.map(link => stiffnessForModulus(value, link.restLength));
+      if (values.some(stiffness => stiffness === null)) return false;
+      links.forEach((link, index) => { link.stiffness = values[index]!; });
+    }, "N", this.commit, value => Number.isNaN(value) ? "Mixed"
+      : String(Number(value.toPrecision(15))), {
+      disabled: () => links.some(link => elasticModulus(link) === null),
+      tooltip: "Modulus of elasticity in newtons, λ = k × natural length. This is not Young’s modulus in pascals.",
+    });
+    const input = modulus.root.querySelector("input")!;
+    input.setAttribute("aria-describedby", `${helpId} ${errorId}`);
+    const values = el("dl", { class: "elastic-readings" });
+    const fields = ["Current length L", "Extension x", "Ideal elastic force", "Ideal elastic energy"];
+    const outputs = fields.map(label => {
+      const output = el("dd");
+      values.append(el("dt", { text: label }), output);
+      return output;
+    });
+    const state = el("span", { class: "elastic-state" });
+    const ideal = button("Set damping to zero", () => {
+      links.forEach(link => { link.damping = 0; });
+      this.commit();
+    }, { tooltip: "Remove axial damping from every selected spring and elastic string." });
+    const note = el("p", { class: "elastic-help" });
+    const explanation = el("details", { class: "elastic-explanation" },
+      el("summary", { text: "How these values work" }),
+      el("p", { class: "elastic-help", text:
+        "l is natural length; x = L − l. Changing natural length keeps stiffness k. " +
+        "Set length before modulus when copying a question. Modulus λ is in newtons, not pascals." }),
+      el("p", { class: "elastic-help", text:
+        "These ideal values use entered stiffness. Damping and solver limits can change " +
+        "the simulated force. Elastic strings have zero force and energy when x ≤ 0; " +
+        "springs can also push when compressed." }));
+    const card = el("div", { class: "elastic-model" },
+      el("div", { class: "elastic-heading" }, el("strong", { text: "Hooke’s law" }), state),
+      el("div", { class: "elastic-equations" },
+        el("p", { class: "elastic-equation", text: "F = k x = λx / l" }),
+        el("p", { class: "elastic-equation", text: "E = ½ k x² = λx² / (2l)" })),
+      modulus.root, help, error, values, note, ideal.root, explanation);
+    this.add({ root: card, refresh: () => {
+      modulus.refresh?.();
+      error.hidden = input.getAttribute("aria-invalid") !== "true";
+      const unavailable = input.disabled;
+      const helpText = unavailable
+        ? "Set a positive natural length to use a modulus. Stiffness remains available."
+        : multiple
+          ? "One modulus for all selected links, using each natural length. Mixed means different values."
+          : "λ = k l. Set natural length before modulus.";
+      if (help.textContent !== helpText) help.textContent = helpText;
+      values.hidden = multiple;
+      if (!multiple) {
+        const analysis = analyseElasticLink(first);
+        const readings = [`${analysisNumber(analysis.length)} m`, `${analysisNumber(analysis.extension)} m`,
+          `${analysisNumber(Math.abs(analysis.force))} N${analysis.force < 0 ? " thrust" : analysis.force > 0 ? " tension" : ""}`,
+          `${analysisNumber(analysis.energy)} J`];
+        outputs.forEach((output, index) => {
+          if (output.textContent !== readings[index]) output.textContent = readings[index];
+        });
+        if (state.textContent !== analysis.state) state.textContent = analysis.state;
+      } else if (state.textContent !== `${links.length} links`) state.textContent = `${links.length} links`;
+      const damped = links.some(link => link.damping > 0);
+      ideal.root.hidden = !damped;
+      const noteText = this.app.perfMode
+        ? "Performance mode approximates elastic motion. Use Normal mode for quantitative study."
+        : damped ? "Set damping to zero for an ideal elastic model."
+          : "Ideal values exclude damping and solver limits.";
+      if (note.textContent !== noteText) note.textContent = noteText;
+    } });
   }
 
   private buildRodAttachmentsList(rod: DistanceLink): void {

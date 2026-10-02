@@ -360,7 +360,8 @@ For a single object it exposes type-specific state:
 - anchor position and colour with anchor invariants preserved; a rod-attached
   anchor instead exposes its position along the rod and deletion;
 - wall endpoints, thickness, material, colour, and actions;
-- spring/string natural length, stiffness, damping, one-sidedness/conversion;
+- spring/string natural length, stiffness, modulus of elasticity, damping,
+  ideal extension/force/energy readings, and one-sidedness/conversion;
 - rod/rope length, compliance where applicable, and rope conversion. A selected
   standalone rod labels A and B on the canvas, lets the coordinate origin be A
   or B, and lists every attached anchor/particle as a selectable row with its
@@ -392,6 +393,26 @@ when the structure key is unchanged. A subsequent focused edit therefore
 cannot be detached by the preceding commit's notification. Object roles,
 rod-attachment ownership and pulley membership participate in that key;
 world replacement still explicitly invalidates the panel's object references.
+
+An elastic link has a themed Hooke's law card. Modulus λ is in newtons and
+converts to the canonical stiffness using `k = λ/l`, where `l` is positive
+natural length. Both parameter fields remain available; changing natural length
+keeps stiffness, so users set length before modulus when copying a question.
+The field accepts exact decimal/scientific values, rejects negative or
+out-of-schema conversions without clamping, and is disabled for a zero natural
+length imported from an existing scene. Bulk edits validate all selected links
+before writing, use each link's own natural length, and show Mixed when moduli
+differ beyond relative floating-point roundoff. The displayed modulus uses up
+to 15 significant digits; unchanged blur never rounds the underlying stiffness.
+No modulus preference or extra physical parameter is serialized.
+Single-link readings show current length, signed extension, ideal axial force
+(tension or thrust) and ideal elastic energy, with slack elastic strings showing
+zero force and energy. These use authored stiffness, exclude damping, and
+explain solver limits rather than presenting old effective coefficients as
+current values. A visible Set damping to zero action removes axial damping in
+one reversible edit; Performance mode explicitly recommends Normal mode for
+quantitative study. The complete card owns its refresh observation so scrolling
+one explanation out of view cannot freeze another visible reading.
 
 An ordinary selected particle can enable a free-body diagram directly on the
 canvas. After stepping, it draws weight, applied, drag, field, driver, link,
@@ -765,7 +786,10 @@ restores canonical source before focus is released.
 Rejected text, numbers, formulas, and hex colours stay visible across panel
 refreshes until corrected or cancelled, and expose `aria-invalid`. Numeric
 commits require a complete finite decimal or scientific-notation value; trailing
-characters and incomplete exponents are rejected. Slider endpoints remain exact
+characters and incomplete exponents are rejected. Numeric setters can reject
+domain-invalid finite values by returning false; rejected drafts do not invoke
+the commit callback. Numeric controls can also disable reactively, dropping a
+pending draft and rejecting blur writes while disabled. Slider endpoints remain exact
 when their bounds are not multiples of the step. Native colour and hex controls
 have separate accessible names, and unchanged colour refreshes avoid DOM writes.
 Colour rows place the label above a swatch and exact hex field, with palette

@@ -41,6 +41,144 @@ beforeEach(() => {
   localStorage.clear();
 });
 
+describe("Elastic-link modulus", () => {
+  it("accepts exam modulus and exposes extension, elastic force and energy", () => {
+    const { app, panel, inspector } = makeInspector();
+    const a = new Body(new Vec2(0, 0), 0.1, 1);
+    const b = new Body(new Vec2(2.5, 0), 0.1, 1);
+    const link = new SpringLink(a, b, 2, 10, 0, true);
+    app.world.bodies.push(a, b);
+    app.world.links.push(link);
+    app.undoStack.reset(app.world);
+    app.setSelection([link]);
+    inspector.refresh();
+    const input = panel.querySelector<HTMLInputElement>('[aria-label="Modulus λ (N)"]');
+    expect(input).not.toBeNull();
+    input!.focus();
+    input!.value = "60";
+    input!.blur();
+    inspector.refresh();
+    expect(link.stiffness).toBe(30);
+    expect(panel.querySelector(".elastic-model")!.textContent).toContain("15.00 N");
+    expect(panel.querySelector(".elastic-model")!.textContent).toContain("3.75 J");
+    expect(app.undoStack.canUndo).toBe(true);
+    app.undo();
+    expect((app.world.links[0] as SpringLink).stiffness).toBe(10);
+    app.redo();
+    expect((app.world.links[0] as SpringLink).stiffness).toBe(30);
+  });
+
+  function selectedLinks(lengths = [2, 4]) {
+    const fixture = makeInspector();
+    const a = new Body(new Vec2(0, 0), 0.1, 1);
+    const b = new Body(new Vec2(2.5, 0), 0.1, 1);
+    const links = lengths.map(length => new SpringLink(a, b, length, 10, 2, true));
+    fixture.app.world.bodies.push(a, b);
+    fixture.app.world.links.push(...links);
+    fixture.app.undoStack.reset(fixture.app.world);
+    fixture.app.setSelection(links);
+    fixture.inspector.refresh();
+    const input = fixture.panel.querySelector<HTMLInputElement>('[aria-label="Modulus λ (N)"]')!;
+    return { ...fixture, links, input, b };
+  }
+
+  it("identifies mixed moduli and applies a common modulus using each natural length", () => {
+    const { app, panel, links, input, inspector } = selectedLinks();
+    expect(input.value).toBe("Mixed");
+    input.focus();
+    input.value = "60";
+    input.blur();
+    inspector.refresh();
+    expect(links.map(link => link.stiffness)).toEqual([30, 15]);
+    expect(input.value).toBe("60");
+    expect(panel.querySelector<HTMLDListElement>(".elastic-readings")!.hidden).toBe(true);
+    app.undo();
+    expect(app.world.links.map(link => (link as SpringLink).stiffness)).toEqual([10, 10]);
+  });
+
+  it.each([[60, 2, 3.7], [100, 0.3, 11]])("keeps common modulus %s readable across natural lengths %s and %s", (value, a, b) => {
+    const { input, links, inspector } = selectedLinks([a, b]);
+    input.focus();
+    input.value = String(value);
+    input.blur();
+    inspector.refresh();
+    expect(input.value).toBe(String(value));
+    expect(links[0].stiffness).toBe(value / a);
+    expect(links[1].stiffness).toBe(value / b);
+  });
+
+  it.each(["-2", "1e12", "2oops"])("retains rejected modulus %s without history or partial writes", async value => {
+    const { app, links, input, inspector, panel } = selectedLinks([2, 1e-8]);
+    input.focus();
+    input.value = value;
+    input.blur();
+    await Promise.resolve();
+    inspector.refresh();
+    expect(links.map(link => link.stiffness)).toEqual([10, 10]);
+    expect(input.value).toBe(value);
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(panel.querySelector<HTMLElement>("#elastic-modulus-error")!.hidden).toBe(false);
+    expect(app.undoStack.canUndo).toBe(false);
+    input.focus();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    inspector.refresh();
+    expect(input.value).toBe("Mixed");
+    expect(input.hasAttribute("aria-invalid")).toBe(false);
+    expect(panel.querySelector<HTMLElement>("#elastic-modulus-error")!.hidden).toBe(true);
+  });
+
+  it("disables modulus for zero natural length without losing the stiffness control", () => {
+    const { input, links, inspector, panel } = selectedLinks([2, 0]);
+    expect(input.disabled).toBe(true);
+    expect(panel.textContent).toContain("Set a positive natural length");
+    expect(panel.querySelector<HTMLInputElement>('[aria-label="Stiffness (type an exact value)"]')!.disabled).toBe(false);
+    links[1].restLength = 4;
+    inspector.refresh();
+    expect(input.disabled).toBe(false);
+    expect(input.value).toBe("Mixed");
+  });
+
+  it("retains a focused modulus draft as live geometry changes and keeps stiffness on length edits", () => {
+    const { app, panel, inspector, input, links, b } = selectedLinks([2]);
+    const card = panel.querySelector(".elastic-model");
+    input.focus();
+    input.value = "60";
+    b.pos.x = 1.5;
+    inspector.refresh();
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("60");
+    expect(panel.querySelector(".elastic-model")).toBe(card);
+    expect(card!.textContent).toContain("slack");
+    input.blur();
+    const length = panel.querySelector<HTMLInputElement>('[aria-label="Natural length (type an exact value)"]')!;
+    length.focus();
+    length.value = "4";
+    length.blur();
+    inspector.refresh();
+    expect(links[0].stiffness).toBe(30);
+    expect(input.value).toBe("120");
+    app.undo();
+    expect((app.world.links[0] as SpringLink).restLength).toBe(2);
+    expect((app.world.links[0] as SpringLink).stiffness).toBe(30);
+  });
+
+  it("removes damping as one reversible bulk edit and explains Performance approximations", () => {
+    const { app, panel, inspector, links } = selectedLinks();
+    const button = [...panel.querySelectorAll("button")].find(button => button.textContent === "Set damping to zero")!;
+    expect(button.hidden).toBe(false);
+    button.click();
+    inspector.refresh();
+    expect(links.map(link => link.damping)).toEqual([0, 0]);
+    expect(button.hidden).toBe(true);
+    app.undo();
+    expect(app.world.links.map(link => (link as SpringLink).damping)).toEqual([2, 2]);
+    app.setSelection(app.world.links);
+    app.settings.perf_mode = true;
+    inspector.refresh();
+    expect(panel.querySelector(".elastic-model")!.textContent).toContain("Use Normal mode for quantitative study");
+  });
+});
+
 describe("Force values and sources", () => {
   it("names individual forces, exposes signed components and retains the focused disclosure", () => {
     const { app, panel, inspector } = makeInspector();

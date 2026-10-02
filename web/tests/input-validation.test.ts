@@ -64,6 +64,55 @@ describe("invalid input survives panel refresh", () => {
     expect(committed).toHaveBeenCalledTimes(1);
   });
 
+  it("retains a domain-rejected number without committing and allows correction", () => {
+    let value = 3;
+    const committed = vi.fn();
+    const control = numEdit("Modulus", () => value, next => {
+      if (next < 0) return false;
+      value = next;
+    }, "N", committed);
+    document.body.append(control.root);
+    const input = control.root.querySelector("input")!;
+    typeAndBlur(input, "-4");
+    control.refresh!();
+    expect(value).toBe(3);
+    expect(input.value).toBe("-4");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(committed).not.toHaveBeenCalled();
+    typeAndBlur(input, "4");
+    expect(value).toBe(4);
+    expect(input.hasAttribute("aria-invalid")).toBe(false);
+    expect(committed).toHaveBeenCalledTimes(1);
+    typeAndBlur(input, "-5");
+    escape(input);
+    expect(input.value).toBe("4");
+    expect(input.hasAttribute("aria-invalid")).toBe(false);
+  });
+
+  it("drops a numeric draft when the control becomes disabled and restores editing when enabled", () => {
+    let disabled = false;
+    const setter = vi.fn();
+    const committed = vi.fn();
+    const control = numEdit("Modulus", () => 3, setter, "N", committed, String,
+      { disabled: () => disabled });
+    document.body.append(control.root);
+    const input = control.root.querySelector("input")!;
+    input.focus();
+    input.value = "8";
+    disabled = true;
+    control.refresh!();
+    input.blur();
+    expect(input.disabled).toBe(true);
+    expect(input.value).toBe("3");
+    expect(setter).not.toHaveBeenCalled();
+    expect(committed).not.toHaveBeenCalled();
+    disabled = false;
+    control.refresh!();
+    typeAndBlur(input, "8");
+    expect(setter).toHaveBeenCalledExactlyOnceWith(8);
+    expect(committed).toHaveBeenCalledTimes(1);
+  });
+
   it("retains an invalid exact slider value and recovers through the track", () => {
     let value = 3;
     const control = slider("Mass", () => value, v => { value = v; }, 1, 10);

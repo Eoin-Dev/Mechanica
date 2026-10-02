@@ -819,6 +819,35 @@ button.perf-banner-btn:hover:not(:disabled) {
 .num-row .lbl { color: var(--text-dim); font-size: calc(12px * var(--fs, 1)); flex: none; min-width: 16px; }
 .num-row .unit { color: var(--text-faint); font-size: calc(11px * var(--fs, 1)); flex: none; }
 
+.elastic-model {
+  display: grid;
+  gap: 9px;
+  margin: 10px 0;
+  padding: 11px;
+  border: 1px solid var(--outline);
+  border-radius: var(--radius);
+  background: var(--panel-light);
+  min-width: 0;
+}
+.elastic-heading { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; justify-content: space-between; }
+.elastic-state { color: var(--accent-text); font-size: calc(11px * var(--fs, 1)); text-transform: capitalize; }
+.elastic-equation { margin: 0; font-size: calc(12px * var(--fs, 1)); line-height: 1.6; }
+.elastic-help { margin: 0; color: var(--text-dim); font-size: calc(11px * var(--fs, 1)); line-height: 1.5; }
+.elastic-model .num-row { flex-wrap: wrap; gap: 5px; }
+.elastic-model .num-row input { flex: 1 1 70px; min-width: 0; width: 70px; font-variant-numeric: tabular-nums; }
+.elastic-readings { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 12px; margin: 0; }
+.elastic-readings[hidden], .elastic-model > [hidden] { display: none; }
+.elastic-readings dt { color: var(--text-dim); font-size: calc(11px * var(--fs, 1)); }
+.elastic-readings dd { margin: 0; font-size: calc(12px * var(--fs, 1)); text-align: right; font-variant-numeric: tabular-nums; }
+.elastic-model > button { justify-content: center; }
+.elastic-explanation { border-top: 1px solid var(--outline); padding-top: 8px; }
+.elastic-explanation summary { color: var(--accent-text); cursor: pointer; font-size: calc(11px * var(--fs, 1)); min-height: 24px; line-height: 1.5; padding: 3px 0; }
+.elastic-explanation p { margin-top: 8px; }
+@container (max-width: 260px) {
+  .elastic-readings { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .elastic-readings dd { text-align: left; margin-bottom: 5px; }
+}
+
 .dim { color: var(--text-dim); }
 .faint { color: var(--text-faint); }
 .error-text { color: var(--bad); font-size: calc(11px * var(--fs, 1)); margin: 2px 0; }

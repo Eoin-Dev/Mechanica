@@ -269,6 +269,19 @@ tests run before Vitest under `npm test`.
 
 ### Real-browser acceptance
 
+Elastic-link coverage in [`elasticity.test.ts`](../web/tests/elasticity.test.ts)
+checks modulus conversion/bounds, spring compression, string slackness,
+authored-versus-effective coefficients, existing-schema round trips, vertical
+equilibrium and analytic maximum extension. Inspector tests verify bulk
+conversion atomicity, invalid/disabled drafts, focus retention, length-edit
+semantics, undo/redo and reversible damping removal. Shared numeric validation
+tests protect setter rejection and disabling during an edit.
+[`e2e/elasticity.spec.ts`](../web/e2e/elasticity.spec.ts) exercises real modulus
+entry, invalid correction, history, damping removal, named save/export/load,
+scaled fonts, themed card surfaces, measured containment and axe checks across
+desktop, phone and 320-CSS-pixel/200%-text layouts in every configured engine.
+Its captured cards accompany the measurements for visual review.
+
 Tab recovery is covered by
 [`session-recovery.test.ts`](../web/tests/session-recovery.test.ts): edited/empty
 scene round trips, malformed and oversized input, unchanged-write suppression,

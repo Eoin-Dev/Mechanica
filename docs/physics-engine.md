@@ -320,6 +320,15 @@ scenes](data-formulas-scenes.md#force-field-expression-language).
 
 ### Spring forces
 
+The mechanics modulus of elasticity `λ` (N) and natural length `l` (m) give
+`k = λ/l` (N/m). For extension `x = current length - l`, ideal axial force is
+`k*x = λ*x/l` and elastic energy is `k*x²/2 = λ*x²/(2*l)`. Positive axial force
+is pulling tension; negative force is spring thrust. An elastic string instead
+uses `max(0, x)`, so it has no force, damping or stored elastic energy while
+slack. This mechanics modulus is not Young's modulus measured in pascals.
+The Inspector's headless educational readings use these authored ideal values;
+the engine's applied force also includes damping and uses effective coefficients.
+
 In the accurate solver, every spring applies its effective Hooke/damper force
 after ordinary and gravitational acceleration. Effective coefficients are
 bounded against explicit integration stability:

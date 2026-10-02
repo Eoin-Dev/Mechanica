@@ -901,7 +901,8 @@ const GETTING_STARTED: Array<[string, string, string]> = [
    "is two clicks and a chain is a few more."],
   ["4", "Change the physics",
    "Select anything and the Inspector edits it live - mass, bounce, " +
-   "friction. The World tab has gravity, air drag, N-body attraction and " +
+   "friction. Select an elastic string or spring to enter modulus λ in " +
+   "newtons and inspect extension, ideal force and energy. The World tab has gravity, air drag, N-body attraction and " +
    "custom force fields you write as formulas."],
   ["5", "Measure it",
    "Select a particle to edit its position and velocity or show free-body " +

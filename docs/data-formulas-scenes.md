@@ -176,6 +176,11 @@ serialized.
 
 Effective stability-clamped `kEff` and `cEff` are recalculated and are not
 serialized.
+Modulus entry is an alternate way to set existing `stiffness`: `λ/rest_length`
+for a positive natural length. The scene schema remains unchanged, and
+save/load, reset, undo and redo retain that stiffness and natural length.
+Zero natural lengths remain valid imports; their modulus entry is unavailable
+until a positive natural length is set.
 
 ### Inextensible pulley string
 
