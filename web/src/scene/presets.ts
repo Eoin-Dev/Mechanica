@@ -794,6 +794,7 @@ function buildInclinePulley(): World {
   const inwardUnit = inward.div(inward.length());
   onRamp.pos = wheel.pos.add(string.guideAOffset).add(inwardUnit.mul(2.0));
   hanging.pos = wheel.pos.add(string.guideBOffset).add(new Vec2(0, -1.55));
+  string.resetRouting();
   string.length = string.currentLength();
   return w;
 }

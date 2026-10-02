@@ -418,7 +418,7 @@ support components. Tension readings and separate pulley arrows use the same
 current or completed-interval measurements as the particle diagrams, including
 tightening impulses. Hover descriptions identify current forces or the
 averaging interval. The axle support balances string pulls and particle
-contact with the wheel/frame or routing guide. For example, a stationary 2 kg
+contact with the wheel/frame. For example, a stationary 2 kg
 free mass and 1 kg particle stopped at the wheel require 19.62 N tension and
 29.43 N upward axle support: the frame contact contributes to that support.
 During swinging, the readout reports mean scalar tension while an arrow shows
@@ -430,7 +430,8 @@ turn. A vanishing wrap becomes a straight segment, and later contact on the
 other side follows that side's tangent arc. A straight string has no wheel
 tension arrows; its endpoint forces act along the direct string. Export and
 rewind retain the angular route, including an initially small wrap imported
-from an older scene.
+from an older scene. Reference guide rays do not block free particle motion
+or create reactions; only physical wheel-frame or ordinary contacts do so.
 
 Ordinary name, mass, colour and other value commits keep the current controls
 when the structure key is unchanged. A subsequent focused edit therefore
@@ -473,6 +474,8 @@ disclosure lists every named force, signed x/y components in newtons and the
 resultant; a selected slope adds signed parallel/normal components. It uses
 the same ledger and interval as the arrows, retains unchanged rows/focus, and
 remains a complete text alternative when a dense diagram crowds the canvas.
+Its open or closed choice survives Inspector rebuilds, tab changes and rewind;
+restored rows read the restored particle's forces. This preference is transient.
 Each component keeps its axis, value and unit together; paired columns become
 one column in a narrow or enlarged Inspector.
 Slope reference offers only walls currently touching the selected colliding

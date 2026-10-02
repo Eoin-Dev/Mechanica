@@ -121,25 +121,25 @@ describe("ideal pulley constraint", () => {
       expect(world.energy().ke).toBeLessThanOrEqual(initial * 1.000001);
     });
 
-  it.each([false, true])("blocks an outside-disc route to the opposite side (performance=%s)",
+  it.each([false, true])("allows a slack particle past an empty guide, clear of the wheel (performance=%s)",
     (performance) => {
       const { world, a, b, wheel, string } = assembly(1, 1);
       world.gravity = 0;
       world.performance = performance;
       world.performanceLevel = 3;
-      string.length = 100; // isolate the topology guard from tension
+      string.length = 100; // isolate free flight from tension
       a.pos.set(-2, wheel.pos.y - 0.5);
-      a.vel.set(0, 180); // misses the wheel, but crosses the A-side route
+      a.vel.set(0, 180); // misses the wheel and crosses the A-side reference ray
       b.vel.set(0, 0);
       const initial = world.energy().ke;
 
       world.step(1 / 60);
 
-      expect(string.branchDistance("a")).toBeGreaterThanOrEqual(-1e-10);
-      expect(a.pos.y).toBeLessThanOrEqual(wheel.pos.y + 1e-10);
-      expect(a.vel.length()).toBeLessThan(1e-9);
+      expect(a.pos.y).toBeCloseTo(wheel.pos.y + 2.5, 12);
+      expect(a.vel.y).toBe(180);
+      expect(a.pos.distTo(wheel.pos)).toBeGreaterThan(wheel.radius + a.radius);
       expect(b.vel.length()).toBeLessThan(1e-9);
-      expect(world.energy().ke).toBeLessThanOrEqual(initial * 1.000001);
+      expect(world.energy().ke).toBe(initial);
     });
 
   it.each([

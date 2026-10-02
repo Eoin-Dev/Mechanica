@@ -514,7 +514,7 @@ export class World {
         if (link instanceof DistanceLink) read(link.isRope);
         else {
           read(link.pulley); read(link.guideAOffset.x); read(link.guideAOffset.y);
-          read(link.guideBOffset.x); read(link.guideBOffset.y); read(link.wrapSweep); read(link.wrapTurns);
+          read(link.guideBOffset.x); read(link.guideBOffset.y); read(link.wrapSweep); read(link.currentWrapTurns());
           read(link.mountWallId); read(link.mountWallEnd); read(link.mountNormalSign);
         }
       }
@@ -1478,14 +1478,6 @@ export class World {
     const recorder = diagnosticWeight !== 0 && this.forceRecorder.active ? this.forceRecorder : null;
     if (links.length === 0) return;
     for (const ln of links) {
-      // A routed leg is not allowed to change sides. Suppress the force row
-      // during an intermediate integrator trial that has crossed its branch;
-      // the swept stop below restores the valid position without letting a
-      // discontinuous wrap angle kick the partner particle.
-      if (ln.branchDistance("a") <= 1e-8 || ln.branchDistance("b") <= 1e-8) {
-        ln.mu = 0.0;
-        continue;
-      }
       const a = ln.a;
       const b = ln.b;
       const wa = a.invMass;
@@ -1516,11 +1508,10 @@ export class World {
       }
       for (let pass = 0; pass < ROD_FORCE_PASSES; pass++) {
         if (this.pulleyQuerySupports !== null) {
-          const sigma = ln.wrapSweep < 0 ? -1 : 1;
           this.clampPulleyQueryContacts(a, diagnosticWeight, nax, nay);
           this.clampPulleyQueryContacts(b, diagnosticWeight, nbx, nby);
-          this.clampPulleyBodyAcceleration(a, ln.pulley, ln.guideAOffset, -sigma, diagnosticWeight);
-          this.clampPulleyBodyAcceleration(b, ln.pulley, ln.guideBOffset, sigma, diagnosticWeight);
+          this.clampPulleyBodyAcceleration(a, ln.pulley, diagnosticWeight);
+          this.clampPulleyBodyAcceleration(b, ln.pulley, diagnosticWeight);
         }
         const perpendicular = (a.vel.x - b.vel.x) * nay - (a.vel.y - b.vel.y) * nax;
         const curveA = geom.wrapped ? this.pulleyCurvature(a, ln.pulley,
@@ -1530,8 +1521,8 @@ export class World {
         const cdd = a.acc.x * nax + a.acc.y * nay + curveA +
           b.acc.x * nbx + b.acc.y * nby + curveB;
         const effectiveW = this.pulleyQuerySupports === null ? wSum :
-          this.pulleyQueryWeight(a, ln.pulley, ln.guideAOffset, ln.wrapSweep < 0 ? 1 : -1, nax, nay) +
-          this.pulleyQueryWeight(b, ln.pulley, ln.guideBOffset, ln.wrapSweep < 0 ? -1 : 1, nbx, nby);
+          this.pulleyQueryWeight(a, ln.pulley, nax, nay) +
+          this.pulleyQueryWeight(b, ln.pulley, nbx, nby);
         if (effectiveW <= 1e-18) break;
         const next = Math.max(0.0, mu + cdd / effectiveW);
         const dmu = next - mu;
@@ -1556,9 +1547,8 @@ export class World {
     this.clampPulleyStopAccelerations(links, diagnosticWeight);
   }
 
-  /** Query-only response derivative after active frame/guide projection. */
-  private pulleyQueryWeight(body: Body, pulley: Body, fallback: Vec2,
-                            side: number, nx: number, ny: number): number {
+  /** Query-only response derivative after active frame/contact projection. */
+  private pulleyQueryWeight(body: Body, pulley: Body, nx: number, ny: number): number {
     const dx = body.pos.x - pulley.pos.x, dy = body.pos.y - pulley.pos.y;
     const d = Math.hypot(dx, dy);
     if (d <= PULLEY_RADIUS + body.radius + 1e-7 && d > 1e-12) {
@@ -1566,13 +1556,6 @@ export class World {
       if (body.acc.x * rx + body.acc.y * ry <= 1e-12) return 0;
       const projection = nx * rx + ny * ry;
       return body.invMass * projection * projection;
-    }
-    const fd = Math.max(1e-12, fallback.length());
-    const bx = -fallback.y * side / fd, by = fallback.x * side / fd;
-    const projection = nx * bx + ny * by;
-    if (dx * bx + dy * by <= 1e-7 &&
-        body.acc.x * bx + body.acc.y * by <= 1e-12 && projection > 0) {
-      return body.invMass * Math.max(0, 1 - projection * projection);
     }
     let gx = nx, gy = ny;
     let firstX = 0, firstY = 0, active = false;
@@ -1608,32 +1591,16 @@ export class World {
   /** Remove inward acceleration at an active particle/pulley stop. */
   private clampPulleyStopAccelerations(links: readonly PulleyLink[], diagnosticWeight = 0): void {
     for (const ln of links) {
-      const sigma = ln.wrapSweep < 0 ? -1 : 1;
-      this.clampPulleyBodyAcceleration(ln.a, ln.pulley, ln.guideAOffset, -sigma, diagnosticWeight);
-      this.clampPulleyBodyAcceleration(ln.b, ln.pulley, ln.guideBOffset, sigma, diagnosticWeight);
+      this.clampPulleyBodyAcceleration(ln.a, ln.pulley, diagnosticWeight);
+      this.clampPulleyBodyAcceleration(ln.b, ln.pulley, diagnosticWeight);
     }
   }
 
-  private clampPulleyBodyAcceleration(body: Body, pulley: Body, fallback: Vec2,
-                                      branchSide: number, diagnosticWeight = 0): void {
+  private clampPulleyBodyAcceleration(body: Body, pulley: Body, diagnosticWeight = 0): void {
     const dx = body.pos.x - pulley.pos.x;
     const dy = body.pos.y - pulley.pos.y;
     const d = Math.hypot(dx, dy);
-    const fd = Math.max(1e-12, fallback.length());
-    const branchNX = -fallback.y * branchSide / fd;
-    const branchNY = fallback.x * branchSide / fd;
-    const branchGap = dx * branchNX + dy * branchNY;
     const recorder = diagnosticWeight !== 0 && this.forceRecorder.active ? this.forceRecorder : null;
-    const beforeX = body.acc.x, beforeY = body.acc.y;
-    if (branchGap <= 1e-7) {
-      const intoBranch = body.acc.x * branchNX + body.acc.y * branchNY;
-      if (intoBranch < 0.0) {
-        body.acc.x -= intoBranch * branchNX;
-        body.acc.y -= intoBranch * branchNY;
-      }
-    }
-    recorder?.add(body, `pulley-guide-${pulley.id}`, "Pulley guide reaction", "reaction",
-      (body.acc.x - beforeX) * body.mass, (body.acc.y - beforeY) * body.mass, diagnosticWeight);
     const limit = PULLEY_RADIUS + body.radius;
     if (d > limit + 1e-7 || d < 1e-12) return;
     const nx = dx / d;
@@ -2487,9 +2454,6 @@ export class World {
         // At the wheel stop the endpoint is blocked completely: letting the
         // string correction retain a tangent component made a stopped body
         // skate around the axle and converted projection into kinetic energy.
-        // At the routing half-plane, only a correction back toward the valid
-        // side remains feasible. The partner takes the rest of the length
-        // correction without either safety constraint fighting the row.
         // Keep this hot path scalar: Performance mode still solves this row,
         // so no per-pass closures or tuple allocations belong here.
         let gax = geom.nax;
@@ -2502,18 +2466,6 @@ export class World {
           gax = 0.0;
           gay = 0.0;
           ga2 = 0.0;
-        } else if (ln.branchDistance("a") <= 1e-7) {
-          const fd = Math.max(1e-12, ln.guideAOffset.length());
-          const sigma = ln.wrapSweep < 0 ? -1 : 1;
-          const bnx = ln.guideAOffset.y * sigma / fd;
-          const bny = -ln.guideAOffset.x * sigma / fd;
-          // dlam is negative for an overlong string. A positive gradient
-          // component along the allowed normal would therefore cross out.
-          if (gax * bnx + gay * bny > 0.0) {
-            gax = 0.0;
-            gay = 0.0;
-            ga2 = 0.0;
-          }
         }
         let gbx = geom.nbx;
         let gby = geom.nby;
@@ -2525,16 +2477,6 @@ export class World {
           gbx = 0.0;
           gby = 0.0;
           gb2 = 0.0;
-        } else if (ln.branchDistance("b") <= 1e-7) {
-          const fd = Math.max(1e-12, ln.guideBOffset.length());
-          const sigma = ln.wrapSweep < 0 ? -1 : 1;
-          const bnx = -ln.guideBOffset.y * sigma / fd;
-          const bny = ln.guideBOffset.x * sigma / fd;
-          if (gbx * bnx + gby * bny > 0.0) {
-            gbx = 0.0;
-            gby = 0.0;
-            gb2 = 0.0;
-          }
         }
         const wSum = wa * ga2 + wb * gb2;
         if (wSum === 0.0) continue;
@@ -2565,16 +2507,16 @@ export class World {
           recorder.add(b, `pulley-${ln.id}`, "Pulley-string tension", "pulley",
             fullBX * b.mass * rateB, fullBY * b.mass * rateB, 1, -dlam * rateB);
           // A stopped leg still bears the common string multiplier. Its
-          // frame/guide supplies the part removed by the feasible gradient.
+          // frame supplies the part removed by the feasible gradient.
           const frameA = ad <= PULLEY_RADIUS + a.radius + 1e-7;
           const frameB = bd <= PULLEY_RADIUS + b.radius + 1e-7;
-          recorder.add(a, `pulley-${frameA ? "frame" : "guide"}-${ln.pulley.id}`,
-            frameA ? "Pulley-frame reaction" : "Pulley guide reaction", "reaction",
+          if (frameA) recorder.add(a, `pulley-frame-${ln.pulley.id}`,
+            "Pulley-frame reaction", "reaction",
             (ax - fullAX) * a.mass * rateA, (ay - fullAY) * a.mass * rateA, 1, 0,
             frameA && ad > 1e-12 ? -arx / ad : undefined,
             frameA && ad > 1e-12 ? -ary / ad : undefined);
-          recorder.add(b, `pulley-${frameB ? "frame" : "guide"}-${ln.pulley.id}`,
-            frameB ? "Pulley-frame reaction" : "Pulley guide reaction", "reaction",
+          if (frameB) recorder.add(b, `pulley-frame-${ln.pulley.id}`,
+            "Pulley-frame reaction", "reaction",
             (bx - fullBX) * b.mass * rateB, (by - fullBY) * b.mass * rateB, 1, 0,
             frameB && bd > 1e-12 ? -brx / bd : undefined,
             frameB && bd > 1e-12 ? -bry / bd : undefined);
@@ -2607,10 +2549,9 @@ export class World {
         const rate = a.vel.x * geometry.nax + a.vel.y * geometry.nay +
           b.vel.x * geometry.nbx + b.vel.y * geometry.nby;
         if (rate <= 1e-10) continue;
-        const sigma = ln.wrapSweep < 0 ? -1 : 1;
         const ga = this.pulleyVelocityGA, gb = this.pulleyVelocityGB;
-        this.pulleyVelocityGradient(a, ln.pulley, ln.guideAOffset, -sigma, geometry.nax, geometry.nay, ga);
-        this.pulleyVelocityGradient(b, ln.pulley, ln.guideBOffset, sigma, geometry.nbx, geometry.nby, gb);
+        this.pulleyVelocityGradient(a, ln.pulley, geometry.nax, geometry.nay, ga);
+        this.pulleyVelocityGradient(b, ln.pulley, geometry.nbx, geometry.nby, gb);
         const weight = a.invMass * (ga.x * ga.x + ga.y * ga.y) +
           b.invMass * (gb.x * gb.x + gb.y * gb.y);
         if (weight <= 1e-18) continue;
@@ -2635,8 +2576,7 @@ export class World {
     }
   }
 
-  private pulleyVelocityGradient(body: Body, pulley: Body, fallback: Vec2,
-                                 side: number, nx: number, ny: number, target: Vec2): void {
+  private pulleyVelocityGradient(body: Body, pulley: Body, nx: number, ny: number, target: Vec2): void {
     const dx = body.pos.x - pulley.pos.x, dy = body.pos.y - pulley.pos.y, d = Math.hypot(dx, dy);
     if (d <= PULLEY_RADIUS + body.radius + 1e-7 && d > 1e-12) {
       const rx = dx / d, ry = dy / d;
@@ -2644,21 +2584,16 @@ export class World {
       const projection = nx * rx + ny * ry;
       target.set(rx * projection, ry * projection); return;
     }
-    const fd = Math.max(1e-12, fallback.length());
-    const bx = -fallback.y * side / fd, by = fallback.x * side / fd;
-    const projection = nx * bx + ny * by;
-    if (dx * bx + dy * by <= 1e-7 && body.vel.x * bx + body.vel.y * by <= 1e-10 && projection > 0) {
-      target.set(nx - projection * bx, ny - projection * by); return;
-    }
     target.set(nx, ny);
   }
 
   private recordPulleyVelocitySupport(body: Body, pulley: Body, x: number, y: number): void {
     const dx = body.pos.x - pulley.pos.x, dy = body.pos.y - pulley.pos.y, d = Math.hypot(dx, dy);
     const frame = d <= PULLEY_RADIUS + body.radius + 1e-7;
-    this.forceRecorder.add(body, `pulley-${frame ? "frame" : "guide"}-${pulley.id}`,
-      frame ? "Pulley-frame reaction" : "Pulley guide reaction", "reaction", x, y, 1, 0,
-      frame && d > 1e-12 ? -dx / d : undefined, frame && d > 1e-12 ? -dy / d : undefined);
+    if (!frame) return;
+    this.forceRecorder.add(body, `pulley-frame-${pulley.id}`,
+      "Pulley-frame reaction", "reaction", x, y, 1, 0,
+      d > 1e-12 ? -dx / d : undefined, d > 1e-12 ? -dy / d : undefined);
   }
 
   /** Keep pulley particles outside the axle's finite frame.
@@ -2674,17 +2609,17 @@ export class World {
     const recorder = clampVelocity && this.forceRecorder.active ? this.forceRecorder : null;
     for (const ln of links) {
       const avx = ln.a.vel.x, avy = ln.a.vel.y, bvx = ln.b.vel.x, bvy = ln.b.vel.y;
-      const sigma = ln.wrapSweep < 0 ? -1 : 1;
       this.enforcePulleyBodyStop(ln.a, ln.pulley, ln.guideAOffset,
-        -sigma, ln.safeAX, ln.safeAY, clampVelocity);
+        ln.safeAX, ln.safeAY, clampVelocity);
       this.enforcePulleyBodyStop(ln.b, ln.pulley, ln.guideBOffset,
-        sigma, ln.safeBX, ln.safeBY, clampVelocity);
+        ln.safeBX, ln.safeBY, clampVelocity);
       if (clampVelocity && (recorder !== null || this.pulleyQuerySupports !== null)) {
         for (const [body, vx, vy] of [[ln.a, avx, avy], [ln.b, bvx, bvy]] as const) {
           const dx = body.pos.x - ln.pulley.pos.x, dy = body.pos.y - ln.pulley.pos.y;
           const d = Math.hypot(dx, dy), frame = d <= PULLEY_RADIUS + body.radius + 1e-7;
-          recorder?.add(body, `pulley-${frame ? "frame" : "guide"}-${ln.pulley.id}`,
-            frame ? "Pulley-frame reaction" : "Pulley guide reaction", "reaction",
+          if (!frame || (body.vel.x === vx && body.vel.y === vy)) continue;
+          recorder?.add(body, `pulley-frame-${ln.pulley.id}`,
+            "Pulley-frame reaction", "reaction",
             (body.vel.x - vx) * body.mass, (body.vel.y - vy) * body.mass, 1, 0,
             frame && d > 1e-12 ? -dx / d : undefined, frame && d > 1e-12 ? -dy / d : undefined);
           if (this.pulleyQuerySupports !== null) {
@@ -2699,30 +2634,8 @@ export class World {
   }
 
   private enforcePulleyBodyStop(body: Body, pulley: Body, fallback: Vec2,
-                                branchSide: number,
                                 startX: number, startY: number,
                                 clampVelocity: boolean): void {
-    const fd = Math.max(1e-12, fallback.length());
-    const branchNX = -fallback.y * branchSide / fd;
-    const branchNY = fallback.x * branchSide / fd;
-    const startBranch = (startX - pulley.pos.x) * branchNX +
-      (startY - pulley.pos.y) * branchNY;
-    let endBranch = (body.pos.x - pulley.pos.x) * branchNX +
-      (body.pos.y - pulley.pos.y) * branchNY;
-    let branchHit = false;
-    if (endBranch < 0.0) {
-      const change = endBranch - startBranch;
-      if (startBranch >= 0.0 && change < -1e-12) {
-        const hit = Math.max(0.0, Math.min(1.0, -startBranch / change));
-        body.pos.x = startX + (body.pos.x - startX) * hit;
-        body.pos.y = startY + (body.pos.y - startY) * hit;
-      } else {
-        body.pos.x -= endBranch * branchNX;
-        body.pos.y -= endBranch * branchNY;
-      }
-      endBranch = 0.0;
-      branchHit = true;
-    }
     let dx = body.pos.x - pulley.pos.x;
     let dy = body.pos.y - pulley.pos.y;
     let d = Math.hypot(dx, dy);
@@ -2765,21 +2678,13 @@ export class World {
       body.pos.y = pulley.pos.y + dy * limit;
       d = limit;
     }
-    if (clampVelocity && branchHit) {
-      body.vel.set(0.0, 0.0);
-    } else if (clampVelocity && d <= limit + 1e-7) {
+    if (clampVelocity && d <= limit + 1e-7) {
       // A zero-restitution terminal stop. Only direct motion away from the
       // axle survives; tangent velocity is deliberately removed so the body
-      // cannot skate around the wheel and swap routed sides.
+      // retains the existing terminal-frame contact model.
       const outward = body.vel.x * dx + body.vel.y * dy;
       if (outward > 0.0) body.vel.set(dx * outward, dy * outward);
       else body.vel.set(0.0, 0.0);
-    } else if (clampVelocity && endBranch <= 1e-7) {
-      const intoBranch = body.vel.x * branchNX + body.vel.y * branchNY;
-      if (intoBranch < 0.0) {
-        body.vel.x -= intoBranch * branchNX;
-        body.vel.y -= intoBranch * branchNY;
-      }
     }
   }
 

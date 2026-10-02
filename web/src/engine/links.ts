@@ -247,6 +247,8 @@ export class PulleyLink {
   safeAY = 0.0;
   safeBX = 0.0;
   safeBY = 0.0;
+  safePX = 0.0;
+  safePY = 0.0;
 
   constructor(a: Body, b: Body, pulley: Body, length: number | null = null,
               compliance = 0.0,
@@ -272,20 +274,24 @@ export class PulleyLink {
     pulley.vel.set(0, 0);
     pulley.omega = 0.0;
     this.compliance = compliance;
-    this.guideAOffset = guideAOffset.copy();
-    this.guideBOffset = guideBOffset.copy();
+    const sizeA = guideAOffset.length(), sizeB = guideBOffset.length();
+    this.guideAOffset = sizeA > 0 && Number.isFinite(sizeA) ? guideAOffset.copy() : new Vec2(-PULLEY_RADIUS, 0);
+    this.guideBOffset = sizeB > 0 && Number.isFinite(sizeB) ? guideBOffset.copy() : new Vec2(PULLEY_RADIUS, 0);
     this.wrapSweep = wrapSweep;
     this.mountWallId = null;
     this.mountWallEnd = 0;
     this.mountNormalSign = 1;
     this.resetRouting();
-    if (wrapTurns !== null) this.wrapTurns = intIn(wrapTurns, this.wrapTurns, -1, 1) || 0;
+    if (wrapTurns !== null) this.wrapTurns = intIn(wrapTurns, this.wrapTurns, -1e6, 1e6) || 0;
     this.length = length ?? this.currentLength();
     this.captureSafePositions();
   }
 
   /** Preserve the initially authored route without modulo jumps during motion. */
   resetRouting(): void {
+    this.safeAX = this.a.pos.x; this.safeAY = this.a.pos.y;
+    this.safeBX = this.b.pos.x; this.safeBY = this.b.pos.y;
+    this.safePX = this.pulley.pos.x; this.safePY = this.pulley.pos.y;
     this.wrapTurns = 0;
     const sigma = this.wrapSweep < 0 ? -1 : 1;
     const angle = sigma * this.geometry().routeSweep;
@@ -293,11 +299,28 @@ export class PulleyLink {
     this.wrapTurns = turns === 0 ? 0 : turns;
   }
 
+  private portAngle(x: number, y: number, guide: Vec2): number {
+    return Math.atan2(guide.x * y - guide.y * x, guide.x * x + guide.y * y);
+  }
+
+  /** Resolve the current angular sheet without changing the accepted sweep sample. */
+  currentWrapTurns(): number {
+    const tau = 2 * Math.PI, sigma = this.wrapSweep < 0 ? -1 : 1;
+    const a = this.portAngle(this.a.pos.x - this.pulley.pos.x, this.a.pos.y - this.pulley.pos.y, this.guideAOffset);
+    const b = this.portAngle(this.b.pos.x - this.pulley.pos.x, this.b.pos.y - this.pulley.pos.y, this.guideBOffset);
+    const sa = this.portAngle(this.safeAX - this.safePX, this.safeAY - this.safePY, this.guideAOffset);
+    const sb = this.portAngle(this.safeBX - this.safePX, this.safeBY - this.safePY, this.guideBOffset);
+    return (this.wrapTurns + sigma * (Math.round((sb - b) / tau) - Math.round((sa - a) / tau))) || 0;
+  }
+
+  /** Commit the route at a step/edit boundary, then retain its reference positions. */
   captureSafePositions(): void {
+    this.wrapTurns = this.currentWrapTurns();
     this.safeAX = this.a.pos.x;
     this.safeAY = this.a.pos.y;
     this.safeBX = this.b.pos.x;
     this.safeBY = this.b.pos.y;
+    this.safePX = this.pulley.pos.x; this.safePY = this.pulley.pos.y;
   }
 
   /** Reassert the point-particle shape at the step boundary. This also
@@ -365,8 +388,7 @@ export class PulleyLink {
         // derivatives have opposite signs.
         tangentCoeff: -branch * PULLEY_RADIUS / d,
         angle, alpha,
-        offset: -branch * Math.acos(Math.max(-1, Math.min(1,
-          (qx * fallback.x + qy * fallback.y) / (d * Math.max(1e-12, fallback.length()))))) + branch * alpha,
+        offset: this.portAngle(qx, qy, fallback) + branch * alpha,
       };
     };
     let la = leg(this.a, sigma, this.guideAOffset);
@@ -376,8 +398,10 @@ export class PulleyLink {
     const aa = Math.atan2(this.guideAOffset.y, this.guideAOffset.x);
     const ab = Math.atan2(this.guideBOffset.y, this.guideBOffset.x);
     const reference = sigma > 0 ? positive(ab - aa) : -positive(aa - ab);
-    const routeSweep = reference + lb.offset - la.offset + sigma * tau * this.wrapTurns;
+    const routeSweep = reference + lb.offset - la.offset + sigma * tau * this.currentWrapTurns();
     const routedArc = sigma * routeSweep;
+    // Trial positions lift their angles to the closest accepted sweep sample.
+    // Only step/edit boundaries commit that sheet; reads remain observational.
     // Within the interval between the two tangent families the string is
     // clear of the wheel. Past its other boundary it contacts the opposite
     // side. Keep the angular sheet fixed: reducing each live angle modulo a
@@ -419,11 +443,8 @@ export class PulleyLink {
   get legLimit(): number { return Math.max(0.0, this.length - this.wrapLength); }
   currentLength(): number { return this.geometry().totalLength; }
 
-  /** Signed distance from an endpoint's permitted routing half-plane.
-   *
-   * The stored guide ray and winding direction define which side of the
-   * axle each leg belongs to. A negative result means the particle crossed
-   * the pulley and would make the wrapped path jump to another branch. */
+  /** Signed distance from the reference guide ray, for geometry inspection.
+   * The reference rays select angular coordinates and are not physical barriers. */
   branchDistance(endpoint: "a" | "b"): number {
     const offset = endpoint === "a" ? this.guideAOffset : this.guideBOffset;
     const body = endpoint === "a" ? this.a : this.b;
@@ -443,7 +464,7 @@ export class PulleyLink {
       guide_a: [this.guideAOffset.x, this.guideAOffset.y],
       guide_b: [this.guideBOffset.x, this.guideBOffset.y],
       wrap_sweep: this.wrapSweep,
-      wrap_turns: this.wrapTurns,
+      wrap_turns: this.currentWrapTurns(),
       wall_id: this.mountWallId,
       wall_end: this.mountWallEnd,
       wall_normal_sign: this.mountNormalSign,
@@ -483,7 +504,7 @@ export function linkFromDict(d: LinkDict, bodiesById: Map<number, Body>): Link {
     link = new PulleyLink(a, b, pulley, null,
       numIn(d.compliance, 0.0, 0.0, 1e9), ga, gb,
       numIn(d.wrap_sweep, -Math.PI, -2 * Math.PI, 2 * Math.PI));
-    link.wrapTurns = intIn(d.wrap_turns, link.wrapTurns, -1, 1) || 0;
+    link.wrapTurns = intIn(d.wrap_turns, link.wrapTurns, -1e6, 1e6) || 0;
     link.length = numIn(d.length, link.currentLength(), 0.0, 1e6);
     link.mountWallId = d.wall_id === null || d.wall_id === undefined
       ? null : idOr(d.wall_id, -1) >= 0 ? idOr(d.wall_id, -1) : null;

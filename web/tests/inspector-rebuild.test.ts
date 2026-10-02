@@ -385,6 +385,53 @@ describe("Elastic-link modulus", () => {
 });
 
 describe("Force values and sources", () => {
+  it.each([true, false])("keeps the disclosure choice %s when rewind replaces its particle", (open) => {
+    const { app, panel, inspector } = makeInspector();
+    app.newScene(); app.world.gravity = 0; app.adaptiveDt = false;
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    body.showForceComponents = true; body.constForce.y = 0.5;
+    app.world.bodies.push(body); app.setSelection([body]); inspector.refresh();
+    const previous = panel.querySelector<HTMLDetailsElement>(".force-values")!;
+    expect(previous.open).toBe(false);
+    previous.open = open;
+    // Rebuild may precede the native asynchronous toggle notification.
+    app.stepOnce(); app.stepOnce(); app.stepBack(); inspector.refresh();
+    const current = panel.querySelector<HTMLDetailsElement>(".force-values")!;
+    expect(current).not.toBe(previous);
+    expect(app.world.bodies[0]).not.toBe(body);
+    expect(current.open).toBe(open);
+    expect(current.querySelectorAll("li")).toHaveLength(open ? 2 : 0);
+    if (open) {
+      expect(current.textContent).toContain("Fy 0.50 N");
+      app.world.bodies[0].constForce.y = 0.75;
+      app.world.clearForceDiagnostics();
+      inspector.refresh();
+      expect(current.textContent).toContain("Fy 0.75 N");
+    }
+  });
+
+  it("retains the choice across tabs and ignores toggles from detached readouts", () => {
+    const { app, panel, inspector } = makeInspector();
+    app.world.gravity = 0;
+    const body = new Body(new Vec2(0, 0));
+    body.showForceComponents = true; body.constForce.y = 0.5;
+    app.world.bodies.push(body); app.setSelection([body]); inspector.refresh();
+    const previous = panel.querySelector<HTMLDetailsElement>(".force-values")!;
+    previous.open = true;
+    const tab = (name: string) => [...panel.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+      .find(button => button.textContent === name)!.click();
+    tab("World"); tab("Selection");
+    const current = panel.querySelector<HTMLDetailsElement>(".force-values")!;
+    expect(current.open).toBe(true);
+    current.open = false;
+    current.dispatchEvent(new Event("toggle"));
+    // A queued event on the old, open node must not undo the newer choice.
+    previous.dispatchEvent(new Event("toggle"));
+    tab("World"); tab("Selection");
+    expect(panel.querySelector<HTMLDetailsElement>(".force-values")!.open).toBe(false);
+    expect(app.undoStack.canUndo).toBe(false);
+  });
+
   it("names individual forces, exposes signed components and retains the focused disclosure", () => {
     const { app, panel, inspector } = makeInspector();
     app.world.gravity = 9.8;
@@ -920,11 +967,13 @@ describe("Inspector edit transactions", () => {
     const wall = new Wall(new Vec2(-3, 0), new Vec2(3, 0), 0.04);
     wall.name = "Impact floor"; wall.restitution = 1; wall.friction = 0;
     app.world.bodies.push(body); app.world.walls.push(wall); app.setSelection([body]);
+    inspector.refresh();
+    panel.querySelector<HTMLDetailsElement>(".force-values")!.open = true;
     app.stepOnce(); app.stepOnce(); app.stepBack(); inspector.refresh();
     expect(panel.querySelector(".force-interval-note")!.textContent)
       .toContain("Average forces: 0.008–0.017 s.");
     const disclosure = panel.querySelector<HTMLDetailsElement>(".force-values")!;
-    disclosure.open = true; inspector.refresh();
+    expect(disclosure.open).toBe(true);
     expect(disclosure.textContent).toContain("R: Reaction from Impact floor");
     expect(disclosure.textContent).toContain("Fy 720.00 N");
     const restored = app.world.bodies[0];

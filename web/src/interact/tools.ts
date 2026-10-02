@@ -949,11 +949,12 @@ export class CanvasController {
         const other = mount.end === 0 ? mount.wall.b : mount.wall.a;
         const delta = other.sub(endpoint);
         const along = delta.div(Math.max(1e-9, delta.length()));
-        a.pos = string.guideA().add(along.mul(1.35));
+        a.pos = wheel.pos.add(string.guideAOffset).add(along.mul(1.35));
       } else {
-        a.pos = string.guideA().add(new Vec2(0, -1.35));
+        a.pos = wheel.pos.add(string.guideAOffset).add(new Vec2(0, -1.35));
       }
-      b.pos = string.guideB().add(new Vec2(0, -1.35));
+      b.pos = wheel.pos.add(string.guideBOffset).add(new Vec2(0, -1.35));
+      string.resetRouting();
       string.length = string.currentLength();
       app.setSelection([string]);
       app.commitEdit();

@@ -183,7 +183,8 @@ test("a terminal pulley stop displays matching tensions and its rim reaction imm
   const summary = page.locator(".force-values > summary");
   await pickParticle(page, [50, 170, 150]); await toggle.check(); await summary.click();
   await expect(sources.getByRole("listitem").filter({ hasText: "Pulley-string tension" })).toContainText("Fy 19.62 N");
-  await pickParticle(page, [220, 130, 90]); await toggle.check(); await summary.click();
+  await pickParticle(page, [220, 130, 90]); await toggle.check();
+  await expect(page.locator(".force-values")).toHaveJSProperty("open", true);
   const tension = sources.getByRole("listitem").filter({ hasText: "Pulley-string tension" });
   const reaction = sources.getByRole("listitem").filter({ hasText: "Pulley-frame reaction" });
   await expect(tension).toContainText("Fy 19.62 N");
@@ -237,7 +238,7 @@ test("rewinding restores completed impact captions and their measured interval a
   await page.keyboard.press(",");
   await expect(clock).toHaveValue("0.02"); await expect(toggle).toBeChecked();
   const disclosure = page.locator(".force-values");
-  if (await disclosure.getAttribute("open") === null) await disclosure.locator("summary").click();
+  await expect(disclosure).toHaveJSProperty("open", true);
   await expect(page.locator(".force-interval-note")).toContainText("Average forces: 0.008–0.017 s.");
   await expect(sources.getByRole("listitem").filter({ hasText: "Reaction from Impact floor" })).toContainText("Fy 720.00 N");
   await expect.poll(captions).toContain("R 720.00 N");

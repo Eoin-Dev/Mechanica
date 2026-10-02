@@ -153,14 +153,16 @@ sweeps the particle centre from its starting position against the wheel
 expanded by the particle radius, so a fast particle is clamped at its first
 impact even when both sampled endpoints lie outside the wheel.
 
-The guide ray and signed winding define a permitted half-plane for each leg.
-A second swept guard catches routes that miss the disc but cross to the other
-side, stops the endpoint at that boundary, and suppresses a force row during
-an intermediate integrator trial on the wrong side. This preserves routing
-half-plane boundaries. Continuous angular-sheet ownership separately prevents
-an internal full-turn seam from injecting energy into the partner. Both guards
-and continuous path geometry apply in Normal and every
-Performance profile.
+The reference guide rays define angular coordinates, not collision surfaces.
+Particles may cross either ray or move around the wheel while the string is
+slack. `currentWrapTurns()` resolves each trial angle against the accepted
+substep/edit positions and wheel centre, lifting the relative path onto its
+continuous angular sheet. `captureSafePositions()` commits the sheet at a
+boundary; geometry and current-force reads do not mutate it. Serialization and
+structural history use the resolved current sheet even before the next capture.
+The physical wheel-frame sweep and continuous routing apply in Normal and every
+Performance profile. Creating an assembly selects its initial route after both
+particles are placed; subsequent motion retains that route.
 
 ## World state and effective settings
 
@@ -262,7 +264,7 @@ Velocity-change accounting subtracts individually named impulses;
 support anchoring/roundoff residuals remain numerical corrections.
 Contact reactions remain available even when the contact ended before the last
 substep. Pulley position and velocity rows record their common string impulse
-as tension on both legs. A frame or routing stop records the opposing part
+as tension on both legs. A frame stop records the opposing part
 removed by its feasible gradient, separately from tension. These measured rows
 are subtracted from the remaining velocity change, so enforcing a taut string
 does not appear as an extra numerical force beside an incomplete tension.
@@ -293,8 +295,8 @@ forces, predicts velocities over one nominal solver interval at fixed geometry
 and calculates loaded contact impulses. A microscopic query-only skin includes
 exact tangencies. Tighter query-only contact tolerances and at most 24 coupled
 link/support iterations improve static load estimates; live solver settings
-remain unchanged. Query-only pulley rows include active terminal-frame and
-routing projections in their response derivative. This shares the stopped
+remain unchanged. Query-only pulley rows include active terminal-frame
+projections in their response derivative. This shares the stopped
 endpoint's load with its partner without requiring slow iteration through an
 extreme mass ratio. Resting contacts with fixed walls or particles supply a
 query-only projected response when friction is zero or string tension is normal
@@ -582,7 +584,7 @@ projects positive path velocity onto its non-stretching constraint. Position
 projection alone cannot guarantee a compatible final velocity, particularly
 after Verlet/RK4 trial accelerations or a contact impulse. Up to eight coupled
 passes remove the positive path derivative in the mass metric, using the
-feasible frame/routing gradients and recording the common tension impulse and
+feasible frame gradients and recording the common tension impulse and
 blocked support separately. This projection cannot increase kinetic energy in
 a free assembly. A held endpoint may supply external work. Shortening velocity
 is allowed to make a string slack; slack strings and nonzero-compliance rows

@@ -134,7 +134,7 @@ function visitStructuralValues(world: World,
       if (!visit(ln.guideBOffset.x)) return false;
       if (!visit(ln.guideBOffset.y)) return false;
       if (!visit(ln.wrapSweep)) return false;
-      if (!visit(ln.wrapTurns)) return false;
+      if (!visit(ln.currentWrapTurns())) return false;
       if (!visit(ln.mountWallId ?? -1)) return false;
       if (!visit(ln.mountWallEnd)) return false;
       if (!visit(ln.mountNormalSign)) return false;

@@ -90,6 +90,7 @@ export class Inspector implements Panel {
   private tab: Tab = "Selection";
   private group = new RefreshGroup();
   private eventHistoryOpen = false;
+  private forceValuesOpen = false;
   private structureKey = "";
   /** Formula rows where the user chose plain text over typeset math.
    *
@@ -374,6 +375,10 @@ export class Inspector implements Panel {
 
   // ------------------------------------------------------------------ build
   private rebuild(): void {
+    // Read synchronously: a rewind can replace the node before its queued
+    // native toggle event delivers the user's latest choice.
+    const forceValues = this.body.querySelector<HTMLDetailsElement>(".force-values");
+    if (forceValues !== null) this.forceValuesOpen = forceValues.open;
     this.structureKey = this.computeStructureKey();
     this.group.clear();
     this.body.replaceChildren();
@@ -605,11 +610,16 @@ export class Inspector implements Panel {
 
     const readout = el("details", { class: "force-values" },
       el("summary", { text: "Force values and sources" }));
+    readout.open = this.forceValuesOpen;
     const values = el("ul", { class: "force-value-list", "aria-label": "Force values and sources" });
     readout.append(values);
     const rows = new Map<string, { root: HTMLElement; name: HTMLElement; components: HTMLElement }>();
     let rowKey = "";
-    readout.addEventListener("toggle", () => this.refresh());
+    readout.addEventListener("toggle", () => {
+      if (!readout.isConnected) return;
+      this.forceValuesOpen = readout.open;
+      this.refresh();
+    });
     const forceNote = el("div", { class: "faint settings-note force-interval-note",
       title: "Current forces are calculated on isolated scene inputs. Contact and impact forces are estimated over one nominal solver interval; a completed step shows its measured average. Current previews use the authored model, including forces suppressed by Performance approximations." });
     // The disclosure may remain visible after its note scrolls away. Observe

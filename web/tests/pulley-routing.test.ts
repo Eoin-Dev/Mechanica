@@ -144,7 +144,7 @@ describe("continuous pulley routing", () => {
     expect(structuralDigest(back)).toBe(structuralDigest(world));
   });
 
-  it("checks gradients, directional curvature and clear straight paths across varied ports", () => {
+  it.each([false, true])("checks gradients, curvature and clear paths across varied ports (all angles=%s)", allAngles => {
     let seed = 29029;
     const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32; };
     let direct = 0, reverse = 0;
@@ -154,7 +154,8 @@ describe("continuous pulley routing", () => {
       const wheel = new Body(new Vec2(0.1, -0.2), PULLEY_RADIUS);
       const a = new Body(new Vec2(), 0.16, 1), b = new Body(new Vec2(), 0.16, 1);
       for (const [body, guide, sign] of [[a, aa, -sigma], [b, ab, sigma]] as const) {
-        const angle = guide + sign * (0.03 + random() * (Math.PI - 0.06)), distance = 0.5 + random() * 5;
+        const angle = guide + sign * (allAngles ? -Math.PI + random() * 2 * Math.PI :
+          0.03 + random() * (Math.PI - 0.06)), distance = 0.5 + random() * 5;
         body.pos.set(wheel.pos.x + distance * Math.cos(angle), wheel.pos.y + distance * Math.sin(angle));
         body.vel.set((random() - 0.5) * 4, (random() - 0.5) * 4);
       }
@@ -175,7 +176,12 @@ describe("continuous pulley routing", () => {
         direct++;
         const d = b.pos.sub(a.pos), t = Math.max(0, Math.min(1, wheel.pos.sub(a.pos).dot(d) / d.length2()));
         expect(a.pos.add(d.mul(t)).distTo(wheel.pos)).toBeGreaterThanOrEqual(PULLEY_RADIUS - 1e-9);
-      } else if (Math.sign(g.sweep) !== sigma) reverse++;
+      } else {
+        if (Math.sign(g.sweep) !== sigma) reverse++;
+        const end = Math.atan2(g.ga.y - wheel.pos.y, g.ga.x - wheel.pos.x) + g.sweep;
+        expect(wheel.pos.x + PULLEY_RADIUS * Math.cos(end)).toBeCloseTo(g.gb.x, 10);
+        expect(wheel.pos.y + PULLEY_RADIUS * Math.sin(end)).toBeCloseTo(g.gb.y, 10);
+      }
       const expected = g.wrapped ?
         (a.vel.x * g.nay - a.vel.y * g.nax) ** 2 / g.da +
         (b.vel.x * g.nby - b.vel.y * g.nbx) ** 2 / g.db :
@@ -213,5 +219,124 @@ describe("continuous pulley routing", () => {
         expect(entry.kind).not.toBe("correction");
       }
     }
+  });
+});
+
+describe("pulley motion beyond the guide rays", () => {
+  const modes = INTEGRATORS.flatMap(integrator =>
+    (["normal", 0, 1, 2, 3] as const).map(mode => ({ integrator, mode })));
+
+  function free(integrator: typeof INTEGRATORS[number], mode: "normal" | number) {
+    const world = new World(); world.gravity = 0; world.integrator = integrator;
+    world.performance = mode !== "normal"; world.performanceLevel = mode === "normal" ? 0 : mode;
+    const wheel = new Body(new Vec2(), PULLEY_RADIUS);
+    const a = new Body(new Vec2(-2, -0.01), 0.16, 1);
+    const b = new Body(new Vec2(2, -2), 0.16, 1);
+    const link = new PulleyLink(a, b, wheel, 20);
+    a.collides = b.collides = false; a.showForceComponents = true; a.vel.set(0, 0.2);
+    world.bodies.push(wheel, a, b); world.links.push(link);
+    expect(world.effectiveIntegrator).toBe(mode === "normal" ? integrator : "Symplectic Euler");
+    expect(world.performanceLevel).toBe(mode === "normal" ? 0 : mode);
+    return { world, wheel, a, b, link };
+  }
+
+  it.each(modes)("keeps unforced slack motion across an empty guide: $integrator, $mode", ({ integrator, mode }) => {
+    const { world, a, b, link } = free(integrator, mode);
+    for (let i = 0; i < 12; i++) {
+      world.step(1 / 60);
+      expect(a.pos.y).toBeCloseTo(-0.01 + 0.2 * world.time, 12);
+      expect(a.vel.y).toBe(0.2); expect(a.pos.x).toBe(-2);
+      expect(b.vel.length()).toBe(0);
+      expect(world.energy().ke).toBeCloseTo(0.02, 14);
+      expect(link.length - link.currentLength()).toBeGreaterThan(14);
+      expect(a.forceSnapshot?.entries ?? []).toHaveLength(0);
+    }
+  });
+
+  it.each(modes)("keeps applied acceleration and current forces at the empty guide: $integrator, $mode", ({ integrator, mode }) => {
+    const { world, a } = free(integrator, mode);
+    a.pos.y = 0; a.constForce.set(0, 0.5);
+    const original = world.toDict(), nextId = Body.nextId;
+    const current = world.currentForceSnapshot(a);
+    if (current === null) throw new Error("Expected forces for the free particle");
+    expect(current.fy).toBeCloseTo(0.5, 12);
+    expect(current.entries.every(entry => entry.kind !== "reaction" && entry.kind !== "correction")).toBe(true);
+    expect(world.toDict()).toEqual(original); expect(Body.nextId).toBe(nextId);
+    const h = 1 / 60 / world.effectiveSubsteps;
+    for (let i = 0; i < 12; i++) world.step(1 / 60);
+    const eulerOffset = world.effectiveIntegrator === "Symplectic Euler" ? 0.5 * world.time * h / 2 : 0;
+    expect(a.pos.y).toBeCloseTo(0.2 * world.time + 0.5 * 0.5 * world.time ** 2 + eulerOffset, 11);
+    expect(a.vel.y).toBeCloseTo(0.2 + 0.5 * world.time, 12);
+    expect(a.forceSnapshot?.entries.every(entry => entry.kind !== "reaction" && entry.kind !== "correction")).toBe(true);
+  });
+
+  it.each([[-1, "a"], [-1, "b"], [1, "a"], [1, "b"]] as const)(
+    "retains multiple turns, pure reads and rewind for direction %s, endpoint %s", (sign, endpoint) => {
+      const { world, wheel, a, b, link } = free("Velocity Verlet", "normal");
+      a.pos.set(wheel.pos.x + 2 * Math.cos(-1.8), wheel.pos.y + 2 * Math.sin(-1.8));
+      b.pos.set(wheel.pos.x + 3 * Math.cos(-0.8), wheel.pos.y + 3 * Math.sin(-0.8));
+      const made = new PulleyLink(a, b, wheel, 100);
+      world.links.splice(world.links.indexOf(link), 1, made);
+      const body = endpoint === "a" ? a : b, radius = endpoint === "a" ? 2 : 3;
+      const angle = endpoint === "a" ? -1.8 : -0.8;
+      const history = new RewindBuffer(); history.push(world);
+      let storedTurns = 0;
+      for (let i = 1; i <= 2000; i++) {
+        const oldPosition = body.pos.copy(), oldLength = made.currentLength(), oldTurns = made.wrapTurns;
+        body.pos.set(wheel.pos.x + radius * Math.cos(angle + sign * i * 0.01),
+          wheel.pos.y + radius * Math.sin(angle + sign * i * 0.01));
+        const length = made.currentLength();
+        expect(Math.abs(length - oldLength)).toBeLessThanOrEqual(body.pos.distTo(oldPosition) + 1e-10);
+        expect(made.wrapTurns).toBe(oldTurns);
+        if (i % 250 === 0) {
+          world.time = i * 0.01;
+          const digest = structuralDigest(world), document = world.toDict();
+          const restored = World.fromDict(JSON.parse(JSON.stringify(document)));
+          expect((restored.links[0] as PulleyLink).currentLength()).toBe(length);
+          expect(structuralDigest(restored)).toBe(digest);
+          history.push(world);
+          const data = document.links[0];
+          if (data.type !== "pulley") throw new Error("Expected pulley");
+          storedTurns = Math.max(storedTurns, Math.abs(data.wrap_turns ?? 0));
+        }
+        made.captureSafePositions();
+        expect(made.currentLength()).toBe(length);
+      }
+      expect(storedTurns).toBeGreaterThan(1);
+      const back = history.back()!;
+      expect(back.time).toBe(17.5);
+      const restored = World.fromDict(JSON.parse(JSON.stringify(back.toDict())));
+      expect((restored.links[0] as PulleyLink).currentLength()).toBe((back.links[0] as PulleyLink).currentLength());
+    });
+
+  it("keeps the same route while both particles rotate and translate together", () => {
+    const { world, wheel, a, b } = free("Velocity Verlet", "normal");
+    a.pos.set(-1, -2); b.pos.set(2, -1);
+    const link = new PulleyLink(a, b, wheel, 100), expected = link.currentLength();
+    for (let i = 1; i <= 1200; i++) {
+      const angle = i * 0.02, c = Math.cos(angle), s = Math.sin(angle);
+      wheel.pos.set(i * 0.01, -i * 0.004);
+      a.pos.set(wheel.pos.x - c + 2 * s, wheel.pos.y - s - 2 * c);
+      b.pos.set(wheel.pos.x + 2 * c + s, wheel.pos.y + 2 * s - c);
+      expect(link.currentLength()).toBeCloseTo(expected, 12);
+      link.captureSafePositions();
+    }
+    expect(world.time).toBe(0);
+  });
+
+  it("uses valid reference rays for zero ports and keeps the arc endpoints coherent", () => {
+    const wheel = new Body(new Vec2(), PULLEY_RADIUS);
+    const a = new Body(new Vec2(-2, 0), 0.16, 1), b = new Body(new Vec2(2, 0), 0.16, 1);
+    const link = new PulleyLink(a, b, wheel, null, 0, new Vec2(), new Vec2());
+    const expected = 2 * Math.sqrt(4 - PULLEY_RADIUS ** 2) +
+      PULLEY_RADIUS * (Math.PI - 2 * Math.acos(PULLEY_RADIUS / 2));
+    const g = link.geometry();
+    expect(g.totalLength).toBeCloseTo(expected, 12);
+    expect(g.wrapped).toBe(true);
+    expect(link.guideAOffset.length()).toBe(PULLEY_RADIUS);
+    expect(link.guideBOffset.length()).toBe(PULLEY_RADIUS);
+    const end = Math.atan2(g.ga.y, g.ga.x) + g.sweep;
+    expect(PULLEY_RADIUS * Math.cos(end)).toBeCloseTo(g.gb.x, 12);
+    expect(PULLEY_RADIUS * Math.sin(end)).toBeCloseTo(g.gb.y, 12);
   });
 });
