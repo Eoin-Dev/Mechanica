@@ -7,6 +7,8 @@
  */
 import { assertSceneCollectionLimits, SceneLimitError, World, WorldDict } from "../engine/world";
 import { PulleyLink } from "../engine/links";
+import { Contact } from "../engine/contacts";
+import type { ForceSnapshot } from "../engine/force-diagnostics";
 
 const SCENE_PREFIX = "mechanica.scene.";
 // per-scene user metadata (description, ...) lives under a separate key so
@@ -196,7 +198,56 @@ function structureMatches(world: World, expected: readonly StructuralValue[]): b
   return complete && i === expected.length;
 }
 
-interface Frame {
+interface FrameAnalysis {
+  forces: Array<{ bodyId: number; sample: ForceSnapshot }> | null;
+  contacts: Float64Array | null;
+  analysisBytes: number;
+}
+
+const EMPTY_FRAME_ANALYSIS: FrameAnalysis = { forces: null, contacts: null, analysisBytes: 0 };
+
+/** Own only primitive diagnostic values, never pooled contacts or live bodies. */
+function captureAnalysis(world: World): FrameAnalysis {
+  let forces: FrameAnalysis["forces"] = null;
+  let analysisBytes = 0;
+  for (const body of world.bodies) {
+    const source = body.forceSnapshot;
+    if (!body.showForceComponents || source === null) continue;
+    const entries = source.entries.map(entry => Object.freeze({
+      id: entry.id, label: entry.label, kind: entry.kind, fx: entry.fx, fy: entry.fy,
+      ...(entry.contactNx === undefined ? {} :
+        { contactNx: entry.contactNx, contactNy: entry.contactNy }),
+    }));
+    const sample: ForceSnapshot = Object.freeze({ entries: Object.freeze(entries),
+      startTime: source.startTime, endTime: source.endTime, stepCount: source.stepCount,
+      x: source.x, y: source.y, vx: source.vx, vy: source.vy, mass: source.mass,
+      fx: source.fx, fy: source.fy });
+    (forces ??= []).push({ bodyId: body.id, sample });
+    // Conservative heap allowance includes rows, arrays, object overhead and
+    // UTF-16 source strings; shared strings are deliberately charged again.
+    analysisBytes += 256;
+    for (const entry of entries) {
+      analysisBytes += 144 + 2 * (entry.id.length + entry.label.length + entry.kind.length);
+    }
+  }
+  let contacts: Float64Array | null = null;
+  if (world.contacts.length > 0) {
+    contacts = new Float64Array(world.contacts.length * 9);
+    let k = 0;
+    for (const contact of world.contacts) {
+      contacts[k++] = contact.px; contacts[k++] = contact.py;
+      contacts[k++] = contact.nx; contacts[k++] = contact.ny;
+      contacts[k++] = contact.impulse; contacts[k++] = contact.bodyAId;
+      contacts[k++] = contact.bodyBId ?? -1; contacts[k++] = contact.wallId ?? -1;
+      contacts[k++] = contact.tangentImpulse;
+    }
+    analysisBytes += contacts.byteLength + 64;
+  }
+  return forces === null && contacts === null ? EMPTY_FRAME_ANALYSIS :
+    { forces, contacts, analysisBytes };
+}
+
+interface Frame extends FrameAnalysis {
   key: number;             // index into `keys` of the snapshot this rests on
   dyn: Float64Array | null; // null retained as a corruption/legacy guard
 }
@@ -213,8 +264,10 @@ export type RewindStoreResult = "stored" | "too-large";
  *
  * Ten numbers per body change as the simulation runs: position, velocity,
  * angle, spin, acceleration and realised net force. A frame normally stores
- * just those, plus the clock and step count, as a flat Float64Array against
- * the last full snapshot. A new snapshot is taken when the structural digest
+ * those, plus the clock and step count, as a flat Float64Array against
+ * the last full snapshot. It also owns immutable enabled force intervals and
+ * copied contact primitives, charged to the same byte budget. A new snapshot
+ * is taken when the structural digest
  * differs or an exact value comparison rejects a matching digest. A compact
  * delta is therefore stored only when every omitted value still equals its
  * keyframe value.
@@ -273,7 +326,9 @@ export class RewindBuffer {
   push(world: World): RewindStoreResult {
     const digest = this.digestWorld(world);
     const dyn = this.captureDynamic(world);
-    if (dyn.byteLength > RewindBuffer.BUDGET_BYTES) {
+    const analysis = captureAnalysis(world);
+    const frameCost = dyn.byteLength + analysis.analysisBytes;
+    if (frameCost > RewindBuffer.BUDGET_BYTES) {
       this.clear();
       return "too-large";
     }
@@ -281,7 +336,7 @@ export class RewindBuffer {
       structureMatches(world, this.structure);
     if (!sameStructure || this.keys.length === 0) {
       const state = snapshot(world);
-      if (state.length * 2 + dyn.byteLength > RewindBuffer.BUDGET_BYTES) {
+      if (state.length * 2 + frameCost > RewindBuffer.BUDGET_BYTES) {
         this.clear();
         return "too-large";
       }
@@ -290,11 +345,11 @@ export class RewindBuffer {
       this.digest = digest;
       this.haveDigest = true;
       this.structure = captureStructure(world);
-      this.bytes += dyn.byteLength;
-      this.frames.push({ key: this.keyBase + this.keys.length - 1, dyn });
+      this.bytes += frameCost;
+      this.frames.push({ key: this.keyBase + this.keys.length - 1, dyn, ...analysis });
     } else {
-      this.bytes += dyn.byteLength;
-      this.frames.push({ key: this.keyBase + this.keys.length - 1, dyn });
+      this.bytes += frameCost;
+      this.frames.push({ key: this.keyBase + this.keys.length - 1, dyn, ...analysis });
     }
     this.trim();
     // A single delta still owns its keyframe. If that pair cannot fit the
@@ -303,15 +358,15 @@ export class RewindBuffer {
     if (this.bytes > RewindBuffer.BUDGET_BYTES) {
       const state = snapshot(world);
       this.clear();
-      if (state.length * 2 + dyn.byteLength > RewindBuffer.BUDGET_BYTES) {
+      if (state.length * 2 + frameCost > RewindBuffer.BUDGET_BYTES) {
         return "too-large";
       }
       this.keys.push(state);
-      this.bytes = state.length * 2 + dyn.byteLength;
+      this.bytes = state.length * 2 + frameCost;
       this.digest = digest;
       this.haveDigest = true;
       this.structure = captureStructure(world);
-      this.frames.push({ key: 0, dyn });
+      this.frames.push({ key: 0, dyn, ...analysis });
     }
     return "stored";
   }
@@ -319,7 +374,7 @@ export class RewindBuffer {
   /** Bytes a frame owns outright. A keyframe's string is shared with every
    * delta resting on it, so it is charged to the key, not to the frame. */
   private frameBytes(f: Frame): number {
-    return f.dyn === null ? 0 : f.dyn.byteLength;
+    return (f.dyn?.byteLength ?? 0) + f.analysisBytes;
   }
 
   private trim(): void {
@@ -360,6 +415,22 @@ export class RewindBuffer {
       }
       world.time = dyn[k];
       world.stepCount = Math.max(0, Math.floor(dyn[k + 1]));
+    }
+    if (frame.forces !== null) {
+      const bodies = new Map(world.bodies.map(body => [body.id, body]));
+      for (const { bodyId, sample } of frame.forces) {
+        const body = bodies.get(bodyId);
+        if (body !== undefined) body.forceSnapshot = sample;
+      }
+    }
+    if (frame.contacts !== null) {
+      const values = frame.contacts;
+      for (let k = 0; k + 8 < values.length; k += 9) {
+        world.contacts.push(new Contact(values[k], values[k + 1], values[k + 2],
+          values[k + 3], values[k + 4], values[k + 5],
+          values[k + 6] < 0 ? null : values[k + 6],
+          values[k + 7] < 0 ? null : values[k + 7], values[k + 8]));
+      }
     }
     return world;
   }

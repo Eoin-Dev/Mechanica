@@ -1364,3 +1364,41 @@ describe("graph recording", () => {
     expect(app.energySeries.lastT).toBeLessThanOrEqual(app.world.time + 1e-9);
   });
 });
+
+describe("rewind interval and trail clocks", () => {
+  it("keeps completed impact arrows and sources when stepping back after separation", () => {
+    const app = makeApp(); app.newScene(); app.world.gravity = 0; app.adaptiveDt = false;
+    const body = new Body(new Vec2(0, 0.26), 0.2, 1);
+    body.vel.y = -3; body.restitution = 1; body.friction = 0; body.showForceComponents = true;
+    const floor = new Wall(new Vec2(-3, 0), new Vec2(3, 0), 0.04);
+    floor.restitution = 1; floor.friction = 0;
+    app.world.bodies.push(body); app.world.walls.push(floor); app.setSelection([body]);
+    app.stepOnce();
+    const recorded = forceLedger(app.world, body);
+    expect(recorded.mode).toBe("step-average");
+    expect(recorded.entries.find(entry => entry.kind === "reaction")!.fy).toBeCloseTo(720, 9);
+    expect(app.world.contacts).toHaveLength(0);
+    const original = snapshot(app.world);
+    app.stepOnce(); app.stepBack();
+    const restored = app.world.bodies[0];
+    expect(app.selection).toEqual([restored]); expect(restored.showForceComponents).toBe(true);
+    expect(snapshot(app.world)).toBe(original);
+    expect(forceLedger(app.world, restored)).toEqual(recorded);
+  });
+
+  it("records adaptive positions with their own timestamps instead of the step end", () => {
+    const app = makeApp(); app.newScene(); app.world.gravity = 0; app.setTrails(true);
+    const body = new Body(new Vec2(0, 1), 0.2, 1); app.world.bodies.push(body);
+    app.world.time = 0.1;
+    // Independently supplied intermediate positions make the App consumer's
+    // timestamp contract observable without mirroring the adaptive integrator.
+    app.world.trace.push([body.id, -0.03, 0.97, 0.04], [body.id, -0.01, 0.99, 0.08]);
+    (app as unknown as { recordTrails(): void }).recordTrails();
+    const trail = app.trails.get(body.id)!;
+    expect([...Array(trail.count)].map((_, k) => trail.time(k))).toEqual([0.04, 0.08, 0.1]);
+    expect(app.world.trace).toHaveLength(0);
+    trail.truncateAfter(0.06);
+    expect(trail.count).toBe(1); expect(trail.time(0)).toBe(0.04);
+    expect([trail.x(0), trail.y(0)]).toEqual([-0.03, 0.97]);
+  });
+});

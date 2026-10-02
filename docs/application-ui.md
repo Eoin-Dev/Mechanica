@@ -61,6 +61,10 @@ undo history remains separate.
 
 ### Reset and time jump
 
+Rewind announces the world replacement before refreshing selection. Panels must
+rebind object references even when IDs and control structure are unchanged;
+otherwise a displayed value or edit can still target the discarded world.
+
 The initial snapshot is the scene setup as first played/stepped, including
 edits committed at time zero. Reset restores it, pauses, clears derived
 display/history state through `replaceWorld`, and preserves the same initial
@@ -662,13 +666,15 @@ preserved Normal-mode choice. Turning Performance mode off restores that
 choice and begins a fresh trail rather than joining across the disabled span.
 
 - App recording occurs after every physical step, including adaptive steps.
-- Encounter trace samples captured inside a world slice are drained first.
+- Encounter trace samples captured inside a world slice are drained first,
+  retaining each position's actual simulation timestamp.
 - Ordinary endpoints are added only after sufficient screen-space motion.
 - Trail age is based on simulated time, so a stopped body's old path still
   expires and speed multipliers do not change the simulated history span.
-- Before recording resumes after rewind/re-simulation, future-stamped trails
-  are cleared; whole-world replacement, including undo/redo, clears all trail
-  samples.
+- Rewind/re-simulation discards only future samples from the remaining trail;
+  whole-world replacement, including undo/redo, clears all trail samples.
+  Samples already expired or evicted from the ring cannot currently be recovered
+  by rewinding.
 - Trails belonging to removed bodies are deleted.
 - Capacity changes retain the newest points and preserve monotonic serials.
 

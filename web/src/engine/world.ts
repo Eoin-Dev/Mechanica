@@ -433,7 +433,7 @@ export class World {
   // slices through a close encounter, the U-turn happens *inside* one step,
   // so the UI sets traceSpacing (world units) and drains `trace` after each
   // step to keep trails smooth through it
-  trace: Array<[number, number, number]> = [];
+  trace: Array<[bodyId: number, x: number, y: number, time: number]> = [];
   traceSpacing = 0.0; // 0 = tracing off
   private traceLast = new Map<number, [number, number]>();
   // Base timestep the spring/damper stability clamps are measured
@@ -1650,7 +1650,7 @@ export class World {
               Math.abs(last[0] - b.pos.x) + Math.abs(last[1] - b.pos.y) >= spacing) {
             if (last === undefined) this.traceLast.set(b.id, [b.pos.x, b.pos.y]);
             else { last[0] = b.pos.x; last[1] = b.pos.y; }
-            this.trace.push([b.id, b.pos.x, b.pos.y]);
+            this.trace.push([b.id, b.pos.x, b.pos.y, t0 + elapsed]);
           }
         }
       }

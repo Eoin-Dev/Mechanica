@@ -877,6 +877,9 @@ export class App {
     // a rewind swaps the world just as much as a load does, so the same
     // in-progress gestures have to go with it (see resetInteraction)
     this.controller.resetInteraction();
+    // IDs can stay identical while every object reference changes. Notify
+    // bound panels before selection refresh so their controls use this world.
+    this.onWorldReplaced();
     this.setSelection(selectionKeys.flatMap((key) => {
       const item = this.findSelectable(world, key);
       return item === null ? [] : [item];
@@ -2023,9 +2026,9 @@ export class App {
     // sub-step path samples captured inside the adaptive integrator
     // (close encounters turn around within a single step)
     if (this.world.trace.length > 0) {
-      for (const [bid, x, y] of this.world.trace) {
+      for (const [bid, x, y, time] of this.world.trace) {
         if (internalRodEnds.has(bid)) continue;
-        trailFor(bid).push(x, y, now);
+        trailFor(bid).push(x, y, time);
         changed = true;
       }
       this.world.trace.length = 0;

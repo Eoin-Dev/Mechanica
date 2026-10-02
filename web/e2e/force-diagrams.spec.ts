@@ -42,9 +42,13 @@ test.beforeEach(async ({ page }) => {
     localStorage.setItem("mechanica.settings", JSON.stringify({ tour_done: true, theme: "light" }));
     const captions: Caption[] = [];
     Object.defineProperty(window, "contactCaptions", { value: captions });
+    const paint = { width: 0, height: 0 };
+    Object.defineProperty(window, "contactPaint", { value: paint });
     const clear = CanvasRenderingContext2D.prototype.fillRect;
     CanvasRenderingContext2D.prototype.fillRect = function(x, y, w, h) {
-      if (this.canvas.id === "canvas" && x === 0 && y === 0 && w > 100 && h > 100) captions.length = 0;
+      if (this.canvas.id === "canvas" && x === 0 && y === 0 && w > 100 && h > 100) {
+        paint.width = w; paint.height = h; captions.length = 0;
+      }
       clear.call(this, x, y, w, h);
     };
     const fill = CanvasRenderingContext2D.prototype.fillText;
@@ -117,7 +121,12 @@ test("current diagrams show all loaded slope contacts and update immediately thr
     await page.keyboard.press("Escape"); await page.setViewportSize({ width, height: 900 });
     const hide = page.getByRole("button", { name: "Hide Inspector", exact: true });
     if (width === 390 && await hide.isVisible()) await hide.click();
-    await expect.poll(async () => (await readCaptions()).filter(caption => /^R[₁₂₃] /.test(caption.text)).length).toBe(3);
+    await expect.poll(() => page.evaluate(() => {
+      const canvas = document.querySelector<HTMLCanvasElement>("#canvas")!;
+      const frame = window as unknown as { contactPaint: { width: number; height: number }; contactCaptions: Caption[] };
+      return frame.contactPaint.width === canvas.clientWidth && frame.contactPaint.height === canvas.clientHeight &&
+        frame.contactCaptions.filter(caption => /^R[₁₂₃] /.test(caption.text)).length === 3;
+    })).toBe(true);
     const bounds = await page.locator("#canvas").evaluate(element => ({ width: element.clientWidth, height: element.clientHeight }));
     const captions = await readCaptions();
     for (const caption of captions) {
@@ -156,6 +165,50 @@ test("a floor-supported pulley displays its coupled tension and reaction without
   await page.screenshot({ path: testInfo.outputPath("immediate-supported-pulley.png") });
   expect((await new AxeBuilder({ page }).include("#inspector")
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze()).violations).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("rewinding restores completed impact captions and their measured interval after separation", async ({ page }, testInfo) => {
+  const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+  await page.addInitScript(() => {
+    localStorage.setItem("mechanica.settings", JSON.stringify({
+      tour_done: true, theme: "light", adaptive_dt: false,
+    }));
+  });
+  await page.reload();
+  await loadScene(page, { settings: { gravity: 0, integrator: "RK4", substeps: 4 },
+    bodies: [{ id: 1, name: "Bouncing particle", pos: [0, 0.26], vel: [0, -3],
+      radius: 0.2, mass: 1, restitution: 1, friction: 0, color: [120, 190, 120] }],
+    walls: [{ id: 1, name: "Impact floor", a: [-3, 0], b: [3, 0], thickness: 0.04,
+      restitution: 1, friction: 0 }] });
+  await pickParticle(page, [120, 190, 120]);
+  const toggle = page.getByRole("checkbox", { name: "Free-body forces on canvas", exact: true });
+  await toggle.check();
+  await page.locator(".force-values > summary").click();
+  const sources = page.getByRole("list", { name: "Force values and sources", exact: true });
+  const clock = page.getByRole("textbox", { name: "Simulation time in seconds", exact: true });
+  const captions = () => page.evaluate(() =>
+    (window as unknown as { contactCaptions: Caption[] }).contactCaptions.map(caption => caption.text));
+  const canvas = page.locator("#canvas");
+  await canvas.focus(); await page.keyboard.press(".");
+  await expect(clock).toHaveValue("0.02");
+  await expect(page.locator(".force-interval-note")).toContainText("Average forces: 0.008–0.017 s.");
+  await expect(sources.getByRole("listitem").filter({ hasText: "Reaction from Impact floor" })).toContainText("Fy 720.00 N");
+  await expect.poll(captions).toContain("R 720.00 N");
+  await page.screenshot({ path: testInfo.outputPath("completed-impact-before-rewind.png") });
+
+  await page.keyboard.press(".");
+  await expect(clock).toHaveValue("0.03");
+  await expect(sources).not.toContainText("Reaction from Impact floor");
+  await expect.poll(captions).not.toContain("R 720.00 N");
+  await page.keyboard.press(",");
+  await expect(clock).toHaveValue("0.02"); await expect(toggle).toBeChecked();
+  const disclosure = page.locator(".force-values");
+  if (await disclosure.getAttribute("open") === null) await disclosure.locator("summary").click();
+  await expect(page.locator(".force-interval-note")).toContainText("Average forces: 0.008–0.017 s.");
+  await expect(sources.getByRole("listitem").filter({ hasText: "Reaction from Impact floor" })).toContainText("Fy 720.00 N");
+  await expect.poll(captions).toContain("R 720.00 N");
+  await page.screenshot({ path: testInfo.outputPath("completed-impact-restored.png") });
   expect(errors).toEqual([]);
 });
 

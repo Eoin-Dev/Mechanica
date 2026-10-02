@@ -378,9 +378,15 @@ intentionally clears undo history.
 budget and a 3,000-frame ceiling. `push()` returns `stored` or `too-large`.
 Ten numbers per body normally change during play: x/y position, x/y velocity,
 angle, spin, x/y acceleration, and x/y realised net force. The clock and world
-step count add two more numbers to a dynamic frame. Retaining the analysis
-vectors is what makes free-body and resultant-force overlays agree immediately
-after a frame rewind rather than waiting for another forward step.
+step count add two more numbers to a dynamic frame. Each frame also owns the
+enabled particles' immutable named-force intervals and copied contact data,
+including contact directions, normal/tangential impulses and body/wall IDs.
+Rewinding restores the recorded interval, including an impact that has already
+ended, instead of replacing it with a different current-force calculation.
+These records never retain live bodies or pooled contact objects. Their arrays,
+source strings and a conservative object allowance count against the same
+byte budget; frames without recorded forces or contacts allocate no analysis
+arrays. Saved scene JSON remains unchanged.
 
 `structuralDigest()` folds every other serialized world value into a fast
 32-bit digest: world settings except time, body identity/properties, walls,

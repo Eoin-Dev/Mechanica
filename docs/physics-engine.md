@@ -488,9 +488,11 @@ that include body and pair-force evaluations plus integrator cost. A dense
 world may receive no extra slices and falls back to authored substep
 resolution. Remaining work never uses timing measurements.
 
-Adaptive slices can write intermediate body positions into `World.trace` when
-the application requests a world-space spacing. This preserves a visually
-smooth U-turn that happened inside one externally visible step.
+Adaptive slices can write `[bodyId, x, y, time]` samples into `World.trace` when
+the application requests a world-space spacing. Each position carries the
+actual slice-start clock, before integration, rather than the enclosing step's
+end time. This preserves a visually smooth U-turn inside one externally visible
+step and allows intermediate samples to expire or truncate at the correct time.
 
 ## Post-integration constraints
 

@@ -896,6 +896,41 @@ describe("Inspector accessibility and persisted visibility", () => {
 });
 
 describe("Inspector edit transactions", () => {
+  it("rebinds restored force values and particle edits after rewind with unchanged identities", () => {
+    const { app, panel, inspector } = makeInspector();
+    app.newScene(); app.world.gravity = 0; app.adaptiveDt = false;
+    const body = new Body(new Vec2(0, 0.26), 0.2, 1);
+    body.vel.y = -3; body.restitution = 1; body.friction = 0; body.showForceComponents = true;
+    const wall = new Wall(new Vec2(-3, 0), new Vec2(3, 0), 0.04);
+    wall.name = "Impact floor"; wall.restitution = 1; wall.friction = 0;
+    app.world.bodies.push(body); app.world.walls.push(wall); app.setSelection([body]);
+    app.stepOnce(); app.stepOnce(); app.stepBack(); inspector.refresh();
+    expect(panel.querySelector(".force-interval-note")!.textContent)
+      .toContain("Average forces: 0.008–0.017 s.");
+    const disclosure = panel.querySelector<HTMLDetailsElement>(".force-values")!;
+    disclosure.open = true; inspector.refresh();
+    expect(disclosure.textContent).toContain("R: Reaction from Impact floor");
+    expect(disclosure.textContent).toContain("Fy 720.00 N");
+    const restored = app.world.bodies[0];
+    expect(restored).not.toBe(body);
+    const mass = panel.querySelector<HTMLInputElement>('[aria-label="Mass (type an exact value)"]')!;
+    mass.focus(); mass.value = "2"; mass.blur();
+    expect(restored.mass).toBe(2); expect(body.mass).toBe(1);
+  });
+
+  it("rebinds World controls after rewind without changing their structure", () => {
+    const { app, panel, inspector } = makeInspector();
+    app.newScene(); app.world.gravity = 0;
+    app.world.bodies.push(new Body(new Vec2(0, 2)));
+    [...panel.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+      .find(tab => tab.textContent === "World")!.click();
+    app.stepOnce(); app.stepOnce(); const previous = app.world;
+    app.stepBack(); inspector.refresh();
+    const gravity = panel.querySelector<HTMLInputElement>('[aria-label="g (type an exact value)"]')!;
+    gravity.focus(); gravity.value = "3"; gravity.blur();
+    expect(app.world.gravity).toBe(3); expect(previous.gravity).toBe(0);
+  });
+
   it("retains committed fields so subsequent edits cannot target detached controls", () => {
     const { app, panel, inspector } = makeInspector();
     const body = new Body(new Vec2(0, 0), 0.2, 1);
