@@ -171,6 +171,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`pulley.test.ts`](../web/tests/pulley.test.ts) | Equal-tension Atwood acceleration, tension-only slack behavior, live finite-wheel tangency, terminal radial/tangent stops, outside-disc route crossing, hostile mass-ratio energy bounds across all integrators and both solver modes, all four Performance profiles, fixed endpoint radius ownership/release, realised contact-force diagnostics, exact wall-surface placement with parallel routing, mount following, live snap/breakaway wheel dragging, paused and running taut axle edits, pulley-only box filtering, complete placement, three dismantling cascades, persistence/digest structure, and malformed axle ownership/reference rejection. |
 | [`pulley-analytic-forces.test.ts`](../web/tests/pulley-analytic-forces.test.ts) | Independent Newton-law incline tension, reaction and limiting-friction answers across integrators and timesteps; terminal and fixed-wall/body equilibrium across extreme mass ratios with matching leg tensions, owned rim reactions, unchanged immediate-query inputs, disabled partner diagrams and cache invalidation; stationary position/velocity in actual Normal/Performance profiles; and an analytic inelastic tension impulse with non-increasing kinetic energy. Force-ledger closure and motion accuracy are checked separately. |
 | [`pulley-diagnostics.test.ts`](../web/tests/pulley-diagnostics.test.ts) | Immediate Atwood acceleration/tension and whole-axle support, compatible force intervals and full tightening impulses, hidden endpoint/query ownership and caching, scalar/vector averaging, disabled-display work and rewind retention. |
+| [`pulley-routing.test.ts`](../web/tests/pulley-routing.test.ts) | Independent path continuity at vanishing and full-turn wraps in both orientations, release and opposite-side wheel-clearance/tangent oracles, relative-velocity straight-string tension, saved and legacy route ownership, query/rewind structural invalidation, guarded import defaults, seeded gradient/curvature checks over varied port spans, and seam energy bounds across actual Normal/Performance integrators and timesteps. |
 
 ### Presets, determinism, stress, and long runs
 
@@ -369,7 +370,7 @@ checks at 200% text. These cases also protect a usable speed-slider track and
 | Test file | Protected behavior |
 | --- | --- |
 | [`e2e/graph-viewer.spec.ts`](../web/e2e/graph-viewer.spec.ts) | Production graph coordinates, zoom, six-family navigation, physical dimensions, exact CSV and decoded PNG dimensions, divider-free controls, readable responsive themes and WCAG scans, with screenshots in every configured browser. |
-| [`e2e/pulley-diagnostics.spec.ts`](../web/e2e/pulley-diagnostics.spec.ts) | Immediate wheel tension/axle support and painted separate-arrow coordinates without stepping, interval hover descriptions and retained readings after forward/backward stepping, accessibility and screenshots in all configured engines. |
+| [`e2e/pulley-diagnostics.spec.ts`](../web/e2e/pulley-diagnostics.spec.ts) | Immediate wheel tension/axle support and painted separate-arrow coordinates without stepping, interval hover descriptions and retained readings after forward/backward stepping, accessibility and screenshots in all configured engines, plus legacy vanishing-wrap continuity through stepping/rewind, endpoint velocity/position bounds and exported route ownership. |
 | [`e2e/accessibility.spec.ts`](../web/e2e/accessibility.spec.ts) | Production boot without console/page errors; axe WCAG A/AA scans at boot and with Library open, with only the deliberate browser-page-zoom `meta-viewport` exception waived; keyboard play/tabs/splitters/full-card library activation; undo after scene replacement; rendered-canvas pointer alignment; paused Jelly zoom paint-FPS/idle reporting with stable Performance quality; incline-pulley preset/tool/status/Inspector editing and tension toggle; 390 x 844 transient inspector and Studio Library behavior; extreme-accent safe text/button states; full-disc swatch geometry; modal-tour focus/inertness/restoration; modal modifier-shortcut isolation, real MathLive Escape cancellation, light-theme destructive-hover contrast, and contained Library/Settings plus usable graph canvas at 320 CSS px with 200% application text. |
 
 A DPR-2 scene-import case checks visible tiny-particle pixels and glyph-copy
@@ -465,6 +466,23 @@ When fixing a defect, add the smallest test that pins the violated invariant in
 the closest existing file. Add a new test file only when the behavior is a new
 coherent area. Tests should name the mechanism and expected physical/UI
 contract, not merely replay one bug report.
+
+Mathematical changes need independent checks of the physical answer in addition
+to force-accounting closure. A sum of displayed forces matching `m*delta-v/dt`
+can faithfully describe an incorrect numerical step. Keep observational
+state-equivalence checks separate from tests of an intentional physical repair.
+Assert the actual integrator and Performance profile in mode comparisons;
+setting an unused fixture property does not exercise another solver.
+
+Challenge constraint geometry at angular branch boundaries, contact/release
+transitions, extreme mass ratios and reconstructed states. Check path gradients
+and directional curvature against independent differences or analytic answers,
+then test work/energy and timestep convergence during motion. Measure intermediate
+peaks as well as the final state: a later inelastic stop can conceal an earlier
+energy injection. Verify query, step and rewind ownership without treating
+cached or completed-interval forces as instantaneous measurements. Passing
+these checks supports their specified cases and numerical tolerances; it does
+not establish universal correctness or complete review of every source line.
 
 ## Performance and determinism expectations
 

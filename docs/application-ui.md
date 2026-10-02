@@ -425,6 +425,12 @@ During swinging, the readout reports mean scalar tension while an arrow shows
 its mean vector. Hidden diagram flags stay hidden when a readout requests an
 isolated current calculation, and enabled separate-vector measurements survive
 rewind without stepping again.
+The rendered string follows its retained route continuously across a full
+turn. A vanishing wrap becomes a straight segment, and later contact on the
+other side follows that side's tangent arc. A straight string has no wheel
+tension arrows; its endpoint forces act along the direct string. Export and
+rewind retain the angular route, including an initially small wrap imported
+from an older scene.
 
 Ordinary name, mass, colour and other value commits keep the current controls
 when the structure key is unchanged. A subsequent focused edit therefore

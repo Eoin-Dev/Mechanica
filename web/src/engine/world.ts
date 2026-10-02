@@ -514,7 +514,7 @@ export class World {
         if (link instanceof DistanceLink) read(link.isRope);
         else {
           read(link.pulley); read(link.guideAOffset.x); read(link.guideAOffset.y);
-          read(link.guideBOffset.x); read(link.guideBOffset.y); read(link.wrapSweep);
+          read(link.guideBOffset.x); read(link.guideBOffset.y); read(link.wrapSweep); read(link.wrapTurns);
           read(link.mountWallId); read(link.mountWallEnd); read(link.mountNormalSign);
         }
       }
@@ -1522,10 +1522,11 @@ export class World {
           this.clampPulleyBodyAcceleration(a, ln.pulley, ln.guideAOffset, -sigma, diagnosticWeight);
           this.clampPulleyBodyAcceleration(b, ln.pulley, ln.guideBOffset, sigma, diagnosticWeight);
         }
-        const curveA = this.pulleyCurvature(a, ln.pulley,
-          geom.aRadialX, geom.aRadialY, geom.aTangentCoeff, da, nax, nay);
-        const curveB = this.pulleyCurvature(b, ln.pulley,
-          geom.bRadialX, geom.bRadialY, geom.bTangentCoeff, db, nbx, nby);
+        const perpendicular = (a.vel.x - b.vel.x) * nay - (a.vel.y - b.vel.y) * nax;
+        const curveA = geom.wrapped ? this.pulleyCurvature(a, ln.pulley,
+          geom.aRadialX, geom.aRadialY, geom.aTangentCoeff, da, nax, nay) : perpendicular * perpendicular / geom.totalLength;
+        const curveB = geom.wrapped ? this.pulleyCurvature(b, ln.pulley,
+          geom.bRadialX, geom.bRadialY, geom.bTangentCoeff, db, nbx, nby) : 0;
         const cdd = a.acc.x * nax + a.acc.y * nay + curveA +
           b.acc.x * nbx + b.acc.y * nby + curveB;
         const effectiveW = this.pulleyQuerySupports === null ? wSum :
@@ -3109,6 +3110,9 @@ export class World {
       ln.pulley.pos.set(endpoint.x + nx * axleOffset,
                         endpoint.y + ny * axleOffset);
       ln.pulley.vel.set(0, 0);
+      const priorAX = ln.guideAOffset.x, priorAY = ln.guideAOffset.y;
+      const priorBX = ln.guideBOffset.x, priorBY = ln.guideBOffset.y;
+      const priorSweep = ln.wrapSweep;
       ln.guideAOffset.set(nx * PULLEY_RADIUS, ny * PULLEY_RADIUS);
       const hangingSide = Math.abs(ux) > 1e-9 ? (ux < 0 ? 1 : -1)
         : (nx < 0 ? 1 : -1);
@@ -3121,6 +3125,10 @@ export class World {
         sweep = hangingSide > 0 ? -Math.PI : Math.PI;
       }
       ln.wrapSweep = sweep;
+      // Only an authored mount change selects a new route. Repeated step/query
+      // synchronization must preserve its sheet across a full-turn seam.
+      if (priorAX !== ln.guideAOffset.x || priorAY !== ln.guideAOffset.y ||
+          priorBX !== ln.guideBOffset.x || priorBY !== ln.guideBOffset.y || priorSweep !== sweep) ln.resetRouting();
     }
   }
 

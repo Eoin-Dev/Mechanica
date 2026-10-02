@@ -135,8 +135,12 @@ included in the length constraint, and both particle gradients share one
 non-negative multiplier. The result is equal tension on both legs, no pushing
 while slack, and free particle motion rather than a hidden rail constraint.
 `guideAOffset`/`guideBOffset` retain the intended wrap topology and the
-wall-aligned creation geometry; `wrapSweep` retains which direction the string
-passes around the wheel. Optional wall-mount identity follows a chosen wall
+wall-aligned creation geometry; `wrapSweep` defines the reference direction
+and `wrapTurns` owns the angular sheet of the path. Live contact angles remain
+continuous across a full turn instead of reducing the route modulo a wheel
+circumference. A vanishing wrapped arc releases to a straight string; if that
+route approaches the other side of the wheel, the opposite tangent family
+provides a continuous wrapped path there. Optional wall-mount identity follows a chosen wall
 endpoint without making either particle part of the wall.
 
 The pulley wheel remains absent from ordinary body/body collision generation.
@@ -153,8 +157,9 @@ The guide ray and signed winding define a permitted half-plane for each leg.
 A second swept guard catches routes that miss the disc but cross to the other
 side, stops the endpoint at that boundary, and suppresses a force row during
 an intermediate integrator trial on the wrong side. This preserves routing
-topology and prevents a discontinuous wrapped angle from injecting energy into
-the partner. Both guards use the same bounded scalar work in Normal and every
+half-plane boundaries. Continuous angular-sheet ownership separately prevents
+an internal full-turn seam from injecting energy into the partner. Both guards
+and continuous path geometry apply in Normal and every
 Performance profile.
 
 ## World state and effective settings
@@ -442,16 +447,22 @@ For a taut pulley string the constraint is the sum of two tangent lengths and
 the live wrapped arc:
 
 ```text
-C = tangentLengthA + tangentLengthB + wheelRadius*abs(wrapSweep) - length
+C = tangentLengthA + tangentLengthB + wheelRadius*abs(geometry.sweep) - length
 ```
 
 The contact angles are recomputed from each particle, wheel centre, wheel
-radius, and retained wrap direction. The constraint gradients are the unit
+radius, reference wrap direction, guide rays and retained angular sheet. The constraint gradients are the unit
 directions of the two straight legs. One warm-started, non-negative multiplier
 applies `-T*gradient` to each endpoint, so the force magnitude `T` is identical
 on both sides even when masses differ. The acceleration solve includes the
 finite-wheel curvature term for a moving tangent; when the current path is
 shorter than `length`, the multiplier is cleared and the string is slack.
+When the string clears the wheel, `C = distance(a,b) - length`; the gradients
+point from one endpoint away from the other. Its curvature is the squared
+relative transverse speed divided by that separation. Equal endpoint velocity
+therefore requires no tension and the straight string supplies no axle load.
+Reattachment selects the appropriate tangent family continuously. These reads
+are pure; no history-dependent angle cache is mutated during rendering or queries.
 
 ## Integrators
 

@@ -71,6 +71,7 @@ export interface PulleyDict {
   guide_a: [number, number];
   guide_b: [number, number];
   wrap_sweep: number;
+  wrap_turns?: number;
   wall_id?: number | null;
   wall_end?: number;
   wall_normal_sign?: number;
@@ -231,6 +232,8 @@ export class PulleyLink {
   guideAOffset: Vec2;
   guideBOffset: Vec2;
   wrapSweep: number;
+  /** Integer sheet of the angular path, owned by the authored route. */
+  wrapTurns = 0;
   mountWallId: number | null;
   mountWallEnd: 0 | 1;
   mountNormalSign: -1 | 1;
@@ -249,7 +252,7 @@ export class PulleyLink {
               compliance = 0.0,
               guideAOffset = new Vec2(-PULLEY_RADIUS, 0),
               guideBOffset = new Vec2(PULLEY_RADIUS, 0),
-              wrapSweep = -Math.PI) {
+              wrapSweep = -Math.PI, wrapTurns: number | null = null) {
     this.id = PulleyLink.nextId++;
     this.a = a;
     this.b = b;
@@ -275,8 +278,19 @@ export class PulleyLink {
     this.mountWallId = null;
     this.mountWallEnd = 0;
     this.mountNormalSign = 1;
+    this.resetRouting();
+    if (wrapTurns !== null) this.wrapTurns = intIn(wrapTurns, this.wrapTurns, -1, 1) || 0;
     this.length = length ?? this.currentLength();
     this.captureSafePositions();
+  }
+
+  /** Preserve the initially authored route without modulo jumps during motion. */
+  resetRouting(): void {
+    this.wrapTurns = 0;
+    const sigma = this.wrapSweep < 0 ? -1 : 1;
+    const angle = sigma * this.geometry().routeSweep;
+    const turns = -Math.floor(angle / (2 * Math.PI));
+    this.wrapTurns = turns === 0 ? 0 : turns;
   }
 
   captureSafePositions(): void {
@@ -311,7 +325,7 @@ export class PulleyLink {
     aRadialX: number; aRadialY: number;
     bRadialX: number; bRadialY: number;
     aTangentCoeff: number; bTangentCoeff: number;
-    sweep: number; wrapLength: number; totalLength: number;
+    sweep: number; routeSweep: number; wrapped: boolean; wrapLength: number; totalLength: number;
   } {
     const sigma = this.wrapSweep < 0 ? -1 : 1;
     const leg = (body: Body, branch: number, fallback: Vec2) => {
@@ -330,7 +344,7 @@ export class PulleyLink {
           nx: sx / straight, ny: sy / straight,
           radialX: d > 1e-9 ? qx / d : fallback.x / fd,
           radialY: d > 1e-9 ? qy / d : fallback.y / fd,
-          tangentCoeff: 0.0,
+          tangentCoeff: 0.0, offset: 0, alpha: 0,
           angle: Math.atan2(gy - this.pulley.pos.y, gx - this.pulley.pos.x),
         };
       }
@@ -349,17 +363,43 @@ export class PulleyLink {
         radialX, radialY,
         // B in gradient = A*e_r + B*e_phi. The a and b arc
         // derivatives have opposite signs.
-        tangentCoeff: branch === sigma ? -sigma * PULLEY_RADIUS / d
-                                        : sigma * PULLEY_RADIUS / d,
-        angle,
+        tangentCoeff: -branch * PULLEY_RADIUS / d,
+        angle, alpha,
+        offset: -branch * Math.acos(Math.max(-1, Math.min(1,
+          (qx * fallback.x + qy * fallback.y) / (d * Math.max(1e-12, fallback.length()))))) + branch * alpha,
       };
     };
-    const la = leg(this.a, sigma, this.guideAOffset);
-    const lb = leg(this.b, -sigma, this.guideBOffset);
+    let la = leg(this.a, sigma, this.guideAOffset);
+    let lb = leg(this.b, -sigma, this.guideBOffset);
     const tau = 2 * Math.PI;
     const positive = (angle: number): number => ((angle % tau) + tau) % tau;
-    const sweep = sigma > 0 ? positive(lb.angle - la.angle)
-      : -positive(la.angle - lb.angle);
+    const aa = Math.atan2(this.guideAOffset.y, this.guideAOffset.x);
+    const ab = Math.atan2(this.guideBOffset.y, this.guideBOffset.x);
+    const reference = sigma > 0 ? positive(ab - aa) : -positive(aa - ab);
+    const routeSweep = reference + lb.offset - la.offset + sigma * tau * this.wrapTurns;
+    const routedArc = sigma * routeSweep;
+    // Within the interval between the two tangent families the string is
+    // clear of the wheel. Past its other boundary it contacts the opposite
+    // side. Keep the angular sheet fixed: reducing each live angle modulo a
+    // turn would replace a continuous route by a different physical path.
+    const reverseArc = -routedArc - 2 * (la.alpha + lb.alpha);
+    if (routedArc <= 0 && reverseArc <= 0) {
+      const x = this.a.pos.x - this.b.pos.x, y = this.a.pos.y - this.b.pos.y;
+      const length = Math.hypot(x, y), inv = length > 1e-12 ? 1 / length : 0;
+      const midpoint = new Vec2((this.a.pos.x + this.b.pos.x) * 0.5,
+        (this.a.pos.y + this.b.pos.y) * 0.5);
+      return { ga: midpoint, gb: midpoint.copy(), da: length / 2, db: length / 2,
+        nax: x * inv, nay: y * inv, nbx: -x * inv, nby: -y * inv,
+        aRadialX: la.radialX, aRadialY: la.radialY,
+        bRadialX: lb.radialX, bRadialY: lb.radialY,
+        aTangentCoeff: 0, bTangentCoeff: 0,
+        sweep: 0, routeSweep, wrapped: false, wrapLength: 0, totalLength: length };
+    }
+    if (routedArc < 0) {
+      la = leg(this.a, -sigma, this.guideAOffset);
+      lb = leg(this.b, sigma, this.guideBOffset);
+    }
+    const sweep = routedArc >= 0 ? routeSweep : -sigma * reverseArc;
     const wrapLength = Math.abs(sweep) * PULLEY_RADIUS;
     return {
       ga: la.guide, gb: lb.guide, da: la.straight, db: lb.straight,
@@ -368,7 +408,7 @@ export class PulleyLink {
       bRadialX: lb.radialX, bRadialY: lb.radialY,
       aTangentCoeff: la.tangentCoeff,
       bTangentCoeff: lb.tangentCoeff,
-      sweep, wrapLength,
+      sweep, routeSweep, wrapped: true, wrapLength,
       totalLength: la.straight + lb.straight + wrapLength,
     };
   }
@@ -403,6 +443,7 @@ export class PulleyLink {
       guide_a: [this.guideAOffset.x, this.guideAOffset.y],
       guide_b: [this.guideBOffset.x, this.guideBOffset.y],
       wrap_sweep: this.wrapSweep,
+      wrap_turns: this.wrapTurns,
       wall_id: this.mountWallId,
       wall_end: this.mountWallEnd,
       wall_normal_sign: this.mountNormalSign,
@@ -439,12 +480,11 @@ export function linkFromDict(d: LinkDict, bodiesById: Map<number, Body>): Link {
       numIn(d.guide_b?.[0], PULLEY_RADIUS, -1e6, 1e6),
       numIn(d.guide_b?.[1], 0.0, -1e6, 1e6),
     );
-    const fallback = a.pos.distTo(pulley.pos.add(ga)) +
-      b.pos.distTo(pulley.pos.add(gb)) + Math.PI * PULLEY_RADIUS;
-    link = new PulleyLink(a, b, pulley,
-      numIn(d.length, fallback, 0.0, 1e6),
+    link = new PulleyLink(a, b, pulley, null,
       numIn(d.compliance, 0.0, 0.0, 1e9), ga, gb,
       numIn(d.wrap_sweep, -Math.PI, -2 * Math.PI, 2 * Math.PI));
+    link.wrapTurns = intIn(d.wrap_turns, link.wrapTurns, -1, 1) || 0;
+    link.length = numIn(d.length, link.currentLength(), 0.0, 1e6);
     link.mountWallId = d.wall_id === null || d.wall_id === undefined
       ? null : idOr(d.wall_id, -1) >= 0 ? idOr(d.wall_id, -1) : null;
     link.mountWallEnd = intIn(d.wall_end, 0, 0, 1) as 0 | 1;

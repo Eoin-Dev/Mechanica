@@ -792,13 +792,15 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
       const path = STROKES.path(color, slack ? 1 : 2);
       path.moveTo(pax, pay);
       path.lineTo(pga[0], pga[1]);
-      const guideAngle = Math.atan2(ga.y - link.pulley.pos.y,
-                                    ga.x - link.pulley.pos.x);
-      const start = -guideAngle;
-      const end = -(guideAngle + geom.sweep);
-      path.moveTo(pga[0], pga[1]);
-      path.arc(centre[0], centre[1], link.pulley.radius * zoom,
-               start, end, geom.sweep > 0);
+      if (geom.wrapped) {
+        const guideAngle = Math.atan2(ga.y - link.pulley.pos.y,
+                                      ga.x - link.pulley.pos.x);
+        const start = -guideAngle;
+        const end = -(guideAngle + geom.sweep);
+        path.moveTo(pga[0], pga[1]);
+        path.arc(centre[0], centre[1], link.pulley.radius * zoom,
+                 start, end, geom.sweep > 0);
+      }
       path.moveTo(pgb[0], pgb[1]);
       path.lineTo(pbx, pby);
     } else if (link instanceof SpringLink) {
@@ -1176,8 +1178,10 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
         // equal-and-opposite pair acts on the pulley at those contacts.
         consider(a[0], a[1], reading.forceAX, reading.forceAY);
         consider(b[0], b[1], reading.forceBX, reading.forceBY);
-        consider(ga[0], ga[1], -reading.forceAX, -reading.forceAY);
-        consider(gb[0], gb[1], -reading.forceBX, -reading.forceBY);
+        if (geom.wrapped) {
+          consider(ga[0], ga[1], -reading.forceAX, -reading.forceAY);
+          consider(gb[0], gb[1], -reading.forceBX, -reading.forceBY);
+        }
         continue;
       }
       if (link instanceof SpringLink || link.isRope) {

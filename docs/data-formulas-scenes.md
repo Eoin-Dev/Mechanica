@@ -196,6 +196,7 @@ until a positive natural length is set.
   "guide_a": [-0.22, 0],
   "guide_b": [0.22, 0],
   "wrap_sweep": -3.141592653589793,
+  "wrap_turns": 0,
   "wall_id": null,
   "wall_end": 0,
   "wall_normal_sign": 1
@@ -206,10 +207,11 @@ until a positive natural length is set.
 | --- | --- |
 | `a`, `b` | Two distinct ordinary, non-anchor particle IDs. Both must resolve and must differ from the pulley ID. A valid route normalizes both to non-rotating radius-`0.16` point particles for its lifetime; their serialized radius is otherwise ignored. Missing, anchor, pulley, or repeated endpoints skip the link. |
 | `pulley` | ID of a body whose guarded `is_pulley` value is true. A missing, ordinary, endpoint, or already-claimed axle skips the link; one axle owns exactly one routed string. |
-| `length` | Total light-string length, including both live tangent legs and the finite wrapped arc; finite and clamped to `0..1e6`. Invalid data uses the current guide-leg lengths plus a half circumference. |
+| `length` | Total light-string length, including both live tangent legs and the finite wrapped arc, or the direct separation when clear of the wheel; finite and clamped to `0..1e6`. Missing or invalid data uses the actual current path on the restored route. |
 | `compliance` | XPBD compliance, finite and clamped to `0..1e9`, default zero. The UI-created pulley keeps this zero for an inextensible string. |
 | `guide_a`, `guide_b` | Guarded fallback/topology offsets from the axle, each component clamped to `[-1e6, 1e6]`. Live tangent points are recomputed from current particle positions. |
-| `wrap_sweep` | Guarded signed wrap direction in `[-2*pi, 2*pi]`, default `-pi`; live arc magnitude follows the tangent contacts while the sign retains which way the string passes around the wheel. |
+| `wrap_sweep` | Guarded reference wrap direction in `[-2*pi, 2*pi]`, default `-pi`. Along with the guide offsets it defines the permitted routing sides and reference angular path. |
+| `wrap_turns` | Optional integer angular-sheet offset, clamped to `-1..1`. It preserves the authored route across full-turn boundaries in save/load, queries and rewind. Missing or invalid data infers the initial canonical wrapped path for compatibility with older scenes. A vanishing wrap can release to a straight path and later contact the other side of the wheel. |
 | `wall_id` | Optional mounted-wall ID or `null`. A missing wall detaches the axle without deleting the assembly. |
 | `wall_end` | Mounted endpoint index `0` or `1`, default `0`. |
 | `wall_normal_sign` | Surface-side sign normalized to `-1` or `1`, default `1`. |
@@ -217,8 +219,11 @@ until a positive natural length is set.
 
 Force warm-start `mu`, position `lambda`, dynamic tangent contacts, safe sweep
 samples, active wheel-stop state, and routing-half-plane state are transient
-and are not serialized. The latter topology is derived from the persisted
-guide offsets and signed wrap direction.
+and are not serialized. Routing half-planes derive from the persisted guide
+offsets and reference wrap direction. The angular-sheet offset is structural
+state and remains serialized; live geometry reads never change it. An authored
+mount-geometry change selects its initial route again, while repeated unchanged
+mount synchronization retains the route.
 
 ## Force-field and driver documents
 
