@@ -1059,6 +1059,42 @@ describe("graph recording", () => {
     expect(total).toBeCloseTo(e.total, 9);
   });
 
+  for (const heavyParity of [0, 1]) {
+    it.each([0, 1, 2, 3])(`samples energy without mass-parity omission in profile %s (heavy ${heavyParity})`, level => {
+      const app = makeApp();
+      app.world.gravity = 0;
+      app.world.G = 1;
+      app.world.softening = 0.1;
+      app.world.mutualGravity = true;
+      for (let i = 0; i < 200; i++) {
+        app.world.bodies.push(new Body(new Vec2(i % 20, Math.floor(i / 20)),
+          0.05, i % 2 === heavyParity ? 1 : 0.01));
+      }
+      let expected = 0;
+      for (let i = 0; i < 200; i++) {
+        const a = app.world.bodies[i];
+        for (let j = i + 1; j < 200; j++) {
+          const b = app.world.bodies[j];
+          expected -= a.mass * b.mass / Math.hypot(
+            b.pos.x - a.pos.x, b.pos.y - a.pos.y, 0.1);
+        }
+      }
+      app.setPerfMode(true);
+      // Exercise the actual adaptive-profile transition and its cache
+      // invalidation rather than assigning an unused fixture property.
+      (app as unknown as { setPerformanceLevel(level: number): void })
+        .setPerformanceLevel(level);
+      expect(app.performanceLevel).toBe(level);
+      expect(app.world.performanceLevel).toBe(level);
+      const before = snapshot(app.world), nextId = Body.nextId;
+      const estimate = app.energyNow();
+      expect(Math.abs(estimate.pe - expected) / Math.abs(expected)).toBeLessThan(0.08);
+      expect(snapshot(app.world)).toBe(before);
+      expect(Body.nextId).toBe(nextId);
+      expect(app.energyNow()).toBe(estimate);
+    });
+  }
+
   it("records momentum that matches the world's own accounting", () => {
     const app = makeApp();
     movingScene(app);

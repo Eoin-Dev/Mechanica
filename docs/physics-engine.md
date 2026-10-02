@@ -757,9 +757,15 @@ The projection also bounds per-substep movement, spring stretch/compression,
 and damping fraction. These are catastrophe bounds, not intended material
 properties. No blanket damping is added to spring-connected bodies.
 
-Energy diagnostics remain exact in Normal mode. Performance mode samples a
-deterministic bounded subset of mutual-gravity pairs for drift readouts; the
-`~dE` prefix marks that approximation. This diagnostic never feeds forces.
+Energy diagnostics remain exact in Normal mode. Performance mode takes a
+deterministic bounded sample of mutual-gravity pairs for drift readouts; the
+`~dE` prefix marks that approximation. Pair indices scale the full unsigned
+generator output, avoiding the alternating low-bit pattern that would omit
+same-parity pairs in even populations. Sampling may repeat pairs and has
+scene-dependent error; it does not promise a fixed accuracy. Internal anchors
+and rod coordinates are excluded, while locked physical masses remain sources.
+Small populations whose pair count fits the budget use the exact calculation.
+This diagnostic never feeds forces or changes physical state.
 
 ## Diagnostics
 

@@ -2849,10 +2849,12 @@ export class World {
           let sampled = 0.0;
           let seed = (0x9e3779b9 ^ n) | 0;
           for (let s = 0; s < samples; s++) {
+            // Scale the full unsigned output: every second LCG draw has
+            // constant low-bit parity, so modulo n omits pairs for even n.
             seed = (Math.imul(seed, 1664525) + 1013904223) | 0;
-            const i = (seed >>> 0) % n;
+            const i = Math.floor((seed >>> 0) * n / 0x100000000);
             seed = (Math.imul(seed, 1664525) + 1013904223) | 0;
-            let j = (seed >>> 0) % (n - 1);
+            let j = Math.floor((seed >>> 0) * (n - 1) / 0x100000000);
             if (j >= i) j++;
             const bi = active[i];
             const bj = active[j];
