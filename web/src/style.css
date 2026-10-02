@@ -819,7 +819,7 @@ button.perf-banner-btn:hover:not(:disabled) {
 .num-row .lbl { color: var(--text-dim); font-size: calc(12px * var(--fs, 1)); flex: none; min-width: 16px; }
 .num-row .unit { color: var(--text-faint); font-size: calc(11px * var(--fs, 1)); flex: none; }
 
-.elastic-model {
+.elastic-model, .collision-model {
   display: grid;
   gap: 9px;
   margin: 10px 0;
@@ -829,10 +829,11 @@ button.perf-banner-btn:hover:not(:disabled) {
   background: var(--panel-light);
   min-width: 0;
 }
-.elastic-heading { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; justify-content: space-between; }
+.elastic-heading, .collision-heading { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; justify-content: space-between; }
+.collision-pair { color: var(--accent-text); font-size: calc(11px * var(--fs, 1)); overflow-wrap: anywhere; }
 .elastic-state { color: var(--accent-text); font-size: calc(11px * var(--fs, 1)); text-transform: capitalize; }
 .elastic-equation { margin: 0; font-size: calc(12px * var(--fs, 1)); line-height: 1.6; }
-.elastic-help { margin: 0; color: var(--text-dim); font-size: calc(11px * var(--fs, 1)); line-height: 1.5; }
+.elastic-help, .collision-help { margin: 0; color: var(--text-dim); font-size: calc(11px * var(--fs, 1)); line-height: 1.5; }
 .elastic-model .num-row { flex-wrap: wrap; gap: 5px; }
 .elastic-model .num-row input { flex: 1 1 70px; min-width: 0; width: 70px; font-variant-numeric: tabular-nums; }
 .elastic-readings { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 12px; margin: 0; }
@@ -840,9 +841,12 @@ button.perf-banner-btn:hover:not(:disabled) {
 .elastic-readings dt { color: var(--text-dim); font-size: calc(11px * var(--fs, 1)); }
 .elastic-readings dd { margin: 0; font-size: calc(12px * var(--fs, 1)); text-align: right; font-variant-numeric: tabular-nums; }
 .elastic-model > button { justify-content: center; }
-.elastic-explanation { border-top: 1px solid var(--outline); padding-top: 8px; }
-.elastic-explanation summary { color: var(--accent-text); cursor: pointer; font-size: calc(11px * var(--fs, 1)); min-height: 24px; line-height: 1.5; padding: 3px 0; }
-.elastic-explanation p { margin-top: 8px; }
+.elastic-explanation, .collision-explanation { border-top: 1px solid var(--outline); padding-top: 8px; }
+.elastic-explanation summary, .collision-explanation summary { color: var(--accent-text); cursor: pointer; font-size: calc(11px * var(--fs, 1)); min-height: 24px; line-height: 1.5; padding: 3px 0; }
+.elastic-explanation p, .collision-explanation p { margin-top: 8px; }
+.row.restitution-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 6px; }
+.row.restitution-control > .lbl { width: auto; overflow-wrap: anywhere; }
+.row.restitution-control > input[type="range"] { grid-column: 1 / -1; grid-row: 2; width: 100%; }
 @container (max-width: 260px) {
   .elastic-readings { grid-template-columns: minmax(0, 1fr); gap: 3px; }
   .elastic-readings dd { text-align: left; margin-bottom: 5px; }
@@ -876,6 +880,9 @@ button.perf-banner-btn:hover:not(:disabled) {
   .btn-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .btn-grid > button { padding: 6px 8px; }
 }
+/* This coefficient has no unit suffix and is bounded by 0–1: leave room for
+   its complete notation even at the narrowest enlarged Inspector width. */
+.row.restitution-control > input.val { width: calc(40px * var(--fs, 1)); }
 .inspector-action {
   display: flex;
   width: 100%;

@@ -41,6 +41,83 @@ beforeEach(() => {
   localStorage.clear();
 });
 
+describe("Collision material guidance", () => {
+  it.each(["body", "anchor", "wall"] as const)("explains relative restitution and the material rule for a %s", kind => {
+    const { app, panel, inspector } = makeInspector();
+    const item = kind === "wall" ? new Wall(new Vec2(-2, 0), new Vec2(2, 0))
+      : new Body(new Vec2(0, 1));
+    if (item instanceof Body) {
+      item.isAnchor = kind === "anchor";
+      app.world.bodies.push(item);
+    } else app.world.walls.push(item);
+    app.setSelection([item]);
+    inspector.refresh();
+    const input = panel.querySelector<HTMLInputElement>('[aria-label="Restitution e (type an exact value)"]');
+    expect(input).not.toBeNull();
+    const model = panel.querySelector(".collision-model")!;
+    expect(model.textContent).toContain("lower");
+    expect(model.textContent).toContain("relative");
+    expect(model.textContent).toContain("not joined");
+    expect(model.querySelector("summary")!.textContent).toBe("How impacts work");
+  });
+
+  it("updates the selected material pair without replacing its disclosure or focused control", () => {
+    const { app, panel, inspector } = makeInspector();
+    const a = new Body(new Vec2(-1, 0));
+    const b = new Body(new Vec2(1, 0));
+    a.restitution = 1;
+    b.restitution = 0.6;
+    app.world.bodies.push(a, b);
+    app.setSelection([a, b]);
+    inspector.refresh();
+    const model = panel.querySelector(".collision-model")!;
+    const details = model.querySelector("details")!;
+    details.open = true;
+    const field = panel.querySelector<HTMLInputElement>('[aria-label="Restitution e (type an exact value)"]')!;
+    field.focus();
+    expect(model.querySelector(".collision-pair")!.textContent).toBe("Material pair e = 0.6");
+    b.restitution = 0.25;
+    inspector.refresh();
+    expect(model.querySelector(".collision-pair")!.textContent).toBe("Material pair e = 0.25");
+    expect(panel.querySelector(".collision-model")).toBe(model);
+    expect(model.querySelector("details")).toBe(details);
+    expect(details.open).toBe(true);
+    expect(document.activeElement).toBe(field);
+  });
+
+  it("shows one material rule for a mixed body and wall pair", () => {
+    const { app, panel, inspector } = makeInspector();
+    const body = new Body(new Vec2(0, 1));
+    const wall = new Wall(new Vec2(-2, 0), new Vec2(2, 0));
+    body.restitution = 0.8;
+    wall.restitution = 0.123456789;
+    app.world.bodies.push(body);
+    app.world.walls.push(wall);
+    app.setSelection([body, wall]);
+    inspector.refresh();
+    expect(panel.querySelectorAll(".collision-model")).toHaveLength(1);
+    expect(panel.querySelector(".collision-pair")!.textContent).toBe("Material pair e = 0.123456789");
+    wall.restitution = 0.9;
+    inspector.refresh();
+    expect(panel.querySelector(".collision-pair")!.textContent).toBe("Material pair e = 0.8");
+  });
+
+  it.each(["two walls", "three bodies"] as const)("does not invent a single collision pair for %s", kind => {
+    const { app, panel, inspector } = makeInspector();
+    if (kind === "two walls") {
+      app.world.walls.push(new Wall(new Vec2(-2, 0), new Vec2(2, 0)),
+        new Wall(new Vec2(-2, 2), new Vec2(2, 2)));
+      app.setSelection([...app.world.walls]);
+    } else {
+      app.world.bodies.push(...[-1, 0, 1].map(x => new Body(new Vec2(x, 1))));
+      app.setSelection([...app.world.bodies]);
+    }
+    inspector.refresh();
+    expect(panel.querySelectorAll(".collision-model")).toHaveLength(1);
+    expect(panel.querySelector(".collision-pair")).toBeNull();
+  });
+});
+
 describe("Elastic-link modulus", () => {
   it("accepts exam modulus and exposes extension, elastic force and energy", () => {
     const { app, panel, inspector } = makeInspector();

@@ -78,6 +78,14 @@ At a contact:
 - friction is `sqrt(muA * muB)`;
 - wall properties occupy the infinite-mass side of a body-wall manifold.
 
+For an isolated impact, restitution relates relative separation and approach
+speeds along the contact normal. It does not specify either body's retained
+speed. A smooth fixed-wall impact leaves tangential velocity unchanged;
+friction acts separately. Zero restitution gives a common normal velocity,
+without attaching the bodies to each other. The resting-speed threshold,
+coupled constraints and simultaneous contacts require the solver treatment
+described below rather than a single isolated-collision calculation.
+
 The inspector offers named body materials (`Custom`, `Rubber`, `Steel`,
 `Wood`, `Ice`, `Clay`, and `Superball`) as restitution/friction pairs. They are
 UI conveniences, not a separate serialized material type.

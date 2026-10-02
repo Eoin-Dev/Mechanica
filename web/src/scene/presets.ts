@@ -657,6 +657,18 @@ function buildRestitutionLadder(): World {
   return w;
 }
 
+function buildDirectCollision(): World {
+  const w = new World();
+  w.gravity = 0;
+  solver(w, 4);
+  const a = addBody(w, -2, 0, { m: 2, vx: 4, e: 0.6, mu: 0,
+    color: [86, 156, 214], name: "A (2 kg)" });
+  const b = addBody(w, 2, 0, { m: 3, vx: -1, e: 1, mu: 0,
+    color: [220, 130, 90], name: "B (3 kg)" });
+  a.noRotation = b.noRotation = true;
+  return w;
+}
+
 /** Random elastic gas in a box. */
 export function gasWorld(count: number, half: number, seed: number): World {
   const w = new World();
@@ -1490,9 +1502,17 @@ export const PRESETS: Preset[] = [
   new Preset("Elastic vs inelastic", "Collisions & Gas",
     "Equal masses, head-on. Elastic (top): the mover stops dead and " +
     "hands its velocity over. Perfectly inelastic (bottom): they " +
-    "stick and share it. Momentum is conserved in both - kinetic " +
+    "leave the impact with a common velocity. Momentum is conserved in both - kinetic " +
     "energy only in the first.",
     buildElasticVsInelastic, { zoom: 130, graph: "momentum" }, ["Momentum", "Restitution"]),
+  new Preset("Direct collision", "Collisions & Gas",
+    "Blue A (2 kg) starts at +4 m/s; orange B (3 kg) at −1 m/s. Their material values " +
+    "are e = 0.6 and 1, so the contact uses 0.6. In Normal mode A leaves " +
+    "at −0.8 m/s and B at +2.2 m/s. Momentum stays at 5 kg m/s; kinetic " +
+    "energy falls by 9.6 J. The impulses are −9.6 N s on A and +9.6 N s " +
+    "on B. Select both particles to inspect their material pair.",
+    buildDirectCollision, { zoom: 100, centre: [1, 0], graph: "momentum", vectors: true },
+    ["Momentum", "Restitution"]),
   new Preset("Gas in a box (50)", "Collisions & Gas",
     "Fifty particles bouncing elastically in zero gravity - a toy " +
     "ideal gas. Elastic impacts preserve kinetic energy; the fixed walls " +

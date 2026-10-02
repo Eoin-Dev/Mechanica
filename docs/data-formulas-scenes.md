@@ -769,7 +769,7 @@ The registry is ordered for the library and currently contains these groups:
 | Three-Body Problem | Sun, Earth & Moon; Three-body figure-8; Lagrange's triangle; Choreography: moth; Choreography: butterfly; Pythagorean three-body |
 | Pendulums | Simple pendulum; Double pendulum; Triple pendulum; Swinging rope; Newton's cradle; Coupled pendulums |
 | Oscillators | Mass on a spring; Elastic string release; Damping regimes; Driven resonance; Coupled oscillators; Spring pendulum |
-| Collisions & Gas | Billiard break; Restitution ladder; Elastic vs inelastic; Gas in a box (50); Gas in a box (200); Brownian motion |
+| Collisions & Gas | Billiard break; Restitution ladder; Elastic vs inelastic; Direct collision; Gas in a box (50); Gas in a box (200); Brownian motion |
 | Projectiles & Friction | Projectile drag race; Friction ramp; Pulley on an incline; Galileo's drop; Which lands first?; Projectile angles; Terminal velocity; Wrecking ball; Chain bridge |
 | Soft Bodies | Jelly block; Squishy ball; Trampoline; Soft wheel; Jelly smash |
 | Chaos | Butterfly effect; Orbit dance; Sinai billiard; Cyclone |
@@ -784,6 +784,18 @@ The Friction ramp places three deliberately non-rotating balls 1.5 m apart
 along its 25-degree surface. Its friction levels demonstrate fast sliding,
 slower sliding, and static holding without rotational motion obscuring the
 comparison.
+
+Direct collision isolates two smooth, non-rotating particles in zero gravity:
+`mA = 2 kg`, `mB = 3 kg`, `uA = +4 m/s`, `uB = −1 m/s`. Their material
+coefficients are `0.6` and `1`, giving contact restitution `0.6`. Momentum
+conservation and relative separation speed give `vA = −0.8 m/s` and
+`vB = +2.2 m/s`, momentum `5 kg m/s`, kinetic-energy loss `9.6 J` and impulses
+`−9.6 N s`/`+9.6 N s`. The actual preset motion is checked at its shipped
+Normal-mode settings. It opens momentum and shows velocity vectors in a
+stable view anticipating the first impact, with blue A and orange B named
+in the description. Fit/auto-fit remain available for longer exploration.
+The Elastic vs inelastic description states common velocity after
+impact; zero restitution creates no persistent attachment.
 
 Elastic string release isolates a non-rotating, non-colliding `2 kg` load on
 one light tension-only string, with `l = 2 m`, modulus `λ = 39.2 N`, zero

@@ -695,9 +695,14 @@ test("signed displacement, travel and velocity stay distinct and fit responsive 
       for (const channelName of names) {
         const channel = dock.getByRole("button", { name: `${channelName} series`, exact: true });
         await expect(channel).toBeVisible();
-        const bounds = (await channel.boundingBox())!;
-        expect(bounds.x).toBeGreaterThanOrEqual(0);
-        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+        // Native legend hit positions follow the next canvas redraw after
+        // resize. Assert the final bounds rather than the old frame's layout.
+        await expect.poll(async () => (await channel.boundingBox())?.x ?? -Infinity)
+          .toBeGreaterThanOrEqual(0);
+        await expect.poll(async () => {
+          const bounds = await channel.boundingBox();
+          return bounds ? bounds.x + bounds.width : Infinity;
+        }).toBeLessThanOrEqual(width);
       }
     }
     await dock.getByRole("button", { name: "Displacement", exact: true }).click();

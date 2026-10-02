@@ -28,6 +28,32 @@ const lightest = (bs: Body[]): Body => bs.reduce((a, b) => (a.mass < b.mass ? a 
 type Claim = [phrase: string, check: (w: World) => void];
 
 const CARD_CLAIMS: Record<string, Claim[]> = {
+  "Direct collision": [
+    ["A (2 kg) starts at +4 m/s; B (3 kg) at −1 m/s", w => {
+      expect(movers(w).map(body => [body.mass, body.vel.x])).toEqual([[2, 4], [3, -1]]);
+      expect(w.gravity).toBe(0);
+      expect(w.bodies.every(body => body.noRotation && body.friction === 0)).toBe(true);
+      expect(w.fields).toHaveLength(0);
+      expect(w.drivers).toHaveLength(0);
+    }],
+    ["material values are e = 0.6 and 1", w => {
+      expect(w.bodies.map(body => body.restitution)).toEqual([0.6, 1]);
+    }],
+    ["A leaves at −0.8 m/s and B at +2.2 m/s", w => {
+      for (let i = 0; i < 240; i++) w.step(1 / 120);
+      expect(w.bodies[0].vel.x).toBeCloseTo(-0.8, 10);
+      expect(w.bodies[1].vel.x).toBeCloseTo(2.2, 10);
+    }],
+    ["momentum 5, energy loss 9.6, impulses ±9.6", w => {
+      const before = w.energy().ke;
+      for (let i = 0; i < 240; i++) w.step(1 / 120);
+      const [a, b] = w.bodies;
+      expect(w.momentum().x).toBeCloseTo(5, 10);
+      expect(before - w.energy().ke).toBeCloseTo(9.6, 10);
+      expect(a.mass * (a.vel.x - 4)).toBeCloseTo(-9.6, 10);
+      expect(b.mass * (b.vel.x + 1)).toBeCloseTo(9.6, 10);
+    }],
+  ],
   "Elastic string release": [
     ["A 2 kg load", w => {
       expect(movers(w)).toHaveLength(1);

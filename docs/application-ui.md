@@ -376,6 +376,17 @@ For a single object it exposes type-specific state:
 - a read-only pulley-wheel explanation with position dragging and deletion as
   its only physical editing actions, plus the pulley tension-overlay toggle.
 
+Material controls label the coefficient as Restitution e, with the complete
+caption and exact value above a full-width track in every single/bulk context.
+The themed Collision model card explains relative normal approach/separation
+speed and the lower material-coefficient rule. How impacts work is a native keyboard-operated
+disclosure covering smooth tangential motion, zero-restitution non-attachment,
+ideal particle setup and non-isolated/Performance limits. A mixed selection
+gets one shared card rather than a duplicate for each group. Exactly two
+selected materials including a body expose a live Material pair e output;
+it describes the material combination without claiming the objects contact.
+The output, disclosure and focused controls remain attached during refresh.
+
 Selecting either pulley particle, its wheel or its string exposes a Pulley
 assembly group. Its four labelled rows navigate directly to Particle A,
 Particle B, Wheel and String, showing the particle names/masses, fixed-axle

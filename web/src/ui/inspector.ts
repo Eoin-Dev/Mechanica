@@ -49,6 +49,9 @@ function selectionKey(o: Selectable): string {
 
 const TABS = ["Selection", "World", "View"] as const;
 type Tab = (typeof TABS)[number];
+const RESTITUTION_HELP = "Coefficient of restitution: relative separation speed " +
+  "divided by relative approach speed along the line of impact. " +
+  "The lower of the two contacting materials' values is used.";
 
 /** A Performance-mode banner above controls the mode makes unavailable: why
  * they are greyed out, and the single click that gives them back. Present
@@ -525,14 +528,12 @@ export class Inspector implements Panel {
       "can then hold it still on a slope instead of rolling it down."));
 
     this.sub("Material");
-    this.add(slider("Bounce", () => b.restitution, (v) => { b.restitution = v; },
-      0.0, 1.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-        tooltip: "Fraction of approach speed kept after an impact. " +
-                 "1 = perfectly elastic, 0 = no bounce at all." }));
+    this.restitutionControl([b]);
     this.add(slider("Friction", () => b.friction, (v) => { b.friction = v; },
       0.0, 10.0, { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
         onCommit: this.commit,
         tooltip: "Resistance to sliding at contact. 0 = frictionless." }));
+    this.buildRestitutionModel([b]);
     this.materialButtons([b]);
     this.colourRow([b]);
 
@@ -720,15 +721,13 @@ export class Inspector implements Panel {
       "Let bodies collide with this anchor. Off, they pass through it."));
 
     this.sub("Material");
-    this.add(slider("Bounce", () => b.restitution, (v) => { b.restitution = v; },
-      0.0, 1.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-        tooltip: "Fraction of approach speed a body keeps after hitting " +
-                 "this anchor. 1 = perfectly elastic, 0 = no bounce at all." }));
+    this.restitutionControl([b]);
     this.add(slider("Friction", () => b.friction, (v) => { b.friction = v; },
       0.0, 10.0, { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
         onCommit: this.commit,
         tooltip: "Resistance to sliding against this anchor. " +
                  "0 = frictionless." }));
+    this.buildRestitutionModel([b]);
     this.materialButtons([b]);
     this.colourRow([b]);
 
@@ -752,6 +751,43 @@ export class Inspector implements Panel {
             "the palette new bodies are picked from." }));
   }
 
+  /** Keep the full exam notation readable above the track in every context. */
+  private restitutionControl(objects: Array<Body | Wall>): void {
+    const control = slider("Restitution e", () => objects[0].restitution,
+      value => objects.forEach(item => { item.restitution = value; }), 0, 1,
+      { fmt: value => value.toFixed(2), onCommit: this.commit, tooltip: RESTITUTION_HELP });
+    control.root.classList.add("restitution-control");
+    this.add(control);
+  }
+
+  /** Explain the stored material coefficient separately from current motion.
+   * A selected pair's value is a material rule, not a claim that they collide. */
+  private buildRestitutionModel(objects: Array<Body | Wall>): void {
+    if (objects.length === 0) return;
+    const pair = objects.length === 2 && objects.some(item => item instanceof Body)
+      ? el("output", { class: "collision-pair", "aria-label": "Material pair restitution" }) : null;
+    const root = el("div", { class: "collision-model" },
+      el("div", { class: "collision-heading" }, el("strong", { text: "Collision model" }), pair),
+      el("p", { class: "collision-help", text: "A contact uses the lower of the two materials’ e values." }),
+      el("details", { class: "collision-explanation" },
+        el("summary", { text: "How impacts work" }),
+        el("p", { class: "collision-help", text: "e = relative separation speed / relative approach speed, " +
+          "measured along the line of impact (the contact normal). It compares the pair’s motion, " +
+          "rather than the speed retained by either body." }),
+        el("p", { class: "collision-help", text: "e = 1 gives equal relative approach and separation speeds " +
+          "along the normal. e = 0 gives no relative " +
+          "normal rebound; the bodies are not joined. For a smooth wall impact, tangential velocity " +
+          "is unchanged. Friction acts separately." }),
+        el("p", { class: "collision-help", text: "For ideal particle questions, use No rotation and zero " +
+          "friction. Resting, simultaneous and constrained contacts, and Performance mode, can differ " +
+          "from an isolated ideal impact." })));
+    this.add({ root, refresh: () => {
+      if (pair === null) return;
+      const text = `Material pair e = ${Math.min(objects[0].restitution, objects[1].restitution)}`;
+      if (pair.textContent !== text) pair.textContent = text;
+    } });
+  }
+
   private materialButtons(bodies: Body[]): void {
     const grid = el("div", { class: "btn-grid" });
     for (const [name, [e, mu]] of Object.entries(MATERIALS)) {
@@ -762,7 +798,7 @@ export class Inspector implements Panel {
           body.friction = mu;
         }
         this.commit();
-      }, { tooltip: `Set bounce to ${e} and friction to ${mu}.` });
+      }, { tooltip: `Set restitution e to ${e} and friction to ${mu}.` });
       grid.append(b.root);
     }
     this.target.append(grid);
@@ -804,6 +840,7 @@ export class Inspector implements Panel {
     }
     this.body.append(el("div", { text: parts.join(", ") + " selected",
       style: "font-weight:600;margin-bottom:6px" }));
+    this.buildRestitutionModel([...bodies, ...anchors, ...walls]);
 
     if (bodies.length > 0) {
       const first = bodies[0];
@@ -817,11 +854,7 @@ export class Inspector implements Panel {
           (v) => resizableBodies.forEach((b) => { b.radius = v; }), 0.01, 10.0,
           { unit: "m", log: true, onCommit: this.commit }));
       }
-      this.add(slider("Bounce", () => first.restitution,
-        (v) => bodies.forEach((b) => { b.restitution = v; }), 0.0, 1.0,
-        { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-          tooltip: "Fraction of approach speed kept after an impact. " +
-                   "1 = perfectly elastic, 0 = no bounce at all." }));
+      this.restitutionControl(bodies);
       this.add(slider("Friction", () => first.friction,
         (v) => bodies.forEach((b) => { b.friction = v; }), 0.0, 10.0,
         { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
@@ -871,11 +904,7 @@ export class Inspector implements Panel {
         (v) => anchors.forEach((a) => { a.radius = v; }), 0.01, 10.0,
         { unit: "m", log: true, onCommit: this.commit,
           tooltip: "Size of the anchors." }));
-      this.add(slider("Bounce", () => af.restitution,
-        (v) => anchors.forEach((a) => { a.restitution = v; }), 0.0, 1.0,
-        { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-          tooltip: "Fraction of approach speed a body keeps after hitting " +
-                   "these anchors. 1 = perfectly elastic, 0 = no bounce." }));
+      this.restitutionControl(anchors);
       this.add(slider("Friction", () => af.friction,
         (v) => anchors.forEach((a) => { a.friction = v; }), 0.0, 10.0,
         { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
@@ -906,9 +935,7 @@ export class Inspector implements Panel {
       this.add(slider("Thickness", () => wf.thickness,
         (v) => walls.forEach((w) => { w.thickness = v; }), 0.01, 2.0,
         { unit: "m", log: true, fmt: (v) => v.toFixed(2), onCommit: this.commit }));
-      this.add(slider("Bounce", () => wf.restitution,
-        (v) => walls.forEach((w) => { w.restitution = v; }), 0.0, 1.0,
-        { fmt: (v) => v.toFixed(2), onCommit: this.commit }));
+      this.restitutionControl(walls);
       this.add(slider("Friction", () => wf.friction,
         (v) => walls.forEach((w) => { w.friction = v; }), 0.0, 10.0,
         { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
@@ -1076,14 +1103,12 @@ export class Inspector implements Panel {
       0.01, 2.0, { unit: "m", log: true, fmt: (v) => v.toFixed(2),
         onCommit: this.commit, tooltip: "Width of the wall across its length." }));
     this.body.append(section("Material"));
-    this.add(slider("Bounce", () => w.restitution, (v) => { w.restitution = v; },
-      0.0, 1.0, { fmt: (v) => v.toFixed(2), onCommit: this.commit,
-        tooltip: "Fraction of approach speed a body keeps after hitting " +
-                 "this wall. 1 = perfectly elastic, 0 = no bounce at all." }));
+    this.restitutionControl([w]);
     this.add(slider("Friction", () => w.friction, (v) => { w.friction = v; },
       0.0, 10.0, { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
         onCommit: this.commit,
         tooltip: "Resistance to sliding along this wall. 0 = frictionless." }));
+    this.buildRestitutionModel([w]);
     this.colourRow([w]);
     this.actionButtons();
   }

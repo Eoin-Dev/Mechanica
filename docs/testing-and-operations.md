@@ -192,6 +192,7 @@ with the behavior it protects rather than an exact assertion count.
 | Test file | Protected behavior |
 | --- | --- |
 | [`education-analysis.test.ts`](../web/tests/education-analysis.test.ts) | Named free-body force ledgers that close to realised resultants, slope bases/components, ideal pulley tension/rate/acceleration/axle diagnostics, bounded transition detection, chronological event interpolation, unordered body versus wall contact identity including zero IDs, and rewind-safe event history. |
+| [`collision-model.test.ts`](../web/tests/collision-model.test.ts) | Unequal-mass collision velocities, lower material restitution, conserved vector momentum, analytic kinetic-energy loss, common tangential motion, smooth oblique wall rebound/impulse in either material order, and separation after a zero-restitution impact under a later force. |
 | [`force-ledger.test.ts`](../web/tests/force-ledger.test.ts) | Integrator/substep-consistent force averages, changing fields and drag without false reactions, singular-vector rejection, earlier-contact impulses, damping/limits, string/rod/spring/Atwood forces, mounted supports, actual approximate gravity, hidden source exclusion, immutable transient intervals, no extra expression evaluations, edit/restore/no-op lifecycle, and bit-identical physics with recording on/off in Normal/Performance/adaptive modes. App and Inspector suites also protect edit invalidation, history view retention, interval guidance and checkbox focus. Production acceptance checks actual painted force labels plus desktop/phone/enlarged layouts. |
 
 ### Expressions and math editing
@@ -277,6 +278,15 @@ tests check the elastic-string investigation's constants, equilibrium,
 turning-point extension and energy at shipped solver settings, plus the tour's
 registry-derived count. Existing all-preset invariants and ten-second stability
 checks also include this builder.
+The Direct collision description's unequal masses, velocities, material
+coefficients, conserved momentum, kinetic-energy loss and impulses are checked
+against its actual motion. Inspector tests protect the corrected material
+controls, pair value and retained disclosure/focus.
+[`e2e/collisions.spec.ts`](../web/e2e/collisions.spec.ts) exercises study-term
+loading, exact bulk coefficient entry/undo, the native impact disclosure,
+five themed/enlarged layouts with containment and axe scans, retained pair
+selection after time seeking and actual post-impact velocities read from
+particles selected through their painted canvas interiors.
 [`e2e/library-study.spec.ts`](../web/e2e/library-study.spec.ts) verifies real
 study-term queries, query/focus-preserving cross-category recovery, themed and
 enlarged badge reflow/axe scans, category scrolling on narrow/short screens,

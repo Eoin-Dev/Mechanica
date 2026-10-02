@@ -910,8 +910,9 @@ const GETTING_STARTED: Array<[string, string, string]> = [
    "string or spring creates the anchor or body you need, so a pendulum " +
    "is two clicks and a chain is a few more."],
   ["4", "Change the physics",
-   "Select anything and the Inspector edits it live - mass, bounce, " +
-   "friction. Select an elastic string or spring to enter modulus λ in " +
+   "Select anything and the Inspector edits it live - mass, restitution e, " +
+   "friction. Collision model explains relative impact speeds and the material pair rule. " +
+   "Select an elastic string or spring to enter modulus λ in " +
    "newtons and inspect extension, ideal force and energy. The World tab has gravity, air drag, N-body attraction and " +
    "custom force fields you write as formulas."],
   ["5", "Measure it",

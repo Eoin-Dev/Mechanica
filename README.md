@@ -55,12 +55,16 @@ The complete build, CI, Pages, and alternative-host instructions are in
   categories (press `L`), plus saved scenes with rename, description, export,
   and import. Study topics such as SHM, SUVAT and modulus λ lead to matching
   examples; Elastic string release illustrates equilibrium versus maximum stretch.
+  Direct collision supplies an unequal-mass momentum/restitution investigation
+  with independently checkable velocities, impulses and energy loss.
 - **Analysis** — live energy / momentum / phase-space plots and selected-particle
   displacement / distance / velocity against time, realised net-force
   vectors, per-link spring/string/pulley force vectors with hover readouts,
   motion trails, centre of mass, contact normals, and an energy-drift readout
   in the status bar. Elastic links accept exam-style modulus in newtons and
   show extension, ideal elastic force and stored energy alongside Hooke's law.
+  Material controls explain relative restitution along the line of impact and
+  show the combined coefficient for a selected body/body or body/wall pair.
 - **Editing** — direct manipulation with undo/redo, renameable objects, a
   type-filtered box select with bulk editing, grid snapping, property
   copy/paste, alignment tools, scene save/load (JSON).
