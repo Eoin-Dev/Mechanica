@@ -247,7 +247,13 @@ Each loaded body/body or body/wall contact owns separate normal-reaction and
 friction rows. The optional contact observer reads the final solved impulses,
 including effective Performance contact inverse masses, without modifying the
 solve. Opposing neighbour forces therefore remain visible even when their sum
-is zero. Velocity-change accounting subtracts individually named impulses;
+is zero. Each contact row carries the last sampled unit direction from the
+particle centre toward that contact. This transient presentation data lets
+reaction and friction arrows start at the particle's rim; it changes no
+impulse, torque or motion. An interval average can span changing contact
+geometry, so its origin represents the last sampled contact rather than an
+instantaneous peak impact. Smooth forces retain their centre origin.
+Velocity-change accounting subtracts individually named impulses;
 support anchoring/roundoff residuals remain numerical corrections.
 Contact reactions remain available even when the contact ended before the last
 substep. Constraint projection and guard effects are identified as numerical

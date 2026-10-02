@@ -3,14 +3,14 @@ import { Vec2 } from "../core/vec";
 import { Body, Color, Wall } from "../engine/body";
 import { DistanceLink, Link, PulleyLink, SpringLink } from "../engine/links";
 import { World } from "../engine/world";
-import { ForceEntry, forceLedger, projectForce } from "../education/analysis";
+import { forceLedger, projectForce } from "../education/analysis";
 import { forceSymbols } from "../engine/force-diagnostics";
 import * as theme from "../ui/theme";
 import { css, lighten } from "../ui/theme";
 import { Camera, niceNumber } from "./camera";
 import { Trail } from "./trail";
 import { ParticleAtlas } from "./particle-atlas";
-import { AnalysisVector, AnalysisLabel, analysisNumber, drawAnalysisOverlays } from "./analysis-overlays";
+import { AnalysisVector, AnalysisLabel, analysisNumber, analysisForceColour, drawAnalysisOverlays } from "./analysis-overlays";
 
 // world metres of arrow length per unit of the quantity, at vector scale 1
 export const VEL_ARROW_SCALE = 0.15;
@@ -374,6 +374,8 @@ function addLine(path: Path2D, ax: number, ay: number,
 // cannot be emptied) but the maps and the batch objects are not reallocated.
 const FILLS = new StyleBatch();
 const STROKES = new StyleBatch();
+const ANALYSIS_CONTOURS = new StyleBatch();
+const ANALYSIS_BACKS = new StyleBatch();
 
 const STRING_TAUT: Color = [170, 150, 115];
 const STRING_SLACK: Color = [140, 125, 100];
@@ -1070,14 +1072,20 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   // toggle is active and uses the recorded interval after a completed step.
   const fbdLabels: AnalysisLabel[] = [];
   const fbdVectors: AnalysisVector[] = [];
-  const forceColour = (entry: ForceEntry): Color => {
-    if (entry.kind === "weight") return theme.BAD;
-    if (entry.kind === "reaction") return theme.GOOD;
-    if (entry.kind === "friction") return theme.WARN;
-    if (entry.kind === "correction") return theme.TEXT_DIM;
-    if (entry.kind === "spring" || entry.kind === "string" ||
-        entry.kind === "pulley" || entry.kind === "rod") return theme.WARN;
-    return theme.ACCENT_HOT;
+  const contour: Color = theme.themeName === "light" ? [255, 255, 255] : [8, 8, 8];
+  const diagramArrow = (sx: number, sy: number, ex: number, ey: number, color: Color): void => {
+    const length = Math.hypot(ex - sx, ey - sy);
+    if (length < vectorMinLengthPx) return;
+    addArrowXY(ANALYSIS_CONTOURS, ANALYSIS_BACKS, sx, sy, ex, ey, contour, 6, vectorMinLengthPx);
+    const ux = (ex - sx) / length, uy = (ey - sy) / length, head = Math.min(9, length * 0.4);
+    const edge = ANALYSIS_CONTOURS.path(contour, 3);
+    edge.moveTo(ex, ey);
+    edge.lineTo(ex - ux * head - uy * head * 0.5, ey - uy * head + ux * head * 0.5);
+    edge.lineTo(ex - ux * head + uy * head * 0.5, ey - uy * head - ux * head * 0.5);
+    edge.closePath();
+    addCircle(ANALYSIS_BACKS.path(contour), sx, sy, 4);
+    addCircle(FILLS.path(color), sx, sy, 2);
+    addArrowXY(STROKES, FILLS, sx, sy, ex, ey, color, 2.5, vectorMinLengthPx);
   };
   let fbdCount = 0;
   let fbdArrows = false;
@@ -1094,16 +1102,17 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     const ledger = forceLedger(world, body, wall);
     const symbols = forceSymbols(ledger.entries);
     for (const entry of ledger.entries) {
-      const ex = sx + entry.fx * FORCE_ARROW_SCALE * vScale * zoom;
-      const ey = sy - entry.fy * FORCE_ARROW_SCALE * vScale * zoom;
-      const color = forceColour(entry);
-      addArrowXY(STROKES, FILLS, sx, sy, ex, ey, color, 2,
-                 vectorMinLengthPx);
+      const startX = sx + (entry.contactNx ?? 0) * radius;
+      const startY = sy - (entry.contactNy ?? 0) * radius;
+      const ex = startX + entry.fx * FORCE_ARROW_SCALE * vScale * zoom;
+      const ey = startY - entry.fy * FORCE_ARROW_SCALE * vScale * zoom;
+      const color = analysisForceColour(entry.kind);
+      diagramArrow(startX, startY, ex, ey, color);
       fbdArrows = true;
-      if (Math.hypot(ex - sx, ey - sy) >= vectorMinLengthPx) {
+      if (Math.hypot(ex - startX, ey - startY) >= vectorMinLengthPx) {
         fbdLabels.push({ text: `${symbols.get(entry.id)} ${analysisNumber(Math.hypot(entry.fx, entry.fy))} N`,
-          x: ex, y: ey, color, right: ex >= sx });
-        fbdVectors.push({ x1: sx, y1: sy, x2: ex, y2: ey });
+          x: ex, y: ey, color, right: ex >= startX, source: entry.label });
+        fbdVectors.push({ x1: startX, y1: startY, x2: ex, y2: ey });
       }
     }
     if (ledger.basis !== null) {
@@ -1117,18 +1126,20 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
       ]) {
         const ex = sx + component.value * component.x * FORCE_ARROW_SCALE * vScale * zoom;
         const ey = sy - component.value * component.y * FORCE_ARROW_SCALE * vScale * zoom;
-        addArrowXY(STROKES, FILLS, sx, sy, ex, ey, component.color, 1.5,
-                   vectorMinLengthPx);
+        diagramArrow(sx, sy, ex, ey, component.color);
         fbdArrows = true;
         if (Math.hypot(ex - sx, ey - sy) >= vectorMinLengthPx) {
           fbdLabels.push({ text: `${component.text} ${analysisNumber(component.value)} N`,
-            x: ex, y: ey, color: component.color, right: ex >= sx });
+            x: ex, y: ey, color: component.color, right: ex >= sx,
+            source: component.text === "F∥" ? "Resultant along the slope" : "Resultant normal to the slope" });
           fbdVectors.push({ x1: sx, y1: sy, x2: ex, y2: ey });
         }
       }
     }
   }
   if (fbdArrows) {
+    ANALYSIS_CONTOURS.strokeAll(ctx);
+    ANALYSIS_BACKS.fillAll(ctx);
     STROKES.strokeAll(ctx);
     FILLS.fillAll(ctx);
   }
@@ -1247,8 +1258,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     }
   }
   // Draw readable analysis surfaces after scene geometry and force arrows.
-  drawAnalysisOverlays(ctx, fbdLabels, fbdVectors, areaW, areaH, textScale);
-  if (pointer !== null && tensionHoverD2 < 49.0) {
+  drawAnalysisOverlays(ctx, fbdLabels, fbdVectors, areaW, areaH, textScale, pointer);
+  if (fbdLabels.length === 0 && pointer !== null && tensionHoverD2 < 49.0) {
     drawForceTooltip(ctx, pointer, tensionHoverFx, tensionHoverFy, areaW, areaH);
   }
   // Endpoint letters are editing landmarks, so they appear only on the

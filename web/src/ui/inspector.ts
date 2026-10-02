@@ -584,7 +584,7 @@ export class Inspector implements Panel {
     this.sub("Forces on canvas");
     this.add(checkbox("Free-body forces on canvas", () => b.showForceComponents,
       (value) => { b.showForceComponents = value; app.invalidateCanvas(); },
-      "Draw current forces immediately. After a step, arrows share the resultant's time interval. R: reaction; f: friction; C: numerical correction."));
+      "Draw current forces immediately. After a step, arrows share the resultant's time interval. R: reaction; F: friction; f: applied force; C: numerical correction."));
 
     const readout = el("details", { class: "force-values" },
       el("summary", { text: "Force values and sources" }));
@@ -607,9 +607,9 @@ export class Inspector implements Panel {
         app.world.walls.find(candidate => candidate.id === b.forceSlopeWallId) ?? null;
       const ledger = forceLedger(app.world, b, wall);
       const text = ledger.mode === "step-average" && ledger.interval !== null ?
-        `Average forces: ${fmt3dp(ledger.interval.start)}–${fmt3dp(ledger.interval.end)} s. R: reaction; f: friction; C: numerical correction.` :
+        `Average forces: ${fmt3dp(ledger.interval.start)}–${fmt3dp(ledger.interval.end)} s. R: reaction; F: friction; f: applied force; C: numerical correction.` :
         ledger.mode === "resting" ? "Resting forces: weight and support balance." :
-          "Current forces. R: reaction; f: friction; C: numerical correction.";
+          "Current forces. R: reaction; F: friction; f: applied force; C: numerical correction.";
       if (forceNote.textContent !== text) forceNote.textContent = text;
       if (!readout.open) return;
       const entries = [...ledger.entries, { id: "resultant", label: "Resultant",

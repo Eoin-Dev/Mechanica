@@ -310,7 +310,8 @@ describe("force source symbols", () => {
     }
     const symbols = forceSymbols(entries);
     expect(symbols.get("reaction-0")).toBe("R₁"); expect(symbols.get("reaction-11")).toBe("R₁₂");
-    expect(symbols.get("friction-1")).toBe("f₂"); expect(symbols.get("string-1")).toBe("T₂");
-    expect(symbols.get("applied-1")).toBe("F₂"); expect(new Set(symbols.values()).size).toBe(entries.length);
+    expect(symbols.get("friction-0")).toBe("F"); expect(symbols.get("friction-1")).toBe("F");
+    expect(symbols.get("string-1")).toBe("T₂"); expect(symbols.get("applied-1")).toBe("f₂");
+    expect(new Set(symbols.values()).size).toBe(entries.length - 1);
   });
 });

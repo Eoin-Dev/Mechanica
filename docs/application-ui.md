@@ -439,11 +439,13 @@ An ordinary selected particle can enable a free-body diagram directly on the
 canvas. After stepping, it draws weight, applied, drag, field, driver, link,
 support/contact, and numerical-correction arrows averaged over the same
 interval as the realised resultant, with closure up to floating-point tolerance.
-The Inspector displays that interval and explains `R` (normal reaction), `f`
-(friction) and `C` (numerical correction). Each loaded neighbour or wall has
+The Inspector displays that interval and explains `R` (normal reaction), `F`
+(friction), lowercase `f` (applied force) and `C` (numerical correction). Each loaded neighbour or wall has
 separate reaction/friction arrows and named sources. Repeated symbols use
-subscripts, such as `R₁`/`R₂` or `F₁`/`F₂`, consistently on canvas and in the
-source rows. Its keyboard-operable Force values and sources
+subscripts, such as `R₁`/`R₂` or `f₁`/`f₂`, consistently on canvas and in the
+source rows. Friction keeps unindexed `F`, including when several contacts
+contribute; hover identifies its particular source. Springs use `fₛ`, strings
+use `T`, and drag uses `D`. Its keyboard-operable Force values and sources
 disclosure lists every named force, signed x/y components in newtons and the
 resultant; a selected slope adds signed parallel/normal components. It uses
 the same ledger and interval as the arrows, retains unchanged rows/focus, and
@@ -471,7 +473,16 @@ Event refinement and time seeking transfer those presentation choices before
 their final simulation pass so the paused result has recorded forces. An optional
 wall reference also shows components parallel and perpendicular to that slope.
 Force captions use opaque themed surfaces, readable neutral text and coloured
-association cues, with bounded attempts to separate nearby captions. Their
+association cues, with bounded attempts to separate nearby captions. A separate
+force palette and opaque contrasting contours on shafts/heads keep arrows
+visible over particle colours. Origin dots mark their actual application point:
+weight and smooth forces start at the centre; contact reaction/friction start
+at the rim in the recorded contact direction. For interval averages this is
+the last sampled contact direction, even if contact ended before the frame.
+Dashed caption leaders distinguish association lines from force arrows.
+Hovering an arrow or caption outlines its caption and displays its source;
+source names and paint work are bounded, with complete names retained in the
+optional disclosure. Their
 placement protects the enabled diagram's arrow shafts and tips, searching
 progressively wider positions when the preferred caption would obscure a
 vector. The same protection applies to parallel/normal arrows.

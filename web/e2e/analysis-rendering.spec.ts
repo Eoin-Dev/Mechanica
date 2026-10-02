@@ -34,8 +34,8 @@ test("scientific canvas captions remain readable, separate and contained", async
     };
     const fill = CanvasRenderingContext2D.prototype.fillText;
     CanvasRenderingContext2D.prototype.fillText = function(text, x, y, maxWidth) {
-      const isCaption = /^(?:[WFRCDTSf]|Fₛ|F[∥⊥])[₀-₉]*\s.*N$/.test(text);
-      const isComponent = /^(?:Slope components \(N\)|∥ Along|⊥ Normal|[WFRCDTS]|Fₛ|-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)$/.test(text);
+      const isCaption = /^(?:[WFRCDTSf]|fₛ|F[∥⊥])[₀-₉]*\s.*N$/.test(text);
+      const isComponent = /^(?:Slope components \(N\)|∥ Along|⊥ Normal|[WFRCDTS]|fₛ|-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)$/.test(text);
       if (this.canvas.id === "canvas" && (isCaption || isComponent)) {
         const metrics = this.measureText(text);
         const fontSize = Number(this.font.match(/([\d.]+)px/)?.[1]);
@@ -111,9 +111,9 @@ test("scientific canvas captions remain readable, separate and contained", async
       expect(caption.fontSize, `${outcome.layout}: scalable caption`).toBeGreaterThanOrEqual(12 * outcome.scale);
       expect(contrast(caption.ink, caption.background), `${outcome.layout}: ${caption.text} contrast`).toBeGreaterThanOrEqual(4.5);
     }
-    const matching = outcome.captions.filter(caption => /^F[₁₂] 3\.00 N$/.test(caption.text));
+    const matching = outcome.captions.filter(caption => /^f[₁₂] 3\.00 N$/.test(caption.text));
     expect(matching).toHaveLength(2);
-    expect(matching.map(caption => caption.text).sort()).toEqual(["F₁ 3.00 N", "F₂ 3.00 N"]);
+    expect(matching.map(caption => caption.text).sort()).toEqual(["f₁ 3.00 N", "f₂ 3.00 N"]);
     const [a, b] = matching;
     expect(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top,
       `${outcome.layout}: matching forces must have separate captions`).toBe(true);

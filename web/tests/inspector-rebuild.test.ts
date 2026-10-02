@@ -411,7 +411,7 @@ describe("Force values and sources", () => {
     expect(rows[2].textContent).toContain("<img src=x onerror=alert(1)>");
     expect(details.querySelector("img")).toBeNull();
     expect(rows[3].textContent).toContain(`R: Reaction from ${wall.name}`);
-    expect(rows[4].textContent).toContain(`f: Friction from ${wall.name}`);
+    expect(rows[4].textContent).toContain(`F: Friction from ${wall.name}`);
     expect(rows[4].textContent).toContain("Fx -6.00 N");
     expect(rows[5].textContent).toContain("Resultant");
     expect(rows[5].textContent).toContain("Fx 0.00 NFy 0.00 N");

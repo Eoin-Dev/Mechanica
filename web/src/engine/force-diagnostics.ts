@@ -11,6 +11,10 @@ export interface ForceEntry {
   readonly kind: ForceKind;
   readonly fx: number;
   readonly fy: number;
+  /** Unit direction from the particle centre to its last sampled contact.
+   * Ordinary smooth/link forces have no surface-contact origin. */
+  readonly contactNx?: number;
+  readonly contactNy?: number;
 }
 
 export interface ForceSnapshot {
@@ -33,13 +37,13 @@ export function forceSymbols(entries: readonly ForceEntry[]): Map<string, string
     switch (entry.kind) {
       case "weight": return "W";
       case "reaction": return "R";
-      case "friction": return "f";
+      case "friction": return "F";
       case "correction": return "C";
       case "string": case "pulley": return "T";
       case "rod": return entry.label.includes("thrust") ? "S" : "T";
-      case "spring": return "Fₛ";
+      case "spring": return "fₛ";
       case "drag": return "D";
-      default: return "F";
+      default: return "f";
     }
   };
   const counts = new Map<string, number>();
@@ -53,7 +57,7 @@ export function forceSymbols(entries: readonly ForceEntry[]): Map<string, string
     const symbol = base(entry);
     const index = (used.get(symbol) ?? 0) + 1;
     used.set(symbol, index);
-    const suffix = counts.get(symbol)! > 1 ?
+    const suffix = entry.kind !== "friction" && counts.get(symbol)! > 1 ?
       String(index).replace(/\d/g, digit => "₀₁₂₃₄₅₆₇₈₉"[Number(digit)]) : "";
     symbols.set(entry.id, symbol + suffix);
   }
@@ -67,6 +71,8 @@ interface Impulse {
   x: number;
   y: number;
   axial: number;
+  contactNx?: number;
+  contactNy?: number;
 }
 
 interface Record {
@@ -181,14 +187,15 @@ export class ForceRecorder {
     nx: number, ny: number, normal: number, tangent: number,
     invMa: number, invMb: number,
   ): void => {
-    this.recordContactBody(a, b, wallId, -invMa, nx, ny, normal, tangent);
-    if (b !== null) this.recordContactBody(b, a, null, invMb, nx, ny, normal, tangent);
+    this.recordContactBody(a, b, wallId, -invMa, nx, ny, normal, tangent, 1);
+    if (b !== null) this.recordContactBody(b, a, null, invMb, nx, ny, normal, tangent, -1);
   };
 
   private recordContactBody(body: Body, source: Body | null, wallId: number | null,
                             signedInvMass: number, nx: number, ny: number,
-                            normal: number, tangent: number): void {
-    if (!this.records.has(body)) return;
+                            normal: number, tangent: number, side: number): void {
+    const record = this.records.get(body);
+    if (record === undefined) return;
     const id = source === null ? `wall-${wallId}` : `body-${source.id}`;
     const name = source?.name ?? this.wallNames.get(wallId!) ?? `Wall ${wallId}`;
     const scale = body.mass * signedInvMass;
@@ -196,6 +203,13 @@ export class ForceRecorder {
       normal * nx * scale, normal * ny * scale, 1);
     this.add(body, `friction-${id}`, `Friction from ${name}`, "friction",
       -tangent * ny * scale, tangent * nx * scale, 1);
+    for (const key of [`reaction-${id}`, `friction-${id}`]) {
+      const entry = record.entries.get(key);
+      if (entry !== undefined) {
+        entry.contactNx = side * nx;
+        entry.contactNy = side * ny;
+      }
+    }
   }
 
   finish(dt: number, endTime: number, stepCount: number, current = false): void {
@@ -219,7 +233,9 @@ export class ForceRecorder {
           (entry.axial >= 0 ? "Rod tension" : "Rod thrust") :
           entry.id.startsWith("spring-") && entry.kind === "spring" ?
             (entry.axial >= 0 ? "Spring tension" : "Spring thrust") : entry.label;
-        entries.push(Object.freeze({ id: entry.id, label, kind: entry.kind, fx, fy }));
+        entries.push(Object.freeze({ id: entry.id, label, kind: entry.kind, fx, fy,
+          ...(entry.contactNx === undefined ? {} :
+            { contactNx: entry.contactNx, contactNy: entry.contactNy }) }));
       };
       for (const entry of record.entries.values()) append(entry);
       let namedX = 0;

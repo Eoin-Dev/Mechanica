@@ -9,7 +9,9 @@ import { World } from "../src/engine/world";
 import { Camera } from "../src/render/camera";
 import { ViewSettings, drawGrid, drawWorld } from "../src/render/draw";
 import { Trail } from "../src/render/trail";
+import { analysisForceColour } from "../src/render/analysis-overlays";
 import { ACC_COLOR, FORCE_COLOR, VEL_COLOR, WARN, css } from "../src/ui/theme";
+import { setTheme, THEME_NAMES } from "../src/ui/theme";
 
 interface Op { op: string; style?: string; x?: number; y?: number;
                cx?: number; cy?: number; text?: string; }
@@ -43,7 +45,7 @@ function recCtx(): { ctx: CanvasRenderingContext2D; ops: Op[] } {
   const base: Record<string, unknown> = {
     beginPath() {},
     stroke(path?: FakePath2D) {
-      if (path !== undefined) ops.push(...path.ops);
+      if (path !== undefined) ops.push(...path.ops.map(op => ({ ...op, style: strokeStyle })));
       ops.push({ op: "stroke", style: strokeStyle });
     },
     fill(path?: FakePath2D) {
@@ -194,6 +196,33 @@ describe("grid rendering", () => {
 });
 
 describe("body rendering", () => {
+  it.each(THEME_NAMES)("draws reaction/friction at the rim and weight at the centre in %s", name => {
+    setTheme(name);
+    try {
+      const body = new Body(new Vec2(0, 0.25), 0.2, 1);
+      body.showForceComponents = true; body.noRotation = true; body.friction = 1;
+      body.constForce.x = 2; body.color = analysisForceColour("reaction");
+      const floor = new Wall(new Vec2(-3, 0), new Vec2(3, 0), 0.1);
+      floor.friction = 1; floor.restitution = 0;
+      const world = worldWith(body); world.walls.push(floor);
+      const camera = new Camera(800, 600); camera.zoom = 100;
+      for (const performance of [false, true]) {
+        const { ctx, ops } = recCtx();
+        drawWorld(ctx, camera, world, new ViewSettings(), [body], null, new Map(),
+          800, 600, 1, performance, performance);
+        for (const kind of ["reaction", "friction", "weight"] as const) {
+          const starts = ops.filter(op => op.op === "moveTo" && op.style === css(analysisForceColour(kind)));
+          expect(starts).toContainEqual(expect.objectContaining({ x: 400, y: kind === "weight" ? 275 : 295 }));
+        }
+        expect(ops.filter(op => op.op === "stroke" && op.style === (name === "light" ? "rgb(255,255,255)" : "rgb(8,8,8)")).length)
+          .toBeGreaterThan(0);
+        expect(ops.some(op => op.text === "F 2.00 N")).toBe(true);
+        expect(ops.some(op => op.text === "f 2.00 N")).toBe(true);
+        expect(world.time).toBe(0);
+      }
+    } finally { setTheme("dark"); }
+  });
+
   it("does not pin an off-screen particle's force captions to the visible canvas", () => {
     const body = new Body(new Vec2(10000, 10000), 0.2, 2);
     body.showForceComponents = true;

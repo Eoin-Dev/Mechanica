@@ -2,10 +2,6 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
 test("study topics are discoverable and the elastic-string investigation matches its card", async ({ page }, testInfo) => {
-  // Six responsive/theme accessibility scans plus the real turning-point
-  // investigation share this workflow. Keep ordinary locator timeouts, but
-  // allow the complete sequence to finish on slower browser hosts.
-  test.setTimeout(60_000);
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(() => localStorage.setItem("mechanica.settings",
@@ -36,58 +32,6 @@ test("study topics are discoverable and the elastic-string investigation matches
   const release = library.locator('[data-preset-name="Elastic string release"]');
   await expect(release).toContainText("39.2 N");
 
-  for (const [layout, width, height, theme, studio, scale] of [
-    ["light-studio", 1440, 900, "Light", true, 1],
-    ["dark-studio", 1440, 900, "Dark", true, 1],
-    ["void-classic", 1440, 900, "Void", false, 1.2],
-    ["phone-enlarged", 390, 900, "Light", true, 1.2],
-    ["narrow-double-text", 320, 900, "Dark", false, 2],
-    ["short-landscape", 1440, 380, "Light", true, 1.2],
-  ] as const) {
-    await library.getByRole("button", { name: "Close (Esc)", exact: true }).click();
-    await page.locator("#btn-settings").click();
-    const settings = page.getByRole("dialog", { name: "Settings", exact: true });
-    await settings.getByRole("button", { name: theme, exact: true }).click();
-    await settings.getByRole("checkbox", { name: "Studio mode", exact: true }).setChecked(studio);
-    await settings.getByRole("button", { name: scale === 1 ? "100%" : "120%", exact: true }).click();
-    await page.keyboard.press("Escape");
-    await page.setViewportSize({ width, height });
-    if (scale === 2) await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
-    await page.getByRole("button", { name: "Library", exact: true }).click();
-    await expect(search).toHaveValue("λ");
-    await expect(release).toBeVisible();
-    await release.scrollIntoViewIfNeeded();
-    const fit = await release.evaluate(card => ({ client: card.clientWidth, scroll: card.scrollWidth,
-      topics: [...card.querySelectorAll(".preset-topics span")].map(topic => ({
-        left: topic.getBoundingClientRect().left, right: topic.getBoundingClientRect().right,
-        parentLeft: card.getBoundingClientRect().left, parentRight: card.getBoundingClientRect().right,
-        client: topic.clientWidth, scroll: topic.scrollWidth,
-        size: parseFloat(getComputedStyle(topic).fontSize),
-      })) }));
-    expect(fit.scroll).toBeLessThanOrEqual(fit.client + 1);
-    for (const topic of fit.topics) {
-      expect(topic.left).toBeGreaterThanOrEqual(topic.parentLeft);
-      expect(topic.right).toBeLessThanOrEqual(topic.parentRight);
-      expect(topic.scroll).toBeLessThanOrEqual(topic.client + 1);
-      expect(topic.size).toBeCloseTo(10 * scale, 1);
-    }
-    if (width <= 600 || height <= 500) {
-      await search.fill("");
-      const readingArea = await library.evaluate(dialog => {
-        const body = dialog.querySelector<HTMLElement>(".overlay-body")!;
-        body.scrollTop = body.scrollHeight;
-        return { top: body.getBoundingClientRect().top,
-          categoriesBottom: dialog.querySelector(".cat-chips")!.getBoundingClientRect().bottom };
-      });
-      expect(readingArea.categoriesBottom).toBeLessThanOrEqual(readingArea.top + 1);
-      await search.fill("λ");
-      await release.scrollIntoViewIfNeeded();
-    }
-    await library.screenshot({ path: testInfo.outputPath(`study-library-${layout}.png`) });
-    const scan = await new AxeBuilder({ page }).include("#library")
-      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze();
-    expect(scan.violations).toEqual([]);
-  }
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.evaluate(() => document.documentElement.style.removeProperty("--fs"));
@@ -97,7 +41,8 @@ test("study topics are discoverable and the elastic-string investigation matches
   await expect(page.getByRole("button", {
     name: "Keep the whole scene framed as it spreads out (Shift+F).", exact: true,
   })).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "Dismiss notification", exact: true }).click();
+  const notices = page.getByRole("button", { name: "Dismiss notification", exact: true });
+  while (await notices.count()) await notices.first().click();
   const canvas = page.locator("#canvas");
   await canvas.focus();
   await page.keyboard.press("f");
@@ -140,3 +85,71 @@ test("study topics are discoverable and the elastic-string investigation matches
   await page.screenshot({ path: testInfo.outputPath("elastic-release-turning-point.png") });
   expect(errors).toEqual([]);
 });
+
+for (const [layout, width, height, theme, studio, scale] of [
+    ["light-studio", 1440, 900, "Light", true, 1],
+    ["dark-studio", 1440, 900, "Dark", true, 1],
+    ["void-classic", 1440, 900, "Void", false, 1.2],
+    ["phone-enlarged", 390, 900, "Light", true, 1.2],
+    ["narrow-double-text", 320, 900, "Dark", false, 2],
+    ["short-landscape", 1440, 380, "Light", true, 1.2],
+  ] as const) {
+  test(`study Library remains readable in ${layout}`, async ({ page }, testInfo) => {
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    await page.addInitScript(() => localStorage.setItem("mechanica.settings",
+      JSON.stringify({ tour_done: true, theme: "light", studio_mode: true })));
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Library", exact: true }).click();
+    const library = page.getByRole("dialog", { name: "Library", exact: true });
+    const search = library.getByRole("searchbox", { name: "Search examples", exact: true });
+    await search.fill("λ");
+    const release = library.locator('[data-preset-name="Elastic string release"]');
+    await library.getByRole("button", { name: "Close (Esc)", exact: true }).click();
+    await page.locator("#btn-settings").click();
+    const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+    await settings.getByRole("button", { name: theme, exact: true }).click();
+    await settings.getByRole("checkbox", { name: "Studio mode", exact: true }).setChecked(studio);
+    await settings.getByRole("button", { name: scale === 1 ? "100%" : "120%", exact: true }).click();
+    await page.keyboard.press("Escape");
+    await expect(settings).toBeHidden();
+    await page.setViewportSize({ width, height });
+    if (scale === 2) await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
+    await page.getByRole("button", { name: "Library", exact: true }).click();
+    await expect(search).toHaveValue("λ");
+    await expect(release).toBeVisible();
+    await release.scrollIntoViewIfNeeded();
+    const fit = await release.evaluate(card => ({ client: card.clientWidth, scroll: card.scrollWidth,
+      topics: [...card.querySelectorAll(".preset-topics span")].map(topic => ({
+        left: topic.getBoundingClientRect().left, right: topic.getBoundingClientRect().right,
+        parentLeft: card.getBoundingClientRect().left, parentRight: card.getBoundingClientRect().right,
+        client: topic.clientWidth, scroll: topic.scrollWidth,
+        size: parseFloat(getComputedStyle(topic).fontSize),
+      })) }));
+    expect(fit.scroll).toBeLessThanOrEqual(fit.client + 1);
+    for (const topic of fit.topics) {
+      expect(topic.left).toBeGreaterThanOrEqual(topic.parentLeft);
+      expect(topic.right).toBeLessThanOrEqual(topic.parentRight);
+      expect(topic.scroll).toBeLessThanOrEqual(topic.client + 1);
+      expect(topic.size).toBeCloseTo(10 * scale, 1);
+    }
+    if (width <= 600 || height <= 500) {
+      await search.fill("");
+      const readingArea = await library.evaluate(dialog => {
+        const body = dialog.querySelector<HTMLElement>(".overlay-body")!;
+        body.scrollTop = body.scrollHeight;
+        return { top: body.getBoundingClientRect().top,
+          categoriesBottom: dialog.querySelector(".cat-chips")!.getBoundingClientRect().bottom };
+      });
+      expect(readingArea.categoriesBottom).toBeLessThanOrEqual(readingArea.top + 1);
+      await search.fill("λ");
+      await release.scrollIntoViewIfNeeded();
+    }
+    await library.screenshot({ path: testInfo.outputPath(`study-library-${layout}.png`) });
+    const scan = await new AxeBuilder({ page }).include("#library")
+      .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze();
+    expect(scan.violations).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+}

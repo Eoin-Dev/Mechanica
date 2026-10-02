@@ -1,14 +1,35 @@
 /** Screen-space scientific annotations, independent of physical state. */
 import type { Color } from "../engine/body";
+import type { ForceKind } from "../engine/force-diagnostics";
 import * as theme from "../ui/theme";
 
 export interface AnalysisLabel {
   text: string; x: number; y: number; color: Color; right: boolean;
+  source?: string;
 }
 export interface AnalysisVector {
   x1: number; y1: number; x2: number; y2: number;
 }
 interface Box { x: number; y: number; width: number; height: number; }
+
+const DARK_FORCES: Record<string, Color> = {
+  weight: [255, 116, 165], reaction: [80, 225, 245], friction: [232, 181, 255],
+  link: [255, 221, 110], applied: [180, 195, 255], drag: [255, 180, 90],
+};
+const LIGHT_FORCES: Record<string, Color> = {
+  weight: [175, 35, 80], reaction: [0, 95, 165], friction: [115, 45, 165],
+  link: [140, 90, 0], applied: [65, 70, 165], drag: [155, 65, 0],
+};
+
+/** Scientific arrows use a fixed palette independent of body/custom colours.
+ * The renderer surrounds it with an opaque contrasting contour. */
+export function analysisForceColour(kind: ForceKind): Color {
+  if (kind === "correction") return theme.TEXT_DIM;
+  const palette = theme.themeName === "light" ? LIGHT_FORCES : DARK_FORCES;
+  return palette[kind] ?? palette[
+    kind === "string" || kind === "spring" || kind === "pulley" || kind === "rod"
+      ? "link" : "applied"];
+}
 
 /** Keep small nonzero components and large values legible without long decimals. */
 export function analysisNumber(value: number): string {
@@ -102,7 +123,7 @@ function surface(ctx: CanvasRenderingContext2D, box: Box): void {
 
 export function drawAnalysisOverlays(ctx: CanvasRenderingContext2D,
     labels: AnalysisLabel[], vectors: AnalysisVector[], areaW: number, areaH: number,
-    textScale = 1): void {
+    textScale = 1, pointer: readonly [number, number] | null = null): void {
   if (labels.length === 0 || areaW < 24 || areaH < 24) return;
   const scale = Number.isFinite(textScale) ? Math.max(0.9, Math.min(2, textScale)) : 1;
   const occupied: Box[] = [];
@@ -110,11 +131,24 @@ export function drawAnalysisOverlays(ctx: CanvasRenderingContext2D,
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
   ctx.font = `600 ${12 * scale}px system-ui, sans-serif`;
-  for (const label of labels) {
+  let hot = -1, closest = 49;
+  if (pointer !== null) for (let i = 0; i < vectors.length; i++) {
+    const v = vectors[i], dx = v.x2 - v.x1, dy = v.y2 - v.y1;
+    const length2 = dx * dx + dy * dy;
+    const along = length2 > 0 ? Math.max(0, Math.min(1,
+      ((pointer[0] - v.x1) * dx + (pointer[1] - v.y1) * dy) / length2)) : 0;
+    const distance2 = (pointer[0] - v.x1 - along * dx) ** 2 +
+      (pointer[1] - v.y1 - along * dy) ** 2;
+    if (distance2 < closest) { hot = i; closest = distance2; }
+  }
+  for (let i = 0; i < labels.length; i++) {
+    const label = labels[i];
     const width = Math.min(areaW - 12, ctx.measureText(label.text).width + 18 * scale);
     const height = 24 * scale;
     const preferredX = label.right ? label.x + 7 : label.x - width - 7;
     const box = placeBox(preferredX, label.y - height - 6, width, height, areaW, areaH, occupied, vectors, scale);
+    if (pointer !== null && pointer[0] >= box.x && pointer[0] <= box.x + width &&
+        pointer[1] >= box.y && pointer[1] <= box.y + height) hot = i;
     const anchorX = Math.max(0, Math.min(areaW, label.x));
     const anchorY = Math.max(0, Math.min(areaH, label.y));
     const edgeX = Math.max(box.x, Math.min(box.x + width, anchorX));
@@ -122,16 +156,48 @@ export function drawAnalysisOverlays(ctx: CanvasRenderingContext2D,
     if (Math.hypot(anchorX - edgeX, anchorY - edgeY) > 3) {
       ctx.strokeStyle = theme.css(label.color);
       ctx.lineWidth = 1;
+      ctx.setLineDash([3 * scale, 3 * scale]);
       ctx.beginPath();
       ctx.moveTo(anchorX, anchorY);
       ctx.lineTo(edgeX, edgeY);
       ctx.stroke();
+      ctx.setLineDash([]);
     }
     surface(ctx, box);
     ctx.fillStyle = theme.css(label.color);
     ctx.fillRect(box.x + 4 * scale, box.y + 5 * scale, 2 * scale, height - 10 * scale);
     ctx.fillStyle = theme.css(theme.TEXT);
     ctx.fillText(label.text, box.x + 10 * scale, box.y + 16 * scale);
+  }
+  if (pointer !== null && hot >= 0 && labels[hot]?.source && areaH >= 60 * scale && areaW >= 80 * scale) {
+    const label = labels[hot], box = occupied[hot];
+    ctx.strokeStyle = theme.css(label.color);
+    ctx.lineWidth = 2;
+    ctx.strokeRect(box.x + 1, box.y + 1, box.width - 2, box.height - 2);
+    const lines: string[] = [];
+    const maxWidth = Math.min(300 * scale, areaW - 36 - 20 * scale);
+    // Scene names are text only. Bound paint work for exceptionally long names;
+    // the source disclosure keeps the complete name and exact components.
+    for (const word of label.source!.slice(0, 240).split(/\s+/)) {
+      const last = lines.length - 1;
+      if (last < 0 || ctx.measureText(lines[last] + " " + word).width > maxWidth) lines.push(word);
+      else lines[last] += " " + word;
+    }
+    const availableLines = Math.max(1, Math.min(3, Math.floor((areaH - 24 * scale) / (18 * scale)) - 1));
+    const displayed = [...lines.slice(0, availableLines), label.text];
+    const width = Math.min(areaW - 36, Math.max(...displayed.map(line => ctx.measureText(line).width)) + 20 * scale);
+    const height = (displayed.length * 18 + 12) * scale;
+    // Prefer the pointer's other side before clamping a wide popup against the
+    // edge. Leave room for the narrow Inspector tab over the canvas there.
+    const preferredX = pointer[0] + 16 + width <= areaW - 30
+      ? pointer[0] + 16 : pointer[0] - width - 16;
+    const tip = { x: Math.max(6, Math.min(areaW - width - 30, preferredX)),
+      y: Math.max(6, Math.min(areaH - height - 6, pointer[1] + 16)), width, height };
+    surface(ctx, tip);
+    ctx.fillStyle = theme.css(theme.TEXT);
+    for (let i = 0; i < displayed.length; i++) {
+      ctx.fillText(displayed[i], tip.x + 10 * scale, tip.y + (20 + 18 * i) * scale, width - 20 * scale);
+    }
   }
   ctx.restore();
 }

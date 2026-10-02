@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { analysisNumber, drawAnalysisOverlays, type AnalysisLabel } from "../src/render/analysis-overlays";
+import { analysisNumber, analysisForceColour, drawAnalysisOverlays, type AnalysisLabel } from "../src/render/analysis-overlays";
 import * as theme from "../src/ui/theme";
 
 interface Box { x: number; y: number; width: number; height: number; colour: string; }
@@ -11,7 +11,7 @@ function recorder(): { ctx: CanvasRenderingContext2D; text: Text[]; surfaces: Bo
   const fontSize = (): number => Number(state.font.match(/([\d.]+)px/)?.[1]);
   const width = (value: string): number => Array.from(value).length * fontSize() * 0.6;
   const methods = {
-    save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, strokeRect() {},
+    save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, strokeRect() {}, setLineDash() {},
     measureText(value: string) { return { width: width(value) }; },
     fillRect(x: number, y: number, w: number, h: number) {
       surfaces.push({ x, y, width: w, height: h, colour: state.fillStyle });
@@ -33,6 +33,50 @@ function recorder(): { ctx: CanvasRenderingContext2D; text: Text[]; surfaces: Bo
 afterEach(() => { theme.setTheme("dark"); });
 
 describe("scientific canvas annotations", () => {
+  it.each(theme.THEME_NAMES)("keeps force ink distinct and visible over its %s contour", name => {
+    theme.setTheme(name);
+    const contour: [number, number, number] = name === "light" ? [255, 255, 255] : [8, 8, 8];
+    const colours = ["weight", "reaction", "friction", "applied", "spring", "drag", "correction"] as const;
+    for (const kind of colours) {
+      expect(theme.contrastRatio(analysisForceColour(kind), contour)).toBeGreaterThanOrEqual(3);
+    }
+    expect(new Set(colours.map(kind => theme.css(analysisForceColour(kind)))).size).toBe(colours.length);
+  });
+
+  it("identifies a force source when hovering its shaft without adding permanent copy", () => {
+    const label = { text: "F 2.00 N", source: "Friction from Floor", x: 300, y: 200,
+      color: theme.WARN, right: true };
+    const vector = { x1: 200, y1: 200, x2: 300, y2: 200 };
+    const idle = recorder();
+    drawAnalysisOverlays(idle.ctx, [label], [vector], 600, 400);
+    expect(idle.text.map(row => row.text)).toEqual(["F 2.00 N"]);
+    const hovered = recorder();
+    drawAnalysisOverlays(hovered.ctx, [label], [vector], 600, 400, 1, [250, 202]);
+    expect(hovered.text.map(row => row.text)).toContain("Friction from Floor");
+    const away = recorder();
+    drawAnalysisOverlays(away.ctx, [label], [vector], 600, 400, 1, [250, 210]);
+    expect(away.text.map(row => row.text)).toEqual(["F 2.00 N"]);
+  });
+
+  it("identifies a source from its caption and bounds long-source hover surfaces", () => {
+    const label = { text: "R 9.81 N", source: "Reaction from " + "a long wall name ".repeat(100),
+      x: 220, y: 120, color: theme.GOOD, right: true };
+    const idle = recorder();
+    drawAnalysisOverlays(idle.ctx, [label], [], 268, 220, 1.2);
+    const caption = idle.surfaces.find(box => box.colour === theme.css(theme.PANEL))!;
+    const hovered = recorder();
+    drawAnalysisOverlays(hovered.ctx, [label], [], 268, 220, 1.2,
+      [caption.x + caption.width / 2, caption.y + caption.height / 2]);
+    expect(hovered.text.length).toBeGreaterThan(1);
+    expect(hovered.text.length).toBeLessThanOrEqual(5);
+    for (const box of hovered.surfaces.filter(box => box.colour === theme.css(theme.PANEL))) {
+      expect(box.x).toBeGreaterThanOrEqual(0); expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(268);
+      expect(box.y + box.height).toBeLessThanOrEqual(220);
+    }
+    const popup = hovered.surfaces.filter(box => box.colour === theme.css(theme.PANEL)).at(-1)!;
+    expect(popup.x + popup.width).toBeLessThanOrEqual(268 - 30);
+  });
   it.each(theme.THEME_NAMES)("puts readable complete force values on an opaque %s surface", name => {
     theme.setTheme(name);
     const capture = recorder();

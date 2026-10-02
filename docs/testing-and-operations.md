@@ -202,6 +202,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`collision-model.test.ts`](../web/tests/collision-model.test.ts) | Unequal-mass collision velocities, lower material restitution, conserved vector momentum, analytic kinetic-energy loss, common tangential motion, smooth oblique wall rebound/impulse in either material order, and separation after a zero-restitution impact under a later force. |
 | [`force-ledger.test.ts`](../web/tests/force-ledger.test.ts) | Integrator/substep-consistent force averages, changing fields and drag without false reactions, singular-vector rejection, earlier-contact impulses, damping/limits, string/rod/spring/Atwood forces, mounted supports, actual approximate gravity, hidden source exclusion, immutable transient intervals, no extra expression evaluations, edit/restore/no-op lifecycle, and bit-identical physics with recording on/off in Normal/Performance/adaptive modes. App and Inspector suites also protect edit invalidation, history view retention, interval guidance and checkbox focus. Production acceptance checks actual painted force labels plus desktop/phone/enlarged layouts. |
 | [`force-preview.test.ts`](../web/tests/force-preview.test.ts) | Immediate exact floor/capsule contacts, loaded opposing neighbour forces, loaded/free inclined-plane cases, separate friction, taut/slack/compressed links, analytical Atwood and coupled floor/pulley loads, current-time field/driver sampling, cached changes, sleeping masses, complete live-state/identity/ID preservation and bit-identical subsequent Normal/Performance motion. Also verifies separate contact sources in completed intervals and shared indexed arrow/source symbols. |
+| [`force-contact-origins.test.ts`](../web/tests/force-contact-origins.test.ts) | Contact origins on inclined, vertical, underside and capsule-end surfaces without advancing, opposite body-contact origins, floor-friction moment matching spin direction, immutable contact metadata, unindexed capital F for friction and lowercase applied-force symbols. The renderer suite checks actual rim/centre geometry and contrasting contours across themes in Normal/Performance display. |
 
 ### Expressions and math editing
 
@@ -218,7 +219,8 @@ with the behavior it protects rather than an exact assertion count.
 Scientific presentation is also covered by
 [`analysis-overlays.test.ts`](../web/tests/analysis-overlays.test.ts): opaque
 theme surfaces, complete edge-contained captions, coincident-force separation,
-large/tiny signed values, arrow-tip and diagonal-shaft protection at multiple
+large/tiny signed values, scientific palette/contour contrast, source identification
+from arrow shafts or captions, bounded long-source hover, arrow-tip and diagonal-shaft protection at multiple
 text scales, removal of redundant slope cards, and no overlay work when disabled. The Inspector suite checks every
 force source, retained disclosure focus, safe names, slope components and
 recorded interval averages in the text alternative.
@@ -287,7 +289,8 @@ diagnostics.
 opt-in centre coordinates, fixed-obstacle exclusion, keyboard/full-precision
 access, non-announcing outputs, hover guidance, six theme/Studio/classic/
 phone/enlarged/OpenDyslexic layouts, containment/axe and coordinate evolution
-after time seeking. Inspector regressions cover sleep, retained focused outputs,
+after time seeking. Each layout has its own page and test budget; scene evolution
+has a separate workflow. Inspector regressions cover sleep, retained focused outputs,
 new world references, empty/invalid-system recovery, fractional/tiny precision
 and absence of calculation while disabled. Collision acceptance
 also measures each material name's full text line at enlarged sizes.
@@ -316,6 +319,13 @@ study-term queries, query/focus-preserving cross-category recovery, themed and
 enlarged badge reflow/axe scans, category scrolling on narrow/short screens,
 loading the investigation and seeking to its
 analytic turning time to read extension, tension and energy through the UI.
+Library layout scans run independently of discovery and the turning-point
+investigation. Formula-guide reference scans likewise isolate every section
+and layout, preserving geometry, screenshots and WCAG checks without sharing
+one timeout across all scans. Elastic-model layout scans are separate from
+exact editing, undo/redo and saved-scene round trips. Force-origin hover checks
+wait for geometry painted at the current canvas dimensions to settle before
+placing the pointer; changing colour alone does not prove a resize has painted.
 The release workflow also verifies auto-fit activation and waits for a real
 painted load disc fully contained in the canvas before its final capture.
 Time-jump selection regressions cover forward/backward replacement, all

@@ -222,7 +222,7 @@ test("free-body diagrams use one interval and retain their view choice through u
     Object.defineProperty(window, "forceDiagramLabels", { value: labels });
     const original = CanvasRenderingContext2D.prototype.fillText;
     CanvasRenderingContext2D.prototype.fillText = function(text, x, y, maxWidth) {
-      if (/^[FRCD] \d/.test(text)) {
+      if (/^[FfRCD] \d/.test(text)) {
         labels.push(text);
         if (labels.length > 100) labels.shift();
       }
@@ -241,9 +241,11 @@ test("free-body diagrams use one interval and retain their view choice through u
   await page.locator("#canvas").focus();
   await page.keyboard.press(".");
   await expect(note).toContainText("Average forces: 0.008–0.017 s");
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { forceDiagramLabels: string[] }).forceDiagramLabels))
+    .toContain("f 1.50 N");
   const labels = await page.evaluate(() =>
     (window as unknown as { forceDiagramLabels: string[] }).forceDiagramLabels);
-  expect(labels).toContain("F 1.50 N");
   expect(labels.some(label => label.startsWith("R ") || label.startsWith("C "))).toBe(false);
   await page.screenshot({ path: testInfo.outputPath("force-diagram-desktop.png") });
   await page.getByRole("textbox", { name: "Mass (type an exact value)", exact: true }).fill("3");
@@ -423,18 +425,18 @@ test("force-field recipe formulas fit responsive themes and enlarged text", asyn
   expect(errors).toEqual([]);
 });
 
-test("formula guide reference pages remain readable at phone and enlarged text", async ({ page }) => {
-  test.setTimeout(60_000);
-  const errors: string[] = [];
-  page.on("pageerror", error => errors.push(error.message));
-  await loadMeasurementParticle(page);
-  await page.getByRole("tab", { name: "World", exact: true }).click();
-  await page.getByRole("button", { name: "Formula guide", exact: true }).click();
-  const guide = page.getByRole("dialog", { name: "Force-field formula guide", exact: true });
-  for (const [layout, width, scale] of [["desktop", 1440, 1], ["phone", 390, 1], ["enlarged", 320, 2]] as const) {
-    await page.setViewportSize({ width, height: 844 });
-    await page.evaluate(value => document.documentElement.style.setProperty("--fs", String(value)), scale);
-    for (const section of ["Basics", "Functions", "Logic", "Math editor"] as const) {
+// Isolate each accessibility scan so one layout cannot consume another's budget.
+for (const [layout, width, scale] of [["desktop", 1440, 1], ["phone", 390, 1], ["enlarged", 320, 2]] as const) {
+  for (const section of ["Basics", "Functions", "Logic", "Math editor"] as const) {
+    test(`formula guide ${section} remains readable in ${layout}`, async ({ page }) => {
+      const errors: string[] = [];
+      page.on("pageerror", error => errors.push(error.message));
+      await loadMeasurementParticle(page);
+      await page.getByRole("tab", { name: "World", exact: true }).click();
+      await page.getByRole("button", { name: "Formula guide", exact: true }).click();
+      const guide = page.getByRole("dialog", { name: "Force-field formula guide", exact: true });
+      await page.setViewportSize({ width, height: 844 });
+      await page.evaluate(value => document.documentElement.style.setProperty("--fs", String(value)), scale);
       await guide.getByRole("tab", { name: section, exact: true }).click();
       await expect(guide.locator(".guide-math[data-latex]")).toHaveCount(0);
       const geometry = await guide.evaluate(panel => ({
@@ -449,10 +451,10 @@ test("formula guide reference pages remain readable at phone and enlarged text",
       const heading = { Basics: "Operators", Functions: "Powers & growth", Logic: "Smooth alternatives", "Math editor": "Typing math" }[section];
       await guide.getByRole("heading", { name: heading, exact: true }).scrollIntoViewIfNeeded();
       await page.screenshot({ path: test.info().outputPath(`guide-${section.replace(" ", "-").toLowerCase()}-${layout}.png`) });
-    }
+      expect(errors).toEqual([]);
+    });
   }
-  expect(errors).toEqual([]);
-});
+}
 
 test("recorded graph data exports every graph family and stays fixed during playback", async ({ page }) => {
   const errors: string[] = [];

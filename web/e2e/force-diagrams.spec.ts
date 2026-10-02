@@ -49,7 +49,7 @@ test.beforeEach(async ({ page }) => {
     };
     const fill = CanvasRenderingContext2D.prototype.fillText;
     CanvasRenderingContext2D.prototype.fillText = function(text, x, y, maxWidth) {
-      if (this.canvas.id === "canvas" && /^(?:[WRTf]|F[∥⊥])[₀-₉]*\s.*N$/.test(text)) {
+      if (this.canvas.id === "canvas" && /^(?:[WRTFf]|fₛ|F[∥⊥])[₀-₉]*\s.*N$/.test(text)) {
         const metrics = this.measureText(text);
         captions.push({ text, left: x - metrics.actualBoundingBoxLeft,
           right: x + metrics.actualBoundingBoxRight, top: y - metrics.actualBoundingBoxAscent,
@@ -156,5 +156,117 @@ test("a floor-supported pulley displays its coupled tension and reaction without
   await page.screenshot({ path: testInfo.outputPath("immediate-supported-pulley.png") });
   expect((await new AxeBuilder({ page }).include("#inspector")
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze()).violations).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("surface forces start at the contact and identify their source across force colours and themes", async ({ page }, testInfo) => {
+  test.setTimeout(90000);
+  await page.addInitScript(() => {
+    type Segment = { x1: number; y1: number; x2: number; y2: number; colour: string; width: number };
+    const frame = { width: 0, height: 0, segments: [] as Segment[],
+      circles: [] as { x: number; y: number; r: number }[], text: [] as string[] };
+    Object.defineProperty(window, "forceGeometry", { value: frame });
+    const paths = new WeakMap<Path2D, { x: number; y: number; segments: Omit<Segment, "colour" | "width">[] }>();
+    const move = Path2D.prototype.moveTo, line = Path2D.prototype.lineTo;
+    Path2D.prototype.moveTo = function(x, y) {
+      const state = paths.get(this) ?? { x, y, segments: [] };
+      state.x = x; state.y = y; paths.set(this, state); move.call(this, x, y);
+    };
+    Path2D.prototype.lineTo = function(x, y) {
+      const state = paths.get(this);
+      if (state) { state.segments.push({ x1: state.x, y1: state.y, x2: x, y2: y }); state.x = x; state.y = y; }
+      line.call(this, x, y);
+    };
+    const fill = CanvasRenderingContext2D.prototype.fillRect;
+    CanvasRenderingContext2D.prototype.fillRect = function(x, y, w, h) {
+      if (this.canvas.id === "canvas" && x === 0 && y === 0 && w > 100 && h > 100) {
+        frame.width = w; frame.height = h;
+        frame.segments.length = 0; frame.circles.length = 0; frame.text.length = 0;
+      }
+      fill.call(this, x, y, w, h);
+    };
+    const stroke: (this: CanvasRenderingContext2D, path?: Path2D) => void = CanvasRenderingContext2D.prototype.stroke;
+    CanvasRenderingContext2D.prototype.stroke = function(path?: Path2D) {
+      if (this.canvas.id === "canvas" && path) for (const segment of paths.get(path)?.segments ?? []) {
+        frame.segments.push({ ...segment, colour: String(this.strokeStyle), width: this.lineWidth });
+      }
+      if (path === undefined) stroke.call(this); else stroke.call(this, path);
+    };
+    const arc = CanvasRenderingContext2D.prototype.arc;
+    CanvasRenderingContext2D.prototype.arc = function(x, y, r, a, b, anticlockwise) {
+      if (this.canvas.id === "canvas" && r > 5) frame.circles.push({ x, y, r });
+      arc.call(this, x, y, r, a, b, anticlockwise);
+    };
+    const text = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function(value, x, y, maxWidth) {
+      if (this.canvas.id === "canvas") frame.text.push(value);
+      if (maxWidth === undefined) text.call(this, value, x, y); else text.call(this, value, x, y, maxWidth);
+    };
+  });
+  const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+  await page.reload();
+  await loadScene(page, { settings: { gravity: 9.81 }, bodies: [
+    { id: 1, name: "Sliding particle", pos: [0, 0.25], radius: 0.2, mass: 1,
+      no_rotation: true, friction: 1, restitution: 0, const_force: [2, 0], color: [80, 225, 245] },
+  ], walls: [{ id: 1, name: "Rough floor", a: [-1.2, 0], b: [1.2, 0], thickness: 0.1,
+    friction: 1, restitution: 0 }] });
+  await pickParticle(page, [80, 225, 245]);
+  await page.getByRole("checkbox", { name: "Free-body forces on canvas", exact: true }).check();
+  await page.locator(".force-values > summary").click();
+  const sources = page.getByRole("list", { name: "Force values and sources", exact: true });
+  await expect(sources).toContainText("F: Friction from Rough floor");
+  await expect(sources).toContainText("f: Applied force");
+  const canvas = page.locator("#canvas");
+  type Frame = { width: number; height: number;
+    segments: { x1: number; y1: number; x2: number; y2: number; colour: string; width: number }[];
+    circles: { x: number; y: number; r: number }[]; text: string[] };
+  const geometry = () => page.evaluate(() => (window as unknown as { forceGeometry: Frame }).forceGeometry);
+  for (const [name, width, weightColour, reactionColour, frictionColour] of [
+    ["Dark", 1440, "#ff74a5", "#50e1f5", "#e8b5ff"],
+    ["Void", 1440, "#ff74a5", "#50e1f5", "#e8b5ff"],
+    ["Light", 390, "#af2350", "#005fa5", "#732da5"],
+  ] as const) {
+    await page.locator("#btn-settings").click();
+    const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+    await settings.getByRole("button", { name, exact: true }).click();
+    if (width === 390) await settings.getByRole("button", { name: "120%", exact: true }).click();
+    await page.keyboard.press("Escape"); await page.setViewportSize({ width, height: 900 });
+    const hide = page.getByRole("button", { name: "Hide Inspector", exact: true });
+    if (width === 390 && await hide.isVisible()) await hide.click();
+    let previous: number[] = [];
+    let stableFrames = 0;
+    await expect.poll(async () => {
+      const frame = await geometry();
+      const size = await canvas.evaluate(element => [element.clientWidth, element.clientHeight]);
+      const friction = frame.segments.filter(s => s.colour === frictionColour && s.width === 2.5);
+      if (frame.width !== size[0] || frame.height !== size[1] || friction.length !== 1) {
+        previous = []; stableFrames = 0; return false;
+      }
+      const values = [friction[0].x1, friction[0].y1, friction[0].x2, friction[0].y2];
+      stableFrames = previous.length && values.every((value, i) => Math.abs(value - previous[i]) < 0.05)
+        ? stableFrames + 1 : 0;
+      previous = values;
+      return stableFrames >= 2;
+    }).toBe(true);
+    const frame = await geometry();
+    const w = frame.segments.find(s => s.colour === weightColour && s.width === 2.5)!;
+    const r = frame.segments.find(s => s.colour === reactionColour && s.width === 2.5)!;
+    const f = frame.segments.find(s => s.colour === frictionColour && s.width === 2.5)!;
+    const circle = frame.circles.filter(c => Math.abs(c.x - w.x1) < 0.01 && Math.abs(c.y - w.y1) < 0.01)
+      .sort((a, b) => a.r - b.r)[0];
+    expect(circle).toBeDefined(); expect(r.x1).toBeCloseTo(w.x1, 6);
+    expect(r.y1 - w.y1).toBeCloseTo(circle.r, 6);
+    expect(f.x1).toBeCloseTo(r.x1, 6); expect(f.y1).toBeCloseTo(r.y1, 6);
+    expect(r.y2).toBeLessThan(r.y1); expect(f.x2).toBeLessThan(f.x1);
+    expect(frame.segments.some(s => s.width === 6)).toBe(true);
+    const box = (await canvas.boundingBox())!;
+    await page.mouse.move(box.x + (f.x1 + f.x2) / 2, box.y + f.y1);
+    await expect.poll(async () => (await geometry()).text).toContain("Friction from Rough floor");
+    await page.screenshot({ path: testInfo.outputPath(`contact-origin-hover-${name.toLowerCase()}.png`) });
+    await page.mouse.move(5, 5);
+    await expect.poll(async () => (await geometry()).text).not.toContain("Friction from Rough floor");
+    await page.screenshot({ path: testInfo.outputPath(`contact-origin-${name.toLowerCase()}.png`) });
+  }
+  await expect(page.getByRole("textbox", { name: "Simulation time in seconds", exact: true })).toHaveValue("0.00");
   expect(errors).toEqual([]);
 });
