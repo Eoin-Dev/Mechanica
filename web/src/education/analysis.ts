@@ -73,12 +73,24 @@ export function projectForce(entry: Pick<ForceEntry, "fx" | "fy">,
   };
 }
 
+/** Current capsule contact, including endpoints and both faces. A microscopic
+ * allowance keeps an exact tangent selectable despite floating-point roundoff. */
+export function touchingSlopeWall(body: Body, wall: Wall): boolean {
+  if (!body.collides || body.isAnchor || body.isRodEndpoint ||
+      Math.hypot(wall.b.x - wall.a.x, wall.b.y - wall.a.y) < 1e-12) return false;
+  const [x, y] = closestOnSegment(body.pos.x, body.pos.y,
+    wall.a.x, wall.a.y, wall.b.x, wall.b.y);
+  const reach = body.radius + wall.thickness / 2;
+  return Math.hypot(body.pos.x - x, body.pos.y - y) <= reach + 1e-6;
+}
+
 /** Use one completed interval for both named forces and m*delta-v/dt.
  * Before a recorded step (or after an edit), show current authored forces;
  * this preview cannot infer a contact reaction from an old resultant. */
 export function forceLedger(world: World, body: Body,
                             referenceWall: Wall | null = null): ForceLedger {
-  const basis = referenceWall === null ? null : slopeBasis(referenceWall, body);
+  const basis = referenceWall !== null && world.walls.includes(referenceWall) &&
+    touchingSlopeWall(body, referenceWall) ? slopeBasis(referenceWall, body) : null;
   const sample = body.forceSnapshot;
   if (body.showForceComponents && sample !== null && body.invMass !== 0 &&
       sample.stepCount === world.stepCount && sample.endTime === world.time &&

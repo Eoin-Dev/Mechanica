@@ -421,7 +421,7 @@ prevent startup.
 | `dyslexic_font` | Boolean body-font preference. |
 | `cull` | Boolean runaway-culling preference, default on. |
 | `perf_mode` | Boolean adaptive performance solver/render preference, default off. The chosen runtime level is not persisted. |
-| `drag_hits_walls` | Boolean kinematic wall-sweep preference, default off. |
+| `drag_hits_walls` | Boolean kinematic wall-sweep preference, default on. An explicit saved false remains off. |
 | `new_scene_gravity` | Finite number clamped to `0..100`, default `9.8` when absent. Clear applies it to the newly created world; it does not override gravity in presets, imports, saved scenes, reset, or the current world. |
 | `accent` | `#rrggbb` string. Absent uses the theme default. |
 | `custom_accents` | Up to six valid `#rrggbb` strings. |

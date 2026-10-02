@@ -8,7 +8,7 @@ import { App, GraphMode, Panel } from "../app";
 import { BODY_PALETTE, Body, Color, MATERIALS, Wall } from "../engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
-import { PlaybackEventKind, analysePulley, forceLedger, projectForce } from "../education/analysis";
+import { PlaybackEventKind, analysePulley, forceLedger, projectForce, touchingSlopeWall } from "../education/analysis";
 import { analyseElasticLink, elasticModulus, stiffnessForModulus } from "../education/elasticity";
 import { Selectable } from "../render/draw";
 import { analysisNumber } from "../render/analysis-overlays";
@@ -49,9 +49,13 @@ function selectionKey(o: Selectable): string {
 
 const TABS = ["Selection", "World", "View"] as const;
 type Tab = (typeof TABS)[number];
-const RESTITUTION_HELP = "Coefficient of restitution: relative separation speed " +
-  "divided by relative approach speed along the line of impact. " +
-  "The lower of the two contacting materials' values is used.";
+const RESTITUTION_HELP = "Coefficient of restitution e: relative separation speed divided by " +
+  "relative approach speed along the contact normal. The lower of the two materials’ " +
+  "values is used. e = 1 is elastic; e = 0 gives no relative normal rebound, " +
+  "without joining the objects.";
+const FRICTION_HELP = "Coefficient of friction μ. Contact uses √(μ₁ × μ₂) from the two " +
+  "materials; either value at zero makes contact frictionless. Tangential friction " +
+  "is limited by μ times the normal reaction and acts separately from restitution.";
 
 /** A Performance-mode banner above controls the mode makes unavailable: why
  * they are greyed out, and the single click that gives them back. Present
@@ -475,6 +479,15 @@ export class Inspector implements Panel {
       }
       return;
     }
+    if (sel.length === 1) {
+      const selected = sel[0];
+      for (const link of app.world.links) {
+        if (link instanceof PulleyLink &&
+            (link === selected || link.a === selected || link.b === selected || link.pulley === selected)) {
+          this.buildPulleyAssembly(link);
+        }
+      }
+    }
     if (sel.length === 1 && sel[0] instanceof Body) {
       if (sel[0].isPulley) this.buildSinglePulley();
       else if (sel[0].isPivot) this.buildSinglePivot(sel[0]);
@@ -528,12 +541,8 @@ export class Inspector implements Panel {
       "can then hold it still on a slope instead of rolling it down."));
 
     this.sub("Material");
-    this.restitutionControl([b]);
-    this.add(slider("Friction", () => b.friction, (v) => { b.friction = v; },
-      0.0, 10.0, { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
-        onCommit: this.commit,
-        tooltip: "Resistance to sliding at contact. 0 = frictionless." }));
-    this.buildRestitutionModel([b]);
+    this.materialControls([b]);
+
     this.materialButtons([b]);
     this.colourRow([b]);
 
@@ -544,11 +553,6 @@ export class Inspector implements Panel {
 
     this.buildParticleAnalysis(b);
     this.buildRodAttachment(b);
-    for (const link of app.world.links) {
-      if (link instanceof PulleyLink && (link.a === b || link.b === b)) {
-        this.buildPulleyAssembly(link);
-      }
-    }
 
     const drv = this.app.world.drivers.find((d) => d.bodyId === b.id);
     this.sub("Driving force");
@@ -643,19 +647,36 @@ export class Inspector implements Panel {
     } });
 
     const slope = el("select", { "aria-label": "Resolve forces relative to a slope" });
-    slope.append(el("option", { value: "", text: "No slope selected" }));
-    for (const wall of app.world.walls) {
-      slope.append(el("option", { value: String(wall.id), text: wall.name }));
-    }
     slope.addEventListener("change", () => {
-      b.forceSlopeWallId = slope.value === "" ? null : Number(slope.value);
+      const wall = app.world.walls.find(wall => String(wall.id) === slope.value && touchingSlopeWall(b, wall));
+      b.forceSlopeWallId = wall?.id ?? null;
       if (b.forceSlopeWallId !== null) b.showForceComponents = true;
       app.invalidateCanvas();
     });
-    const slopeRow = el("div", { class: "row", title:
-      "Add the resultant components parallel and perpendicular to the chosen wall or inclined plane." },
+    const slopeHelp = "Resolve the resultant along and normal to a wall in contact.";
+    const slopeRow = el("div", { class: "row" },
       el("span", { class: "lbl", text: "Slope reference" }), slope);
+    let slopeOptionsKey = "";
     this.add({ root: slopeRow, refresh: () => {
+      const walls = app.world.walls.filter(wall => touchingSlopeWall(b, wall));
+      const key = JSON.stringify(walls.map(wall => [wall.id, wall.name]));
+      if (key !== slopeOptionsKey) {
+        slope.replaceChildren(el("option", { value: "",
+          text: walls.length === 0 ? "No slope in contact" : "No slope selected" }),
+          ...walls.map(wall => el("option", { value: String(wall.id), text: wall.name })));
+        slopeOptionsKey = key;
+      }
+      if (b.forceSlopeWallId !== null && !walls.some(wall => wall.id === b.forceSlopeWallId)) {
+        b.forceSlopeWallId = null;
+        app.invalidateCanvas();
+      }
+      const disabled = walls.length === 0;
+      if (slope.disabled !== disabled) slope.disabled = disabled;
+      slopeRow.classList.toggle("disabled", disabled);
+      const help = disabled ? "No slope in contact." : slopeHelp;
+      if (slopeRow.title !== help) slopeRow.title = help;
+      if (slope.title !== help) slope.title = help;
+      if (slope.getAttribute("aria-description") !== help) slope.setAttribute("aria-description", help);
       const value = b.forceSlopeWallId === null ? "" : String(b.forceSlopeWallId);
       if (slope.value !== value) slope.value = value;
     } });
@@ -721,13 +742,8 @@ export class Inspector implements Panel {
       "Let bodies collide with this anchor. Off, they pass through it."));
 
     this.sub("Material");
-    this.restitutionControl([b]);
-    this.add(slider("Friction", () => b.friction, (v) => { b.friction = v; },
-      0.0, 10.0, { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
-        onCommit: this.commit,
-        tooltip: "Resistance to sliding against this anchor. " +
-                 "0 = frictionless." }));
-    this.buildRestitutionModel([b]);
+    this.materialControls([b]);
+
     this.materialButtons([b]);
     this.colourRow([b]);
 
@@ -751,41 +767,26 @@ export class Inspector implements Panel {
             "the palette new bodies are picked from." }));
   }
 
-  /** Keep the full exam notation readable above the track in every context. */
-  private restitutionControl(objects: Array<Body | Wall>): void {
-    const control = slider("Restitution e", () => objects[0].restitution,
-      value => objects.forEach(item => { item.restitution = value; }), 0, 1,
-      { fmt: value => value.toFixed(2), onCommit: this.commit, tooltip: RESTITUTION_HELP });
-    control.root.classList.add("restitution-control");
-    this.add(control);
-  }
-
-  /** Explain the stored material coefficient separately from current motion.
-   * A selected pair's value is a material rule, not a claim that they collide. */
-  private buildRestitutionModel(objects: Array<Body | Wall>): void {
-    if (objects.length === 0) return;
-    const pair = objects.length === 2 && objects.some(item => item instanceof Body)
-      ? el("output", { class: "collision-pair", "aria-label": "Material pair restitution" }) : null;
-    const root = el("div", { class: "collision-model" },
-      el("div", { class: "collision-heading" }, el("strong", { text: "Collision model" }), pair),
-      el("p", { class: "collision-help", text: "A contact uses the lower of the two materials’ e values." }),
-      el("details", { class: "collision-explanation" },
-        el("summary", { text: "How impacts work" }),
-        el("p", { class: "collision-help", text: "e = relative separation speed / relative approach speed, " +
-          "measured along the line of impact (the contact normal). It compares the pair’s motion, " +
-          "rather than the speed retained by either body." }),
-        el("p", { class: "collision-help", text: "e = 1 gives equal relative approach and separation speeds " +
-          "along the normal. e = 0 gives no relative " +
-          "normal rebound; the bodies are not joined. For a smooth wall impact, tangential velocity " +
-          "is unchanged. Friction acts separately." }),
-        el("p", { class: "collision-help", text: "For ideal particle questions, use No rotation and zero " +
-          "friction. Resting, simultaneous and constrained contacts, and Performance mode, can differ " +
-          "from an isolated ideal impact." })));
-    this.add({ root, refresh: () => {
-      if (pair === null) return;
-      const text = `Material pair e = ${Math.min(objects[0].restitution, objects[1].restitution)}`;
-      if (pair.textContent !== text) pair.textContent = text;
-    } });
+  /** Matched compact rows, with material guidance in native delayed hover help. */
+  private materialControls(objects: Array<Body | Wall>): void {
+    const root = el("div", { class: "material-controls" });
+    for (const [property, label, maximum, help] of [
+      ["restitution", "Restitution", 1, RESTITUTION_HELP],
+      ["friction", "Friction", 10, FRICTION_HELP],
+    ] as const) {
+      const control = slider(label, () => objects[0][property],
+        value => objects.forEach(item => { item[property] = value; }), 0, maximum,
+        { fmt: value => value.toFixed(2), onCommit: this.commit,
+          log: property === "friction", logFloor: 0.01 });
+      control.root.classList.add("material-control");
+      const caption = control.root.querySelector<HTMLElement>(".lbl")!;
+      const range = control.root.querySelector<HTMLInputElement>('input[type="range"]')!;
+      caption.title = help;
+      range.title = help;
+      for (const input of control.root.querySelectorAll("input")) input.setAttribute("aria-description", help);
+      root.append(this.group.add(control).root);
+    }
+    this.target.append(root);
   }
 
   private materialButtons(bodies: Body[]): void {
@@ -840,7 +841,7 @@ export class Inspector implements Panel {
     }
     this.body.append(el("div", { text: parts.join(", ") + " selected",
       style: "font-weight:600;margin-bottom:6px" }));
-    this.buildRestitutionModel([...bodies, ...anchors, ...walls]);
+
 
     if (bodies.length > 0) {
       const first = bodies[0];
@@ -854,12 +855,7 @@ export class Inspector implements Panel {
           (v) => resizableBodies.forEach((b) => { b.radius = v; }), 0.01, 10.0,
           { unit: "m", log: true, onCommit: this.commit }));
       }
-      this.restitutionControl(bodies);
-      this.add(slider("Friction", () => first.friction,
-        (v) => bodies.forEach((b) => { b.friction = v; }), 0.0, 10.0,
-        { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
-          onCommit: this.commit,
-          tooltip: "Resistance to sliding at contact. 0 = frictionless." }));
+      this.materialControls(bodies);
       this.materialButtons(bodies);
       this.colourRow(bodies);
       this.addHalf(
@@ -904,13 +900,7 @@ export class Inspector implements Panel {
         (v) => anchors.forEach((a) => { a.radius = v; }), 0.01, 10.0,
         { unit: "m", log: true, onCommit: this.commit,
           tooltip: "Size of the anchors." }));
-      this.restitutionControl(anchors);
-      this.add(slider("Friction", () => af.friction,
-        (v) => anchors.forEach((a) => { a.friction = v; }), 0.0, 10.0,
-        { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
-          onCommit: this.commit,
-          tooltip: "Resistance to sliding against these anchors. " +
-                   "0 = frictionless." }));
+      this.materialControls(anchors);
       this.materialButtons(anchors);
       this.colourRow(anchors);
       this.add(checkbox("Collides", () => af.collides,
@@ -935,11 +925,7 @@ export class Inspector implements Panel {
       this.add(slider("Thickness", () => wf.thickness,
         (v) => walls.forEach((w) => { w.thickness = v; }), 0.01, 2.0,
         { unit: "m", log: true, fmt: (v) => v.toFixed(2), onCommit: this.commit }));
-      this.restitutionControl(walls);
-      this.add(slider("Friction", () => wf.friction,
-        (v) => walls.forEach((w) => { w.friction = v; }), 0.0, 10.0,
-        { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
-          onCommit: this.commit }));
+      this.materialControls(walls);
       this.colourRow(walls);
     }
 
@@ -1103,12 +1089,8 @@ export class Inspector implements Panel {
       0.01, 2.0, { unit: "m", log: true, fmt: (v) => v.toFixed(2),
         onCommit: this.commit, tooltip: "Width of the wall across its length." }));
     this.body.append(section("Material"));
-    this.restitutionControl([w]);
-    this.add(slider("Friction", () => w.friction, (v) => { w.friction = v; },
-      0.0, 10.0, { fmt: (v) => v.toFixed(2), log: true, logFloor: 0.01,
-        onCommit: this.commit,
-        tooltip: "Resistance to sliding along this wall. 0 = frictionless." }));
-    this.buildRestitutionModel([w]);
+    this.materialControls([w]);
+
     this.colourRow([w]);
     this.actionButtons();
   }
@@ -1137,7 +1119,6 @@ export class Inspector implements Panel {
         text: "The wheel is fixed and non-colliding. A mounted wheel follows " +
               "its wall endpoint; both particles remain ordinary colliding " +
               "bodies and may slide or swing freely." }));
-      this.buildPulleyAssembly(link);
     } else if (link instanceof SpringLink) {
       const isString = link.tensionOnly;
       this.body.append(el("div", { text: isString ? "String (elastic)" : "Spring",
@@ -1327,19 +1308,36 @@ export class Inspector implements Panel {
     const link = this.app.world.links.find((candidate) =>
       candidate instanceof PulleyLink && candidate.pulley === this.app.selection[0]);
     if (link instanceof PulleyLink) {
-      this.buildPulleyAssembly(link);
       this.sub("Analysis");
       this.addTensionToggle([link], "Show four equal-tension force vectors: " +
         "two on the particles and two on the pulley contacts.");
-      const readout = el("div", { class: "pulley-readout" });
+      const readout = el("div", { class: "pulley-readout", role: "group",
+        "aria-label": "Pulley force and motion" });
+      const readings = [
+        ["Tension", "Shared string tension, in newtons."],
+        ["Path", "Current routed string length / natural string length, in metres."],
+        ["Leg rates", "Rates of change of legs A and B; positive means lengthening."],
+        ["Constraint rate", "Rate of change of the total string path; near zero when taut."],
+        ["Axle reaction", "Support force on the wheel: rightward and upward components, in newtons."],
+      ].map(([name, help]) => {
+        const caption = el("span", { class: "pulley-reading-name", text: `${name}:`,
+          title: help, tabindex: "0", "aria-description": help });
+        const value = el("span", { class: "pulley-reading-value" });
+        readout.append(el("span", {}, caption, " ", value));
+        return value;
+      });
       this.add({ root: readout, refresh: () => {
         const p = analysePulley(link);
-        readout.replaceChildren(
-          el("span", { text: `T ${p.tension.toFixed(3)} N` }),
-          el("span", { text: `path ${p.pathLength.toFixed(3)} / ${p.naturalLength.toFixed(3)} m` }),
-          el("span", { text: `leg rates ${p.legRateA.toFixed(3)}, ${p.legRateB.toFixed(3)} m/s` }),
-          el("span", { text: `constraint rate ${p.constraintRate.toExponential(2)} m/s` }),
-          el("span", { text: `axle reaction (${p.axleReactionX.toFixed(2)}, ${p.axleReactionY.toFixed(2)}) N` }));
+        const values = [
+          `${p.tension.toFixed(3)} N`,
+          `${p.pathLength.toFixed(3)} / ${p.naturalLength.toFixed(3)} m`,
+          `${p.legRateA.toFixed(3)}, ${p.legRateB.toFixed(3)} m/s`,
+          `${p.constraintRate.toExponential(2)} m/s`,
+          `(${p.axleReactionX.toFixed(2)}, ${p.axleReactionY.toFixed(2)}) N`,
+        ];
+        readings.forEach((node, index) => {
+          if (node.textContent !== values[index]) node.textContent = values[index];
+        });
       } });
     }
     this.sub("Actions");
@@ -1748,6 +1746,38 @@ export class Inspector implements Panel {
   }
 
   // ------------------------------------------------------------------- view
+  private buildCentreModel(): void {
+    const x = el("output", { "aria-label": "Centre of mass x", "aria-live": "off", tabindex: "0" });
+    const y = el("output", { "aria-label": "Centre of mass y", "aria-live": "off", tabindex: "0" });
+    const readings = el("dl", { class: "centre-readings" },
+      el("dt", { text: "Centre x" }), el("dd", {}, x),
+      el("dt", { text: "Centre y" }), el("dd", {}, y));
+    const empty = el("p", { class: "centre-help centre-empty", text: "No movable particles to measure." });
+    const root = el("div", { class: "centre-model", role: "group", "aria-label": "Centre of mass coordinates" },
+      readings, empty);
+    this.add({ root, refresh: () => {
+      root.hidden = !this.app.view.com;
+      if (root.hidden) return;
+      const centre = this.app.world.centreOfMass();
+      const available = centre !== null && Number.isFinite(centre.x) && Number.isFinite(centre.y);
+      readings.hidden = !available;
+      empty.hidden = available;
+      if (!available) {
+        empty.textContent = centre === null ? "No movable particles to measure." : "Coordinates are unavailable.";
+        return;
+      }
+      for (const [output, value] of [[x, centre.x], [y, centre.y]] as const) {
+        const text = `${Number(value.toPrecision(12))} m`;
+        const exact = `Full stored value: ${value} m.`;
+        if (output.textContent !== text) output.textContent = text;
+        if (output.title !== exact) {
+          output.title = exact;
+          output.setAttribute("aria-description", exact);
+        }
+      }
+    } });
+  }
+
   private buildView(): void {
     const app = this.app;
     const view = app.view;
@@ -1799,7 +1829,11 @@ export class Inspector implements Panel {
       trailWarn.style.display = heavy ? "" : "none";
     } });
     chk("Centre of mass", () => view.com, (v) => { view.com = v; },
-        "Mark the centre of mass of the whole scene.");
+        "Mass-weighted centre of movable particles; right and up are positive. " +
+        "Includes resting particles asleep in Performance mode. Anchors, locked or held particles " +
+        "and internal rod coordinates are omitted; walls and light links carry no mass. " +
+        "Focus or hover a coordinate for full stored precision.");
+    this.buildCentreModel();
     chk("Contact normals", () => view.contacts, (v) => { view.contacts = v; },
         "Draw an arrow at every contact resolved this frame.");
     chk("Broadphase grid", () => view.spatialGrid, (v) => { view.spatialGrid = v; },

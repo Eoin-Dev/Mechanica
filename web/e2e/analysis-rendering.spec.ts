@@ -151,7 +151,13 @@ test("scientific canvas captions remain readable, separate and contained", async
   await fy.press("Enter");
   await expect(sources).toContainText("Fx -1.00e+6 N");
   await expect(sources).toContainText("Fy -4.00e-4 N");
-  await page.getByRole("combobox", { name: "Resolve forces relative to a slope", exact: true }).selectOption("1");
+  const slope = page.getByRole("combobox", { name: "Resolve forces relative to a slope", exact: true });
+  await expect(slope).toBeDisabled();
+  await expect(slope).toHaveAttribute("title", "No slope in contact.");
+  await page.getByRole("checkbox", { name: "Collides", exact: true }).setChecked(true);
+  await slope.scrollIntoViewIfNeeded();
+  await expect(slope).toBeEnabled();
+  await slope.selectOption("1");
   await expect(sources).toContainText("∥ -9.70e+5 N");
   await expect(sources).toContainText("⊥ 2.43e+5 N");
   for (const width of [1440, 390, 320]) {
@@ -173,7 +179,8 @@ test("scientific canvas captions remain readable, separate and contained", async
     await page.screenshot({ path: testInfo.outputPath(`force-sources-${width}.png`) });
     if (width <= 760) await page.getByRole("button", { name: "Hide Inspector", exact: true }).click();
     await expect.poll(() => page.evaluate(() => (window as unknown as { analysisComponentRows: Caption[] }).analysisComponentRows.length))
-      .toBeGreaterThanOrEqual(12);
+      .toBe(0);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { analysisCaptions: Caption[] }).analysisCaptions.some(row => row.text.startsWith("F∥ ")))).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`slope-components-${width}.png`) });
     const metrics = await canvas.evaluate(element => ({ width: element.clientWidth, height: element.clientHeight,
       rows: [...(window as unknown as { analysisComponentRows: Caption[] }).analysisComponentRows,

@@ -160,6 +160,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`adaptive-quality.test.ts`](../web/tests/adaptive-quality.test.ts) | State-derived App subdivision quality and the boundaries that keep it independent of scheduling load. |
 | [`slice-cost.test.ts`](../web/tests/slice-cost.test.ts) | Encounter slicing catches close motion while respecting the work budget for added/dense bodies. |
 | [`perf-mode.test.ts`](../web/tests/perf-mode.test.ts) | Four effective solver profiles without scene mutation, approximate large-cloud gravity, deterministic bounded energy, sleep/wake, maximum friction/spin omission, stable projected springs over full control ranges, compliance behavior, strain/movement/speed bounds, mixed contacts, lifecycle changes, and neutral UI styling. |
+| [`world-diagnostics.test.ts`](../web/tests/world-diagnostics.test.ts) | Independent weighted centre and angular momentum under translated coordinates, partial/all sleep, actual floor sleep/wake, unchanged snapshots, locked/held/zero-mass/internal exclusions and empty systems. App and renderer regressions additionally protect physical CSV/plot values and the painted centre marker. |
 | [`engine-safety.test.ts`](../web/tests/engine-safety.test.ts) | Fixed-support friction chains and common translation, held-support exclusion, final performance-spring displacement bounds, spring/string endpoint collision, strict timestep contracts, numeric import/runtime caps, and velocity-dependent Verlet convergence/conservative arithmetic. |
 | [`pulley.test.ts`](../web/tests/pulley.test.ts) | Equal-tension Atwood acceleration, tension-only slack behavior, live finite-wheel tangency, terminal radial/tangent stops, outside-disc route crossing, hostile mass-ratio energy bounds across all integrators and both solver modes, all four Performance profiles, fixed endpoint radius ownership/release, realised contact-force diagnostics, exact wall-surface placement with parallel routing, mount following, live snap/breakaway wheel dragging, paused and running taut axle edits, pulley-only box filtering, complete placement, three dismantling cascades, persistence/digest structure, and malformed axle ownership/reference rejection. |
 
@@ -210,8 +211,8 @@ with the behavior it protects rather than an exact assertion count.
 Scientific presentation is also covered by
 [`analysis-overlays.test.ts`](../web/tests/analysis-overlays.test.ts): opaque
 theme surfaces, complete edge-contained captions, coincident-force separation,
-large/tiny signed values, compact enlarged-text slope layout, explicit tall-card
-limits, and no overlay work when disabled. The Inspector suite checks every
+large/tiny signed values, arrow-tip and diagonal-shaft protection at multiple
+text scales, removal of redundant slope cards, and no overlay work when disabled. The Inspector suite checks every
 force source, retained disclosure focus, safe names, slope components and
 recorded interval averages in the text alternative.
 
@@ -270,6 +271,15 @@ tests run before Vitest under `npm test`.
 
 ### Real-browser acceptance
 
+[`e2e/system-measurements.spec.ts`](../web/e2e/system-measurements.spec.ts) checks
+opt-in centre coordinates, fixed-obstacle exclusion, keyboard/full-precision
+access, non-announcing outputs, hover guidance, six theme/Studio/classic/
+phone/enlarged/OpenDyslexic layouts, containment/axe and coordinate evolution
+after time seeking. Inspector regressions cover sleep, retained focused outputs,
+new world references, empty/invalid-system recovery, fractional/tiny precision
+and absence of calculation while disabled. Collision acceptance
+also measures each material name's full text line at enlarged sizes.
+
 [`preset-search.test.ts`](../web/tests/preset-search.test.ts) checks study-term,
 Greek/accent/compatibility-character and smart-apostrophe matches, all-word and
 category constraints, input focus retention, cross-category recovery, truthful
@@ -281,9 +291,11 @@ checks also include this builder.
 The Direct collision description's unequal masses, velocities, material
 coefficients, conserved momentum, kinetic-energy loss and impulses are checked
 against its actual motion. Inspector tests protect the corrected material
-controls, pair value and retained disclosure/focus.
+controls across all six single/bulk contexts, hover/accessible physics
+guidance, exact bulk edits/undo, mixed-object isolation and retained focus.
 [`e2e/collisions.spec.ts`](../web/e2e/collisions.spec.ts) exercises study-term
-loading, exact bulk coefficient entry/undo, the native impact disclosure,
+loading, exact bulk coefficient/friction entry/undo, slider keyboard limits,
+native hover-help attributes, matching inline tracks and narrow gaps,
 five themed/enlarged layouts with containment and axe scans, retained pair
 selection after time seeking and actual post-impact velocities read from
 particles selected through their painted canvas interiors.
@@ -345,6 +357,13 @@ scene and starts a new import. Releasing the old read must preserve the cleared
 scene and the new action's busy state; releasing the new read must load only
 that file. It also checks picker cancellation, retry and absence of page errors
 in every configured engine.
+
+[`e2e/pulley-inspector.spec.ts`](../web/e2e/pulley-inspector.spec.ts) verifies
+first-use wall-drag collisions and saved opt-out across reloads, top-of-Inspector
+assembly navigation from each part, colon-separated readings and native hover
+help, contact-only slope options and the disabled no-contact state without
+stepping. It covers Light, Dark, Void and enlarged phone layouts with real
+rendered-particle selection, screenshots and axe checks.
 
 [`e2e/analysis-rendering.spec.ts`](../web/e2e/analysis-rendering.spec.ts)
 samples the actual canvas text bounds and pre-paint background, checks normal

@@ -9,6 +9,7 @@ import { World } from "../src/engine/world";
 import { forceLedger } from "../src/education/analysis";
 import { PRESETS } from "../src/scene/presets";
 import { Vec2 } from "../src/core/vec";
+import { captureGraphData, graphCSV } from "../src/ui/graph-data";
 import { listScenes, restoreSnapshot, snapshot } from "../src/scene/snapshot";
 
 /** The handful of 2D-context members construction and resizing touch. */
@@ -44,6 +45,18 @@ afterEach(() => {
 });
 
 describe("App construction", () => {
+  it.each([
+    [undefined, true], [false, false], [true, true], ["false", true], [0, true],
+  ])("defaults wall collisions on without overriding a saved preference (%s)", (saved, expected) => {
+    localStorage.setItem("mechanica.settings", JSON.stringify({ drag_hits_walls: saved }));
+    const app = makeApp();
+    expect(app.dragHitsWalls).toBe(expected);
+    app.setDragHitsWalls(false);
+    expect(makeApp().dragHitsWalls).toBe(false);
+    app.setDragHitsWalls(true);
+    expect(makeApp().dragHitsWalls).toBe(true);
+  });
+
   it("records forces during forward and backward time seeking with retained analysis choices", () => {
     const app = makeApp();
     app.newScene();
@@ -1056,6 +1069,23 @@ describe("graph recording", () => {
     expect(app.momentumSeries.values("py").at(-1)!).toBeCloseTo(p.y, 9);
     expect(app.momentumSeries.values("L").at(-1)!)
       .toBeCloseTo(app.world.angularMomentum(), 9);
+  });
+
+  it("records and exports physical angular momentum while a resting particle sleeps", () => {
+    const app = makeApp();
+    app.world.gravity = 0;
+    const moving = new Body(new Vec2(-2, 0), 0.15, 2);
+    const resting = new Body(new Vec2(2, 0), 0.15, 3);
+    moving.vel.set(0, 1);
+    resting.perfSleeping = true;
+    app.world.bodies.push(moving, resting);
+    app.setGraphMode("Mom.");
+    const data = captureGraphData(app)!;
+    expect(data.rows.at(-1)).toEqual([0, 2, 0, 2, -4.8]);
+    expect(graphCSV(data)).toContain("0,2,0,2,-4.8\r\n");
+    resting.perfSleeping = false;
+    app.recordGraphSample(true);
+    expect(captureGraphData(app)!.rows.at(-1)).toEqual(data.rows.at(-1));
   });
 
   it("records selected-particle kinematics and resets on selection", () => {

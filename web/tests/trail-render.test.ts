@@ -218,6 +218,21 @@ describe("body rendering", () => {
     expect(ops.some(op => op.text?.startsWith("R "))).toBe(true);
   });
 
+  it("paints the mass-weighted centre when a particle sleeps", () => {
+    const a = new Body(new Vec2(-2, 1), 0.15, 2);
+    const b = new Body(new Vec2(2, -1), 0.15, 3);
+    b.perfSleeping = true;
+    const world = worldWith(a, b);
+    const camera = new Camera(800, 600);
+    camera.zoom = 100;
+    const settings = new ViewSettings();
+    settings.com = true;
+    const { ctx, ops } = recCtx();
+    drawWorld(ctx, camera, world, settings, [], null, new Map(), 800, 600);
+    // CoM = (0.4, -0.2); the label is 10px right and 14px below its marker.
+    expect(ops.find(op => op.text === "COM")).toMatchObject({ x: 450, y: 334 });
+  });
+
   it("keeps disjoint bodies in bounded current paths", () => {
     const strokeArgs: Array<FakePath2D | undefined> = [];
     const fillArgs: Array<FakePath2D | undefined> = [];

@@ -2572,7 +2572,7 @@ export class World {
   momentum(): Vec2 {
     const p = new Vec2();
     for (const b of this.bodies) {
-      if (b.invMass !== 0.0 && !b.isRodEndpoint) {
+      if (!b.locked && !b.held && b.mass > 0.0 && !b.isRodEndpoint) {
         p.x += b.mass * b.vel.x;
         p.y += b.mass * b.vel.y;
       }
@@ -2585,7 +2585,8 @@ export class World {
     let cx = 0.0;
     let cy = 0.0;
     for (const b of this.bodies) {
-      if (b.invMass !== 0.0 && !b.isRodEndpoint) {
+      // Solver sleeping suppresses work, not the particle's physical mass.
+      if (!b.locked && !b.held && b.mass > 0.0 && !b.isRodEndpoint) {
         mTotal += b.mass;
         cx += b.mass * b.pos.x;
         cy += b.mass * b.pos.y;
@@ -2601,7 +2602,7 @@ export class World {
     if (com === null) return 0.0;
     let total = 0.0;
     for (const b of this.bodies) {
-      if (b.invMass === 0.0 || b.isRodEndpoint) continue;
+      if (b.locked || b.held || b.mass <= 0.0 || b.isRodEndpoint) continue;
       const rx = b.pos.x - com.x;
       const ry = b.pos.y - com.y;
       total += b.mass * (rx * b.vel.y - ry * b.vel.x);

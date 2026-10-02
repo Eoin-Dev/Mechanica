@@ -3,7 +3,7 @@ import { Vec2 } from "../src/core/vec";
 import { Body, Wall } from "../src/engine/body";
 import { PULLEY_RADIUS, PulleyLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
-import { analysePulley, EventTracker, forceLedger, projectForce, slopeBasis } from "../src/education/analysis";
+import { analysePulley, EventTracker, forceLedger, projectForce, slopeBasis, touchingSlopeWall } from "../src/education/analysis";
 import { Contact } from "../src/engine/contacts";
 
 describe("playback event identity and chronology", () => {
@@ -60,6 +60,37 @@ describe("playback event identity and chronology", () => {
 });
 
 describe("education analysis", () => {
+  it("recognises current wall contact on either face and at a rounded endpoint without stepping", () => {
+    const wall = new Wall(new Vec2(-2, 0), new Vec2(2, 0));
+    wall.thickness = 0.1;
+    const body = new Body(new Vec2(0, 0.25), 0.2);
+    expect(touchingSlopeWall(body, wall)).toBe(true);
+    body.pos.y = -0.25;
+    expect(touchingSlopeWall(body, wall)).toBe(true);
+    body.pos.set(2.25, 0);
+    expect(touchingSlopeWall(body, wall)).toBe(true);
+    body.pos.x += 0.00001;
+    expect(touchingSlopeWall(body, wall)).toBe(false);
+    body.pos.set(0, 0.25); body.collides = false;
+    expect(touchingSlopeWall(body, wall)).toBe(false);
+    body.collides = true; wall.b.setVec(wall.a);
+    expect(touchingSlopeWall(body, wall)).toBe(false);
+  });
+
+  it("rejects a separated or foreign slope reference in the force ledger", () => {
+    const world = new World();
+    const wall = new Wall(new Vec2(-2, 0), new Vec2(2, 0));
+    wall.thickness = 0.1;
+    const body = new Body(new Vec2(0, 0.25), 0.2);
+    world.bodies.push(body); world.walls.push(wall);
+    expect(forceLedger(world, body, wall).basis?.wallId).toBe(wall.id);
+    body.pos.y = 1;
+    expect(forceLedger(world, body, wall).basis).toBeNull();
+    body.pos.y = 0.25; world.walls.length = 0;
+    expect(forceLedger(world, body, wall).basis).toBeNull();
+    expect(world.time).toBe(0);
+  });
+
   it("decomposes named forces and closes exactly to the realised resultant", () => {
     const world = new World();
     world.gravity = 9.8;

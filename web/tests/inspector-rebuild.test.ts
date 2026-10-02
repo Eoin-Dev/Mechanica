@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 /** Inspector structure keys must distinguish object kinds as well as IDs.
  * Refresh keeps the existing controls when the required layout is unchanged. */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/app";
 import { Body, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS, Wall } from "../src/engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
@@ -41,80 +41,208 @@ beforeEach(() => {
   localStorage.clear();
 });
 
-describe("Collision material guidance", () => {
-  it.each(["body", "anchor", "wall"] as const)("explains relative restitution and the material rule for a %s", kind => {
-    const { app, panel, inspector } = makeInspector();
-    const item = kind === "wall" ? new Wall(new Vec2(-2, 0), new Vec2(2, 0))
-      : new Body(new Vec2(0, 1));
-    if (item instanceof Body) {
-      item.isAnchor = kind === "anchor";
-      app.world.bodies.push(item);
-    } else app.world.walls.push(item);
-    app.setSelection([item]);
-    inspector.refresh();
-    const input = panel.querySelector<HTMLInputElement>('[aria-label="Restitution e (type an exact value)"]');
-    expect(input).not.toBeNull();
-    const model = panel.querySelector(".collision-model")!;
-    expect(model.textContent).toContain("lower");
-    expect(model.textContent).toContain("relative");
-    expect(model.textContent).toContain("not joined");
-    expect(model.querySelector("summary")!.textContent).toBe("How impacts work");
+describe("Centre-of-mass coordinates", () => {
+  function setup() {
+    const host = makeInspector();
+    const a = new Body(new Vec2(-2, 1), 0.15, 2);
+    const b = new Body(new Vec2(2, -1), 0.15, 3);
+    host.app.world.bodies.push(a, b);
+    [...host.panel.querySelectorAll<HTMLButtonElement>("[role=tab]")]
+      .find(tab => tab.textContent === "View")!.click();
+    const label = [...host.panel.querySelectorAll<HTMLLabelElement>("label.checkbox")]
+      .find(item => item.textContent === "Centre of mass")!;
+    const toggle = label.querySelector<HTMLInputElement>("input")!;
+    return { ...host, a, b, toggle };
+  }
+
+  it("offers opt-in, named, non-announcing coordinates with full stored precision", () => {
+    const { panel, inspector, toggle } = setup();
+    const model = panel.querySelector<HTMLElement>(".centre-model")!;
+    expect(model).not.toBeNull();
+    expect(model.hidden).toBe(true);
+    toggle.click(); inspector.refresh();
+    expect(model.hidden).toBe(false);
+    const x = model.querySelector<HTMLOutputElement>('[aria-label="Centre of mass x"]')!;
+    const y = model.querySelector<HTMLOutputElement>('[aria-label="Centre of mass y"]')!;
+    expect(x.textContent).toBe("0.4 m");
+    expect(y.textContent).toBe("-0.2 m");
+    expect(x.getAttribute("aria-live")).toBe("off");
+    expect(x.getAttribute("aria-description")).toBe("Full stored value: 0.4 m.");
+    expect(x.tabIndex).toBe(0);
   });
 
-  it("updates the selected material pair without replacing its disclosure or focused control", () => {
+  it("retains a focused readout through sleep, position updates and fresh world references", () => {
+    const { app, panel, inspector, b, toggle } = setup();
+    toggle.click(); inspector.refresh();
+    const model = panel.querySelector(".centre-model")!;
+    const x = model.querySelector<HTMLOutputElement>('[aria-label="Centre of mass x"]')!;
+    x.focus();
+    b.perfSleeping = true; b.pos.x = 4;
+    inspector.refresh();
+    expect(x.textContent).toBe("1.6 m");
+    expect(panel.querySelector(".centre-model")).toBe(model);
+    expect(document.activeElement).toBe(x);
+    const fresh = new Body(new Vec2(10, 2), 0.15, 1);
+    app.world.bodies = [fresh];
+    inspector.refresh();
+    expect(x.textContent).toBe("10 m");
+    expect(model.querySelector('[aria-label="Centre of mass y"]')!.textContent).toBe("2 m");
+    expect(document.activeElement).toBe(x);
+  });
+
+  it("explains an empty measured system and avoids stale coordinates", () => {
+    const { panel, inspector, a, b, toggle } = setup();
+    toggle.click(); inspector.refresh();
+    a.locked = true; b.held = true;
+    inspector.refresh();
+    const model = panel.querySelector(".centre-model")!;
+    expect(model.querySelector<HTMLElement>(".centre-readings")!.hidden).toBe(true);
+    const empty = model.querySelector<HTMLElement>(".centre-empty")!;
+    expect(empty.hidden).toBe(false);
+    expect(empty.textContent).toContain("No movable particles");
+    a.locked = false;
+    inspector.refresh();
+    expect(empty.hidden).toBe(true);
+    expect(model.querySelector('[aria-label="Centre of mass x"]')!.textContent).toBe("-2 m");
+    toggle.click(); inspector.refresh();
+    expect(panel.querySelector<HTMLElement>(".centre-model")!.hidden).toBe(true);
+  });
+
+  it("keeps fractional and tiny coordinates inspectable without changing physical data", () => {
+    const { panel, inspector, a, b, toggle } = setup();
+    a.pos.set(1 / 3, 1e-10); b.locked = true;
+    toggle.click(); inspector.refresh();
+    const x = panel.querySelector<HTMLOutputElement>('[aria-label="Centre of mass x"]')!;
+    const y = panel.querySelector<HTMLOutputElement>('[aria-label="Centre of mass y"]')!;
+    expect(x.textContent).toBe("0.333333333333 m");
+    expect(x.title).toBe("Full stored value: 0.3333333333333333 m.");
+    expect(x.getAttribute("aria-description")).toBe(x.title);
+    expect(y.textContent).toBe("1e-10 m");
+    expect(y.title).toBe("Full stored value: 1e-10 m.");
+    expect(a.pos).toEqual(new Vec2(1 / 3, 1e-10));
+  });
+
+  it("does no centre calculation while the measurement is disabled", () => {
+    const { app, inspector, toggle } = setup();
+    const measuring = vi.spyOn(app.world, "centreOfMass");
+    inspector.refresh(); inspector.refresh();
+    expect(measuring).not.toHaveBeenCalled();
+    toggle.click(); inspector.refresh();
+    expect(measuring).toHaveBeenCalled();
+    measuring.mockClear();
+    toggle.click(); inspector.refresh(); inspector.refresh();
+    expect(measuring).not.toHaveBeenCalled();
+  });
+
+  it("hides invalid measurements and recovers instead of displaying stale values", () => {
+    const { app, panel, inspector, toggle } = setup();
+    toggle.click(); inspector.refresh();
+    const readings = panel.querySelector<HTMLElement>(".centre-readings")!;
+    const empty = panel.querySelector<HTMLElement>(".centre-empty")!;
+    const measuring = vi.spyOn(app.world, "centreOfMass").mockReturnValue(new Vec2(Infinity, 0));
+    inspector.refresh();
+    expect(readings.hidden).toBe(true);
+    expect(empty.hidden).toBe(false);
+    expect(empty.textContent).toBe("Coordinates are unavailable.");
+    measuring.mockRestore(); inspector.refresh();
+    expect(readings.hidden).toBe(false);
+    expect(empty.hidden).toBe(true);
+    expect(panel.querySelector('[aria-label="Centre of mass x"]')!.textContent).toBe("0.4 m");
+  });
+});
+
+describe("Compact material controls", () => {
+  it.each(["body", "anchor", "wall", "bodies", "anchors", "walls"] as const)("offers matching hover-described controls for %s", kind => {
+    const { app, panel, inspector } = makeInspector();
+    const items = Array.from({ length: kind.endsWith("s") ? 2 : 1 }, (_, index) => {
+      const item = kind.startsWith("wall") ? new Wall(new Vec2(-2, index), new Vec2(2, index))
+        : new Body(new Vec2(index, 1));
+      if (item instanceof Body) {
+        item.isAnchor = kind.startsWith("anchor");
+        app.world.bodies.push(item);
+      } else app.world.walls.push(item);
+      return item;
+    });
+    app.setSelection(items); inspector.refresh();
+    const rows = [...panel.querySelectorAll<HTMLElement>(".material-control")];
+    expect(rows).toHaveLength(2);
+    expect(rows.map(row => row.querySelector(".lbl")!.textContent)).toEqual(["Restitution", "Friction"]);
+    for (const row of rows) {
+      const caption = row.querySelector<HTMLElement>(".lbl")!;
+      const range = row.querySelector<HTMLInputElement>('input[type="range"]')!;
+      const value = row.querySelector<HTMLInputElement>("input.val")!;
+      expect(caption.title).toBe(range.title);
+      expect(range.getAttribute("aria-description")).toBe(range.title);
+      expect(value.getAttribute("aria-description")).toBe(range.title);
+      expect(range.title).toContain("two materials");
+    }
+    expect(rows[0].querySelector<HTMLInputElement>('input[type="range"]')!.title).toContain("relative separation");
+    expect(rows[0].querySelector<HTMLInputElement>('input[type="range"]')!.title).toContain("without joining");
+    expect(rows[1].querySelector<HTMLInputElement>('input[type="range"]')!.title).toContain("√(μ₁ × μ₂)");
+    expect(panel.querySelector(".collision-model")).toBeNull();
+    expect(panel.textContent).not.toContain("Collision model");
+  });
+
+  it.each(["restitution", "friction"] as const)("commits an exact bulk %s edit and restores it with undo", property => {
     const { app, panel, inspector } = makeInspector();
     const a = new Body(new Vec2(-1, 0));
     const b = new Body(new Vec2(1, 0));
-    a.restitution = 1;
-    b.restitution = 0.6;
-    app.world.bodies.push(a, b);
-    app.setSelection([a, b]);
-    inspector.refresh();
-    const model = panel.querySelector(".collision-model")!;
-    const details = model.querySelector("details")!;
-    details.open = true;
-    const field = panel.querySelector<HTMLInputElement>('[aria-label="Restitution e (type an exact value)"]')!;
-    field.focus();
-    expect(model.querySelector(".collision-pair")!.textContent).toBe("Material pair e = 0.6");
-    b.restitution = 0.25;
-    inspector.refresh();
-    expect(model.querySelector(".collision-pair")!.textContent).toBe("Material pair e = 0.25");
-    expect(panel.querySelector(".collision-model")).toBe(model);
-    expect(model.querySelector("details")).toBe(details);
-    expect(details.open).toBe(true);
-    expect(document.activeElement).toBe(field);
+    a[property] = 0.1; b[property] = 0.6;
+    app.world.bodies.push(a, b); app.undoStack.reset(app.world);
+    app.setSelection([a, b]); inspector.refresh();
+    const label = property === "restitution" ? "Restitution" : "Friction";
+    const field = panel.querySelector<HTMLInputElement>(`[aria-label="${label} (type an exact value)"]`)!;
+    field.focus(); field.value = "0.75";
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(a[property]).toBe(0.75); expect(b[property]).toBe(0.75);
+    app.undo();
+    expect(app.world.bodies.map(body => body[property])).toEqual([0.1, 0.6]);
   });
 
-  it("shows one material rule for a mixed body and wall pair", () => {
+  it("retains focused material controls while values elsewhere change", () => {
+    const { app, panel, inspector } = makeInspector();
+    const a = new Body(new Vec2(-1, 0));
+    const b = new Body(new Vec2(1, 0));
+    app.world.bodies.push(a, b); app.setSelection([a, b]); inspector.refresh();
+    const group = panel.querySelector(".material-controls")!;
+    const field = panel.querySelector<HTMLInputElement>('[aria-label="Restitution (type an exact value)"]')!;
+    field.focus(); field.value = "0.7";
+    b.restitution = 0.25; inspector.refresh();
+    expect(panel.querySelector(".material-controls")).toBe(group);
+    expect(document.activeElement).toBe(field);
+    expect(field.value).toBe("0.7");
+  });
+
+  it.each([true, false])("makes a range gesture undoable on blur (change event: %s)", async change => {
+    const { app, panel, inspector } = makeInspector();
+    const a = new Body(new Vec2(-1, 0));
+    const b = new Body(new Vec2(1, 0));
+    a.friction = b.friction = 0;
+    app.world.bodies.push(a, b); app.undoStack.reset(app.world);
+    app.setSelection([a, b]); inspector.refresh();
+    const range = panel.querySelector<HTMLInputElement>('[aria-label="Friction"]')!;
+    range.focus(); range.value = "2000";
+    range.dispatchEvent(new Event("input", { bubbles: true }));
+    if (change) range.dispatchEvent(new Event("change", { bubbles: true }));
+    range.blur(); await Promise.resolve();
+    expect(app.world.bodies.map(body => body.friction)).toEqual([10, 10]);
+    app.undo();
+    expect(app.world.bodies.map(body => body.friction)).toEqual([0, 0]);
+  });
+
+  it("keeps body and wall material edits independent in a mixed selection", () => {
     const { app, panel, inspector } = makeInspector();
     const body = new Body(new Vec2(0, 1));
     const wall = new Wall(new Vec2(-2, 0), new Vec2(2, 0));
-    body.restitution = 0.8;
-    wall.restitution = 0.123456789;
-    app.world.bodies.push(body);
-    app.world.walls.push(wall);
-    app.setSelection([body, wall]);
-    inspector.refresh();
-    expect(panel.querySelectorAll(".collision-model")).toHaveLength(1);
-    expect(panel.querySelector(".collision-pair")!.textContent).toBe("Material pair e = 0.123456789");
-    wall.restitution = 0.9;
-    inspector.refresh();
-    expect(panel.querySelector(".collision-pair")!.textContent).toBe("Material pair e = 0.8");
-  });
-
-  it.each(["two walls", "three bodies"] as const)("does not invent a single collision pair for %s", kind => {
-    const { app, panel, inspector } = makeInspector();
-    if (kind === "two walls") {
-      app.world.walls.push(new Wall(new Vec2(-2, 0), new Vec2(2, 0)),
-        new Wall(new Vec2(-2, 2), new Vec2(2, 2)));
-      app.setSelection([...app.world.walls]);
-    } else {
-      app.world.bodies.push(...[-1, 0, 1].map(x => new Body(new Vec2(x, 1))));
-      app.setSelection([...app.world.bodies]);
-    }
-    inspector.refresh();
-    expect(panel.querySelectorAll(".collision-model")).toHaveLength(1);
-    expect(panel.querySelector(".collision-pair")).toBeNull();
+    body.friction = 0.3; wall.friction = 0.8;
+    app.world.bodies.push(body); app.world.walls.push(wall);
+    app.setSelection([body, wall]); inspector.refresh();
+    const fields = [...panel.querySelectorAll<HTMLInputElement>('[aria-label="Friction (type an exact value)"]')];
+    expect(fields).toHaveLength(2);
+    fields[1].focus(); fields[1].value = "0.9";
+    fields[1].dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(body.friction).toBe(0.3); expect(wall.friction).toBe(0.9);
+    expect(panel.querySelector(".collision-model")).toBeNull();
   });
 });
 
@@ -265,7 +393,8 @@ describe("Force values and sources", () => {
     body.showForceComponents = true;
     app.world.bodies.push(body);
     app.world.fields.push(new ForceField("<img src=x onerror=alert(1)>", "3", "0"));
-    const wall = new Wall(new Vec2(-2, -2), new Vec2(2, -2));
+    const wall = new Wall(new Vec2(-2, -0.25), new Vec2(2, -0.25));
+    wall.thickness = 0.1;
     app.world.walls.push(wall);
     body.forceSlopeWallId = wall.id;
     app.setSelection([body]);
@@ -362,6 +491,9 @@ describe("Pulley assembly navigation", () => {
     inspector.refresh();
     const parts = [...panel.querySelectorAll<HTMLButtonElement>(".pulley-part")];
     expect(parts).toHaveLength(4);
+    const body = panel.querySelector('[role="tabpanel"]')!;
+    expect(body.children[0].textContent).toBe("Pulley assembly");
+    expect(body.children[1].classList.contains("pulley-assembly")).toBe(true);
     expect(parts.filter(part => part.disabled)).toHaveLength(1);
     expect(parts.find(part => part.disabled)?.getAttribute("aria-current")).toBe("true");
     const destination = selected === "b" ? fixture.a : b;
@@ -386,6 +518,33 @@ describe("Pulley assembly navigation", () => {
     expect(part.textContent).toContain("4 kg");
     expect(part.querySelector("b")).toBeNull();
     expect(part.getAttribute("aria-label")).toBe("Select particle A: <b>Mass 📐</b>");
+  });
+
+  it("explains colon-separated pulley values without replacing a focused label", () => {
+    const { app, panel, inspector, wheel, a } = assembly();
+    app.setSelection([wheel]); inspector.refresh();
+    const readout = panel.querySelector('[aria-label="Pulley force and motion"]')!;
+    const names = [...readout.querySelectorAll<HTMLElement>(".pulley-reading-name")];
+    expect(names.map(name => name.textContent)).toEqual([
+      "Tension:", "Path:", "Leg rates:", "Constraint rate:", "Axle reaction:",
+    ]);
+    for (const name of names) {
+      expect(name.title.length).toBeGreaterThan(15);
+      expect(name.getAttribute("aria-description")).toBe(name.title);
+    }
+    names[2].focus();
+    const before = readout.textContent;
+    a.vel.y = 1;
+    inspector.refresh();
+    expect(readout.textContent).not.toBe(before);
+    expect(readout.querySelectorAll(".pulley-reading-name")[2]).toBe(names[2]);
+    expect(document.activeElement).toBe(names[2]);
+    const mutation = new MutationObserver(() => {});
+    mutation.observe(readout, { subtree: true, childList: true, attributes: true, characterData: true });
+    inspector.refresh(); inspector.refresh();
+    expect(mutation.takeRecords()).toEqual([]);
+    mutation.disconnect();
+    expect(app.undoStack.canUndo).toBe(false);
   });
 
   it("does not discard a recorded force interval when navigating the assembly", () => {
@@ -416,6 +575,44 @@ describe("Pulley assembly navigation", () => {
 });
 
 describe("Inspector structure key", () => {
+  it("limits slope references to current contacts and disables the retained control on separation", () => {
+    const { app, panel, inspector } = makeInspector();
+    const body = new Body(new Vec2(0, 0.25), 0.2);
+    const floor = new Wall(new Vec2(-2, 0), new Vec2(2, 0));
+    floor.thickness = 0.1;
+    const far = new Wall(new Vec2(-2, -3), new Vec2(2, -3));
+    app.world.bodies.push(body); app.world.walls.push(floor, far);
+    app.undoStack.reset(app.world);
+    app.setSelection([body]); inspector.refresh();
+    const slope = panel.querySelector<HTMLSelectElement>('[aria-label="Resolve forces relative to a slope"]')!;
+    expect([...slope.options].map(option => option.value)).toEqual(["", String(floor.id)]);
+    expect(slope.disabled).toBe(false);
+    slope.value = String(floor.id);
+    slope.dispatchEvent(new Event("change"));
+    expect(body.forceSlopeWallId).toBe(floor.id);
+    slope.focus(); floor.name = "Contact plane";
+    inspector.refresh();
+    expect(slope.options[1].text).toBe("Contact plane");
+    expect(document.activeElement).toBe(slope);
+    body.pos.y = 1;
+    inspector.refresh();
+    expect(panel.querySelector('[aria-label="Resolve forces relative to a slope"]')).toBe(slope);
+    expect(slope.disabled).toBe(true);
+    expect(slope.parentElement?.classList.contains("disabled")).toBe(true);
+    expect(slope.title).toBe("No slope in contact.");
+    expect(slope.parentElement?.title).toBe(slope.title);
+    expect(slope.getAttribute("aria-description")).toBe(slope.title);
+    expect(body.forceSlopeWallId).toBeNull();
+    expect([...slope.options].map(option => option.value)).toEqual([""]);
+    expect(app.world.time).toBe(0);
+    expect(app.undoStack.canUndo).toBe(false);
+    body.pos.y = 0.25;
+    inspector.refresh();
+    expect(slope.disabled).toBe(false);
+    slope.value = String(far.id); slope.dispatchEvent(new Event("change"));
+    expect(body.forceSlopeWallId).toBeNull();
+  });
+
   it("explains current versus averaged force diagrams while retaining the focused checkbox", () => {
     const { app, panel, inspector } = makeInspector();
     const body = new Body(new Vec2(0, 1), 0.2, 2);

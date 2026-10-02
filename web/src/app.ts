@@ -364,16 +364,11 @@ export class App {
     return this.settings.cull ?? true;
   }
 
-  /** Whether a body being dragged is stopped by walls.
-   *
-   * Off by default, which is the long-standing behaviour: a held body is
-   * infinite mass so it tracks the cursor exactly, and the contact solver
-   * skips infinite-mass-vs-wall pairs, so it passes through scenery. That
-   * is genuinely useful for placing something on the far side of a wall,
-   * and it is also how every existing scene was built - so it stays the
-   * default and the solid behaviour is opt-in. */
+  /** Dragged particles stop at walls by default; an explicit saved preference
+   * can allow placement through scenery. This is an editing sweep, separate
+   * from the simulation's treatment of a held body's infinite mass. */
   get dragHitsWalls(): boolean {
-    return this.settings.drag_hits_walls ?? false;
+    return this.settings.drag_hits_walls ?? true;
   }
 
   setDragHitsWalls(on: boolean): void {

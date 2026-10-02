@@ -9,7 +9,7 @@ import { css, lighten } from "../ui/theme";
 import { Camera, niceNumber } from "./camera";
 import { Trail } from "./trail";
 import { ParticleAtlas } from "./particle-atlas";
-import { AnalysisCard, AnalysisLabel, analysisNumber, drawAnalysisOverlays } from "./analysis-overlays";
+import { AnalysisVector, AnalysisLabel, analysisNumber, drawAnalysisOverlays } from "./analysis-overlays";
 
 // world metres of arrow length per unit of the quantity, at vector scale 1
 export const VEL_ARROW_SCALE = 0.15;
@@ -1068,7 +1068,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   // field check; force-ledger access runs solely for particles whose Inspector
   // toggle is active and uses the recorded interval after a completed step.
   const fbdLabels: AnalysisLabel[] = [];
-  const slopeCards: AnalysisCard[] = [];
+  const fbdVectors: AnalysisVector[] = [];
   const forceColour = (entry: ForceEntry): Color => {
     if (entry.kind === "weight") return theme.BAD;
     if (entry.kind === "reaction") return theme.GOOD;
@@ -1110,15 +1110,10 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
       if (Math.hypot(ex - sx, ey - sy) >= vectorMinLengthPx) {
         fbdLabels.push({ text: `${forceSymbol(entry)} ${analysisNumber(Math.hypot(entry.fx, entry.fy))} N`,
           x: ex, y: ey, color, right: ex >= sx });
+        fbdVectors.push({ x1: sx, y1: sy, x2: ex, y2: ey });
       }
     }
     if (ledger.basis !== null) {
-      const rows = ledger.entries.map((entry) => {
-        const resolved = projectForce(entry, ledger.basis!);
-        return { symbol: forceSymbol(entry), parallel: resolved.parallel,
-          normal: resolved.normal, color: forceColour(entry) };
-      });
-      if (rows.length > 0) slopeCards.push({ x: sx + 38, y: sy + 26, rows });
       const parallel = projectForce(ledger.resultant, ledger.basis).parallel;
       const normal = projectForce(ledger.resultant, ledger.basis).normal;
       for (const component of [
@@ -1135,6 +1130,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
         if (Math.hypot(ex - sx, ey - sy) >= vectorMinLengthPx) {
           fbdLabels.push({ text: `${component.text} ${analysisNumber(component.value)} N`,
             x: ex, y: ey, color: component.color, right: ex >= sx });
+          fbdVectors.push({ x1: sx, y1: sy, x2: ex, y2: ey });
         }
       }
     }
@@ -1258,7 +1254,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     }
   }
   // Draw readable analysis surfaces after scene geometry and force arrows.
-  drawAnalysisOverlays(ctx, fbdLabels, slopeCards, areaW, areaH, textScale);
+  drawAnalysisOverlays(ctx, fbdLabels, fbdVectors, areaW, areaH, textScale);
   if (pointer !== null && tensionHoverD2 < 49.0) {
     drawForceTooltip(ctx, pointer, tensionHoverFx, tensionHoverFy, areaW, areaH);
   }

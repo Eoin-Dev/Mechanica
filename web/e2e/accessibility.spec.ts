@@ -110,7 +110,10 @@ test("shared Inspector colour and select controls fit themes and enlarged text",
           const labelFits = probe.measureText(labelNode.textContent!).width <= labelNode.clientWidth + 1;
           const css = getComputedStyle(value);
           probe.font = `${css.fontSize} ${css.fontFamily}`;
-          return { labelBottom: label.bottom, trackTop: track.top,
+          return { inline: row.classList.contains("material-control"),
+            labelBottom: label.bottom, trackTop: track.top,
+            labelY: (label.top + label.bottom) / 2, trackY: (track.top + track.bottom) / 2,
+            trackWidth: track.width,
             labelFits,
             textWidth: probe.measureText(value.value).width,
             available: value.clientWidth - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight) };
@@ -119,7 +122,10 @@ test("shared Inspector colour and select controls fit themes and enlarged text",
       expect(sliders.length).toBeGreaterThan(0);
       for (const slider of sliders) {
         expect(slider.labelFits).toBe(true);
-        expect(slider.trackTop).toBeGreaterThanOrEqual(slider.labelBottom);
+        if (slider.inline) {
+          expect(Math.abs(slider.trackY - slider.labelY)).toBeLessThan(1);
+          expect(slider.trackWidth).toBeGreaterThanOrEqual(24);
+        } else expect(slider.trackTop).toBeGreaterThanOrEqual(slider.labelBottom);
         expect(slider.textWidth).toBeLessThanOrEqual(slider.available + 1);
       }
       const materialsFit = await inspector.locator(".btn-grid > button").evaluateAll(buttons => {

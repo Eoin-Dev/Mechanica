@@ -690,11 +690,14 @@ deterministic bounded subset of mutual-gravity pairs for drift readouts; the
 - subdivision need for the application scheduler.
 
 Energy uses `kEff` for spring potential so it reports the spring actually
-applied by the solver. Locked/held bodies are excluded from dynamic energy and
-momentum. Mutual-gravity energy follows the same softened and solid-interior
+applied by the solver. Locked/held bodies, non-positive masses and internal rod
+coordinates are excluded from dynamic energy, momentum, centre of mass and
+angular momentum. Performance sleeping suppresses solver work without removing
+a particle's physical mass from those measurements. Mutual-gravity energy follows the same softened and solid-interior
 model as the force.
 Performance sleeping keeps a dynamic body's uniform-gravity potential energy;
-sleep/wake alone does not remove or restore that energy. A singular unsoftened
+sleep/wake alone does not remove or restore that energy or move the measured
+centre. Angular momentum remains referenced to the same physical centre. A singular unsoftened
 point-mass overlap can have non-finite potential energy. The drift readout shows
 `unavailable` when its current energy or reference energy is non-finite.
 

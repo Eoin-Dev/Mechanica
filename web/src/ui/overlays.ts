@@ -911,13 +911,14 @@ const GETTING_STARTED: Array<[string, string, string]> = [
    "is two clicks and a chain is a few more."],
   ["4", "Change the physics",
    "Select anything and the Inspector edits it live - mass, restitution e, " +
-   "friction. Collision model explains relative impact speeds and the material pair rule. " +
+   "friction. Hover the material labels or sliders for their definitions. " +
    "Select an elastic string or spring to enter modulus λ in " +
    "newtons and inspect extension, ideal force and energy. The World tab has gravity, air drag, N-body attraction and " +
    "custom force fields you write as formulas."],
   ["5", "Measure it",
    "Select a particle to edit its position and velocity or show free-body " +
-   "forces on the canvas. View offers velocity and acceleration arrows. " +
+   "forces on the canvas. View offers velocity and acceleration arrows, " +
+   "plus a centre-of-mass marker and coordinate readings. " +
    "Graphs compares signed displacement, distance travelled and velocity " +
    "over time, alongside energy, momentum and phase space. World records " +
    "and pauses at events. Clear graph data to measure from a new zero; " +

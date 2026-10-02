@@ -287,7 +287,8 @@ and a second touch restore temporary drag state before committing the final
 position. A press that never crosses the activation threshold is unchanged and
 creates no history entry.
 
-When dragged-wall collision is enabled, both paused and running drags call the
+Dragged-wall collision is enabled on first use and preserves an explicit saved
+preference. When enabled, both paused and running drags call the
 engine's kinematic capsule sweep. The default is disabled because passing a
 held body through scenery is useful for editing and is the established scene
 construction behavior.
@@ -376,19 +377,20 @@ For a single object it exposes type-specific state:
 - a read-only pulley-wheel explanation with position dragging and deletion as
   its only physical editing actions, plus the pulley tension-overlay toggle.
 
-Material controls label the coefficient as Restitution e, with the complete
-caption and exact value above a full-width track in every single/bulk context.
-The themed Collision model card explains relative normal approach/separation
-speed and the lower material-coefficient rule. How impacts work is a native keyboard-operated
-disclosure covering smooth tangential motion, zero-restitution non-attachment,
-ideal particle setup and non-isolated/Performance limits. A mixed selection
-gets one shared card rather than a duplicate for each group. Exactly two
-selected materials including a body expose a live Material pair e output;
-it describes the material combination without claiming the objects contact.
-The output, disclosure and focused controls remain attached during refresh.
+Restitution and Friction retain matched compact inline label–slider–value rows at
+all Inspector widths, including enlarged text, with
+shared columns and narrow gaps. Native `title` help on both labels and sliders
+appears after the pointer rests over them; `aria-description` exposes the same
+physics guidance to assistive technology. Restitution explains the relative
+normal-speed ratio and lower material rule; friction explains the geometric
+mean of the material coefficients and the Coulomb limit. Guidance does not
+occupy a persistent card or duplicate a selected-pair readout. Exact entries,
+range keyboard controls, undo and retained focus follow the shared control
+lifecycle in both single and grouped selections.
 
 Selecting either pulley particle, its wheel or its string exposes a Pulley
-assembly group. Its four labelled rows navigate directly to Particle A,
+assembly group at the top of the Selection tab, before the selected part's
+controls. Its four labelled rows navigate directly to Particle A,
 Particle B, Wheel and String, showing the particle names/masses, fixed-axle
 status and total string length. The current row is disabled and marked with
 `aria-current`; the other rows support ordinary button keyboard activation.
@@ -401,6 +403,12 @@ Pulley membership participates in the particle's structure key so dismantling
 an assembly removes its navigation and restores ordinary radius editing.
 Single- and multi-selected pulley strings label their slider String length;
 its tooltip explains that both straight legs and the wrapped arc are included.
+The wheel's analysis reads Tension, Path, Leg rates, Constraint rate and Axle
+reaction with a colon before each value. The retained labels offer brief native
+hover help and the same accessible descriptions when focused; unchanged
+refreshes perform no readout DOM writes. Path compares current and natural
+lengths, positive leg rates mean lengthening, and axle reaction lists right/up
+support components.
 
 Ordinary name, mass, colour and other value commits keep the current controls
 when the structure key is unchanged. A subsequent focused edit therefore
@@ -440,6 +448,12 @@ the same ledger and interval as the arrows, retains unchanged rows/focus, and
 remains a complete text alternative when a dense diagram crowds the canvas.
 Each component keeps its axis, value and unit together; paired columns become
 one column in a narrow or enlarged Inspector.
+Slope reference offers only walls currently touching the selected colliding
+particle, including capsule endpoints and either face. The options use current
+geometry, without requiring a step or relying on old contact records. With no
+contact the control is disabled and grey, with brief hover help: No slope in
+contact. Separation or removal clears the old reference; returning to contact
+enables the same retained control.
 Before a recorded step, or after an edit/restore, it
 previews current applied forces and prompts a step for link/contact forces.
 It does not reuse old solver multipliers or infer reactions from stale motion.
@@ -450,14 +464,16 @@ their final simulation pass so the paused result has recorded forces. An optiona
 wall reference also shows components parallel and perpendicular to that slope.
 Force captions use opaque themed surfaces, readable neutral text and coloured
 association cues, with bounded attempts to separate nearby captions. Their
-positions stay inside the canvas, including when the force arrow extends
+placement protects the enabled diagram's arrow shafts and tips, searching
+progressively wider positions when the preferred caption would obscure a
+vector. The same protection applies to parallel/normal arrows.
+Caption positions stay inside the canvas, including when the force arrow extends
 beyond it. They follow the Font size preference and the same Normal/Performance
 visibility threshold as the arrows. Large and tiny nonzero values use compact
 scientific notation without losing their sign. Diagrams belonging to particles
 outside the visible scene are culled before their captions can pin to an edge.
-Slope cards use measured columns, stack component pairs when space is tight,
-and explicitly indicate
-additional forces when their height is capped; the disclosure lists them all.
+Slope components are labelled on their arrows without a duplicate canvas card;
+the disclosure retains each source's exact signed components.
 Finite screen space can still crowd diagrams with many enabled forces.
 While this per-particle diagram is active, the selected body's default editable
 green velocity handle is hidden to avoid overlapping the force arrows; the
@@ -513,6 +529,16 @@ contacts, spatial grid, and graph mode. These are application/view state, not
 scene JSON. Performance mode disables the Motion trails and Trail length
 controls and displays an explanatory banner. The Normal-mode trail choice is
 preserved for restoration when Performance mode is turned off.
+
+Enabling Centre of mass exposes retained, compact Centre x/y readouts in
+metres. The mass-weighted coordinates follow the current world across motion,
+edits, sleep/wake and scene replacement. Values use twelve significant figures
+for reading; focusable native outputs expose full stored precision through
+`aria-description` and their hover title. Live regions are disabled so motion
+does not produce continuous announcements. No centre calculation runs while
+disabled; an empty or invalid measurement replaces the values. The toggle’s
+hover help explains particle ownership and coordinate signs. Sleeping particles
+retain their mass.
 
 ## Camera and framing
 
@@ -767,7 +793,10 @@ underlying scene edits and playback shortcuts cannot run through it.
   track stop before a configurable positive floor. Friction uses that mapping
   from exact `0` through `0.01..10`, while the toolbar Speed control uses a
   60% logarithmic blend so ordinary rates are less compressed. Paired
-  numeric input allows exact edits and commit/revert behavior.
+  numeric input allows exact edits and commit/revert behavior. Range gestures
+  commit on change, cancellation or blur, so keyboard changes remain undoable
+  even when the browser does not send change before focus moves. Duplicate end
+  events do not create additional commits.
 - `RefreshGroup` polls controls and optionally culls scrolled-out refresh work.
 - `wireTabs` and `refreshTabs` implement the roving-focus ARIA tab pattern with
   Left/Right wrapping and Home/End navigation.
@@ -813,9 +842,10 @@ so native controls that render a text value still show a colour surface. Select
 rows place their label above the full-width dropdown and use the same scalable
 font as the other fields.
 The Inspector is an inline-size query container: below 18 em of available
-width, slider tracks move below their label/value row and exact-value inputs
-scale wide enough for their units. Material grids use two columns there to
-retain complete words; action grids use shrinkable tracks and wrapping button
+width, general slider tracks move below their label/value row and exact-value inputs
+scale wide enough for their units. Material grids use two columns there and one
+column below 12 em to retain complete names with enlarged text. Centre readings
+also stack at narrow/enlarged widths. Action grids use shrinkable tracks and wrapping button
 text, keeping the selection controls inside narrow panes.
 
 ## Panels and overlays

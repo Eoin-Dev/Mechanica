@@ -5,9 +5,8 @@ import * as theme from "../ui/theme";
 export interface AnalysisLabel {
   text: string; x: number; y: number; color: Color; right: boolean;
 }
-export interface AnalysisCard {
-  x: number; y: number;
-  rows: Array<{ symbol: string; parallel: number; normal: number; color: Color }>;
+export interface AnalysisVector {
+  x1: number; y1: number; x2: number; y2: number;
 }
 interface Box { x: number; y: number; width: number; height: number; }
 
@@ -18,36 +17,79 @@ export function analysisNumber(value: number): string {
     ? value.toExponential(2) : value.toFixed(2);
 }
 
+/** Segment/rectangle clipping also protects diagonal shafts and arrowheads. */
+function crosses(vector: AnalysisVector, box: Box, padding: number): boolean {
+  let lo = 0, hi = 1;
+  const dx = vector.x2 - vector.x1, dy = vector.y2 - vector.y1;
+  const left = box.x - padding, right = box.x + box.width + padding;
+  const top = box.y - padding, bottom = box.y + box.height + padding;
+  if (Math.abs(dx) < 1e-12) {
+    if (vector.x1 < left || vector.x1 > right) return false;
+  } else {
+    const a = (left - vector.x1) / dx, b = (right - vector.x1) / dx;
+    lo = Math.max(lo, Math.min(a, b)); hi = Math.min(hi, Math.max(a, b));
+    if (lo > hi) return false;
+  }
+  if (Math.abs(dy) < 1e-12) {
+    if (vector.y1 < top || vector.y1 > bottom) return false;
+  } else {
+    const a = (top - vector.y1) / dy, b = (bottom - vector.y1) / dy;
+    lo = Math.max(lo, Math.min(a, b)); hi = Math.min(hi, Math.max(a, b));
+    if (lo > hi) return false;
+  }
+  return true;
+}
+
+// Compute wider search directions once, rather than rebuilding trigonometric
+// offsets for every label. Ordinary preferred placements stop before using them.
+const SEARCH_DIRECTIONS = Array.from({ length: 64 }, (_, i) => {
+  const ring = 1 + Math.floor(i / 16), angle = (i % 16) * Math.PI / 8;
+  return { x: Math.cos(angle) * ring, y: Math.sin(angle) * ring };
+});
+
 function placeBox(x: number, y: number, width: number, height: number,
-                  areaW: number, areaH: number, occupied: Box[]): Box {
+                  areaW: number, areaH: number, occupied: Box[],
+                  vectors: AnalysisVector[], scale: number): Box {
   const inset = 6;
   const clamp = (px: number, py: number): Box => ({
     x: Math.max(inset, Math.min(areaW - width - inset, px)),
     y: Math.max(inset, Math.min(areaH - height - inset, py)), width, height,
   });
-  const overlaps = (box: Box): boolean => {
-    // Bound dense opt-in annotation work; ordinary scenes retain every box.
+  const preferred = clamp(x, y);
+  let best = preferred, bestScore = Infinity;
+  // Search nearby positions first, then progressively wider rings. Both
+  // candidate count and obstacle work stay bounded in dense opt-in diagrams.
+  for (let i = 0; i < 5 + SEARCH_DIRECTIONS.length; i++) {
+    let dx = 0, dy = 0;
+    if (i === 1) dy = height + 8;
+    else if (i === 2) dy = -height - 8;
+    else if (i === 3) dx = -width - 12;
+    else if (i === 4) dx = width + 12;
+    else if (i >= 5) {
+      dx = SEARCH_DIRECTIONS[i - 5].x * (width + 12);
+      dy = SEARCH_DIRECTIONS[i - 5].y * (height + 12);
+    }
+    const candidate = clamp(x + dx, y + dy);
+    let penalty = 0;
     for (let i = Math.max(0, occupied.length - 128); i < occupied.length; i++) {
       const other = occupied[i];
-      if (box.x < other.x + other.width + 4 && box.x + width + 4 > other.x &&
-          box.y < other.y + other.height + 4 && box.y + height + 4 > other.y) return true;
+      if (candidate.x < other.x + other.width + 4 && candidate.x + width + 4 > other.x &&
+          candidate.y < other.y + other.height + 4 && candidate.y + height + 4 > other.y) penalty += 10;
     }
-    return false;
-  };
-  const preferred = clamp(x, y);
-  for (const [dx, dy] of [
-    [0, 0], [0, height + 8], [0, -height - 8],
-    [-width - 12, 0], [width + 12, 0],
-    [0, 2 * (height + 8)], [0, -2 * (height + 8)],
-    [-width - 12, height + 8], [width + 12, height + 8],
-  ]) {
-    const candidate = clamp(x + dx, y + dy);
-    if (!overlaps(candidate)) { occupied.push(candidate); return candidate; }
+    for (let i = Math.max(0, vectors.length - 128); i < vectors.length; i++) {
+      const vector = vectors[i];
+      if (crosses(vector, candidate, 7 * scale)) penalty += 20;
+      if (vector.x2 >= candidate.x - 7 * scale && vector.x2 <= candidate.x + width + 7 * scale &&
+          vector.y2 >= candidate.y - 7 * scale && vector.y2 <= candidate.y + height + 7 * scale) penalty += 40;
+    }
+    if (penalty === 0) { occupied.push(candidate); return candidate; }
+    const score = penalty + Math.hypot(candidate.x - preferred.x, candidate.y - preferred.y) * 0.001;
+    if (score < bestScore) { best = candidate; bestScore = score; }
   }
-  // A crowded scene has finite screen space. Keep its numeric labels on the
-  // canvas even if local separation is exhausted; full sources remain in UI.
-  occupied.push(preferred);
-  return preferred;
+  // Finite screen space may prevent full separation. Prefer the least
+  // obstructive candidate; the source disclosure retains all exact values.
+  occupied.push(best);
+  return best;
 }
 
 function surface(ctx: CanvasRenderingContext2D, box: Box): void {
@@ -59,80 +101,20 @@ function surface(ctx: CanvasRenderingContext2D, box: Box): void {
 }
 
 export function drawAnalysisOverlays(ctx: CanvasRenderingContext2D,
-    labels: AnalysisLabel[], cards: AnalysisCard[], areaW: number, areaH: number,
+    labels: AnalysisLabel[], vectors: AnalysisVector[], areaW: number, areaH: number,
     textScale = 1): void {
-  if (labels.length === 0 && cards.length === 0) return;
+  if (labels.length === 0 || areaW < 24 || areaH < 24) return;
   const scale = Number.isFinite(textScale) ? Math.max(0.9, Math.min(2, textScale)) : 1;
   const occupied: Box[] = [];
   ctx.save();
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
-  for (const card of cards) {
-    ctx.font = `${12 * scale}px system-ui, sans-serif`;
-    const allAlong = card.rows.map(row => analysisNumber(row.parallel));
-    const allNormal = card.rows.map(row => analysisNumber(row.normal));
-    const numberWidth = Math.max(ctx.measureText("∥ Along").width,
-      ctx.measureText("⊥ Normal").width,
-      ...allAlong.map(value => ctx.measureText(value).width),
-      ...allNormal.map(value => ctx.measureText(value).width));
-    const columnWidth = numberWidth + 14 * scale;
-    const width = Math.min(areaW - 12, Math.max(198 * scale, 36 * scale + 2 * columnWidth));
-    const compact = 36 * scale + 2 * columnWidth > width;
-    ctx.font = `600 ${12 * scale}px system-ui, sans-serif`;
-    const heading: string[] = [];
-    let line = "";
-    for (const word of ["Slope", "components", "(N)"]) {
-      const next = line ? `${line} ${word}` : word;
-      if (line && ctx.measureText(next).width > width - 18 * scale) {
-        heading.push(line); line = word;
-      } else line = next;
-    }
-    heading.push(line);
-    const headerHeight = (11 + heading.length * 17 + (compact ? 2 : 19)) * scale;
-    const rowHeight = (compact ? 38 : 19) * scale;
-    const maxRows = Math.max(1, Math.floor((areaH - 12 - headerHeight - 44 * scale) / rowHeight));
-    const rows = card.rows.slice(0, maxRows);
-    const omitted = card.rows.length - rows.length;
-    const along = allAlong.slice(0, maxRows), normal = allNormal.slice(0, maxRows);
-    const height = headerHeight + rows.length * rowHeight + (omitted > 0 ? 44 : 9) * scale;
-    const box = placeBox(card.x, card.y, width, height, areaW, areaH, occupied);
-    surface(ctx, box);
-    ctx.fillStyle = theme.css(theme.TEXT);
-    ctx.font = `600 ${12 * scale}px system-ui, sans-serif`;
-    for (let i = 0; i < heading.length; i++) {
-      ctx.fillText(heading[i], box.x + 9 * scale, box.y + (17 + i * 17) * scale);
-    }
-    ctx.font = `${12 * scale}px system-ui, sans-serif`;
-    const firstColumn = box.x + 30 * scale;
-    const secondColumn = firstColumn + (width - 40 * scale) / 2;
-    ctx.fillStyle = theme.css(theme.TEXT_DIM);
-    if (!compact) {
-      ctx.fillText("∥ Along", firstColumn, box.y + headerHeight - 5 * scale);
-      ctx.fillText("⊥ Normal", secondColumn, box.y + headerHeight - 5 * scale);
-    }
-    for (let i = 0; i < rows.length; i++) {
-      const baseline = box.y + headerHeight + 14 * scale + i * rowHeight;
-      ctx.fillStyle = theme.css(rows[i].color);
-      ctx.fillRect(box.x + 5 * scale, baseline - 9 * scale, 2 * scale, 11 * scale);
-      ctx.fillStyle = theme.css(theme.TEXT);
-      ctx.fillText(rows[i].symbol, box.x + 11 * scale, baseline);
-      ctx.fillText(compact ? `∥ ${along[i]}` : along[i], firstColumn, baseline);
-      ctx.fillText(compact ? `⊥ ${normal[i]}` : normal[i], compact ? firstColumn : secondColumn,
-        baseline + (compact ? 19 * scale : 0));
-    }
-    if (omitted > 0) {
-      ctx.fillStyle = theme.css(theme.TEXT_DIM);
-      ctx.font = `${10 * scale}px system-ui, sans-serif`;
-      ctx.fillText(`+${omitted} more forces`, box.x + 9 * scale, box.y + height - 25 * scale);
-      ctx.fillText("Open Force values", box.x + 9 * scale, box.y + height - 10 * scale);
-    }
-  }
   ctx.font = `600 ${12 * scale}px system-ui, sans-serif`;
   for (const label of labels) {
     const width = Math.min(areaW - 12, ctx.measureText(label.text).width + 18 * scale);
     const height = 24 * scale;
     const preferredX = label.right ? label.x + 7 : label.x - width - 7;
-    const box = placeBox(preferredX, label.y - height - 6, width, height, areaW, areaH, occupied);
+    const box = placeBox(preferredX, label.y - height - 6, width, height, areaW, areaH, occupied, vectors, scale);
     const anchorX = Math.max(0, Math.min(areaW, label.x));
     const anchorY = Math.max(0, Math.min(areaH, label.y));
     const edgeX = Math.max(box.x, Math.min(box.x + width, anchorX));

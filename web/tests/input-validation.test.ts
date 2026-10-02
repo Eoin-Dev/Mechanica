@@ -138,6 +138,28 @@ describe("invalid input survives panel refresh", () => {
     expect(value).toBe(0.95);
   });
 
+  it.each(["blur", "change", "pointercancel"])("commits a range edit once on %s and resumes external refresh", ending => {
+    let value = 0;
+    const committed = vi.fn();
+    const control = slider("Friction", () => value, v => { value = v; }, 0, 10,
+      { onCommit: committed });
+    document.body.append(control.root);
+    const track = control.root.querySelector<HTMLInputElement>("[type=range]")!;
+    track.focus();
+    track.value = "2000";
+    track.dispatchEvent(new Event("input"));
+    expect(value).toBe(10);
+    if (ending === "blur") track.blur();
+    else track.dispatchEvent(new Event(ending));
+    track.blur();
+    track.dispatchEvent(new Event("change"));
+    expect(committed).toHaveBeenCalledTimes(1);
+    value = 0;
+    control.refresh!();
+    expect(track.value).toBe("0");
+    expect(control.root.querySelector<HTMLInputElement>(".val")!.value).toBe("0");
+  });
+
   it("names both colour inputs and preserves an invalid hex entry", () => {
     const setter = vi.fn();
     const control = colourEdit("Body", () => [1, 2, 3], setter, { presets: [[1, 2, 3]] });

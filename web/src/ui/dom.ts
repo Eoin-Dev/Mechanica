@@ -580,6 +580,9 @@ export function slider(label: string, get: () => number,
   };
   input.addEventListener("change", finishDrag);
   input.addEventListener("pointercancel", finishDrag);
+  // If focus leaves without a change event, still commit the applied value.
+  // The guard prevents a second commit when change already ended the gesture.
+  input.addEventListener("blur", finishDrag);
 
   // The readout is a text field: clicking it lets you type an exact value.
   // Typed values are clamped to the slider's range (and its step, if any).

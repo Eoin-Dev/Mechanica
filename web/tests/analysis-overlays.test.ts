@@ -77,47 +77,46 @@ describe("scientific canvas annotations", () => {
     expect(capture.surfaces.filter(box => box.colour === theme.css(theme.ACCENT_HOT))).toHaveLength(4);
   });
 
-  it("keeps large and small signed slope components complete on a narrow canvas", () => {
+  it.each([1, 1.2, 2])("keeps weight captions clear of other arrow tips and diagonal shafts at scale %s", scale => {
     const capture = recorder();
-    drawAnalysisOverlays(capture.ctx, [], [{ x: 230, y: 150, rows: [
-      { symbol: "F", parallel: -1.23e8, normal: 0.0004, color: theme.ACCENT_HOT },
-      { symbol: "W", parallel: 12.5, normal: -19.6, color: theme.BAD },
-    ] }], 268, 220, 1.2);
-    expect(capture.text.map(row => row.text)).toEqual([
-      "Slope components (N)", "∥ Along", "⊥ Normal", "F", "-1.23e+8", "4.00e-4", "W", "12.50", "-19.60",
-    ]);
+    const vectors = [
+      { x1: 400, y1: 220, x2: 400, y2: 390 },
+      { x1: 400, y1: 220, x2: 330, y2: 365 },
+      { x1: 400, y1: 220, x2: 480, y2: 260 },
+    ];
+    drawAnalysisOverlays(capture.ctx, [
+      { text: "W 9.81 N", x: 400, y: 390, color: theme.BAD, right: false },
+      { text: "F⊥ -8.89 N", x: 330, y: 365, color: theme.ACC_COLOR, right: false },
+      { text: "F∥ 4.15 N", x: 480, y: 260, color: theme.SELECTION, right: true },
+    ], vectors, 800, 600, scale);
+    const boxes = capture.surfaces.filter(box => box.colour === theme.css(theme.PANEL));
+    expect(boxes).toHaveLength(3);
+    for (const box of boxes) for (const vector of vectors) {
+      // Sample the rendered shaft independently of the layout's clipping code.
+      for (let step = 0; step <= 40; step++) {
+        const x = vector.x1 + (vector.x2 - vector.x1) * step / 40;
+        const y = vector.y1 + (vector.y2 - vector.y1) * step / 40;
+        const dx = Math.max(box.x - x, 0, x - box.x - box.width);
+        const dy = Math.max(box.y - y, 0, y - box.y - box.height);
+        expect(Math.hypot(dx, dy)).toBeGreaterThanOrEqual(7 * scale - 1e-9);
+      }
+    }
+    expect(capture.text.some(row => row.text.includes("Slope components"))).toBe(false);
+  });
+
+  it("keeps large and small signed component arrow labels complete on a narrow canvas", () => {
+    const capture = recorder();
+    drawAnalysisOverlays(capture.ctx, [
+      { text: "F∥ -1.23e+8 N", x: 230, y: 150, color: theme.SELECTION, right: true },
+      { text: "F⊥ 4.00e-4 N", x: 230, y: 150, color: theme.ACC_COLOR, right: true },
+    ], [], 268, 220, 1.2);
+    expect(capture.text.map(row => row.text)).toEqual(["F∥ -1.23e+8 N", "F⊥ 4.00e-4 N"]);
     for (const row of capture.text) {
       expect(row.x).toBeGreaterThanOrEqual(0);
       expect(row.y).toBeGreaterThanOrEqual(0);
       expect(row.x + row.width).toBeLessThanOrEqual(268);
       expect(row.y + row.height).toBeLessThanOrEqual(220);
       expect(row.background).toBe(theme.css(theme.PANEL));
-    }
-  });
-
-  it("bounds an overfull component card and explicitly reports omitted rows", () => {
-    const capture = recorder();
-    const rows = Array.from({ length: 64 }, () => ({ symbol: "F", parallel: 3, normal: 4, color: theme.ACCENT_HOT }));
-    drawAnalysisOverlays(capture.ctx, [], [{ x: 10, y: 10, rows }], 320, 240);
-    expect(capture.text.some(row => /^\+\d+ more forces$/.test(row.text))).toBe(true);
-    expect(capture.text.some(row => row.text === "Open Force values")).toBe(true);
-    expect(rows).toHaveLength(64);
-    for (const row of capture.text) {
-      expect(row.y + row.height).toBeLessThanOrEqual(240);
-      expect(row.x + row.width).toBeLessThanOrEqual(320);
-    }
-  });
-
-  it("stacks component pairs at enlarged text instead of clipping their columns", () => {
-    const capture = recorder();
-    drawAnalysisOverlays(capture.ctx, [], [{ x: 120, y: 120, rows: [
-      { symbol: "F", parallel: -1.23e8, normal: 0.0004, color: theme.ACCENT_HOT },
-    ] }], 268, 400, 2);
-    expect(capture.text.map(row => row.text)).toContain("∥ -1.23e+8");
-    expect(capture.text.map(row => row.text)).toContain("⊥ 4.00e-4");
-    for (const row of capture.text) {
-      expect(row.x + row.width).toBeLessThanOrEqual(268);
-      expect(row.y + row.height).toBeLessThanOrEqual(400);
     }
   });
 
