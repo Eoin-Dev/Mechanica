@@ -3,7 +3,7 @@ import { Vec2 } from "../core/vec";
 import { Body, Color, Wall } from "../engine/body";
 import { DistanceLink, Link, PulleyLink, SpringLink } from "../engine/links";
 import { World } from "../engine/world";
-import { forceLedger, projectForce } from "../education/analysis";
+import { analysePulley, forceLedger, projectForce } from "../education/analysis";
 import { forceSymbols } from "../engine/force-diagnostics";
 import * as theme from "../ui/theme";
 import { css, lighten } from "../ui/theme";
@@ -1164,7 +1164,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     for (const link of world.links) {
       if (!link.showTensionVectors) continue;
       if (link instanceof PulleyLink) {
-        const tension = Math.max(0.0, link.mu);
+        const reading = analysePulley(link, world);
+        const tension = reading.tension;
         if (!(tension > 0.0)) continue;
         const geom = link.geometry();
         const a = cam.toScreen(link.a.pos);
@@ -1173,10 +1174,10 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
         const gb = cam.toScreen(geom.gb);
         // Two forces act on the particles toward their tangent contacts; the
         // equal-and-opposite pair acts on the pulley at those contacts.
-        consider(a[0], a[1], -tension * geom.nax, -tension * geom.nay);
-        consider(b[0], b[1], -tension * geom.nbx, -tension * geom.nby);
-        consider(ga[0], ga[1], tension * geom.nax, tension * geom.nay);
-        consider(gb[0], gb[1], tension * geom.nbx, tension * geom.nby);
+        consider(a[0], a[1], reading.forceAX, reading.forceAY);
+        consider(b[0], b[1], reading.forceBX, reading.forceBY);
+        consider(ga[0], ga[1], -reading.forceAX, -reading.forceAY);
+        consider(gb[0], gb[1], -reading.forceBX, -reading.forceBY);
         continue;
       }
       if (link instanceof SpringLink || link.isRope) {

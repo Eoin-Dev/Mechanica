@@ -265,14 +265,24 @@ Unassigned projection, guard and floating-point effects remain numerical
 corrections; closure noise is suppressed with an absolute and scale-relative
 tolerance.
 
-`Body.forceSnapshot` is immutable, transient, and allocated only for enabled
-particles. Recorder working references are released after a step. Edits call
+`Body.forceSnapshot` is immutable, transient, and allocated for enabled
+particle diagrams and both endpoints of an observed pulley (either particle
+diagram or its separate tension vectors). Unobserved pulleys add no endpoint
+records. Pulley entries carry scalar `axialForce` as well as vector components:
+the average of a changing tension direction can have a shorter vector than
+the mean scalar tension. Both quantities include smooth quadrature, position
+feedback and velocity impulses from the same completed interval. Recorder
+working references are released after a step. Edits call
 `World.clearForceDiagnostics`; headless editors should do the same after
 changing authored forces without stepping. `forceLedger` rejects intervals
 whose time/count or body position, velocity, mass, or resultant no longer match.
 Without a valid interval, `World.currentForceSnapshot` calculates the authored
 model immediately on an isolated input graph. Constructor-free copies preserve
-body/link ownership without allocating IDs or sharing mutable vectors. It
+body/link ownership without allocating IDs or sharing mutable vectors. Its
+optional requested-body list lets readers obtain hidden endpoint measurements
+by enabling diagnostics only on the copies; live display flags and live force
+snapshots remain unchanged. The cache expands to new requested endpoints and
+invalidates on physical edits. It
 evaluates fields/drivers at the current clock, resolves springs/rods/pulley
 forces, predicts velocities over one nominal solver interval at fixed geometry
 and calculates loaded contact impulses. A microscopic query-only skin includes

@@ -414,7 +414,17 @@ reaction with a colon before each value. The retained labels offer brief native
 hover help and the same accessible descriptions when focused; unchanged
 refreshes perform no readout DOM writes. Path compares current and natural
 lengths, positive leg rates mean lengthening, and axle reaction lists right/up
-support components.
+support components. Tension readings and separate pulley arrows use the same
+current or completed-interval measurements as the particle diagrams, including
+tightening impulses. Hover descriptions identify current forces or the
+averaging interval. The axle support balances string pulls and particle
+contact with the wheel/frame or routing guide. For example, a stationary 2 kg
+free mass and 1 kg particle stopped at the wheel require 19.62 N tension and
+29.43 N upward axle support: the frame contact contributes to that support.
+During swinging, the readout reports mean scalar tension while an arrow shows
+its mean vector. Hidden diagram flags stay hidden when a readout requests an
+isolated current calculation, and enabled separate-vector measurements survive
+rewind without stepping again.
 
 Ordinary name, mass, colour and other value commits keep the current controls
 when the structure key is unchanged. A subsequent focused edit therefore

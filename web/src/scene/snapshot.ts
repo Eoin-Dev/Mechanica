@@ -212,9 +212,10 @@ function captureAnalysis(world: World): FrameAnalysis {
   let analysisBytes = 0;
   for (const body of world.bodies) {
     const source = body.forceSnapshot;
-    if (!body.showForceComponents || source === null) continue;
+    if (source === null) continue;
     const entries = source.entries.map(entry => Object.freeze({
       id: entry.id, label: entry.label, kind: entry.kind, fx: entry.fx, fy: entry.fy,
+      ...(entry.axialForce === undefined ? {} : { axialForce: entry.axialForce }),
       ...(entry.contactNx === undefined ? {} :
         { contactNx: entry.contactNx, contactNy: entry.contactNy }),
     }));
@@ -227,7 +228,7 @@ function captureAnalysis(world: World): FrameAnalysis {
     // UTF-16 source strings; shared strings are deliberately charged again.
     analysisBytes += 256;
     for (const entry of entries) {
-      analysisBytes += 144 + 2 * (entry.id.length + entry.label.length + entry.kind.length);
+      analysisBytes += 160 + 2 * (entry.id.length + entry.label.length + entry.kind.length);
     }
   }
   let contacts: Float64Array | null = null;

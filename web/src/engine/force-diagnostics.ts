@@ -11,6 +11,10 @@ export interface ForceEntry {
   readonly kind: ForceKind;
   readonly fx: number;
   readonly fy: number;
+  /** Shared scalar pulley tension, averaged over the same interval as fx/fy.
+   * Averaging a changing direction can shorten the vector without reducing
+   * the mean scalar tension. */
+  readonly axialForce?: number;
   /** Unit direction from the particle centre to its last sampled contact.
    * Ordinary smooth/link forces have no surface-contact origin. */
   readonly contactNx?: number;
@@ -90,7 +94,7 @@ interface Record {
 
 /** Accumulate quadrature-weighted smooth forces and measured solver impulses.
  * No formula is evaluated here and no physical state is changed. Records are
- * allocated only for particles with their free-body diagram enabled. */
+ * allocated only for enabled diagrams and explicitly requested link endpoints. */
 export class ForceRecorder {
   private records = new Map<Body, Record>();
   private startTime = 0;
@@ -104,14 +108,15 @@ export class ForceRecorder {
     for (const body of bodies) body.forceSnapshot = null;
   }
 
-  begin(bodies: readonly Body[], time: number, walls: readonly Wall[] = []): void {
+  begin(bodies: readonly Body[], time: number, walls: readonly Wall[] = [],
+        additionalBodies?: ReadonlySet<Body>): void {
     for (const { body } of this.records.values()) body.forceSnapshot = null;
     this.records.clear();
     this.wallNames.clear();
     this.startTime = time;
     for (const body of bodies) {
       body.forceSnapshot = null;
-      if (!body.showForceComponents || body.isRodEndpoint || body.isAnchor ||
+      if ((!body.showForceComponents && !additionalBodies?.has(body)) || body.isRodEndpoint || body.isAnchor ||
           body.invMass === 0 || !Number.isFinite(body.mass)) continue;
       this.records.set(body, {
         body, entries: new Map(), x: 0, y: 0, ax: 0, ay: 0,
@@ -129,7 +134,7 @@ export class ForceRecorder {
         !Number.isFinite(fx) || !Number.isFinite(fy)) return;
     const x = fx * weight;
     const y = fy * weight;
-    if (x === 0 && y === 0) return;
+    if (x === 0 && y === 0 && axial * weight === 0) return;
     let entry = record.entries.get(id);
     if (entry === undefined) {
       entry = { id, label, kind, x: 0, y: 0, axial: 0 };
@@ -231,13 +236,16 @@ export class ForceRecorder {
       const append = (entry: Impulse, threshold = 1e-10): void => {
         const fx = entry.x / dt;
         const fy = entry.y / dt;
+        const axialForce = entry.axial / dt;
         if (!Number.isFinite(fx) || !Number.isFinite(fy) ||
-            Math.abs(fx) + Math.abs(fy) <= threshold) return;
+            (Math.abs(fx) + Math.abs(fy) <= threshold &&
+              (entry.kind !== "pulley" || Math.abs(axialForce) <= threshold))) return;
         const label = entry.id.startsWith("distance-") && entry.kind === "rod" ?
           (entry.axial >= 0 ? "Rod tension" : "Rod thrust") :
           entry.id.startsWith("spring-") && entry.kind === "spring" ?
             (entry.axial >= 0 ? "Spring tension" : "Spring thrust") : entry.label;
         entries.push(Object.freeze({ id: entry.id, label, kind: entry.kind, fx, fy,
+          ...(entry.kind === "pulley" ? { axialForce: Math.max(0, axialForce) } : {}),
           ...(entry.contactNx === undefined ? {} :
             { contactNx: entry.contactNx, contactNy: entry.contactNy }) }));
       };

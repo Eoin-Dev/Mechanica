@@ -126,15 +126,18 @@ describe("education analysis", () => {
   });
 
   it("reports equal pulley tension and the balancing axle reaction", () => {
+    const world = new World();
     const wheel = new Body(new Vec2(0, 1), PULLEY_RADIUS, 0);
-    const a = new Body(new Vec2(-1, 0), 0.16, 2);
-    const b = new Body(new Vec2(1, 0), 0.16, 1);
+    const a = new Body(new Vec2(-PULLEY_RADIUS, 0), 0.16, 2);
+    const b = new Body(new Vec2(PULLEY_RADIUS, 0), 0.16, 1);
     const link = new PulleyLink(a, b, wheel);
-    link.mu = 7.5;
-    const analysis = analysePulley(link);
-    expect(analysis.tension).toBe(7.5);
+    world.bodies.push(wheel, a, b); world.links.push(link);
+    link.mu = 7.5; // An old solver output must not define a fresh reading.
+    const analysis = analysePulley(link, world);
+    const expected = 4 * world.gravity / 3;
+    expect(analysis.tension).toBeCloseTo(expected, 10);
     const g = link.geometry();
-    expect(analysis.axleReactionX).toBeCloseTo(-7.5 * (g.nax + g.nbx), 12);
-    expect(analysis.axleReactionY).toBeCloseTo(-7.5 * (g.nay + g.nby), 12);
+    expect(analysis.axleReactionX).toBeCloseTo(-expected * (g.nax + g.nbx), 10);
+    expect(analysis.axleReactionY).toBeCloseTo(-expected * (g.nay + g.nby), 10);
   });
 });

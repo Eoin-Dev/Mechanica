@@ -454,6 +454,7 @@ export class World {
   // no allocation even when the overlay is enabled or a scene is large.
   private diagnosticVel = new Float64Array(0);
   private forceRecorder = new ForceRecorder();
+  private diagnosticBodies = new Set<Body>();
   private forcePreviewValid = false;
   private pulleyQuerySupports: Map<Body, Vec2> | null = null;
   private pulleyQueryStep = 0;
@@ -464,10 +465,12 @@ export class World {
   private pulleyVelocityGB = new Vec2();
   private forcePreviewInputs: unknown[] = [];
   private forcePreviews = new Map<number, ForceSnapshot>();
+  private forcePreviewTargets = new Set<number>();
 
   /** Discard completed force intervals after an edit. Headless callers can
    * use this when changing authored forces without advancing the world. */
   clearForceDiagnostics(): void {
+    this.diagnosticBodies.clear();
     this.forceRecorder.clear(this.bodies);
     this.clearCurrentForcePreviews();
   }
@@ -476,6 +479,7 @@ export class World {
     this.forcePreviewValid = false;
     this.forcePreviewInputs.length = 0;
     this.forcePreviews.clear();
+    this.forcePreviewTargets.clear();
   }
 
   /** Compare physical inputs directly, avoiding scene JSON/temporary object
@@ -532,10 +536,20 @@ export class World {
   /** Calculate current forces on isolated inputs. No integration, clock
    * advance, live solver/cache mutation, IDs or scene/history edits occur.
    * Repeated paused reads share the result until a physical input changes. */
-  currentForceSnapshot(body: Body): ForceSnapshot | null {
-    if (!body.showForceComponents || body.isAnchor || body.isRodEndpoint || body.locked ||
+  currentForceSnapshot(body: Body, requestedBodies: readonly Body[] = []): ForceSnapshot | null {
+    if ((!body.showForceComponents && !requestedBodies.includes(body)) || body.isAnchor || body.isRodEndpoint || body.locked ||
         body.held || body.mass <= 0 || !Number.isFinite(body.mass) || !this.bodies.includes(body)) return null;
-    if (!this.forceInputsChanged()) return this.forcePreviews.get(body.id) ?? null;
+    const changed = this.forceInputsChanged();
+    if (changed) this.forcePreviewTargets.clear();
+    let added = false;
+    for (const target of requestedBodies) {
+      if (target.isAnchor || target.isRodEndpoint || target.locked || target.held ||
+          target.mass <= 0 || !Number.isFinite(target.mass) || !this.bodies.includes(target)) continue;
+      if (!this.forcePreviewTargets.has(target.id)) {
+        this.forcePreviewTargets.add(target.id); added = true;
+      }
+    }
+    if (!changed && !added) return this.forcePreviews.get(body.id) ?? null;
     this.forcePreviewValid = false;
 
     const copy = new World();
@@ -552,7 +566,10 @@ export class World {
     Object.assign(copy, inputs);
     // Current diagrams show the authored model; sleeping is a work-saving
     // solver state, and Performance step averages still report the actual run.
-    for (const b of copy.bodies) b.perfSleeping = false;
+    for (const b of copy.bodies) {
+      b.perfSleeping = false;
+      if (this.forcePreviewTargets.has(b.id)) b.showForceComponents = true;
+    }
     for (const link of copy.links) if (link instanceof DistanceLink || link instanceof PulleyLink) link.mu = 0;
     const h = Math.max(1e-6, Math.min(1 / 120, this.clampDt / Math.max(1, this.substeps)));
     copy.prepareStep(h);
@@ -1527,9 +1544,9 @@ export class World {
       }
       ln.mu = mu;
       recorder?.add(a, `pulley-${ln.id}`, "Pulley-string tension", "pulley",
-        -mu * nax, -mu * nay, diagnosticWeight);
+        -mu * nax, -mu * nay, diagnosticWeight, mu);
       recorder?.add(b, `pulley-${ln.id}`, "Pulley-string tension", "pulley",
-        -mu * nbx, -mu * nby, diagnosticWeight);
+        -mu * nbx, -mu * nby, diagnosticWeight, mu);
     }
     // The wheel is deliberately absent from the ordinary collision system,
     // but each particle still has to stop at the pulley frame. Cancel only
@@ -1938,7 +1955,14 @@ export class World {
       this.diagnosticVel[2 * i] = b.vel.x;
       this.diagnosticVel[2 * i + 1] = b.vel.y;
     }
-    this.forceRecorder.begin(this.bodies, this.time, this.walls);
+    this.diagnosticBodies.clear();
+    for (const link of this.links) {
+      if (link instanceof PulleyLink &&
+          (link.showTensionVectors || link.a.showForceComponents || link.b.showForceComponents)) {
+        this.diagnosticBodies.add(link.a); this.diagnosticBodies.add(link.b);
+      }
+    }
+    this.forceRecorder.begin(this.bodies, this.time, this.walls, this.diagnosticBodies);
     const recorder = this.forceRecorder.active ? this.forceRecorder : null;
     this.prepareStep(h);
     recorder?.velocityChange("initial-constraint", "Initial constraint correction", "correction");
@@ -2536,9 +2560,9 @@ export class World {
           const fullAX = wa * dlam * geom.nax, fullAY = wa * dlam * geom.nay;
           const fullBX = wb * dlam * geom.nbx, fullBY = wb * dlam * geom.nby;
           recorder.add(a, `pulley-${ln.id}`, "Pulley-string tension", "pulley",
-            fullAX * a.mass * rateA, fullAY * a.mass * rateA, 1);
+            fullAX * a.mass * rateA, fullAY * a.mass * rateA, 1, -dlam * rateA);
           recorder.add(b, `pulley-${ln.id}`, "Pulley-string tension", "pulley",
-            fullBX * b.mass * rateB, fullBY * b.mass * rateB, 1);
+            fullBX * b.mass * rateB, fullBY * b.mass * rateB, 1, -dlam * rateB);
           // A stopped leg still bears the common string multiplier. Its
           // frame/guide supplies the part removed by the feasible gradient.
           const frameA = ad <= PULLEY_RADIUS + a.radius + 1e-7;
@@ -2594,9 +2618,9 @@ export class World {
         const bx = -impulse * b.invMass * gb.x, by = -impulse * b.invMass * gb.y;
         a.vel.x += ax; a.vel.y += ay; b.vel.x += bx; b.vel.y += by;
         recorder?.add(a, `pulley-${ln.id}`, "Pulley-string tension", "pulley",
-          -impulse * geometry.nax, -impulse * geometry.nay, 1);
+          -impulse * geometry.nax, -impulse * geometry.nay, 1, impulse);
         recorder?.add(b, `pulley-${ln.id}`, "Pulley-string tension", "pulley",
-          -impulse * geometry.nbx, -impulse * geometry.nby, 1);
+          -impulse * geometry.nbx, -impulse * geometry.nby, 1, impulse);
         if (recorder !== null) {
           this.recordPulleyVelocitySupport(a, ln.pulley, ax * a.mass + impulse * geometry.nax,
             ay * a.mass + impulse * geometry.nay);

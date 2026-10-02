@@ -8,7 +8,7 @@ import { Body, Wall } from "../engine/body";
 import { closestOnSegment, Contact } from "../engine/contacts";
 import { DistanceLink, PulleyLink, SpringLink } from "../engine/links";
 import { World } from "../engine/world";
-import type { ForceEntry, ForceKind } from "../engine/force-diagnostics";
+import type { ForceEntry, ForceKind, ForceSnapshot } from "../engine/force-diagnostics";
 export type { ForceEntry, ForceKind } from "../engine/force-diagnostics";
 
 export interface SlopeBasis {
@@ -84,18 +84,23 @@ export function touchingSlopeWall(body: Body, wall: Wall): boolean {
   return Math.hypot(body.pos.x - x, body.pos.y - y) <= reach + 1e-6;
 }
 
+function completedForceSnapshot(world: World, body: Body): ForceSnapshot | null {
+  const sample = body.forceSnapshot;
+  return sample !== null && body.invMass !== 0 &&
+    sample.stepCount === world.stepCount && sample.endTime === world.time &&
+    sample.x === body.pos.x && sample.y === body.pos.y &&
+    sample.vx === body.vel.x && sample.vy === body.vel.y && sample.mass === body.mass &&
+    sample.fx === body.netForce.x && sample.fy === body.netForce.y ? sample : null;
+}
+
 /** Use a completed interval, or an isolated calculation at the current state.
  * Never infer contact forces by balancing an old resultant. */
 export function forceLedger(world: World, body: Body,
                             referenceWall: Wall | null = null): ForceLedger {
   const basis = referenceWall !== null && world.walls.includes(referenceWall) &&
     touchingSlopeWall(body, referenceWall) ? slopeBasis(referenceWall, body) : null;
-  const sample = body.forceSnapshot;
-  if (body.showForceComponents && sample !== null && body.invMass !== 0 &&
-      sample.stepCount === world.stepCount && sample.endTime === world.time &&
-      sample.x === body.pos.x && sample.y === body.pos.y &&
-      sample.vx === body.vel.x && sample.vy === body.vel.y && sample.mass === body.mass &&
-      sample.fx === body.netForce.x && sample.fy === body.netForce.y) {
+  const sample = completedForceSnapshot(world, body);
+  if (body.showForceComponents && sample !== null) {
     return { entries: sample.entries, resultant: { fx: sample.fx, fy: sample.fy },
       basis, mode: "step-average", interval: { start: sample.startTime, end: sample.endTime } };
   }
@@ -206,23 +211,63 @@ export interface PulleyAnalysis {
   pathLength: number;
   naturalLength: number;
   slack: boolean;
+  forceAX: number;
+  forceAY: number;
+  forceBX: number;
+  forceBY: number;
+  forceMode: "current" | "step-average";
+  forceInterval: { start: number; end: number } | null;
 }
 
-export function analysePulley(link: PulleyLink): PulleyAnalysis {
+export function analysePulley(link: PulleyLink, world: World): PulleyAnalysis {
   const g = link.geometry();
+  const endpoints = [link.a, link.b];
+  let samples: Array<ForceSnapshot | null> = [null, null];
+  let forceMode: PulleyAnalysis["forceMode"] = "current";
+  let forceInterval: PulleyAnalysis["forceInterval"] = null;
+  if (world.links.includes(link)) {
+    samples = endpoints.map(body => completedForceSnapshot(world, body));
+    const moving = endpoints.map((body, index) => ({ body, sample: samples[index] }))
+      .filter(({ body }) => body.invMass !== 0 && !body.isAnchor && !body.isRodEndpoint);
+    const first = moving[0]?.sample;
+    if (first !== undefined && first !== null && moving.every(({ sample }) =>
+      sample !== null && sample.startTime === first.startTime && sample.endTime === first.endTime)) {
+      forceMode = "step-average";
+      forceInterval = { start: first.startTime, end: first.endTime };
+    } else {
+      samples = endpoints.map(body => world.currentForceSnapshot(body, endpoints));
+    }
+  }
+  const entries = samples.map(sample => sample?.entries.find(entry => entry.id === `pulley-${link.id}`));
+  const tension = Math.max(0, entries[0]?.axialForce ?? entries[1]?.axialForce ??
+      (entries[0] === undefined ? 0 : Math.hypot(entries[0].fx, entries[0].fy)));
+  const forceAX = entries[0]?.fx ?? -tension * g.nax;
+  const forceAY = entries[0]?.fy ?? -tension * g.nay;
+  const forceBX = entries[1]?.fx ?? -tension * g.nbx;
+  const forceBY = entries[1]?.fy ?? -tension * g.nby;
   const legRateA = link.a.vel.x * g.nax + link.a.vel.y * g.nay;
   const legRateB = link.b.vel.x * g.nbx + link.b.vel.y * g.nby;
   const invMassA = link.a.mass > 0 ? 1 / link.a.mass : 0;
   const invMassB = link.b.mass > 0 ? 1 / link.b.mass : 0;
-  const accelerationA = (link.a.netForce.x * g.nax + link.a.netForce.y * g.nay) * invMassA;
-  const accelerationB = (link.b.netForce.x * g.nbx + link.b.netForce.y * g.nby) * invMassB;
+  const accelerationA = ((samples[0]?.fx ?? link.a.netForce.x) * g.nax +
+    (samples[0]?.fy ?? link.a.netForce.y) * g.nay) * invMassA;
+  const accelerationB = ((samples[1]?.fx ?? link.b.netForce.x) * g.nbx +
+    (samples[1]?.fy ?? link.b.netForce.y) * g.nby) * invMassB;
   // The two string legs pull the wheel outward along their straight sections;
   // the fixed axle supplies the equal and opposite reaction.
-  const axleReactionX = -link.mu * (g.nax + g.nbx);
-  const axleReactionY = -link.mu * (g.nay + g.nby);
+  let axleReactionX = forceAX + forceBX;
+  let axleReactionY = forceAY + forceBY;
+  // Frame and routing-guide forces act on the wheel too. Include their
+  // opposite loads when balancing the fixed axle; ordinary walls do not.
+  for (const sample of samples) for (const entry of sample?.entries ?? []) {
+    if (entry.id !== `pulley-frame-${link.pulley.id}` &&
+        entry.id !== `pulley-guide-${link.pulley.id}`) continue;
+    axleReactionX += entry.fx; axleReactionY += entry.fy;
+  }
   return {
     linkId: link.id,
-    tension: Math.max(0, link.mu),
+    tension,
+    forceAX, forceAY, forceBX, forceBY, forceMode, forceInterval,
     legRateA,
     legRateB,
     constraintRate: legRateA + legRateB,

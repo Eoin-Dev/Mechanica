@@ -1342,16 +1342,16 @@ export class Inspector implements Panel {
         ["Path", "Current routed string length / natural string length, in metres."],
         ["Leg rates", "Rates of change of legs A and B; positive means lengthening."],
         ["Constraint rate", "Rate of change of the total string path; near zero when taut."],
-        ["Axle reaction", "Support force on the wheel: rightward and upward components, in newtons."],
+        ["Axle reaction", "Support balancing string and wheel-contact loads: rightward/upward components, in newtons."],
       ].map(([name, help]) => {
         const caption = el("span", { class: "pulley-reading-name", text: `${name}:`,
           title: help, tabindex: "0", "aria-description": help });
         const value = el("span", { class: "pulley-reading-value" });
         readout.append(el("span", {}, caption, " ", value));
-        return value;
+        return { value, caption, help };
       });
       this.add({ root: readout, refresh: () => {
-        const p = analysePulley(link);
+        const p = analysePulley(link, this.app.world);
         const values = [
           `${p.tension.toFixed(3)} N`,
           `${p.pathLength.toFixed(3)} / ${p.naturalLength.toFixed(3)} m`,
@@ -1359,8 +1359,15 @@ export class Inspector implements Panel {
           `${p.constraintRate.toExponential(2)} m/s`,
           `(${p.axleReactionX.toFixed(2)}, ${p.axleReactionY.toFixed(2)}) N`,
         ];
-        readings.forEach((node, index) => {
-          if (node.textContent !== values[index]) node.textContent = values[index];
+        readings.forEach(({ value, caption, help }, index) => {
+          if (value.textContent !== values[index]) value.textContent = values[index];
+          if (index !== 0 && index !== 4) return;
+          const period = p.forceInterval === null ? "Current forces." :
+            `Average forces: ${p.forceInterval.start.toPrecision(4)}–${p.forceInterval.end.toPrecision(4)} s.`;
+          const description = `${help} ${period}`;
+          if (caption.title !== description) {
+            caption.title = description; caption.setAttribute("aria-description", description);
+          }
         });
       } });
     }
