@@ -117,7 +117,7 @@ describe("built-in preset cards", () => {
     expect(hit.textContent).toBe("");
     expect(hit.getAttribute("aria-label")).toBe("Load Earth & Moon");
     expect(hit.getAttribute("aria-describedby")).toBe(
-      card.querySelector("p")!.id);
+      `${card.querySelector("p")!.id} ${card.querySelector(".preset-topics")!.id}`);
 
     hit.click();
     expect(loaded).toBe("Earth & Moon");

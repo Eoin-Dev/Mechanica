@@ -2,6 +2,7 @@
  * Runs automatically once, supports skipping and replay, and restores the
  * previous play state on close. Completion is stored in tour_done. */
 import type { App } from "../app";
+import { PRESETS } from "../scene/presets";
 import { ModalFocus, countNoun, el, isTouch } from "./dom";
 
 /** One stop on the tour.
@@ -119,7 +120,7 @@ export const STEPS: Step[] = [
     // the two buttons this step is about, not the whole toolbar
     target: "#btn-library, #btn-settings",
     title: "Start from a worked example",
-    body: "The Library has 48 ready-made simulations - orbits, pendulums, " +
+    body: `The Library has ${PRESETS.length} ready-made simulations - orbits, pendulums, ` +
           "collisions, gases, chaos, soft bodies - each with a note on what " +
           "it demonstrates. It is the fastest way in: load one, run it, " +
           "then take it apart. The gear beside it holds settings, and help " +

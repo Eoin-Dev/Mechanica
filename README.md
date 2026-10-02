@@ -53,7 +53,8 @@ The complete build, CI, Pages, and alternative-host instructions are in
   drivers and sandboxed user force fields.
 - **Library** — searchable, annotated simulations across eight
   categories (press `L`), plus saved scenes with rename, description, export,
-  and import.
+  and import. Study topics such as SHM, SUVAT and modulus λ lead to matching
+  examples; Elastic string release illustrates equilibrium versus maximum stretch.
 - **Analysis** — live energy / momentum / phase-space plots and selected-particle
   displacement / distance / velocity against time, realised net-force
   vectors, per-link spring/string/pulley force vectors with hover readouts,

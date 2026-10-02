@@ -768,7 +768,7 @@ The registry is ordered for the library and currently contains these groups:
 | Gravity & Orbits | Earth & Moon; Kepler ellipse; Inner planets; Binary stars; Gravity slingshot; Newton's cannon; Trojan asteroids |
 | Three-Body Problem | Sun, Earth & Moon; Three-body figure-8; Lagrange's triangle; Choreography: moth; Choreography: butterfly; Pythagorean three-body |
 | Pendulums | Simple pendulum; Double pendulum; Triple pendulum; Swinging rope; Newton's cradle; Coupled pendulums |
-| Oscillators | Mass on a spring; Damping regimes; Driven resonance; Coupled oscillators; Spring pendulum |
+| Oscillators | Mass on a spring; Elastic string release; Damping regimes; Driven resonance; Coupled oscillators; Spring pendulum |
 | Collisions & Gas | Billiard break; Restitution ladder; Elastic vs inelastic; Gas in a box (50); Gas in a box (200); Brownian motion |
 | Projectiles & Friction | Projectile drag race; Friction ramp; Pulley on an incline; Galileo's drop; Which lands first?; Projectile angles; Terminal velocity; Wrecking ball; Chain bridge |
 | Soft Bodies | Jelly block; Squishy ball; Trampoline; Soft wheel; Jelly smash |
@@ -784,6 +784,15 @@ The Friction ramp places three deliberately non-rotating balls 1.5 m apart
 along its 25-degree surface. Its friction levels demonstrate fast sliding,
 slower sliding, and static holding without rotational motion obscuring the
 comparison.
+
+Elastic string release isolates a non-rotating, non-colliding `2 kg` load on
+one light tension-only string, with `l = 2 m`, modulus `λ = 39.2 N`, zero
+damping and `g = 9.8 m/s²`. It starts at natural length, opens the energy
+graph and enables auto-fit so the expanding string and load stay in view.
+RK4 with eight substeps retains the ideal model: equilibrium extension
+is `mg/k = 1 m`, and the first maximum extension after release is `2mg/k = 2 m`.
+The description's numerical values and the actual turning-point motion/energy
+are tested. Selecting its string opens the modulus/Hooke card.
 
 Brownian motion starts with its motion-trail hint disabled so the dense gas is
 clear and inexpensive on first load. Pulley on an incline mounts a fixed axle
@@ -810,3 +819,8 @@ half of Earth's Hill radius.
 descriptions and hints are behavior-bearing content: changing a builder,
 registry entry, category, or hint requires updating this table and any affected
 physics/application explanation.
+Optional readonly `Preset.topics` metadata supplies truthful visible Library
+study labels and search terms; it does not alter scene physics or JSON. The
+Library prepares a headless text index including SHM/SUVAT expansions, keeps
+registry order and applies the selected category after query normalization.
+The tour derives its example count from the registry instead of a stored total.

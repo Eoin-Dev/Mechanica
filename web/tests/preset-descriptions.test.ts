@@ -6,6 +6,7 @@ import { Body } from "../src/engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
 import { CATEGORIES, PRESETS } from "../src/scene/presets";
+import { STEPS } from "../src/ui/tour";
 
 const find = (n: string): World => {
   const p = PRESETS.find((x) => x.name === n);
@@ -27,6 +28,47 @@ const lightest = (bs: Body[]): Body => bs.reduce((a, b) => (a.mass < b.mass ? a 
 type Claim = [phrase: string, check: (w: World) => void];
 
 const CARD_CLAIMS: Record<string, Claim[]> = {
+  "Elastic string release": [
+    ["A 2 kg load", w => {
+      expect(movers(w)).toHaveLength(1);
+      expect(movers(w)[0].mass).toBe(2);
+      expect(anchors(w)).toHaveLength(1);
+      expect(movers(w)[0].noRotation).toBe(true);
+      expect(w.bodies.every(body => !body.collides)).toBe(true);
+    }],
+    ["natural length ... l = 2 m, modulus λ = 39.2 N and g = 9.8", w => {
+      const link = springs(w)[0];
+      expect(springs(w)).toHaveLength(1);
+      expect(link.restLength).toBe(2);
+      expect(link.stiffness * link.restLength).toBe(39.2);
+      expect(link.damping).toBe(0);
+      expect(link.tensionOnly).toBe(true);
+      expect(w.gravity).toBe(9.8);
+      expect(w.fields).toHaveLength(0);
+      expect(w.drivers).toHaveLength(0);
+    }],
+    ["equilibrium extension is 1 m", w => {
+      const link = springs(w)[0];
+      const load = movers(w)[0];
+      expect(load.mass * w.gravity / link.stiffness).toBe(1);
+      load.pos.y = -3;
+      w.step(1 / 120);
+      expect(load.vel.y).toBeCloseTo(0, 10);
+      expect(load.pos.y).toBeCloseTo(-3, 10);
+    }],
+    ["first maximum extension is 2 m", w => {
+      const link = springs(w)[0];
+      const load = movers(w)[0];
+      const initialEnergy = w.energy().total;
+      const turningTime = Math.PI * Math.sqrt(load.mass / link.stiffness);
+      const frames = Math.floor(turningTime * 120);
+      for (let i = 0; i < frames; i++) w.step(1 / 120);
+      w.step(turningTime - frames / 120);
+      expect(load.pos.distTo(link.a.pos) - link.restLength).toBeCloseTo(2, 8);
+      expect(load.vel.y).toBeCloseTo(0, 8);
+      expect(Math.abs(w.energy().total - initialEnergy)).toBeLessThan(1e-7);
+    }],
+  ],
   "Earth & Moon": [
     ["Momentum is balanced so the pair orbits its centre of mass",
       (w) => expect(w.momentum().length()).toBeLessThan(1e-9)],
@@ -732,9 +774,10 @@ describe("the card audit is complete", () => {
     expect(missing).toEqual([]);
   });
 
-  it("ships the library size the README, help and tour all quote", () => {
-    expect(PRESETS).toHaveLength(48);                                // "48 examples"
-    expect(CATEGORIES.filter((c) => c !== "All")).toHaveLength(8);   // "eight topics"
+  it("keeps the tour example count in sync with the category registry", () => {
+    expect(STEPS.find(step => step.title === "Start from a worked example")!.body)
+      .toContain(`${PRESETS.length} ready-made simulations`);
+    expect(CATEGORIES.filter((c) => c !== "All")).toHaveLength(8);
     expect(new Set(PRESETS.map((p) => p.name)).size).toBe(PRESETS.length);
   });
 });

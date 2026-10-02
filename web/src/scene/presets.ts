@@ -29,6 +29,7 @@ export class Preset {
     public description: string,
     builder: () => World,
     public hints: PresetHints = {},
+    public readonly topics: readonly string[] = [],
   ) {
     this.build = () => capSolverCost(builder());
   }
@@ -527,6 +528,21 @@ function buildCoupledPendulums(): World {
 }
 
 // --------------------------------------------------------------- oscillators
+function buildElasticStringRelease(): World {
+  const w = new World();
+  w.gravity = 9.8;
+  w.integrator = "RK4";
+  solver(w, 8);
+  const anchor = addBody(w, 0, 0, { r: 0.06, anchor: true });
+  const load = addBody(w, 0, -2, { r: 0.14, m: 2, name: "Load (2 kg)",
+    color: [86, 156, 214] });
+  anchor.collides = false;
+  load.collides = false;
+  load.noRotation = true;
+  w.links.push(new SpringLink(anchor, load, 2, 39.2 / 2, 0, true));
+  return w;
+}
+
 function buildShm(): World {
   const w = new World();
   solver(w, 6);
@@ -1342,7 +1358,7 @@ export const PRESETS: Preset[] = [
   new Preset("Earth & Moon", "Gravity & Orbits",
     "A light moon in a circular orbit around a heavy planet. Momentum " +
     "is balanced so the pair orbits its common centre of mass.",
-    buildEarthMoon, { zoom: 60, trails: true, graph: "energy" }),
+    buildEarthMoon, { zoom: 60, trails: true, graph: "energy" }, ["Circular motion", "Gravity"]),
   new Preset("Kepler ellipse", "Gravity & Orbits",
     "Launching a planet below circular speed gives an ellipse. Watch " +
     "it speed up near the star: equal areas in equal times.",
@@ -1411,7 +1427,7 @@ export const PRESETS: Preset[] = [
   new Preset("Simple pendulum", "Pendulums",
     "A small-angle pendulum. Its period is 2*pi*sqrt(L/g), roughly 2.46 s " +
     "for this 1.5 m rod - time it with the clock in the toolbar!",
-    buildSimplePendulum, { zoom: 130, graph: "energy" }),
+    buildSimplePendulum, { zoom: 130, graph: "energy" }, ["SHM", "Pendulums"]),
   new Preset("Double pendulum", "Pendulums",
     "Two links released from high up: the classic chaotic system. " +
     "Energy stays constant while the motion never repeats.",
@@ -1428,7 +1444,7 @@ export const PRESETS: Preset[] = [
   new Preset("Newton's cradle", "Pendulums",
     "Five balls on strings. Elastic collisions hand momentum down the " +
     "line so one ball in means one ball out.",
-    buildNewtonsCradle, { zoom: 170, graph: "momentum" }),
+    buildNewtonsCradle, { zoom: 170, graph: "momentum" }, ["Momentum", "Restitution"]),
   new Preset("Coupled pendulums", "Pendulums",
     "Two pendulums joined by a weak spring trade energy back and " +
     "forth - the swinging slowly migrates from one to the other.",
@@ -1437,23 +1453,30 @@ export const PRESETS: Preset[] = [
   new Preset("Mass on a spring", "Oscillators",
     "Simple harmonic motion: period 2*pi*sqrt(m/k) = 1.26 s here. Open " +
     "the phase plot and select the mass to see the ellipse of y against vy.",
-    buildShm, { zoom: 130, graph: "phase" }),
+    buildShm, { zoom: 130, graph: "phase" }, ["SHM", "Modulus λ"]),
+  new Preset("Elastic string release", "Oscillators",
+    "A 2 kg load starts at the natural length of a light elastic string: " +
+    "l = 2 m, modulus λ = 39.2 N and g = 9.8 m/s². In Normal mode its equilibrium extension " +
+    "is 1 m; the first maximum extension is 2 m. Select the string to inspect " +
+    "Hooke’s law, and watch gravitational energy become elastic energy.",
+    buildElasticStringRelease, { zoom: 105, centre: [0, -2], graph: "energy", autoFit: true },
+    ["Modulus λ", "Elastic energy"]),
   new Preset("Damping regimes", "Oscillators",
     "Identical oscillators with light, critical and heavy damping. " +
     "Critical damping settles fastest without overshooting.",
-    buildDampingRegimes, { zoom: 120, graph: "energy" }),
+    buildDampingRegimes, { zoom: 120, graph: "energy" }, ["SHM", "Damping"]),
   new Preset("Driven resonance", "Oscillators",
     "A sinusoidal driver tuned to the natural frequency pumps the " +
     "amplitude up until damping balances the input - resonance.",
-    buildResonance, { zoom: 110, graph: "energy" }),
+    buildResonance, { zoom: 110, graph: "energy" }, ["SHM", "Resonance"]),
   new Preset("Coupled oscillators", "Oscillators",
     "Three masses and four springs between two anchors. The motion is " +
     "a mixture of the system's normal modes.",
-    buildCoupledOscillators, { zoom: 110, graph: "phase" }),
+    buildCoupledOscillators, { zoom: 110, graph: "phase" }, ["SHM", "Normal modes"]),
   new Preset("Spring pendulum", "Oscillators",
     "A bob on a spring that can also swing: energy sloshes between " +
     "stretching and swinging, and the path becomes chaotic.",
-    buildSpringPendulum, { zoom: 140, trails: true }),
+    buildSpringPendulum, { zoom: 140, trails: true }, ["Elastic springs", "Energy"]),
 
   new Preset("Billiard break", "Collisions & Gas",
     "A cue ball smashes a five-row rack. Watch momentum spread " +
@@ -1463,13 +1486,13 @@ export const PRESETS: Preset[] = [
     "Six balls with restitution 0.5 to 1.0 dropped together. Each " +
     "bounce returns to e² of the previous height, so the e = 1 ball " +
     "keeps (almost) all of it.",
-    buildRestitutionLadder, { zoom: 110 }),
+    buildRestitutionLadder, { zoom: 110 }, ["Restitution", "Impulse"]),
   new Preset("Elastic vs inelastic", "Collisions & Gas",
     "Equal masses, head-on. Elastic (top): the mover stops dead and " +
     "hands its velocity over. Perfectly inelastic (bottom): they " +
     "stick and share it. Momentum is conserved in both - kinetic " +
     "energy only in the first.",
-    buildElasticVsInelastic, { zoom: 130, graph: "momentum" }),
+    buildElasticVsInelastic, { zoom: 130, graph: "momentum" }, ["Momentum", "Restitution"]),
   new Preset("Gas in a box (50)", "Collisions & Gas",
     "Fifty particles bouncing elastically in zero gravity - a toy " +
     "ideal gas. Elastic impacts preserve kinetic energy; the fixed walls " +
@@ -1489,23 +1512,23 @@ export const PRESETS: Preset[] = [
     "Two identical launches; a custom force field applies quadratic " +
     "air drag to one (selected by mass). Drag shortens the range and " +
     "steepens the descent.",
-    buildDragRace, { zoom: 42, trails: true, vectors: true }),
+    buildDragRace, { zoom: 42, trails: true, vectors: true }, ["Projectiles", "Air resistance"]),
   new Preset("Friction ramp", "Projectiles & Friction",
     "Three non-rotating balls spread along a 25 degree ramp. The " +
     "frictionless ball slides fastest, moderate friction slows the next, " +
     "and high static friction holds the last in place.",
-    buildFrictionRamp, { zoom: 70 }),
+    buildFrictionRamp, { zoom: 70 }, ["Friction", "Inclined planes"]),
   new Preset("Pulley on an incline", "Projectiles & Friction",
     "Two particles share one light inextensible string over a smooth fixed " +
     "pulley. The slope-side string begins parallel to the ramp, while both " +
     "particles remain free to slide, collide or swing. Select the string to " +
     "edit its total natural length.",
-    buildInclinePulley, { zoom: 115, centre: [-0.9, -0.2] }),
+    buildInclinePulley, { zoom: 115, centre: [-0.9, -0.2] }, ["Connected particles", "Pulleys"]),
   new Preset("Galileo's drop", "Projectiles & Friction",
     "A 10 kg ball and a 0.5 kg ball fall the same distance and land " +
     "together - without air, gravitational acceleration doesn't " +
     "depend on mass.",
-    buildGalileo, { zoom: 110, vectors: true }),
+    buildGalileo, { zoom: 110, vectors: true }, ["SUVAT", "Free fall"]),
   new Preset("Which lands first?", "Projectiles & Friction",
     "Two identical balls are released at the same instant from the same " +
     "height - but one is also launched sideways at 6 m/s. Which lands " +
@@ -1515,19 +1538,19 @@ export const PRESETS: Preset[] = [
     "down just as hard whether or not you are moving sideways, so " +
     "horizontal motion cannot change the time to fall.",
     buildIndependenceOfMotion,
-    { zoom: 95, centre: [1.2, 1.6], trails: true, vectors: true }),
+    { zoom: 95, centre: [1.2, 1.6], trails: true, vectors: true }, ["SUVAT", "Projectiles"]),
   new Preset("Projectile angles", "Projectiles & Friction",
     "Four launches at 10 m/s. For ideal equal-height launches, range " +
     "goes as sin(2*theta): 45 degrees flies farthest and 30/60 match. " +
     "These finite discs separate at launch; keep one at a time for a precise comparison.",
-    buildProjectileAngles, { zoom: 55, trails: true, centre: [5.0, 2.2] }),
+    buildProjectileAngles, { zoom: 55, trails: true, centre: [5.0, 2.2] }, ["SUVAT", "Projectiles"]),
   new Preset("Terminal velocity", "Projectiles & Friction",
     "Two same-size balls falling with quadratic air drag. Drag " +
     "balances weight at the terminal speed v = sqrt(mg/c), about 3x " +
     "higher for the 10x heavier ball. The finite drop shows the approach " +
     "toward those speeds - Galileo needs a vacuum.",
     buildTerminalVelocity, { zoom: 60, trails: true, centre: [0, 4.0],
-                             vectors: true }),
+                             vectors: true }, ["Air resistance", "Terminal speed"]),
   new Preset("Wrecking ball", "Projectiles & Friction",
     "A 22 kg pendulum ball demolishes a stack. Combines constraints, " +
     "collisions, friction and gravity in one scene.",
@@ -1536,7 +1559,7 @@ export const PRESETS: Preset[] = [
     "A load dropped onto a bridge of elastic string segments. Taut " +
     "strings stretch slightly and pull; slack ones carry nothing - " +
     "so the bridge sags into a catenary-like curve under the weight.",
-    buildChainBridge, { zoom: 110 }),
+    buildChainBridge, { zoom: 110 }, ["Elastic strings", "Equilibrium"]),
 
   new Preset("Jelly block", "Soft Bodies",
     "A 9 x 7 lattice of particles joined by structural, shear and bend " +

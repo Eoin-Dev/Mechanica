@@ -1043,9 +1043,17 @@ export class App {
 
   private finishTimeJump(world: World, target: number, ran: number, steps: number,
                          failure: PhysicsFailure | null): void {
+    // Keep the latest study selection, including choices made while a
+    // cooperative jump was working. The copy contains fresh engine objects;
+    // match by kind and ID and omit objects absent from an earlier baseline.
+    const selected = this.selection.map(item => this.selectableKey(item));
     // Even a zero-step backward jump installs the restored baseline instead
     // of leaving the later live scene visible.
     this.replaceWorld(world, true);
+    this.setSelection(selected.flatMap(key => {
+      const item = this.findSelectable(world, key);
+      return item === null ? [] : [item];
+    }));
     this.playing = false;
     if (failure !== null) {
       this.stopForPhysicsFailure(

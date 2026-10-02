@@ -269,6 +269,25 @@ tests run before Vitest under `npm test`.
 
 ### Real-browser acceptance
 
+[`preset-search.test.ts`](../web/tests/preset-search.test.ts) checks study-term,
+Greek/accent/compatibility-character and smart-apostrophe matches, all-word and
+category constraints, input focus retention, cross-category recovery, truthful
+SUVAT classification and associated visible topic labels. Preset description
+tests check the elastic-string investigation's constants, equilibrium,
+turning-point extension and energy at shipped solver settings, plus the tour's
+registry-derived count. Existing all-preset invariants and ten-second stability
+checks also include this builder.
+[`e2e/library-study.spec.ts`](../web/e2e/library-study.spec.ts) verifies real
+study-term queries, query/focus-preserving cross-category recovery, themed and
+enlarged badge reflow/axe scans, category scrolling on narrow/short screens,
+loading the investigation and seeking to its
+analytic turning time to read extension, tension and energy through the UI.
+The release workflow also verifies auto-fit activation and waits for a real
+painted load disc fully contained in the canvas before its final capture.
+Time-jump selection regressions cover forward/backward replacement, all
+selectable kinds with overlapping IDs, objects absent from an earlier baseline,
+selection changes during pending cooperative work and cancellation identity.
+
 Elastic-link coverage in [`elasticity.test.ts`](../web/tests/elasticity.test.ts)
 checks modulus conversion/bounds, spring compression, string slackness,
 authored-versus-effective coefficients, existing-schema round trips, vertical

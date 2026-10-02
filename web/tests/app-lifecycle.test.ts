@@ -3,8 +3,8 @@
  * A stub canvas context supports construction without starting the render loop. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, PHYSICS_DT } from "../src/app";
-import { Body } from "../src/engine/body";
-import { DistanceLink } from "../src/engine/links";
+import { Body, Wall } from "../src/engine/body";
+import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
 import { forceLedger } from "../src/education/analysis";
 import { PRESETS } from "../src/scene/presets";
@@ -185,6 +185,80 @@ describe("new workspace defaults", () => {
 });
 
 describe("time jump", () => {
+  it("retains study selection using current-world references after forward and backward jumps", () => {
+    const app = makeApp();
+    const body = new Body(new Vec2(0, 0), 0.1, 1);
+    app.world.gravity = 0;
+    app.world.bodies.push(body);
+    app.setSelection([body]);
+    app.ensureInitial();
+    expect(app.commitTimeJump("0.5")).toBe(true);
+    expect(app.selection).toEqual([app.world.bodies[0]]);
+    expect(app.selection[0]).not.toBe(body);
+    const forward = app.selection[0];
+    expect(app.commitTimeJump("0")).toBe(true);
+    expect(app.selection).toEqual([app.world.bodies[0]]);
+    expect(app.selection[0]).not.toBe(forward);
+  });
+
+  it("retains ordered selections of every object kind even when their IDs overlap", () => {
+    const app = makeApp();
+    const a = new Body(new Vec2(-1, -2));
+    const b = new Body(new Vec2(1, -2));
+    const wheel = new Body(new Vec2(0, 0));
+    const wall = new Wall(new Vec2(4, 0), new Vec2(5, 0));
+    const rod = new DistanceLink(a, b);
+    const spring = new SpringLink(a, b);
+    const pulley = new PulleyLink(a, b, wheel);
+    a.id = wall.id = rod.id = spring.id = pulley.id = 123;
+    b.id = 124;
+    wheel.id = 125;
+    app.world.bodies.push(a, b, wheel);
+    app.world.walls.push(wall);
+    app.world.links.push(rod, spring, pulley);
+    app.ensureInitial();
+    app.world.time = 1;
+    const selected = [spring, wall, pulley, a, rod];
+    app.setSelection(selected);
+    expect(app.commitTimeJump("0")).toBe(true);
+    expect(app.selection).toEqual([app.world.links[1], app.world.walls[0],
+      app.world.links[2], app.world.bodies[0], app.world.links[0]]);
+    expect(app.selection.map(item => item.id)).toEqual([123, 123, 123, 123, 123]);
+    app.selection.forEach((item, index) => expect(item).not.toBe(selected[index]));
+  });
+
+  it("drops objects absent from a backward baseline without losing the surviving selection", () => {
+    const app = makeApp();
+    const original = new Body(new Vec2(0, 0));
+    app.world.bodies.push(original);
+    app.ensureInitial();
+    app.world.time = 1;
+    const later = new Body(new Vec2(2, 0));
+    app.world.bodies.push(later);
+    app.setSelection([later, original]);
+    expect(app.commitTimeJump("0")).toBe(true);
+    expect(app.selection).toEqual([app.world.bodies[0]]);
+    expect(app.selection[0]).not.toBe(original);
+    expect(app.playbackEvents.selectedBodyId).toBe(original.id);
+  });
+
+  it("keeps the latest selection made while cooperative seek work is pending", async () => {
+    vi.useFakeTimers();
+    const app = makeApp();
+    app.world.gravity = 0;
+    const first = new Body(new Vec2(-1, 0));
+    const second = new Body(new Vec2(1, 0));
+    app.world.bodies.push(first, second);
+    app.setSelection([first]);
+    const seeking = app.requestTimeJump("0.5");
+    app.setSelection([second]);
+    await vi.runAllTimersAsync();
+    await expect(seeking).resolves.toBe(true);
+    expect(app.selection).toEqual([app.world.bodies[1]]);
+    expect(app.selection[0]).not.toBe(second);
+    expect(app.playbackEvents.selectedBodyId).toBe(second.id);
+  });
+
   it("contains the first numerical failure and stops detached stepping", async () => {
     vi.useFakeTimers();
     const app = makeApp();
@@ -246,6 +320,9 @@ describe("time jump", () => {
   it("can cancel after a slice advances the detached world", async () => {
     vi.useFakeTimers();
     const app = makeApp();
+    const body = new Body(new Vec2(0, 2));
+    app.world.bodies.push(body);
+    app.setSelection([body]);
     const before = snapshot(app.world);
     let elapsed = 0;
     vi.stubGlobal("performance", { now: () => elapsed });
@@ -263,6 +340,7 @@ describe("time jump", () => {
     await vi.runAllTimersAsync();
     expect(snapshot(app.world)).toBe(before);
     expect(app.seeking).toBe(false);
+    expect(app.selection[0]).toBe(body);
   });
 
   it("yields detached seek work and installs the same fixed-step result", async () => {

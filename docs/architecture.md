@@ -361,6 +361,11 @@ path:
 - seed an open graph with the new state; and
 - notify registered UI components.
 
+Time-jump finalization uses this cleanup, then remaps the latest selection
+by object kind and ID into the installed world. Earlier baselines can omit
+later-created objects; missing matches are dropped. Ordinary scene loading,
+clearing and reset continue to clear selection.
+
 `loadPreset()` adds preset-specific work after replacement: apply view hints,
 frame the scene, capture the reset baseline, arm the soft-body drag hint when
 applicable, and notify the UI after those hints are in place. Presets, saved
@@ -470,6 +475,8 @@ live scene. Editing, scene replacement and playback commands cancel it, while
 the paused display loop keeps processing input and progress controls.
 `commitTimeJump()` retains the synchronous bounded path for direct callers and
 deterministic comparisons; both routes share target planning and finalization.
+Finalization retains the latest selection through kind-qualified IDs, using
+fresh engine references so Inspector study readouts survive the jump.
 The total browser budget includes yielding, so an attempt can advance fewer
 quanta than the synchronous route before offering continuation.
 

@@ -79,6 +79,9 @@ cancels the edit without changing simulation time.
   clock differs by at most half a quantum;
 - a backward jump that rounds to zero steps still installs the restored
   baseline instead of leaving the later live state visible;
+- the latest selection survives installation by object kind and ID, using
+  the new scene's references; objects absent from a backward baseline drop
+  out of the selection, and cancelled work keeps the live selection;
 - browser stepping yields before work and between short groups of fixed
   quanta, within a wall-clock budget and hard step count;
 - an incomplete jump installs the reached state and explains that entering the
@@ -837,13 +840,25 @@ height is unusually small.
 
 - **Library:** searchable, category-filtered built-in presets and locally saved scenes.
   Search matches every typed word across example names, categories, and
-  descriptions without replacing the focused input. A polite result count and
+  descriptions plus curated visible study topics without replacing the focused
+  input. A prepared index normalizes catalogue text once; queries ignore accent
+  marks, normalize compatibility characters and smart apostrophes, and accept
+  λ or lambda. SHM and SUVAT expand to their full study terms; drag examples are
+  not labelled as constant-acceleration SUVAT models. Topic badges use themed
+  surfaces, wrap with text scale and are associated with the card's accessible
+  description. A polite result count and
   a clear-search action explain an empty result. The field follows theme, font,
   and text-scale settings; its count wraps below at narrow sizes.
   Its search surface uses the app's outlined rounded controls with an inline
   magnifier, a separately focusable clear action, a subtle focus-within tint,
   a full-field keyboard focus ring, and a bordered result badge. Native search
   decoration is suppressed.
+  If a selected category hides matches elsewhere, Search all categories keeps
+  the query, selects All and restores focus to the replacement search field.
+  Clear search continues to clear only the query.
+  Categories stay visible during desktop scrolling. At widths up to 600 px
+  or heights up to 500 px they scroll with the examples, so wrapped categories
+  leave the reading area available on phones, enlarged text and short screens.
   A built-in preset's transparent native button covers its entire card, so the
   card loads from any ordinary click or from Enter/Space without displaying a
   separate Load control. Pointer hover and keyboard focus apply the same

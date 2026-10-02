@@ -1257,6 +1257,11 @@ input.library-search-input,
 }
 .cat-chips button { padding: 4px 10px; border-radius: 12px; font-size: calc(12px * var(--fs, 1)); }
 .library-scenes-actions { position: static; }
+/* Wrapped categories must not take over the example reading area when
+   the viewport is narrow, text is enlarged or the screen is short. */
+@media (max-width: 600px), (max-height: 500px) {
+  #library .cat-chips { position: static; }
+}
 
 .card-grid {
   display: grid;
@@ -1291,6 +1296,17 @@ button.preset-card-hit:hover:not(:disabled) { background: transparent; }
 .preset-card.has-more { padding-bottom: 34px; }
 .preset-card:hover { background: var(--panel-hover); border-color: var(--accent-dark); }
 .preset-card h3 { font-size: calc(13px * var(--fs, 1)); margin-bottom: 4px; }
+.preset-topics { display: flex; flex-wrap: wrap; gap: 4px; margin: 7px 0; }
+.preset-topics span {
+  padding: 2px 6px;
+  border: 1px solid var(--outline);
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-size: calc(10px * var(--fs, 1));
+  line-height: 1.4;
+  background: var(--panel);
+  overflow-wrap: anywhere;
+}
 .preset-card .cat {
   color: var(--accent-text);
   font-size: calc(10px * var(--fs, 1));

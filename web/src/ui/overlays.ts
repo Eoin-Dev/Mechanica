@@ -1,6 +1,7 @@
 /** Modal overlays: the library (example presets + saved scenes), and help. */
 import { App } from "../app";
 import { CATEGORIES, PRESETS } from "../scene/presets";
+import { buildPresetSearchIndex, searchPresets } from "../scene/preset-search";
 import * as snap from "../scene/snapshot";
 import { Control, ModalFocus, button, checkbox, el, isTouch, refreshTabs,
          fmt3dp, numEdit, segmented, wireTabs } from "./dom";
@@ -25,6 +26,7 @@ export class Library {
   private tab: LibraryTab = "Examples";
   private category = "All";
   private search = "";
+  private readonly exampleIndex = buildPresetSearchIndex(PRESETS);
   private tabBtns = new Map<LibraryTab, HTMLButtonElement>();
   private content!: HTMLElement;
   private importRequest: AbortController | null = null;
@@ -108,7 +110,7 @@ export class Library {
   // ------------------------------------------------------------- examples
   private renderExamples(): void {
     const search = el("input", { type: "search", class: "library-search-input",
-      placeholder: "Search examples", "aria-label": "Search examples" });
+      placeholder: "Search names or study topics", "aria-label": "Search examples" });
     search.value = this.search;
     const searchIcon = el("span", { class: "library-search-icon", "aria-hidden": "true" });
     searchIcon.insertAdjacentHTML("beforeend", ICONS.search);
@@ -147,11 +149,7 @@ export class Library {
     const populate = (): void => {
       grid.replaceChildren();
       clear.hidden = this.search.length === 0;
-      const words = this.search.trim().toLowerCase().split(/\s+/).filter(Boolean);
-      const presets = PRESETS.filter(preset =>
-        (this.category === "All" || preset.category === this.category) &&
-        words.every(word => `${preset.name} ${preset.category} ${preset.description}`
-          .toLowerCase().includes(word)));
+      const presets = searchPresets(this.exampleIndex, this.search, this.category);
       resultCount.textContent = `${presets.length} ${presets.length === 1 ? "example" : "examples"}`;
       if (presets.length === 0) {
         grid.append(el("p", { class: "faint library-empty",
@@ -162,6 +160,14 @@ export class Library {
             populate();
             search.focus();
           }).root);
+      }
+      if (presets.length === 0 && this.category !== "All" &&
+          searchPresets(this.exampleIndex, this.search).length > 0) {
+        grid.append(button("Search all categories", () => {
+          this.category = "All";
+          this.render();
+          this.content.querySelector<HTMLInputElement>(".library-search-input")?.focus();
+        }).root);
       }
       this.renderExampleCards(grid, presets);
     };
@@ -182,13 +188,17 @@ export class Library {
     for (const preset of presets) {
       const desc = el("p", { text: preset.description,
                               id: `preset-description-${descriptionIndex++}` });
+      const topics = preset.topics.length ? el("div", { class: "preset-topics", role: "group",
+        id: `preset-topics-${descriptionIndex}`, "aria-label": "Study topics" },
+        ...preset.topics.map(topic => el("span", { text: topic }))) : null;
       const card = el("div", { class: "preset-card",
                                "data-preset-name": preset.name },
         el("div", { class: "cat", text: preset.category }),
-        el("h3", { text: preset.name }), desc);
+        el("h3", { text: preset.name }),
+        topics, desc);
       const load = el("button", { class: "preset-card-hit",
                                    "aria-label": `Load ${preset.name}`,
-                                   "aria-describedby": desc.id });
+                                   "aria-describedby": `${desc.id}${topics ? ` ${topics.id}` : ""}` });
       load.addEventListener("click", () => {
         this.app.loadPreset(preset);
         this.close();
