@@ -127,8 +127,11 @@ minimum jsdom or hand-written browser stubs they need. The suite does not need a
 running Vite server.
 
 `playwright.config.ts` runs Chromium, Firefox and WebKit serially, because every page owns a
-continuous animation loop. It records a trace on the first CI retry and a
-screenshot on failure. `scripts/run-e2e.mjs` starts Vite preview through its
+continuous animation loop. CI forbids exclusive tests and fails if any case
+passes only on retry. Its two retries still collect diagnostic evidence,
+including a trace on the first retry and a screenshot on failure, but cannot
+turn a flaky run into release approval. Local runs have no automatic retries.
+`scripts/run-e2e.mjs` starts Vite preview through its
 API, invokes the pinned Playwright CLI, forwards termination signals and closes
 the server reliably. CI installs all three engines with Linux system dependencies;
 local installations use `npx playwright install chromium firefox webkit`.
@@ -272,6 +275,11 @@ playback, and stalled clocks.
 checks the badge bound, valid complete results, invalid/count-coercion cases,
 unsuccessful and contradictory reports, and the CLI's exit status. These Node
 tests run before Vitest under `npm test`.
+[`scripts/browser-gate.test.mjs`](../web/scripts/browser-gate.test.mjs) runs the
+installed Playwright CLI against small browser-free fixtures that inherit the
+actual configuration. It checks clean acceptance, CI rejection of retry-only
+passes, ordinary failures and exclusive tests, plus explicitly retried local
+diagnostics.
 
 ### Real-browser acceptance
 

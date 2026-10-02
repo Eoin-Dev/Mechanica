@@ -4,6 +4,7 @@ export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
+  failOnFlakyTests: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   // Every page runs a continuous canvas/physics RAF. Serial browser tests
   // avoid six simulations contending for one CI/desktop CPU and turning
