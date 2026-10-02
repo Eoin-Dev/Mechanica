@@ -9,6 +9,7 @@ import { BODY_PALETTE, Body, Color, MATERIALS, Wall } from "../engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
 import { PlaybackEventKind, analysePulley, forceLedger, projectForce, touchingSlopeWall } from "../education/analysis";
+import { forceSymbols } from "../engine/force-diagnostics";
 import { analyseElasticLink, elasticModulus, stiffnessForModulus } from "../education/elasticity";
 import { Selectable } from "../render/draw";
 import { analysisNumber } from "../render/analysis-overlays";
@@ -583,7 +584,7 @@ export class Inspector implements Panel {
     this.sub("Forces on canvas");
     this.add(checkbox("Free-body forces on canvas", () => b.showForceComponents,
       (value) => { b.showForceComponents = value; app.invalidateCanvas(); },
-      "Draw forces from this particle's centre. After a step, all arrows use the same time interval as the resultant. R is a support/contact reaction; C is a numerical correction."));
+      "Draw current forces immediately. After a step, arrows share the resultant's time interval. R: reaction; f: friction; C: numerical correction."));
 
     const readout = el("details", { class: "force-values" },
       el("summary", { text: "Force values and sources" }));
@@ -592,7 +593,8 @@ export class Inspector implements Panel {
     const rows = new Map<string, { root: HTMLElement; name: HTMLElement; components: HTMLElement }>();
     let rowKey = "";
     readout.addEventListener("toggle", () => this.refresh());
-    const forceNote = el("div", { class: "faint settings-note force-interval-note" });
+    const forceNote = el("div", { class: "faint settings-note force-interval-note",
+      title: "Current forces are calculated on isolated scene inputs. Contact and impact forces are estimated over one nominal solver interval; a completed step shows its measured average. Current previews use the authored model, including forces suppressed by Performance approximations." });
     // The disclosure may remain visible after its note scrolls away. Observe
     // their combined box so visible scientific values never stop refreshing.
     const forceReadout = el("div", { class: "force-readout" }, forceNote, readout);
@@ -605,13 +607,14 @@ export class Inspector implements Panel {
         app.world.walls.find(candidate => candidate.id === b.forceSlopeWallId) ?? null;
       const ledger = forceLedger(app.world, b, wall);
       const text = ledger.mode === "step-average" && ledger.interval !== null ?
-        `Average forces: ${fmt3dp(ledger.interval.start)}–${fmt3dp(ledger.interval.end)} s. R: reaction; C: numerical correction.` :
+        `Average forces: ${fmt3dp(ledger.interval.start)}–${fmt3dp(ledger.interval.end)} s. R: reaction; f: friction; C: numerical correction.` :
         ledger.mode === "resting" ? "Resting forces: weight and support balance." :
-          "Current applied forces. Step once to include link forces and contact reactions.";
+          "Current forces. R: reaction; f: friction; C: numerical correction.";
       if (forceNote.textContent !== text) forceNote.textContent = text;
       if (!readout.open) return;
       const entries = [...ledger.entries, { id: "resultant", label: "Resultant",
         fx: ledger.resultant.fx, fy: ledger.resultant.fy }];
+      const symbols = forceSymbols(ledger.entries);
       const key = entries.map(entry => entry.id).join(",");
       for (const entry of entries) {
         let row = rows.get(entry.id);
@@ -622,7 +625,9 @@ export class Inspector implements Panel {
           row = { root, name, components };
           rows.set(entry.id, row);
         }
-        if (row.name.textContent !== entry.label) row.name.textContent = entry.label;
+        const symbol = symbols.get(entry.id);
+        const name = symbol === undefined ? entry.label : `${symbol}: ${entry.label}`;
+        if (row.name.textContent !== name) row.name.textContent = name;
         const text = [`Fx ${analysisNumber(entry.fx)} N`, `Fy ${analysisNumber(entry.fy)} N`];
         if (ledger.basis !== null) {
           const resolved = projectForce(entry, ledger.basis);
@@ -654,7 +659,7 @@ export class Inspector implements Panel {
       app.invalidateCanvas();
     });
     const slopeHelp = "Resolve the resultant along and normal to a wall in contact.";
-    const slopeRow = el("div", { class: "row" },
+    const slopeRow = el("div", { class: "row", role: "group", "aria-label": "Slope reference" },
       el("span", { class: "lbl", text: "Slope reference" }), slope);
     let slopeOptionsKey = "";
     this.add({ root: slopeRow, refresh: () => {
@@ -673,6 +678,8 @@ export class Inspector implements Panel {
       const disabled = walls.length === 0;
       if (slope.disabled !== disabled) slope.disabled = disabled;
       slopeRow.classList.toggle("disabled", disabled);
+      const disabledState = String(disabled);
+      if (slopeRow.getAttribute("aria-disabled") !== disabledState) slopeRow.setAttribute("aria-disabled", disabledState);
       const help = disabled ? "No slope in contact." : slopeHelp;
       if (slopeRow.title !== help) slopeRow.title = help;
       if (slope.title !== help) slope.title = help;

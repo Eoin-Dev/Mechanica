@@ -95,7 +95,8 @@ describe("force-diagram impulses and constraints", () => {
       world.step(0.1);
       const ledger = expectClosure(world, body);
       expect(world.contacts).toEqual([]);
-      expect(ledger.entries.map(entry => entry.id)).toEqual(["contact"]);
+      expect(ledger.entries.map(entry => entry.id)).toEqual([`reaction-wall-${floor.id}`]);
+      expect(ledger.entries[0].label).toBe(`Reaction from ${floor.name}`);
       expect(ledger.entries[0].fy).toBeCloseTo(120, 9);
       expect(body.vel.y).toBeCloseTo(3, 9);
     });

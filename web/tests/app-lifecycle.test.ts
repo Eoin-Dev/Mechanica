@@ -846,7 +846,7 @@ describe("event-aware playback", () => {
     expect(app.playbackEvents.events.at(-1)?.kind).toBe("contact");
     const ledger = forceLedger(app.world, app.world.bodies.find(body => body.id === moving.id)!);
     expect(ledger.mode).toBe("step-average");
-    expect(ledger.entries.some(entry => entry.id === "contact")).toBe(true);
+    expect(ledger.entries.some(entry => entry.id === `reaction-body-${target.id}`)).toBe(true);
   });
 });
 

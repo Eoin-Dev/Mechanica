@@ -32,7 +32,7 @@
 import { CompiledExpr, ExprError, compileExpr } from "../core/expr";
 import { arrayOr, boolOr, idOr, intIn, numIn, numOr, strOr } from "../core/guards";
 import { Vec2 } from "../core/vec";
-import { ForceRecorder } from "./force-diagnostics";
+import { ForceRecorder, type ForceSnapshot } from "./force-diagnostics";
 import {
   Body, BodyDict, SCENE_MAX_COORDINATE, SCENE_MAX_FORCE,
   SCENE_MAX_SURFACE_SPEED, SCENE_MAX_VELOCITY, Wall, WallDict,
@@ -53,6 +53,30 @@ import {
 
 export const INTEGRATORS = ["Velocity Verlet", "Symplectic Euler", "RK4"] as const;
 export type Integrator = (typeof INTEGRATORS)[number];
+
+const FORCE_BODY_INPUTS = ["id", "name", "mass", "radius", "angle", "omega",
+  "restitution", "friction", "locked", "collides", "noRotation", "isAnchor",
+  "isPulley", "isPivot", "isRodEndpoint", "rodAttachmentId", "rodAttachmentT",
+  "held", "showForceComponents", "kinematicCorrectionRate"] as const;
+const FORCE_WORLD_INPUTS = ["gravity", "mutualGravity", "pointGravity", "G",
+  "softening", "dragLinear", "dragQuadratic", "globalDamping", "integrator",
+  "substeps", "iterations", "clampDt", "time", "stepCount"] as const;
+
+/** Copy the input graph without constructors, ID allocation or shared mutable
+ * vectors. Compiled expressions are pure functions and can be shared. */
+function copyForceInput<T>(value: T, copies = new WeakMap<object, object>()): T {
+  if (value === null || typeof value !== "object") return value;
+  const existing = copies.get(value);
+  if (existing !== undefined) return existing as T;
+  const result = Array.isArray(value) ? [] : Object.create(Object.getPrototypeOf(value));
+  copies.set(value, result);
+  for (const [key, child] of Object.entries(value)) {
+    // Completed diagnostics are output, not an input to the current solve.
+    if (key === "forceSnapshot") result[key] = null;
+    else result[key] = copyForceInput(child, copies);
+  }
+  return result as T;
+}
 
 export const SCENE_MAX_BODIES = 2_000;
 export const SCENE_MAX_WALLS = 2_000;
@@ -430,10 +454,160 @@ export class World {
   // no allocation even when the overlay is enabled or a scene is large.
   private diagnosticVel = new Float64Array(0);
   private forceRecorder = new ForceRecorder();
+  private forcePreviewValid = false;
+  private forcePreviewInputs: unknown[] = [];
+  private forcePreviews = new Map<number, ForceSnapshot>();
 
   /** Discard completed force intervals after an edit. Headless callers can
    * use this when changing authored forces without advancing the world. */
-  clearForceDiagnostics(): void { this.forceRecorder.clear(this.bodies); }
+  clearForceDiagnostics(): void {
+    this.forceRecorder.clear(this.bodies);
+    this.clearCurrentForcePreviews();
+  }
+
+  private clearCurrentForcePreviews(): void {
+    this.forcePreviewValid = false;
+    this.forcePreviewInputs.length = 0;
+    this.forcePreviews.clear();
+  }
+
+  /** Compare physical inputs directly, avoiding scene JSON/temporary object
+   * creation on every paused read. Solver outputs and colours are irrelevant. */
+  private forceInputsChanged(): boolean {
+    let changed = !this.forcePreviewValid;
+    let count = 0;
+    const read = (value: unknown): void => {
+      if (!Object.is(this.forcePreviewInputs[count], value)) changed = true;
+      this.forcePreviewInputs[count++] = value;
+    };
+    for (const key of FORCE_WORLD_INPUTS) read(this[key]);
+    read(this.bodies.length);
+    for (const body of this.bodies) {
+      read(body);
+      for (const key of FORCE_BODY_INPUTS) read(body[key]);
+      read(body.pos.x); read(body.pos.y); read(body.vel.x); read(body.vel.y);
+      read(body.constForce.x); read(body.constForce.y);
+    }
+    read(this.walls.length);
+    for (const wall of this.walls) {
+      read(wall); read(wall.id); read(wall.name); read(wall.a.x); read(wall.a.y);
+      read(wall.b.x); read(wall.b.y); read(wall.thickness); read(wall.restitution); read(wall.friction);
+    }
+    read(this.links.length);
+    for (const link of this.links) {
+      read(link); read(link.id); read(link.a); read(link.b);
+      if (link instanceof SpringLink) {
+        read(link.restLength); read(link.stiffness); read(link.damping); read(link.tensionOnly);
+      } else {
+        read(link.length); read(link.compliance);
+        if (link instanceof DistanceLink) read(link.isRope);
+        else {
+          read(link.pulley); read(link.guideAOffset.x); read(link.guideAOffset.y);
+          read(link.guideBOffset.x); read(link.guideBOffset.y); read(link.wrapSweep);
+          read(link.mountWallId); read(link.mountWallEnd); read(link.mountNormalSign);
+        }
+      }
+    }
+    read(this.fields.length);
+    for (const field of this.fields) {
+      read(field); read(field.name); read(field.enabled); read(field.fx); read(field.fy);
+    }
+    read(this.drivers.length);
+    for (const driver of this.drivers) {
+      read(driver); read(driver.bodyId); read(driver.enabled); read(driver.amplitude);
+      read(driver.frequency); read(driver.phase); read(driver.angle);
+    }
+    if (count !== this.forcePreviewInputs.length) changed = true;
+    this.forcePreviewInputs.length = count;
+    return changed;
+  }
+
+  /** Calculate current forces on isolated inputs. No integration, clock
+   * advance, live solver/cache mutation, IDs or scene/history edits occur.
+   * Repeated paused reads share the result until a physical input changes. */
+  currentForceSnapshot(body: Body): ForceSnapshot | null {
+    if (!body.showForceComponents || body.isAnchor || body.isRodEndpoint || body.locked ||
+        body.held || body.mass <= 0 || !Number.isFinite(body.mass) || !this.bodies.includes(body)) return null;
+    if (!this.forceInputsChanged()) return this.forcePreviews.get(body.id) ?? null;
+    this.forcePreviewValid = false;
+
+    const copy = new World();
+    Object.assign(copy, {
+      gravity: this.gravity, mutualGravity: this.mutualGravity, pointGravity: this.pointGravity,
+      G: this.G, softening: this.softening, dragLinear: this.dragLinear,
+      dragQuadratic: this.dragQuadratic, globalDamping: this.globalDamping,
+      integrator: this.integrator, substeps: this.substeps, clampDt: this.clampDt,
+      iterations: Math.max(64, Math.min(128, this.iterations)), time: this.time,
+      stepCount: this.stepCount,
+    });
+    const inputs = copyForceInput({ bodies: this.bodies, walls: this.walls,
+      links: this.links, fields: this.fields, drivers: this.drivers });
+    Object.assign(copy, inputs);
+    // Current diagrams show the authored model; sleeping is a work-saving
+    // solver state, and Performance step averages still report the actual run.
+    for (const b of copy.bodies) b.perfSleeping = false;
+    for (const link of copy.links) if (link instanceof DistanceLink || link instanceof PulleyLink) link.mu = 0;
+    const h = Math.max(1e-6, Math.min(1 / 120, this.clampDt / Math.max(1, this.substeps)));
+    copy.prepareStep(h);
+    const initial = copy.bodies.map(b => ({ x: b.pos.x, y: b.pos.y, vx: b.vel.x,
+      vy: b.vel.y, omega: b.omega, radius: b.radius }));
+    let previous = new Map<Body, Vec2>();
+    const coupled = copy.links.length > 0;
+    // Contacts and links share loads. Re-evaluate link forces against the
+    // previous support estimate, rather than solving each in isolation.
+    for (let pass = 0; pass < (coupled ? 24 : 1); pass++) {
+      for (let i = 0; i < copy.bodies.length; i++) {
+        const b = copy.bodies[i];
+        const start = initial[i];
+        b.pos.set(start.x, start.y); b.vel.set(start.vx, start.vy); b.omega = start.omega;
+      }
+      copy.forceRecorder.begin(copy.bodies, copy.time, copy.walls);
+      copy.accumulateForces(copy.time, h, previous);
+      for (let i = 0; i < copy.bodies.length; i++) {
+        const b = copy.bodies[i];
+        if (b.invMass !== 0) {
+          const support = previous.get(b);
+          b.vel.x += (b.acc.x - (support?.x ?? 0) * b.invMass) * h;
+          b.vel.y += (b.acc.y - (support?.y ?? 0) * b.invMass) * h;
+        }
+        // A query-only microscopic skin includes exact floating-point
+        // tangencies. Live collision geometry and radii are never modified.
+        b.radius += 1e-6;
+      }
+      const next = new Map<Body, Vec2>();
+      solveContacts(copy.bodies, copy.walls, copy.contacts, copy.iterations, null,
+        { noCollide: copy.noCollide, impulseTolerance: 1e-12, relativeImpulseTolerance: 1e-10 },
+        (a, b, wallId, nx, ny, normal, tangent, invMa, invMb) => {
+          copy.forceRecorder.contactImpulse(a, b, wallId, nx, ny, normal, tangent, invMa, invMb);
+          const x = normal * nx - tangent * ny;
+          const y = normal * ny + tangent * nx;
+          const add = (particle: Body, invM: number, sign: number): void => {
+            let force = next.get(particle);
+            if (force === undefined) { force = new Vec2(); next.set(particle, force); }
+            const scale = particle.mass * invM * sign / h;
+            force.x += x * scale; force.y += y * scale;
+          };
+          add(a, invMa, -1);
+          if (b !== null) add(b, invMb, 1);
+        });
+      let difference = 0;
+      for (let i = 0; i < copy.bodies.length; i++) {
+        const b = copy.bodies[i];
+        const start = initial[i];
+        b.radius = start.radius;
+        const old = previous.get(b); const force = next.get(b);
+        difference = Math.max(difference,
+          Math.abs((force?.x ?? 0) - (old?.x ?? 0)) + Math.abs((force?.y ?? 0) - (old?.y ?? 0)));
+      }
+      copy.forceRecorder.finish(h, copy.time, copy.stepCount, true);
+      if (difference < 1e-7 || next.size === 0) break;
+      previous = next;
+    }
+    this.forcePreviews.clear();
+    for (const b of copy.bodies) if (b.forceSnapshot !== null) this.forcePreviews.set(b.id, b.forceSnapshot);
+    this.forcePreviewValid = true;
+    return this.forcePreviews.get(body.id) ?? null;
+  }
   // Enabled drivers, resolved against their (movable) body and flattened
   // once per step: the id->body lookup, the inverse mass and the direction's
   // sine and cosine are all fixed for the step, and a force evaluation
@@ -739,7 +913,8 @@ export class World {
   }
 
   /** Fill body.acc with the total smooth acceleration at the current state. */
-  private accumulateForces(t: number, diagnosticWeight = 0): void {
+  private accumulateForces(t: number, diagnosticWeight = 0,
+                           diagnosticSupports?: ReadonlyMap<Body, Vec2>): void {
     const g = this.gravity;
     const c1 = this.dragLinear;
     const c2 = this.dragQuadratic;
@@ -807,7 +982,7 @@ export class World {
         }
       }
     }
-    this.applyDriversAndFields(t, diagnosticWeight);
+    this.applyDriversAndFields(t, diagnosticWeight, diagnosticSupports);
   }
 
   // Flat scratch for the O(n^2) attraction pass, grown geometrically and
@@ -970,7 +1145,8 @@ export class World {
   /** Sinusoidal drivers, user force fields and the rod tension solve - the
    * tail of accumulateForces, split out only to keep that function short
    * enough to read alongside the packed attraction pass above. */
-  private applyDriversAndFields(t: number, diagnosticWeight: number): void {
+  private applyDriversAndFields(t: number, diagnosticWeight: number,
+                                diagnosticSupports?: ReadonlyMap<Body, Vec2>): void {
     const recorder = diagnosticWeight !== 0 && this.forceRecorder.active ? this.forceRecorder : null;
     if (this.driven.length > 0) {
       const TAU = 2 * Math.PI;
@@ -988,6 +1164,17 @@ export class World {
     }
 
     if (this.fields.length > 0) this.applyFields(t, diagnosticWeight);
+    if (diagnosticSupports !== undefined) {
+      for (const body of this.movers) {
+        if (body.isRodEndpoint) continue;
+        const support = diagnosticSupports.get(body);
+        const fx = -this.globalDamping * body.mass * body.vel.x;
+        const fy = -this.globalDamping * body.mass * body.vel.y;
+        body.acc.x += (fx + (support?.x ?? 0)) * body.invMass;
+        body.acc.y += (fy + (support?.y ?? 0)) * body.invMass;
+        recorder?.add(body, "global-damping", "Global damping", "drag", fx, fy, diagnosticWeight);
+      }
+    }
     if (this.rods.length > 0 || this.rodAttachments.length > 0) {
       recorder?.captureAcceleration();
       this.solveRodForces(diagnosticWeight);
@@ -1641,6 +1828,7 @@ export class World {
     // substep). Treat the whole call as the documented strict no-op.
     const h2 = h * h;
     if (h === 0.0 || h2 === 0.0 || !Number.isFinite(1.0 / h2)) return;
+    this.clearCurrentForcePreviews();
     const invH = 1.0 / h;
     const bodyCount = this.bodies.length;
     if (this.diagnosticVel.length < bodyCount * 2) {
@@ -1651,7 +1839,7 @@ export class World {
       this.diagnosticVel[2 * i] = b.vel.x;
       this.diagnosticVel[2 * i + 1] = b.vel.y;
     }
-    this.forceRecorder.begin(this.bodies, this.time);
+    this.forceRecorder.begin(this.bodies, this.time, this.walls);
     const recorder = this.forceRecorder.active ? this.forceRecorder : null;
     this.prepareStep(h);
     recorder?.velocityChange("initial-constraint", "Initial constraint correction", "correction");
@@ -1738,8 +1926,8 @@ export class World {
       // reported (and drew) every contact four times over.
       solveContacts(this.bodies, this.walls, this.contacts, iters,
                     this.contactStatic.simplified ? null : this.contactCache,
-                    this.contactStatic);
-      recorder?.velocityChange("contact", "Contact reaction", "reaction");
+                    this.contactStatic, recorder?.contactImpulse);
+      recorder?.velocityChange("contact-correction", "Contact numerical correction", "correction");
       recorder?.captureVelocity();
       // A contact impulse is computed on the particle that touched the wall or
       // another body. Mounted particles must immediately hand the incompatible
@@ -2714,6 +2902,7 @@ export class World {
    */
   removeBodies(gone: ReadonlySet<Body>): void {
     if (gone.size === 0) return;
+    this.clearForceDiagnostics();
     const bodiesGone = new Set(gone);
     const replacements: DistanceLink[] = [];
     this.links = this.links.filter((ln) => {

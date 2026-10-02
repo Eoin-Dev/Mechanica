@@ -237,7 +237,7 @@ test("free-body diagrams use one interval and retain their view choice through u
   const toggle = page.getByRole("checkbox", { name: "Free-body forces on canvas", exact: true });
   await toggle.check();
   const note = page.locator(".force-interval-note");
-  await expect(note).toContainText("Step once");
+  await expect(note).toContainText("Current forces.");
   await page.locator("#canvas").focus();
   await page.keyboard.press(".");
   await expect(note).toContainText("Average forces: 0.008–0.017 s");
@@ -248,7 +248,7 @@ test("free-body diagrams use one interval and retain their view choice through u
   await page.screenshot({ path: testInfo.outputPath("force-diagram-desktop.png") });
   await page.getByRole("textbox", { name: "Mass (type an exact value)", exact: true }).fill("3");
   await page.getByRole("textbox", { name: "Mass (type an exact value)", exact: true }).press("Enter");
-  await expect(note).toContainText("Current applied forces");
+  await expect(note).toContainText("Current forces.");
   await page.locator("#canvas").focus();
   await page.keyboard.press("Control+z");
   // Undo clears selection while retaining presentation on surviving particles.
@@ -256,7 +256,7 @@ test("free-body diagrams use one interval and retain their view choice through u
   const canvasBox = (await page.locator("#canvas").boundingBox())!;
   await page.locator("#canvas").click({ position: { x: canvasBox.width / 2, y: canvasBox.height / 2 } });
   await expect(toggle).toBeChecked();
-  await expect(note).toContainText("Step once");
+  await expect(note).toContainText("Current forces.");
   await page.locator("#canvas").focus();
   await page.keyboard.press(".");
   await expect(note).toContainText("Average forces");

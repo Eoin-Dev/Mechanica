@@ -289,9 +289,8 @@ creates no history entry.
 
 Dragged-wall collision is enabled on first use and preserves an explicit saved
 preference. When enabled, both paused and running drags call the
-engine's kinematic capsule sweep. The default is disabled because passing a
-held body through scenery is useful for editing and is the established scene
-construction behavior.
+engine's kinematic capsule sweep. Turning the preference off permits dragging
+a held body through scenery while editing.
 
 ### Velocity drag
 
@@ -440,8 +439,11 @@ An ordinary selected particle can enable a free-body diagram directly on the
 canvas. After stepping, it draws weight, applied, drag, field, driver, link,
 support/contact, and numerical-correction arrows averaged over the same
 interval as the realised resultant, with closure up to floating-point tolerance.
-The Inspector displays that interval and explains `R` (reaction) and `C`
-(numerical correction). Its keyboard-operable Force values and sources
+The Inspector displays that interval and explains `R` (normal reaction), `f`
+(friction) and `C` (numerical correction). Each loaded neighbour or wall has
+separate reaction/friction arrows and named sources. Repeated symbols use
+subscripts, such as `R₁`/`R₂` or `F₁`/`F₂`, consistently on canvas and in the
+source rows. Its keyboard-operable Force values and sources
 disclosure lists every named force, signed x/y components in newtons and the
 resultant; a selected slope adds signed parallel/normal components. It uses
 the same ledger and interval as the arrows, retains unchanged rows/focus, and
@@ -452,11 +454,17 @@ Slope reference offers only walls currently touching the selected colliding
 particle, including capsule endpoints and either face. The options use current
 geometry, without requiring a step or relying on old contact records. With no
 contact the control is disabled and grey, with brief hover help: No slope in
-contact. Separation or removal clears the old reference; returning to contact
+contact. Its group exposes the disabled state to assistive technology, as do
+conditionally unavailable sliders such as Spin. Separation or removal clears
+the old reference; returning to contact
 enables the same retained control.
-Before a recorded step, or after an edit/restore, it
-previews current applied forces and prompts a step for link/contact forces.
-It does not reuse old solver multipliers or infer reactions from stale motion.
+Before a recorded step, or after an edit/restore, it immediately calculates
+current applied, link and loaded contact forces on isolated scene inputs. No
+first step is required, and viewing or changing the diagram cannot move the
+live particles or advance the clock. The brief current-force note's hover help
+explains the contact/impact estimate's nominal interval and authored-model
+meaning in Performance mode. It does not reuse old multipliers, invent forces
+from unloaded touching geometry or infer reactions from stale motion.
 Undo/redo preserve surviving particles' diagram/slope choices and surviving
 links' tension-overlay choices while discarding old force intervals.
 Event refinement and time seeking transfer those presentation choices before

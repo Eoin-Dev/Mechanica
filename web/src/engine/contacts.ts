@@ -64,12 +64,23 @@ export interface ContactStatic {
   workBudget?: number;
   positionIterations?: number;
   impactIterations?: number;
+  /** Optional precision for isolated diagnostics; live solves retain defaults. */
+  impulseTolerance?: number;
+  relativeImpulseTolerance?: number;
   contactPool?: Contact[];
   wallSweep?: boolean;
   /** Maximum approximation: keep separating/bounce impulses but omit
    * friction, support anchoring, and persistent impulse bookkeeping. */
   simplified?: boolean;
 }
+
+/** Observe the impulses already solved, without changing the contact solve.
+ * Effective inverse masses include Performance mode's contact mass gain. */
+export type ContactImpulseObserver = (
+  a: Body, b: Body | null, wallId: number | null,
+  nx: number, ny: number, normal: number, tangent: number,
+  invMa: number, invMb: number,
+) => void;
 
 /** Closest point to `p` on the segment a-b.
  *
@@ -432,7 +443,8 @@ function solveImpacts(manifolds: Manifold[], passLimit = 32): void {
 }
 
 function solveVelocity(manifolds: Manifold[], iterations: number,
-                       friction = true): void {
+                       friction = true, absoluteTolerance = IMPULSE_EPSILON,
+                       relativeTolerance = 1e-3): void {
   let worst0 = 0.0;
   for (let sweep = 0; sweep < iterations; sweep++) {
     let worst = 0.0;
@@ -514,7 +526,7 @@ function solveVelocity(manifolds: Manifold[], iterations: number,
       }
     }
     if (sweep === 0) worst0 = worst;
-    if (worst < IMPULSE_EPSILON || worst < 1e-3 * worst0) break;
+    if (worst < absoluteTolerance || worst < relativeTolerance * worst0) break;
   }
 }
 
@@ -1138,7 +1150,8 @@ function warmStart(manifolds: Manifold[], cache: ContactCache): void {
 export function solveContacts(bodies: Body[], walls: Wall[],
                               contacts: Contact[], iterations: number,
                               cache: ContactCache | null = null,
-                              staticState: ContactStatic = {}): void {
+                              staticState: ContactStatic = {},
+                              observe?: ContactImpulseObserver): void {
   contacts.length = 0;
   const manifolds: Manifold[] = [];
   detectBodies(bodies, manifolds, staticState);
@@ -1170,7 +1183,8 @@ export function solveContacts(bodies: Body[], walls: Wall[],
   }
   solveImpacts(manifolds, staticState.impactIterations ?? 32);
   const simplified = staticState.simplified === true;
-  solveVelocity(manifolds, iterations, !simplified);
+  solveVelocity(manifolds, iterations, !simplified,
+    staticState.impulseTolerance, staticState.relativeImpulseTolerance);
   solvePosition(manifolds, staticState.positionIterations ?? POSITION_ITERATIONS);
   if (!simplified) {
     markFixedSupport(manifolds);
@@ -1179,6 +1193,8 @@ export function solveContacts(bodies: Body[], walls: Wall[],
   const contactPool = staticState.contactPool ?? (staticState.contactPool = []);
   let contactCount = 0;
   for (const m of manifolds) {
+    observe?.(m.a, m.b, m.wallId, m.nx, m.ny, m.pn + m.pnBounce,
+      m.pt, m.invMa, m.invMb);
     let contact = contactPool[contactCount];
     if (contact === undefined) {
       contact = new Contact(m.px, m.py, m.nx, m.ny, m.pn + m.pnBounce,

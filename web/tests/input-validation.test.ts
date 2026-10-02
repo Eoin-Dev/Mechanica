@@ -130,6 +130,29 @@ describe("invalid input survives panel refresh", () => {
     expect(exact.hasAttribute("aria-invalid")).toBe(false);
   });
 
+  it("exposes an unavailable slider as a disabled named group and discards its interrupted draft", () => {
+    let disabled = false;
+    let value = 3;
+    const setter = vi.fn((next: number) => { value = next; });
+    const control = slider("Spin", () => value, setter, -10, 10, { disabled: () => disabled });
+    document.body.append(control.root);
+    const range = control.root.querySelector<HTMLInputElement>('input[type="range"]')!;
+    const exact = control.root.querySelector<HTMLInputElement>('input[type="text"]')!;
+    expect(control.root.getAttribute("role")).toBe("group");
+    expect(control.root.getAttribute("aria-label")).toBe("Spin");
+    expect(control.root.getAttribute("aria-disabled")).toBe("false");
+    exact.focus(); exact.value = "8"; disabled = true; control.refresh!(); exact.blur();
+    expect(control.root.getAttribute("aria-disabled")).toBe("true");
+    expect(range.disabled).toBe(true); expect(exact.disabled).toBe(true);
+    expect(exact.value).toBe("3"); expect(setter).not.toHaveBeenCalled();
+    disabled = false; value = 4; control.refresh!();
+    expect(control.root.getAttribute("aria-disabled")).toBe("false");
+    expect(range.disabled).toBe(false); expect(exact.disabled).toBe(false); expect(exact.value).toBe("4");
+    const changes = new MutationObserver(() => {}); changes.observe(control.root, { attributes: true, subtree: true });
+    control.refresh!(); control.refresh!();
+    expect(changes.takeRecords()).toEqual([]); changes.disconnect();
+  });
+
   it("keeps stepped exact values inside the declared slider range", () => {
     let value = 0.15;
     const control = slider("Radius", () => value, v => { value = v; }, 0.15, 0.95, { step: 0.1 });

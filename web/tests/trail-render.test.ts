@@ -3,7 +3,7 @@
  * drawWorld() with a recording canvas stub (no DOM canvas needed). */
 import { describe, expect, it, vi } from "vitest";
 import { Vec2 } from "../src/core/vec";
-import { Body } from "../src/engine/body";
+import { Body, Wall } from "../src/engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
 import { Camera } from "../src/render/camera";
@@ -211,6 +211,9 @@ describe("body rendering", () => {
     expect(body.invMass).toBe(0);
     const world = worldWith(body);
     world.stepCount = 1;
+    const floor = new Wall(new Vec2(-2, -0.15), new Vec2(2, -0.15));
+    floor.thickness = 0.1;
+    world.walls.push(floor);
     const { ctx, ops } = recCtx();
     drawWorld(ctx, new Camera(800, 600), world, new ViewSettings(), [body], null,
       new Map(), 800, 600, 1, true);

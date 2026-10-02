@@ -1,9 +1,9 @@
 /** Optional, headless force accounting over one completed World.step. */
-import type { Body } from "./body";
+import type { Body, Wall } from "./body";
 
 export type ForceKind =
   "weight" | "applied" | "drag" | "gravity" | "driver" | "field" |
-  "spring" | "string" | "rod" | "pulley" | "reaction" | "correction";
+  "spring" | "string" | "rod" | "pulley" | "reaction" | "friction" | "correction";
 
 export interface ForceEntry {
   readonly id: string;
@@ -25,6 +25,39 @@ export interface ForceSnapshot {
   readonly mass: number;
   readonly fx: number;
   readonly fy: number;
+}
+
+/** Use the same unambiguous arrow symbols in canvas captions and source rows. */
+export function forceSymbols(entries: readonly ForceEntry[]): Map<string, string> {
+  const base = (entry: ForceEntry): string => {
+    switch (entry.kind) {
+      case "weight": return "W";
+      case "reaction": return "R";
+      case "friction": return "f";
+      case "correction": return "C";
+      case "string": case "pulley": return "T";
+      case "rod": return entry.label.includes("thrust") ? "S" : "T";
+      case "spring": return "Fₛ";
+      case "drag": return "D";
+      default: return "F";
+    }
+  };
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    const symbol = base(entry);
+    counts.set(symbol, (counts.get(symbol) ?? 0) + 1);
+  }
+  const used = new Map<string, number>();
+  const symbols = new Map<string, string>();
+  for (const entry of entries) {
+    const symbol = base(entry);
+    const index = (used.get(symbol) ?? 0) + 1;
+    used.set(symbol, index);
+    const suffix = counts.get(symbol)! > 1 ?
+      String(index).replace(/\d/g, digit => "₀₁₂₃₄₅₆₇₈₉"[Number(digit)]) : "";
+    symbols.set(entry.id, symbol + suffix);
+  }
+  return symbols;
 }
 
 interface Impulse {
@@ -55,17 +88,20 @@ interface Record {
 export class ForceRecorder {
   private records = new Map<Body, Record>();
   private startTime = 0;
+  private wallNames = new Map<number, string>();
   get active(): boolean { return this.records.size !== 0; }
 
   clear(bodies: readonly Body[]): void {
     for (const { body } of this.records.values()) body.forceSnapshot = null;
     this.records.clear();
+    this.wallNames.clear();
     for (const body of bodies) body.forceSnapshot = null;
   }
 
-  begin(bodies: readonly Body[], time: number): void {
+  begin(bodies: readonly Body[], time: number, walls: readonly Wall[] = []): void {
     for (const { body } of this.records.values()) body.forceSnapshot = null;
     this.records.clear();
+    this.wallNames.clear();
     this.startTime = time;
     for (const body of bodies) {
       body.forceSnapshot = null;
@@ -76,6 +112,7 @@ export class ForceRecorder {
         namedX: 0, namedY: 0, vx: body.vel.x, vy: body.vel.y,
       });
     }
+    if (this.active) for (const wall of walls) this.wallNames.set(wall.id, wall.name);
   }
 
   add(body: Body, id: string, label: string, kind: ForceKind,
@@ -124,6 +161,8 @@ export class ForceRecorder {
     for (const record of this.records.values()) {
       record.vx = record.body.vel.x;
       record.vy = record.body.vel.y;
+      record.namedX = record.x;
+      record.namedY = record.y;
     }
   }
 
@@ -131,12 +170,35 @@ export class ForceRecorder {
     for (const record of this.records.values()) {
       const body = record.body;
       this.add(body, id, label, kind,
-        (body.vel.x - record.vx) * body.mass,
-        (body.vel.y - record.vy) * body.mass, 1);
+        (body.vel.x - record.vx) * body.mass - (record.x - record.namedX),
+        (body.vel.y - record.vy) * body.mass - (record.y - record.namedY), 1);
     }
   }
 
-  finish(dt: number, endTime: number, stepCount: number): void {
+  /** Keep opposing contacts separate; an aggregate can hide both arrows. */
+  readonly contactImpulse = (
+    a: Body, b: Body | null, wallId: number | null,
+    nx: number, ny: number, normal: number, tangent: number,
+    invMa: number, invMb: number,
+  ): void => {
+    this.recordContactBody(a, b, wallId, -invMa, nx, ny, normal, tangent);
+    if (b !== null) this.recordContactBody(b, a, null, invMb, nx, ny, normal, tangent);
+  };
+
+  private recordContactBody(body: Body, source: Body | null, wallId: number | null,
+                            signedInvMass: number, nx: number, ny: number,
+                            normal: number, tangent: number): void {
+    if (!this.records.has(body)) return;
+    const id = source === null ? `wall-${wallId}` : `body-${source.id}`;
+    const name = source?.name ?? this.wallNames.get(wallId!) ?? `Wall ${wallId}`;
+    const scale = body.mass * signedInvMass;
+    this.add(body, `reaction-${id}`, `Reaction from ${name}`, "reaction",
+      normal * nx * scale, normal * ny * scale, 1);
+    this.add(body, `friction-${id}`, `Friction from ${name}`, "friction",
+      -tangent * ny * scale, tangent * nx * scale, 1);
+  }
+
+  finish(dt: number, endTime: number, stepCount: number, current = false): void {
     for (const record of this.records.values()) {
       const body = record.body;
       // Sleeping/locked bodies have no realised delta-v diagnostic. Their
@@ -165,16 +227,18 @@ export class ForceRecorder {
       for (const entry of entries) { namedX += entry.fx; namedY += entry.fy; }
       // Any remaining integration roundoff or guard effect is a numerical
       // correction, never evidence of an unobserved physical contact.
-      append({ id: "numerical-correction", label: "Numerical correction",
+      if (!current) append({ id: "numerical-correction", label: "Numerical correction",
         kind: "correction", x: (body.netForce.x - namedX) * dt,
         y: (body.netForce.y - namedY) * dt, axial: 0 }, tolerance);
       body.forceSnapshot = Object.freeze({
         entries: Object.freeze(entries), startTime: this.startTime, endTime,
         stepCount, x: body.pos.x, y: body.pos.y, vx: body.vel.x, vy: body.vel.y,
-        mass: body.mass, fx: body.netForce.x, fy: body.netForce.y,
+        mass: body.mass, fx: current ? namedX : body.netForce.x,
+        fy: current ? namedY : body.netForce.y,
       });
     }
     // Never retain references to deleted bodies between steps.
     this.records.clear();
+    this.wallNames.clear();
   }
 }

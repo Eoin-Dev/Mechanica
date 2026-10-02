@@ -134,6 +134,9 @@ the server reliably. CI installs all three engines with Linux system dependencie
 local installations use `npx playwright install chromium firefox webkit`.
 For a focused local check, append `-- --project=chromium` (or `firefox`/`webkit`)
 to `npm run test:e2e`. Required delivery validation runs all three projects.
+The Library study-discovery workflow has a 60-second total allowance for its
+six responsive/theme accessibility scans and numerical investigation; ordinary
+locator/assertion timeouts still apply.
 
 ## Test suite map
 
@@ -195,6 +198,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`education-analysis.test.ts`](../web/tests/education-analysis.test.ts) | Named free-body force ledgers that close to realised resultants, slope bases/components, ideal pulley tension/rate/acceleration/axle diagnostics, bounded transition detection, chronological event interpolation, unordered body versus wall contact identity including zero IDs, and rewind-safe event history. |
 | [`collision-model.test.ts`](../web/tests/collision-model.test.ts) | Unequal-mass collision velocities, lower material restitution, conserved vector momentum, analytic kinetic-energy loss, common tangential motion, smooth oblique wall rebound/impulse in either material order, and separation after a zero-restitution impact under a later force. |
 | [`force-ledger.test.ts`](../web/tests/force-ledger.test.ts) | Integrator/substep-consistent force averages, changing fields and drag without false reactions, singular-vector rejection, earlier-contact impulses, damping/limits, string/rod/spring/Atwood forces, mounted supports, actual approximate gravity, hidden source exclusion, immutable transient intervals, no extra expression evaluations, edit/restore/no-op lifecycle, and bit-identical physics with recording on/off in Normal/Performance/adaptive modes. App and Inspector suites also protect edit invalidation, history view retention, interval guidance and checkbox focus. Production acceptance checks actual painted force labels plus desktop/phone/enlarged layouts. |
+| [`force-preview.test.ts`](../web/tests/force-preview.test.ts) | Immediate exact floor/capsule contacts, loaded opposing neighbour forces, loaded/free inclined-plane cases, separate friction, taut/slack/compressed links, analytical Atwood and coupled floor/pulley loads, current-time field/driver sampling, cached changes, sleeping masses, complete live-state/identity/ID preservation and bit-identical subsequent Normal/Performance motion. Also verifies separate contact sources in completed intervals and shared indexed arrow/source symbols. |
 
 ### Expressions and math editing
 

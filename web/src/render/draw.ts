@@ -4,6 +4,7 @@ import { Body, Color, Wall } from "../engine/body";
 import { DistanceLink, Link, PulleyLink, SpringLink } from "../engine/links";
 import { World } from "../engine/world";
 import { ForceEntry, forceLedger, projectForce } from "../education/analysis";
+import { forceSymbols } from "../engine/force-diagnostics";
 import * as theme from "../ui/theme";
 import { css, lighten } from "../ui/theme";
 import { Camera, niceNumber } from "./camera";
@@ -1072,20 +1073,11 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   const forceColour = (entry: ForceEntry): Color => {
     if (entry.kind === "weight") return theme.BAD;
     if (entry.kind === "reaction") return theme.GOOD;
+    if (entry.kind === "friction") return theme.WARN;
     if (entry.kind === "correction") return theme.TEXT_DIM;
     if (entry.kind === "spring" || entry.kind === "string" ||
         entry.kind === "pulley" || entry.kind === "rod") return theme.WARN;
     return theme.ACCENT_HOT;
-  };
-  const forceSymbol = (entry: ForceEntry): string => {
-    if (entry.kind === "weight") return "W";
-    if (entry.kind === "reaction") return "R";
-    if (entry.kind === "correction") return "C";
-    if (entry.kind === "string" || entry.kind === "pulley") return "T";
-    if (entry.kind === "spring") return "Fₛ";
-    if (entry.kind === "rod") return entry.label.includes("thrust") ? "S" : "T";
-    if (entry.kind === "drag") return "D";
-    return "F";
   };
   let fbdCount = 0;
   let fbdArrows = false;
@@ -1100,6 +1092,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     const wall = body.forceSlopeWallId === null ? null :
       world.walls.find((candidate) => candidate.id === body.forceSlopeWallId) ?? null;
     const ledger = forceLedger(world, body, wall);
+    const symbols = forceSymbols(ledger.entries);
     for (const entry of ledger.entries) {
       const ex = sx + entry.fx * FORCE_ARROW_SCALE * vScale * zoom;
       const ey = sy - entry.fy * FORCE_ARROW_SCALE * vScale * zoom;
@@ -1108,7 +1101,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
                  vectorMinLengthPx);
       fbdArrows = true;
       if (Math.hypot(ex - sx, ey - sy) >= vectorMinLengthPx) {
-        fbdLabels.push({ text: `${forceSymbol(entry)} ${analysisNumber(Math.hypot(entry.fx, entry.fy))} N`,
+        fbdLabels.push({ text: `${symbols.get(entry.id)} ${analysisNumber(Math.hypot(entry.fx, entry.fy))} N`,
           x: ex, y: ey, color, right: ex >= sx });
         fbdVectors.push({ x1: sx, y1: sy, x2: ex, y2: ey });
       }

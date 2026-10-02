@@ -243,6 +243,12 @@ Post-integration velocity changes contribute impulses: projected Performance
 springs, contact normal/friction impulses, constraints/stops, global damping,
 and speed/stability guards. Dividing the accumulated impulses by the whole
 step's duration produces named forces over the same interval as `netForce`.
+Each loaded body/body or body/wall contact owns separate normal-reaction and
+friction rows. The optional contact observer reads the final solved impulses,
+including effective Performance contact inverse masses, without modifying the
+solve. Opposing neighbour forces therefore remain visible even when their sum
+is zero. Velocity-change accounting subtracts individually named impulses;
+support anchoring/roundoff residuals remain numerical corrections.
 Contact reactions remain available even when the contact ended before the last
 substep. Constraint projection and guard effects are identified as numerical
 corrections rather than unexplained contact reactions; floating-point closure
@@ -253,9 +259,28 @@ particles. Recorder working references are released after a step. Edits call
 `World.clearForceDiagnostics`; headless editors should do the same after
 changing authored forces without stepping. `forceLedger` rejects intervals
 whose time/count or body position, velocity, mass, or resultant no longer match.
-Without a valid interval it previews current authored forces and asks the user
-to step for link/contact forces; it never balances them against a stale
-resultant. Resting Performance bodies retain their balanced support preview.
+Without a valid interval, `World.currentForceSnapshot` calculates the authored
+model immediately on an isolated input graph. Constructor-free copies preserve
+body/link ownership without allocating IDs or sharing mutable vectors. It
+evaluates fields/drivers at the current clock, resolves springs/rods/pulley
+forces, predicts velocities over one nominal solver interval at fixed geometry
+and calculates loaded contact impulses. A microscopic query-only skin includes
+exact tangencies. Tighter query-only contact tolerances and at most 24 coupled
+link/support iterations improve static load estimates; live solver settings
+remain unchanged. Current resultants sum the calculated forces directly,
+avoiding cancellation from subtracting large nearly equal velocities.
+
+The query neither integrates positions nor calls the live stepper, changes
+time, live bodies/links/caches, saved data or history. Frozen results are shared
+until physical inputs, source names/functions or requested diagram choices
+change. Input comparison avoids serializing scenes on repeated reads. Edits
+and positive steps release cached references; strict no-op steps preserve them.
+Sleeping particles are evaluated as physical masses on the copy. A current
+preview uses the authored Normal model, while a valid Performance step average
+continues to describe the approximation actually run. Contact forces at impact
+are interval-dependent impulse estimates, not uniquely defined instantaneous
+forces. No reaction is invented solely because unloaded surfaces touch or to
+balance an old resultant. Compiled field functions must remain pure readers.
 
 ### Constant force, uniform gravity, and drag
 

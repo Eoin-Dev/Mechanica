@@ -2,6 +2,10 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
 test("study topics are discoverable and the elastic-string investigation matches its card", async ({ page }, testInfo) => {
+  // Six responsive/theme accessibility scans plus the real turning-point
+  // investigation share this workflow. Keep ordinary locator timeouts, but
+  // allow the complete sequence to finish on slower browser hosts.
+  test.setTimeout(60_000);
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(() => localStorage.setItem("mechanica.settings",

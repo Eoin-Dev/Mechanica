@@ -84,9 +84,8 @@ export function touchingSlopeWall(body: Body, wall: Wall): boolean {
   return Math.hypot(body.pos.x - x, body.pos.y - y) <= reach + 1e-6;
 }
 
-/** Use one completed interval for both named forces and m*delta-v/dt.
- * Before a recorded step (or after an edit), show current authored forces;
- * this preview cannot infer a contact reaction from an old resultant. */
+/** Use a completed interval, or an isolated calculation at the current state.
+ * Never infer contact forces by balancing an old resultant. */
 export function forceLedger(world: World, body: Body,
                             referenceWall: Wall | null = null): ForceLedger {
   const basis = referenceWall !== null && world.walls.includes(referenceWall) &&
@@ -99,6 +98,11 @@ export function forceLedger(world: World, body: Body,
       sample.fx === body.netForce.x && sample.fy === body.netForce.y) {
     return { entries: sample.entries, resultant: { fx: sample.fx, fy: sample.fy },
       basis, mode: "step-average", interval: { start: sample.startTime, end: sample.endTime } };
+  }
+  const current = world.currentForceSnapshot(body);
+  if (current !== null) {
+    return { entries: current.entries, resultant: { fx: current.fx, fy: current.fy },
+      basis, mode: "current", interval: null };
   }
   const entries: ForceEntry[] = [];
   if (!body.isRodEndpoint && !body.isAnchor && !body.locked && Number.isFinite(body.mass) && body.mass > 0) {

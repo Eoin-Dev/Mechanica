@@ -389,6 +389,7 @@ describe("Force values and sources", () => {
     const { app, panel, inspector } = makeInspector();
     app.world.gravity = 9.8;
     const body = new Body(new Vec2(0, 0), 0.2, 2);
+    body.noRotation = true;
     body.constForce.set(3, -0.0004);
     body.showForceComponents = true;
     app.world.bodies.push(body);
@@ -403,20 +404,23 @@ describe("Force values and sources", () => {
     details.open = true;
     inspector.refresh();
     const rows = [...details.querySelectorAll("li")];
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(6);
     expect(rows[1].textContent).toContain("Applied force");
     expect(rows[1].textContent).toContain("Fy -4.00e-4 N");
     expect(rows[1].textContent).toContain("∥ 3.00 N⊥ -4.00e-4 N");
     expect(rows[2].textContent).toContain("<img src=x onerror=alert(1)>");
     expect(details.querySelector("img")).toBeNull();
-    expect(rows[3].textContent).toContain("Resultant");
-    expect(rows[3].textContent).toContain("Fx 6.00 NFy -19.60 N");
+    expect(rows[3].textContent).toContain(`R: Reaction from ${wall.name}`);
+    expect(rows[4].textContent).toContain(`f: Friction from ${wall.name}`);
+    expect(rows[4].textContent).toContain("Fx -6.00 N");
+    expect(rows[5].textContent).toContain("Resultant");
+    expect(rows[5].textContent).toContain("Fx 0.00 NFy 0.00 N");
     details.querySelector("summary")!.focus();
     body.constForce.x = -10;
     inspector.refresh();
     expect(panel.querySelector(".force-values")).toBe(details);
     expect([...details.querySelectorAll("li")]).toEqual(rows);
-    expect(rows[3].textContent).toContain("Fx -7.00 N");
+    expect(rows[4].textContent).toContain("Fx 7.00 N");
     expect(document.activeElement).toBe(details.querySelector("summary"));
     expect(app.undoStack.canUndo).toBe(false);
   });
@@ -628,7 +632,8 @@ describe("Inspector structure key", () => {
     checkbox.click();
     checkbox.focus();
     inspector.refresh();
-    expect(note.textContent).toContain("Step once");
+    expect(note.textContent).toContain("Current forces.");
+    expect(note.textContent).not.toContain("Step once");
     app.world.step(1 / 60);
     inspector.refresh();
     expect(note.textContent).toContain("Average forces: 0.000–0.017 s");
@@ -639,7 +644,7 @@ describe("Inspector structure key", () => {
     body.constForce.x = 3;
     app.commitEdit();
     inspector.refresh();
-    expect(panel.querySelector(".force-interval-note")?.textContent).toContain("Current applied forces");
+    expect(panel.querySelector(".force-interval-note")?.textContent).toContain("Current forces.");
   });
 
   it("selects displacement from View and follows graph changes without replacing its control", () => {

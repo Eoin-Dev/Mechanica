@@ -491,7 +491,8 @@ export function slider(label: string, get: () => number,
   const val = el("input", { class: "val", type: "text", inputmode: "decimal",
                             "aria-label": `${label} (type an exact value)`,
                             title: "Click to type an exact value" });
-  const row = el("div", { class: "row" },
+  const row = el("div", { class: "row", ...(opts.disabled ?
+    { role: "group", "aria-label": label, "aria-disabled": "false" } : {}) },
                  el("span", { class: "lbl", text: label }), input, val);
   if (opts.tooltip) row.title = opts.tooltip;
 
@@ -636,6 +637,7 @@ export function slider(label: string, get: () => number,
       input.disabled = dis;
       val.disabled = dis;
       row.classList.toggle("disabled", dis);
+      row.setAttribute("aria-disabled", String(dis));
       if (dis) {
         dragging = false;
         editing = false;
