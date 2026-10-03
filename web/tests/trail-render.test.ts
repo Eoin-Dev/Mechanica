@@ -8,6 +8,7 @@ import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
 import { Camera } from "../src/render/camera";
 import { ViewSettings, drawGrid, drawWorld } from "../src/render/draw";
+import { snapshot } from "../src/scene/snapshot";
 import { Trail } from "../src/render/trail";
 import { analysisForceColour } from "../src/render/analysis-overlays";
 import { ACC_COLOR, FORCE_COLOR, VEL_COLOR, WARN, css } from "../src/ui/theme";
@@ -784,5 +785,90 @@ describe("short trail fade coverage", () => {
     expect(Math.max(...colour.map((value, k) => Math.abs(value - body.color[k])))).toBeLessThanOrEqual(5);
     expect(trail.count).toBe(count); expect(trail.x(count - 1)).toBe(1);
     setTheme("dark");
+  });
+});
+
+
+describe("adaptive slack strings", () => {
+  function scene(kind: "rope" | "elastic" | "pulley", extra: number) {
+    const a = new Body(new Vec2(-1, 0)), b = new Body(new Vec2(1, 0)), world = worldWith(a, b);
+    let link: DistanceLink | SpringLink | PulleyLink;
+    if (kind === "pulley") {
+      const wheel = new Body(new Vec2(0, 1)); world.bodies.push(wheel);
+      link = new PulleyLink(a, b, wheel); link.length += extra;
+    } else if (kind === "elastic") link = new SpringLink(a, b, 2 + extra, 20, 0, true);
+    else link = new DistanceLink(a, b, 2 + extra, true);
+    world.links.push(link); return { world, link };
+  }
+  const kinds = ["rope", "elastic", "pulley"] as const;
+
+  it.each(kinds)("adds stable increasing curvature to a %s without altering physical state", kind => {
+    const { world, link } = scene(kind, 0), cam = new Camera(800, 600); cam.zoom = 100;
+    let previous = 0;
+    for (const extra of [0.005, 0.03, 0.2]) {
+      if (link instanceof SpringLink) link.restLength = 2 + extra;
+      else link.length = (link instanceof PulleyLink ? link.currentLength() : 2) + extra;
+      const before = snapshot(world), normal = recCtx(), repeated = recCtx();
+      drawWorld(normal.ctx, cam, world, new ViewSettings(), [], null, new Map(), 800, 600);
+      drawWorld(repeated.ctx, cam, world, new ViewSettings(), [], null, new Map(), 800, 600);
+      expect(snapshot(world)).toBe(before); expect(repeated.ops).toEqual(normal.ops);
+      const curves = normal.ops.filter(op => op.op === "quadraticCurveTo" && op.style === "rgb(140,125,100)");
+      expect(curves).toHaveLength(kind === "pulley" ? 2 : 1);
+      // With these fixed horizontal/angled endpoints, increased excess moves
+      // the control further from the taut segment. No solver quantity changes.
+      const magnitude = kind === "pulley" ? Math.abs(curves[0].cx! - 400) : curves[0].cy! - 300;
+      expect(magnitude).toBeGreaterThan(previous); previous = magnitude;
+    }
+  });
+
+  it.each(kinds)("leaves a taut %s straight", kind => {
+    const { world } = scene(kind, 0), recorder = recCtx();
+    drawWorld(recorder.ctx, new Camera(800, 600), world, new ViewSettings(), [], null, new Map(), 800, 600);
+    expect(recorder.ops.some(op => op.op === "quadraticCurveTo")).toBe(false);
+  });
+
+  it.each([false, true])("draws a released slack pulley as one string (performance=%s)", performance => {
+    const angleA = -0.1, angleB = angleA - 2 * Math.acos(0.22 / 2) - 1e-5;
+    const a = new Body(new Vec2(2 * Math.cos(angleA), 2 * Math.sin(angleA))),
+      b = new Body(new Vec2(2 * Math.cos(angleB), 2 * Math.sin(angleB))),
+      wheel = new Body(new Vec2()), link = new PulleyLink(a, b, wheel), world = worldWith(a, b, wheel);
+    a.pos.set(-2, -0.5); b.pos.set(2, -0.5); link.captureSafePositions();
+    link.length = link.currentLength() + 0.2; world.links.push(link);
+    expect(link.geometry().wrapped).toBe(false);
+    const recorder = recCtx(), before = snapshot(world);
+    drawWorld(recorder.ctx, new Camera(800, 600), world, new ViewSettings(), [], null,
+      new Map(), 800, 600, 1, performance);
+    expect(recorder.ops.filter(op => op.op === "quadraticCurveTo")).toHaveLength(performance ? 0 : 1);
+    expect(snapshot(world)).toBe(before);
+  });
+
+  it.each([0, 1, 2, 3])("omits all slack-curve work in actual Performance profile %s", level => {
+    for (const kind of kinds) {
+      const { world } = scene(kind, 0.5); world.performance = true; world.performanceLevel = level;
+      const recorder = recCtx();
+      drawWorld(recorder.ctx, new Camera(800, 600), world, new ViewSettings(), [], null,
+        new Map(), 800, 600, 1, true, level === 3);
+      expect(recorder.ops.some(op => op.op === "quadraticCurveTo")).toBe(false);
+      expect(recorder.ops.some(op => op.op === "lineTo" && op.style === "rgb(140,125,100)")).toBe(true);
+    }
+  });
+
+  it("retains a visible slack bow when both endpoints lie outside the viewport", () => {
+    const a = new Body(new Vec2(-1, 1.7)), b = new Body(new Vec2(1, 1.7)), world = worldWith(a, b);
+    world.links.push(new DistanceLink(a, b, 2.2, true));
+    const cam = new Camera(400, 300); cam.zoom = 100; const recorder = recCtx();
+    drawWorld(recorder.ctx, cam, world, new ViewSettings(), [], null, new Map(), 400, 300);
+    const q = recorder.ops.find(op => op.op === "quadraticCurveTo" && op.style === "rgb(140,125,100)")!;
+    expect(q).toBeDefined(); expect((-20 + 2 * q.cy! - 20) / 4).toBeGreaterThan(0);
+  });
+
+  it.each([false, true])("retains the wrapped wheel arc at the viewport edge (simplify=%s)", simplify => {
+    const a = new Body(new Vec2(-2.6, -0.5)), b = new Body(new Vec2(-2.6, 0.5)),
+      wheel = new Body(new Vec2(-2.21, 0)), world = worldWith(a, b, wheel);
+    const link = new PulleyLink(a, b, wheel); link.wrapTurns = 1; link.length = link.currentLength();
+    world.links.push(link); const cam = new Camera(400, 300); cam.zoom = 100; const recorder = recCtx();
+    expect(link.geometry().wrapped).toBe(true);
+    drawWorld(recorder.ctx, cam, world, new ViewSettings(), [], null, new Map(), 400, 300, 1, simplify);
+    expect(recorder.ops.some(op => op.op === "arc" && op.style === "rgb(170,150,115)")).toBe(true);
   });
 });

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { App } from "../src/app";
 import { Vec2 } from "../src/core/vec";
 import { Body, PULLEY_RADIUS } from "../src/engine/body";
-import { DistanceLink, PulleyLink } from "../src/engine/links";
+import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
 import { VEL_ARROW_SCALE } from "../src/render/draw";
 import { TimeSeries } from "../src/ui/plots";
 
@@ -640,5 +640,37 @@ describe("pulley drag transaction and mode boundaries", () => {
     app.redo();
     expect(app.world.bodies.find(body => body.id === idA)!.pos.y).toBeCloseTo(-0.55, 9);
     expect(app.world.bodies.find(body => body.id === idB)!.pos.y).toBeCloseTo(0.05, 9);
+  });
+});
+
+
+describe("visible slack-string picking", () => {
+  it.each([false, true])("uses the visible rope/elastic curve only in Normal mode (performance=%s)", performance => {
+    for (const elastic of [false, true]) {
+      const { app } = makeApp(); app.newScene(); app.setPerfMode(performance);
+      const a = new Body(new Vec2(-1, 0)), b = new Body(new Vec2(1, 0));
+      const link = elastic ? new SpringLink(a, b, 3, 20, 0, true) : new DistanceLink(a, b, 3, true);
+      app.world.bodies.push(a, b); app.world.links.push(link);
+      const mid = app.camera.toScreen(new Vec2(0, -48 / app.camera.zoom));
+      expect(app.controller.pick(mid)).toBe(performance ? null : link);
+      const straight = app.camera.toScreen(new Vec2());
+      expect(app.controller.pick(straight)).toBe(performance ? link : null);
+    }
+  });
+});
+
+
+describe("pulley bowed-leg hit geometry", () => {
+  it.each([false, true])("selects the visible leg in its matching display mode (performance=%s)", performance => {
+    const { app } = makeApp(); app.newScene(); app.setPerfMode(performance);
+    const a = new Body(new Vec2(-PULLEY_RADIUS, -0.25)), b = new Body(new Vec2(PULLEY_RADIUS, -0.25)),
+      wheel = new Body(new Vec2(0, 1)), link = new PulleyLink(a, b, wheel);
+    link.length += 0.4; app.world.bodies.push(a, b, wheel); app.world.links.push(link);
+    const extra = 0.399 * app.camera.zoom / 2, length = 1.25 * app.camera.zoom;
+    const bow = Math.min(48, Math.sqrt(extra * (2 * length + extra)) / 2);
+    const curved = app.camera.toScreen(new Vec2(-PULLEY_RADIUS - bow / app.camera.zoom, 0.375));
+    expect(app.controller.pick(curved)).toBe(performance ? null : link);
+    const straight = app.camera.toScreen(new Vec2(-PULLEY_RADIUS, 0.375));
+    expect(app.controller.pick(straight)).toBe(performance ? link : null);
   });
 });

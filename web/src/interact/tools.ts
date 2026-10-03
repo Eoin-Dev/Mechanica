@@ -32,6 +32,7 @@ import {
 import { Driver } from "../engine/world";
 import { Selectable, VEL_ARROW_SCALE, distToSegment, drawVelocityHandle,
          pivotGlyphMetrics, snapStep } from "../render/draw";
+import { slackStringDistance } from "../render/slack-string";
 import { isTouch } from "../ui/dom";
 import type { App } from "../app";
 
@@ -675,13 +676,30 @@ export class CanvasController {
     for (let i = links.length - 1; i >= 0; i--) {
       const link = links[i];
       if (link instanceof PulleyLink) {
-        if (distToSegment(worldP, link.a.pos, link.guideA()) < 6.0 / app.camera.zoom ||
-            distToSegment(worldP, link.b.pos, link.guideB()) < 6.0 / app.camera.zoom) {
-          return link;
-        }
-      } else if (distToSegment(worldP, link.a.pos, link.b.pos) <
-                 6.0 / app.camera.zoom) {
-        return link;
+        const geom = link.geometry();
+        const extra = !app.perfMode ? (link.length - geom.totalLength - 1e-3) * app.camera.zoom : 0;
+        if (extra > 0) {
+          const a = app.camera.toScreen(link.a.pos), b = app.camera.toScreen(link.b.pos);
+          if (!geom.wrapped) {
+            if (slackStringDistance(...mouse, ...a, ...b, extra) < 6) return link;
+          } else {
+            const ga = app.camera.toScreen(geom.ga), gb = app.camera.toScreen(geom.gb),
+              wheel = app.camera.toScreen(link.pulley.pos), straight = geom.da + geom.db;
+            if (slackStringDistance(...mouse, ...a, ...ga,
+                extra * (straight > 1e-12 ? geom.da / straight : 0.5), ...wheel) < 6 ||
+                slackStringDistance(...mouse, ...gb, ...b,
+                extra * (straight > 1e-12 ? geom.db / straight : 0.5), ...wheel) < 6) return link;
+          }
+        } else if (distToSegment(worldP, link.a.pos, geom.ga) < 6.0 / app.camera.zoom ||
+                   distToSegment(worldP, link.b.pos, geom.gb) < 6.0 / app.camera.zoom) return link;
+      } else {
+        const natural = link instanceof SpringLink ? (link.tensionOnly ? link.restLength : 0)
+          : link.isRope ? link.length : 0;
+        const extra = !app.perfMode && natural > 0 ? (natural - link.a.pos.distTo(link.b.pos)) * app.camera.zoom : 0;
+        if (extra > 0) {
+          const a = app.camera.toScreen(link.a.pos), b = app.camera.toScreen(link.b.pos);
+          if (slackStringDistance(...mouse, ...a, ...b, extra) < 6) return link;
+        } else if (distToSegment(worldP, link.a.pos, link.b.pos) < 6.0 / app.camera.zoom) return link;
       }
     }
     const walls = app.world.walls;

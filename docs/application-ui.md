@@ -695,6 +695,17 @@ Major behavior includes:
   zooms in instead of multiplying decorative segments per link;
 - distinct taut/slack string styling with a one-millimetre visual tolerance so
   microscopic projection residuals cannot make a pulley string flicker;
+- Normal-mode slack ropes, elastic strings and pulley legs use a stable bowed
+  visual whose depth increases with excess natural length, up to 48 CSS pixels
+  per nondegenerate segment. Coincident ends draw a small bounded loop. Pulley
+  legs bow away from the wheel and divide the cue according to straight-leg
+  length; a released route uses one curve. Endpoints and wrapped contact points
+  remain fixed. This is a display cue rather than a simulated hanging-string
+  shape; it does not change routed lengths, forces or contact calculations.
+  Picking follows the bowed line within the ordinary six-pixel tolerance.
+  Viewport culling includes the curve's control extent and the full wheel arc.
+  Every Performance tier keeps straight strings and bypasses the curve/picking
+  workload;
 - routed pulley strings with two live tangent legs and a finite wrapped arc;
 - standalone rods as two parallel rails, selected endpoint badges `A` and `B`,
   and rod supports whose triangular glyph dimensions scale with physical rod

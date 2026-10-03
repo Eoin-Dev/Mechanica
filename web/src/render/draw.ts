@@ -1,4 +1,5 @@
 /** Canvas rendering: grid, bodies, walls, links and analysis overlays. */
+import { addSlackString, MAX_SLACK_EXTENT_PX } from "./slack-string";
 import { Vec2 } from "../core/vec";
 import { Body, Color, Wall } from "../engine/body";
 import { DistanceLink, Link, PulleyLink, SpringLink } from "../engine/links";
@@ -768,10 +769,14 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     const bx = link.b.pos.x, by = link.b.pos.y;
     const px = link instanceof PulleyLink ? link.pulley.pos.x : ax;
     const py = link instanceof PulleyLink ? link.pulley.pos.y : ay;
-    if (Math.max(ax, bx, px) < minX - margin ||
-        Math.min(ax, bx, px) > maxX + margin ||
-        Math.max(ay, by, py) < minY - margin ||
-        Math.min(ay, by, py) > maxY + margin) {
+    const stringVisual = link instanceof PulleyLink ||
+      (link instanceof SpringLink ? link.tensionOnly : link.isRope);
+    const linkMargin = margin + (!simplify && stringVisual ? MAX_SLACK_EXTENT_PX / cam.zoom : 0);
+    const wheelRadius = link instanceof PulleyLink ? link.pulley.radius : 0;
+    if (Math.max(ax, bx, px + wheelRadius) < minX - linkMargin ||
+        Math.min(ax, bx, px - wheelRadius) > maxX + linkMargin ||
+        Math.max(ay, by, py + wheelRadius) < minY - linkMargin ||
+        Math.min(ay, by, py - wheelRadius) > maxY + linkMargin) {
       continue;
     }
     const pax = (ax - cx) * zoom + ox;
@@ -795,8 +800,16 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
       const color = selected ? theme.SELECTION
         : hovered ? STRING_HOVER : slack ? STRING_SLACK : STRING_TAUT;
       const path = STROKES.path(color, slack ? 1 : 2);
-      path.moveTo(pax, pay);
-      path.lineTo(pga[0], pga[1]);
+      const extra = !simplify && slack ? (link.length - geom.totalLength - 1e-3) * zoom : 0;
+      if (!geom.wrapped) {
+        if (extra > 0) addSlackString(path, pax, pay, pbx, pby, extra);
+        else addLine(path, pax, pay, pbx, pby);
+        continue;
+      }
+      const straight = geom.da + geom.db;
+      if (extra > 0) addSlackString(path, pax, pay, pga[0], pga[1],
+        extra * (straight > 1e-12 ? geom.da / straight : 0.5), centre[0], centre[1]);
+      else addLine(path, pax, pay, pga[0], pga[1]);
       if (geom.wrapped) {
         const guideAngle = Math.atan2(ga.y - link.pulley.pos.y,
                                       ga.x - link.pulley.pos.x);
@@ -806,8 +819,9 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
         path.arc(centre[0], centre[1], link.pulley.radius * zoom,
                  start, end, geom.sweep > 0);
       }
-      path.moveTo(pgb[0], pgb[1]);
-      path.lineTo(pbx, pby);
+      if (extra > 0) addSlackString(path, pgb[0], pgb[1], pbx, pby,
+        extra * (straight > 1e-12 ? geom.db / straight : 0.5), centre[0], centre[1]);
+      else addLine(path, pgb[0], pgb[1], pbx, pby);
     } else if (link instanceof SpringLink) {
       if (link.tensionOnly) {
         // elastic string: a plain line, thinner while slack
@@ -817,7 +831,10 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
         const slack = dx * dx + dy * dy < link.restLength * link.restLength;
         const color = selected ? theme.SELECTION
           : hovered ? STRING_HOVER : slack ? STRING_SLACK : STRING_TAUT;
-        addLine(STROKES.path(color, slack ? 1 : 2), pax, pay, pbx, pby);
+        const path = STROKES.path(color, slack ? 1 : 2);
+        if (!simplify && slack) addSlackString(path, pax, pay, pbx, pby,
+          (link.restLength - Math.sqrt(dx * dx + dy * dy)) * zoom);
+        else addLine(path, pax, pay, pbx, pby);
       } else {
         const color: Color = selected ? theme.SELECTION
           : hovered ? [200, 205, 215] : [135, 142, 152];
@@ -835,7 +852,10 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
         dx * dx + dy * dy < slackLimit * slackLimit;
       const color = selected ? theme.SELECTION
         : hovered ? STRING_HOVER : slack ? STRING_SLACK : STRING_TAUT;
-      addLine(STROKES.path(color, slack ? 1 : 2), pax, pay, pbx, pby);
+      const path = STROKES.path(color, slack ? 1 : 2);
+      if (!simplify && slack) addSlackString(path, pax, pay, pbx, pby,
+        (link.length - Math.sqrt(dx * dx + dy * dy)) * zoom);
+      else addLine(path, pax, pay, pbx, pby);
     } else {
       // A rod is a beam, not a wall or a thin string. The double rail makes
       // that distinction visible even when its system-owned endpoints are
