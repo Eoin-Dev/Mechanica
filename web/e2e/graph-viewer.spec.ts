@@ -50,6 +50,14 @@ test("graph inspection, zoom, navigation and both exports retain exact measureme
   await expect(reading).toContainText("Point");
   await page.mouse.wheel(0, -120);
   await expect(dialog.locator(".graph-zoom-level")).not.toHaveText("1×");
+  const beforePan = await chart.locator('[data-channel="sx_m"]').getAttribute("d");
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.5);
+  await page.mouse.down(); await page.mouse.move(box.x + box.width * 0.8, box.y + box.height * 0.7, { steps: 6 });
+  await page.mouse.up();
+  await expect(chart.locator('[data-channel="sx_m"]')).not.toHaveAttribute("d", beforePan!);
+  await expect(chart).not.toHaveClass(/panning/);
+  await chart.focus(); await chart.press("Shift+ArrowLeft");
+  await expect(chart.locator("g[clip-path] path[data-channel]")).toHaveCount(2);
   await expect(chart.locator("g[clip-path] path[data-channel]")).toHaveCount(2);
   const receivingImage = page.waitForEvent("download");
   await dialog.getByRole("button", { name: "Export PNG", exact: true }).click();

@@ -40,6 +40,32 @@ function entry(world: World, body: Body, id: string) {
   return forceLedger(world, body).entries.find(force => force.id === id);
 }
 
+describe("batched diagram previews", () => {
+  it("shares one physical-input scan and preserves the exact per-particle answers", () => {
+    const world = new World(); const a = particle(world, -1, 1), b = particle(world, 1, 1);
+    a.constForce.x = 3; b.constForce.y = 2;
+    const expected = [world.currentForceSnapshot(a), world.currentForceSnapshot(b)];
+    const scan = vi.spyOn(world as unknown as { forceInputsChanged(): boolean }, "forceInputsChanged");
+    expect(world.withCurrentForceBatch(() => [world.currentForceSnapshot(a), world.currentForceSnapshot(b)]))
+      .toEqual(expected);
+    expect(scan).toHaveBeenCalledTimes(1);
+    a.constForce.x = 7; scan.mockClear();
+    expect(world.withCurrentForceBatch(() => world.withCurrentForceBatch(() => [world.currentForceSnapshot(a), world.currentForceSnapshot(b)]))![0]!.entries
+      .find(entry => entry.id === "applied")!.fx).toBe(7);
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect(world.currentForceSnapshot(a)!.entries.find(entry => entry.id === "applied")!.fx).toBe(7);
+    expect(scan).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases batch state after a thrown reader and observes subsequent edits", () => {
+    const world = new World(); const body = particle(world, 0, 1);
+    expect(() => world.withCurrentForceBatch(() => { world.currentForceSnapshot(body); throw new Error("reader"); }))
+      .toThrow("reader");
+    body.constForce.x = 9;
+    expect(world.currentForceSnapshot(body)!.entries.find(entry => entry.id === "applied")!.fx).toBe(9);
+  });
+});
+
 describe("immediate, isolated force calculations", () => {
   it("shows weight and a floor reaction at exact tangency before any step", () => {
     const world = new World();
@@ -310,8 +336,19 @@ describe("force source symbols", () => {
     }
     const symbols = forceSymbols(entries);
     expect(symbols.get("reaction-0")).toBe("R₁"); expect(symbols.get("reaction-11")).toBe("R₁₂");
-    expect(symbols.get("friction-0")).toBe("F"); expect(symbols.get("friction-1")).toBe("F");
+    expect(symbols.get("friction-0")).toBe("F₁"); expect(symbols.get("friction-1")).toBe("F₂");
     expect(symbols.get("string-1")).toBe("T₂"); expect(symbols.get("applied-1")).toBe("f₂");
-    expect(new Set(symbols.values()).size).toBe(entries.length - 1);
+    expect(new Set(symbols.values()).size).toBe(entries.length);
+  });
+  it("uses W for both gravitational sources, T for tension and P for thrust", () => {
+    const pairs = [
+      ["weight", "Weight", "W₁"], ["gravity", "Mutual gravity", "W₂"],
+      ["spring", "Spring tension", "T₁"], ["string", "String tension", "T₂"],
+      ["rod", "Rod tension", "T₃"], ["pulley", "Pulley-string tension", "T₄"],
+      ["spring", "Spring thrust", "P₁"], ["rod", "Rod thrust", "P₂"],
+      ["applied", "Applied force", "f₁"], ["drag", "Air resistance", "f₂"],
+    ] as const;
+    const entries = pairs.map(([kind, label], index) => ({ id: String(index), kind, label, fx: 1, fy: 0 }));
+    expect([...forceSymbols(entries).values()]).toEqual(pairs.map(pair => pair[2]));
   });
 });

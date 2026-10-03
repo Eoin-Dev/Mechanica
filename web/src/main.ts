@@ -111,12 +111,16 @@ const recovery = new TabRecovery(() => window.sessionStorage);
 const recovered = recovery.read();
 if (recovered.status === "loaded") {
   app.loadWorld(recovered.world, "previous tab", false);
+  app.restoreTabPresentation(recovered.presentation, recovered.initial);
+  inspector.restoreTabPresentation(recovered.presentation);
 } else if (recovered.status === "invalid" || recovered.status === "too-large") {
   app.toast("Could not restore the previous tab. Saved scenes are available in Library.");
 }
 let recoveryWarning = false;
 const checkpoint = (state: string): void => {
-  const status = recovery.write(state);
+  const tab = app.tabRecoveryState();
+  tab.presentation.inspector = inspector.tabRecoveryState();
+  const status = recovery.write(state, tab.presentation, tab.initial);
   if ((status === "unavailable" || status === "too-large") && !recoveryWarning) {
     recoveryWarning = true;
     app.toast(status === "too-large"
@@ -129,7 +133,7 @@ const checkpointLive = (): void => {
   try { checkpoint(snapshot(app.world)); }
   catch { /* Recovery must not interrupt the live simulation. */ }
 };
-setInterval(() => { if (app.playing) checkpointLive(); }, 5000);
+setInterval(checkpointLive, 5000);
 window.addEventListener("pagehide", checkpointLive);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") checkpointLive();

@@ -14,7 +14,7 @@ import { Body } from "../src/engine/body";
 import { DistanceLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
 import { CanvasController } from "../src/interact/tools";
-import { Selectable } from "../src/render/draw";
+import { Selectable, VEL_ARROW_SCALE } from "../src/render/draw";
 import type { App } from "../src/app";
 
 /** Pixels per metre for the stub camera.
@@ -462,5 +462,19 @@ describe("left-drag preserves velocity", () => {
     c.release([300, 20 * Math.sin(6)]);
     expect(maxRodError).toBeLessThan(2e-3);
     expect(bobs[2].pos.x).toBeGreaterThan(0.5);
+  });
+});
+
+describe("Performance-mode diagram choices and velocity editing", () => {
+  it.each([false, true])("only an effective Normal diagram hides the velocity handle (%s)", performanceMode => {
+    const { app, world, controller } = makeApp(false);
+    (app as unknown as { perfMode: boolean }).perfMode = performanceMode;
+    const body = new Body(new Vec2(0, 0), 0.2, 1);
+    body.showForceComponents = true; body.vel.x = 1;
+    world.bodies.push(body); app.setSelection([body]);
+    (controller as unknown as { press(m: [number, number]): void })
+      .press([VEL_ARROW_SCALE * ZOOM, 0]);
+    expect((controller as unknown as { velDrag: Body | null }).velDrag).toBe(performanceMode ? body : null);
+    expect(body.showForceComponents).toBe(true);
   });
 });

@@ -61,13 +61,15 @@ export class Toolbar implements Panel {
     // simulation clock: type a time to re-simulate to it
     this.timeInput = el("input", {
       type: "text", inputmode: "decimal",
-      style: "width:76px;flex:none;text-align:right;",
+      style: "width:calc(8ch + 1rem);min-width:76px;flex:none;text-align:right;",
       title: "Simulation clock (s). Type a time to re-simulate to it.",
       "aria-label": "Simulation time in seconds",
     });
     let timeFocused = false;
     let timeEditText = "";
     let timeCancelled = false;
+    const clockText = () => (app.seeking ? app.seekingTime : app.world.time)
+      .toFixed(app.collisionFrame ? 6 : 2);
     this.timeInput.addEventListener("focus", () => {
       timeFocused = true;
       timeEditText = this.timeInput.value;
@@ -81,7 +83,7 @@ export class Toolbar implements Panel {
           app.toast("Could not seek to that time. Try again.");
         });
       }
-      this.timeInput.value = app.world.time.toFixed(2);
+      this.timeInput.value = clockText();
     });
     this.timeInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.timeInput.blur();
@@ -94,8 +96,10 @@ export class Toolbar implements Panel {
     });
     this.group.add({ root: this.timeInput, refresh: () => {
       if (!timeFocused) {
-        const value = (app.seeking ? app.seekingTime : app.world.time).toFixed(2);
+        const value = clockText();
         if (this.timeInput.value !== value) this.timeInput.value = value;
+        const width = `calc(${Math.max(8, value.length)}ch + 1rem)`;
+        if (this.timeInput.style.width !== width) this.timeInput.style.width = width;
       }
     } });
     this.timeControls = el("div", { class: "time-ctrl", role: "group",

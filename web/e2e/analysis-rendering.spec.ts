@@ -34,7 +34,7 @@ test("scientific canvas captions remain readable, separate and contained", async
     };
     const fill = CanvasRenderingContext2D.prototype.fillText;
     CanvasRenderingContext2D.prototype.fillText = function(text, x, y, maxWidth) {
-      const isCaption = /^(?:[WFRCDTSf]|fₛ|F[∥⊥])[₀-₉]*\s.*N$/.test(text);
+      const isCaption = /^[WFRCTPf][₀-₉]*[∥⊥]?\s.*N$/.test(text);
       const isComponent = /^(?:Slope components \(N\)|∥ Along|⊥ Normal|[WFRCDTS]|fₛ|-?\d+(?:\.\d+)?(?:e[+-]?\d+)?)$/.test(text);
       if (this.canvas.id === "canvas" && (isCaption || isComponent)) {
         const metrics = this.measureText(text);
@@ -152,15 +152,15 @@ test("scientific canvas captions remain readable, separate and contained", async
   await fy.press("Enter");
   await expect(sources).toContainText("Fx -1.00e+6 N");
   await expect(sources).toContainText("Fy -4.00e-4 N");
-  const slope = page.getByRole("combobox", { name: "Resolve forces relative to a slope", exact: true });
+  const slope = page.getByRole("checkbox", { name: "Resolve weight on slope", exact: true });
   await expect(slope).toBeDisabled();
-  await expect(slope).toHaveAttribute("title", "No slope in contact.");
+  await expect(slope).toHaveAttribute("aria-description", "No slope in contact.");
   await page.getByRole("checkbox", { name: "Collides", exact: true }).setChecked(true);
   await slope.scrollIntoViewIfNeeded();
   await expect(slope).toBeEnabled();
-  await slope.selectOption("1");
-  await expect(sources).toContainText("∥ -9.70e+5 N");
-  await expect(sources).toContainText("⊥ 2.43e+5 N");
+  await slope.check();
+  await expect(sources).toContainText("∥ -4.75 N");
+  await expect(sources).toContainText("⊥ -19.01 N");
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
     const open = page.getByRole("button", { name: "Open Inspector", exact: true });
@@ -181,7 +181,7 @@ test("scientific canvas captions remain readable, separate and contained", async
     if (width <= 760) await page.getByRole("button", { name: "Hide Inspector", exact: true }).click();
     await expect.poll(() => page.evaluate(() => (window as unknown as { analysisComponentRows: Caption[] }).analysisComponentRows.length))
       .toBe(0);
-    await expect.poll(() => page.evaluate(() => (window as unknown as { analysisCaptions: Caption[] }).analysisCaptions.some(row => row.text.startsWith("F∥ ")))).toBe(true);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { analysisCaptions: Caption[] }).analysisCaptions.some(row => row.text.startsWith("W∥ ")))).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`slope-components-${width}.png`) });
     const metrics = await canvas.evaluate(element => ({ width: element.clientWidth, height: element.clientHeight,
       rows: [...(window as unknown as { analysisComponentRows: Caption[] }).analysisComponentRows,

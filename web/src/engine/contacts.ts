@@ -46,6 +46,22 @@ export class Contact {
   ) {}
 }
 
+/** Stable diagnostic identity, independent of body detection order. */
+export function contactKey(contact: Contact): string {
+  const a = contact.bodyAId, b = contact.bodyBId;
+  if (a >= 0) {
+    if (b !== null && b >= 0) return `body:${Math.min(a, b)}:${Math.max(a, b)}`;
+    if (contact.wallId !== null) return `wall:${a}:${contact.wallId}`;
+  }
+  return `point:${contact.px.toFixed(4)}:${contact.py.toFixed(4)}`;
+}
+
+export interface ContactTransition {
+  key: string;
+  time: number;
+  began: boolean;
+}
+
 /** Per-step detection state that cannot change within a step (collider
  * lists, link exclusions); pass a fresh object at the start of every step.
  *

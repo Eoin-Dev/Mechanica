@@ -39,14 +39,12 @@ export interface ForceSnapshot {
 export function forceSymbols(entries: readonly ForceEntry[]): Map<string, string> {
   const base = (entry: ForceEntry): string => {
     switch (entry.kind) {
-      case "weight": return "W";
+      case "weight": case "gravity": return "W";
       case "reaction": return "R";
       case "friction": return "F";
       case "correction": return "C";
       case "string": case "pulley": return "T";
-      case "rod": return entry.label.includes("thrust") ? "S" : "T";
-      case "spring": return "fₛ";
-      case "drag": return "D";
+      case "rod": case "spring": return entry.label.includes("thrust") ? "P" : "T";
       default: return "f";
     }
   };
@@ -61,7 +59,7 @@ export function forceSymbols(entries: readonly ForceEntry[]): Map<string, string
     const symbol = base(entry);
     const index = (used.get(symbol) ?? 0) + 1;
     used.set(symbol, index);
-    const suffix = entry.kind !== "friction" && counts.get(symbol)! > 1 ?
+    const suffix = counts.get(symbol)! > 1 ?
       String(index).replace(/\d/g, digit => "₀₁₂₃₄₅₆₇₈₉"[Number(digit)]) : "";
     symbols.set(entry.id, symbol + suffix);
   }
@@ -109,14 +107,14 @@ export class ForceRecorder {
   }
 
   begin(bodies: readonly Body[], time: number, walls: readonly Wall[] = [],
-        additionalBodies?: ReadonlySet<Body>): void {
+        additionalBodies?: ReadonlySet<Body>, includeDiagrams = true): void {
     for (const { body } of this.records.values()) body.forceSnapshot = null;
     this.records.clear();
     this.wallNames.clear();
     this.startTime = time;
     for (const body of bodies) {
       body.forceSnapshot = null;
-      if ((!body.showForceComponents && !additionalBodies?.has(body)) || body.isRodEndpoint || body.isAnchor ||
+      if ((!(includeDiagrams && body.showForceComponents) && !additionalBodies?.has(body)) || body.isRodEndpoint || body.isAnchor ||
           body.invMass === 0 || !Number.isFinite(body.mass)) continue;
       this.records.set(body, {
         body, entries: new Map(), x: 0, y: 0, ax: 0, ay: 0,

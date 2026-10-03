@@ -75,13 +75,13 @@ describe("force contact origins", () => {
     expect(forceLedger(world, body).entries.find(entry => entry.kind === "weight")?.contactNx).toBeUndefined();
   });
 
-  it("reserves unindexed F for friction and lowercase indexed f for applied forces", () => {
+  it("numbers multiple friction sources and reserves lowercase f for applied forces", () => {
     const entries = [
       { id: "friction-wall-1", label: "Friction from floor", kind: "friction" as const, fx: -2, fy: 0 },
       { id: "friction-body-1", label: "Friction from neighbour", kind: "friction" as const, fx: 0, fy: 3 },
       { id: "applied", label: "Applied", kind: "applied" as const, fx: 1, fy: 0 },
       { id: "field-1", label: "Wind", kind: "field" as const, fx: 0, fy: 1 },
     ];
-    expect([...forceSymbols(entries).values()]).toEqual(["F", "F", "f₁", "f₂"]);
+    expect([...forceSymbols(entries).values()]).toEqual(["F₁", "F₂", "f₁", "f₂"]);
   });
 });

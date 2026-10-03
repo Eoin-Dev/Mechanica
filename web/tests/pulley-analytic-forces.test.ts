@@ -19,6 +19,8 @@ function assembly(massA: number, massB = 1, stopped = false) {
   a.noRotation = b.noRotation = true;
   a.showForceComponents = b.showForceComponents = true;
   const link = new PulleyLink(a, b, wheel);
+  // Explicit link diagnostics remain available in every Performance tier.
+  link.showTensionVectors = true;
   if (stopped) {
     // PulleyLink owns particle radii. Establish exact tangency after construction.
     b.pos.y = wheel.pos.y - Math.sqrt((wheel.radius + b.radius) ** 2 - PULLEY_RADIUS ** 2);

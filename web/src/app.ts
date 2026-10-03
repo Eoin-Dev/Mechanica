@@ -3,13 +3,14 @@
 import { Body, Wall } from "./engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "./engine/links";
 import { World, escapedBodies } from "./engine/world";
+import { Contact, RESTING_SPEED, closestOnSegment } from "./engine/contacts";
 import { contactKey, EventTracker, PlaybackEvent, PlaybackEventKind } from "./education/analysis";
 import { Camera, MAX_ZOOM, MIN_ZOOM } from "./render/camera";
 import { Selectable, ViewSettings, drawGrid, drawScaleBar, drawWorld } from "./render/draw";
 import { Trail } from "./render/trail";
 import * as snap from "./scene/snapshot";
 import { PRESETS, Preset } from "./scene/presets";
-import { CanvasController } from "./interact/tools";
+import { CanvasController, TOOLS, type Tool } from "./interact/tools";
 import { GRAPH_MAX_POINTS, GRAPH_WINDOW_S, PhasePlot, TimeSeries } from "./ui/plots";
 import { DOCK_H_MAX, DOCK_H_MIN, INSPECTOR_W_MAX, INSPECTOR_W_MIN,
          countNoun, reducedMotion } from "./ui/dom";
@@ -284,6 +285,9 @@ export class App {
   settings: Settings = {};
   private autofitRatio = 1.0; // user zoom-out factor while auto-fitting
   private history = new snap.RewindBuffer(); // per-frame rewind (rolling)
+  private rewindInterval: snap.RewindInterval = { steps: [], contacts: [] };
+  private rewindIntervalOverflow = false;
+  private refinedCollisionKeys: string[] = [];
   private lastRewindSampleT = -Infinity;
   private rewindUnavailable = false;
   private overloadSince: number | null = null;
@@ -600,6 +604,7 @@ export class App {
     try {
       world.performance = this.perfMode; // every stepping path, no exceptions
       world.performanceLevel = this.performanceLevel;
+      world.trackContactEvents = world === this.world;
       world.step(dt);
       if (world.diverged.length === 0) return null;
       return { names: [...new Set(world.diverged)], exception: false };
@@ -624,23 +629,28 @@ export class App {
 
   /** Shared stepping primitive for play, frame-step, and time-jump paths. */
   private runPhysicsBatch(world: World, count: number, dt: number,
-                          afterStep: (() => void) | null = null): PhysicsBatchResult {
+                          afterStep: (() => void) | null = null,
+                          stopAtContact = false): PhysicsBatchResult {
     for (let i = 0; i < count; i++) {
+      this.refinedCollisionKeys = [];
       const measuredBody = world === this.world ? this.syncKinematicsSelection() : undefined;
       const startX = measuredBody?.pos.x ?? 0;
       const startY = measuredBody?.pos.y ?? 0;
-      const refineable = world === this.world && this.playing && !this.perfMode &&
-        this.pauseOnEvent !== null;
+      const startTime = world.time;
+      const refineable = world === this.world && (stopAtContact ||
+        (this.playing && !this.perfMode && this.pauseOnEvent !== null));
       const trackPlaybackEvents = world === this.world &&
-        (this.playbackEventTracking || this.pauseOnEvent !== null);
+        (stopAtContact || this.playbackEventTracking || this.pauseOnEvent !== null);
       if (trackPlaybackEvents) this.playbackEvents.prepareStep(world);
       const before = refineable ? snap.snapshot(world) : null;
+      const initialContacts = refineable ? this.copyContacts(world) : [];
       const failure = this.safeStep(world, dt);
       if (failure !== null) {
         // A divergence is a completed, contained engine step. An exception
         // may have interrupted the step, so it is not counted or sampled.
         if (!failure.exception) {
           this.recordKinematicsStep(measuredBody, startX, startY);
+          if (world === this.world) this.recordRewindStep(startTime);
           afterStep?.();
         }
         return { completed: i + (failure.exception ? 0 : 1), failure,
@@ -648,79 +658,156 @@ export class App {
       }
       if (world === this.world) {
         const events = trackPlaybackEvents ? this.playbackEvents.observe(world) : [];
-        if (this.playing && this.pauseOnEvent !== null) {
+        if (stopAtContact || (this.playing && this.pauseOnEvent !== null)) {
           const event = events.find(
-            (candidate) => candidate.kind === this.pauseOnEvent &&
+            (candidate) => candidate.kind === (stopAtContact ? "contact" : this.pauseOnEvent) &&
               (candidate.kind !== "apex" ||
                 candidate.bodyIds.includes(this.playbackEvents.selectedBodyId ?? -1)));
           if (event !== undefined) {
+            let stop = true;
             if (before !== null) {
-              const refined = this.refinePlaybackEvent(before, dt, event);
+              const keys = event.kind === "contact"
+                ? events.filter(candidate => candidate.kind === "contact")
+                  .flatMap(candidate => candidate.key === undefined ? [] : [candidate.key])
+                : undefined;
+              const refined = this.refinePlaybackEvent(before, dt, event,
+                undefined, keys, false, initialContacts);
               if (refined !== null) {
                 event.time = refined.time;
                 this.installPlaybackRefinement(refined);
+              } else if (stopAtContact) {
+                // A contact already present at the starting position is not
+                // a new positive-time collision frame.
+                stop = false;
               }
             }
-            this.recordKinematicsStep(measuredBody, startX, startY);
-            afterStep?.();
-            this.playing = false;
-            this.accumulator = 0;
-            this.overloaded = false;
-            this.toast(`Paused at ${event.time.toFixed(4)} s: ${event.label}`);
-            return { completed: i + 1, failure: null, eventStopped: true };
+            if (stop) {
+              const installedBody = measuredBody === undefined ? undefined :
+                this.world.bodies.find(body => body.id === measuredBody.id);
+              this.recordKinematicsStep(installedBody, startX, startY);
+              this.recordRewindStep(startTime);
+              if (this.refinedCollisionKeys.length > 0) {
+                this.rewindInterval.collisionKeysAtEnd = [...this.refinedCollisionKeys];
+              }
+              afterStep?.();
+              this.playing = false;
+              this.accumulator = 0;
+              this.overloaded = false;
+              if (!stopAtContact) this.toast(`Paused at ${event.time.toFixed(4)} s: ${event.label}`);
+              return { completed: i + 1, failure: null, eventStopped: true };
+            }
           }
         }
       }
       this.recordKinematicsStep(measuredBody, startX, startY);
+      if (world === this.world) this.recordRewindStep(startTime);
       afterStep?.();
     }
     return { completed: count, failure: null, eventStopped: false };
   }
 
-  /** Re-simulate only the final event interval to its transition. This work
-   * exists solely while an explicit event auto-pause rule is armed. Normal
-   * playback therefore keeps its allocation-free path; Performance mode
-   * intentionally pauses at its coarser completed quantum. */
+  /** Refine a collision bracket on detached worlds. Ordinary playback retains
+   * bounded step metadata; it does not perform these trial solves. */
   private refinePlaybackEvent(before: string, dt: number,
-                              event: PlaybackEvent): World | null {
+                              event: PlaybackEvent,
+                              replayMode?: snap.ReplayStep,
+                              contactTargets?: readonly string[], latest = false,
+                              initialContacts: readonly Contact[] = []): World | null {
+    this.refinedCollisionKeys = [];
+    const source = snap.restoreSnapshot(before);
+    const prepare = (world: World): void => {
+      if (replayMode === undefined) this.applySolverMode(world);
+      else {
+        world.performance = replayMode.performance;
+        world.performanceLevel = replayMode.performanceLevel;
+      }
+      world.trackContactEvents = true;
+      world.contacts = initialContacts.map(contact => new Contact(contact.px, contact.py,
+        contact.nx, contact.ny, contact.impulse, contact.bodyAId, contact.bodyBId,
+        contact.wallId, contact.tangentImpulse));
+    };
     let fraction = event.fraction ?? 1;
     if (event.kind === "contact" && event.key !== undefined) {
+      const targets = new Set((contactTargets ?? [event.key]).filter(key =>
+        !this.contactRestingAtStart(source, key)));
+      if (targets.size === 0) return null;
       let lo = 0;
       let hi = dt;
-      for (let pass = 0; pass < 18; pass++) {
+      let beforeKeys = new Set<string>();
+      for (let pass = 0; pass < 32; pass++) {
         const mid = (lo + hi) * 0.5;
         const trial = snap.restoreSnapshot(before);
-        this.applySolverMode(trial);
+        prepare(trial);
         trial.step(mid);
-        if (this.worldHasContact(trial, event.key)) hi = mid;
-        else lo = mid;
+        const keys = new Set(trial.contactEvents.filter(item => item.began).map(item => item.key));
+        const reached = latest ? [...targets].every(key => keys.has(key)) :
+          [...targets].some(key => keys.has(key));
+        if (reached) hi = mid;
+        else { lo = mid; beforeKeys = keys; }
       }
       fraction = hi / dt;
+      this.refinedCollisionKeys = [...targets].filter(key => !beforeKeys.has(key));
     } else if (event.kind === "pulley-stop" && event.bodyIds.length > 0) {
       let lo = 0;
       let hi = dt;
       for (let pass = 0; pass < 18; pass++) {
         const mid = (lo + hi) * 0.5;
         const trial = snap.restoreSnapshot(before);
-        this.applySolverMode(trial);
+        prepare(trial);
         trial.step(mid);
         if (this.bodyAtPulleyStop(trial, event.bodyIds[0])) hi = mid;
         else lo = mid;
       }
       fraction = hi / dt;
     }
-    if (!Number.isFinite(fraction) || fraction <= 1e-8 || fraction >= 1 - 1e-8) {
+    if (!Number.isFinite(fraction) || fraction <= 0 || fraction > 1) {
       return null;
     }
     const refined = snap.restoreSnapshot(before);
     this.transferAnalysisPresentation(this.world, refined);
-    this.applySolverMode(refined);
+    prepare(refined);
     refined.step(dt * fraction);
+    if (event.kind === "contact" && dt * fraction <= Math.min(1e-7, dt * 1e-4)) {
+      // A newly observed resting overlap belongs to the starting frame. An
+      // incoming impact at a quantum boundary still needs its collision frame.
+      const contact = refined.contacts.find(item => contactKey(item) === event.key);
+      if (contact === undefined) return null;
+      const a = source.bodies.find(body => body.id === contact.bodyAId);
+      const b = source.bodies.find(body => body.id === contact.bodyBId);
+      const closing = ((a?.vel.x ?? 0) - (b?.vel.x ?? 0)) * contact.nx +
+        ((a?.vel.y ?? 0) - (b?.vel.y ?? 0)) * contact.ny;
+      if (closing <= RESTING_SPEED) return null;
+    }
     return refined;
   }
 
-  private worldHasContact(world: World, key: string): boolean {
-    return world.contacts.some((contact) => contactKey(contact) === key);
+  private copyContacts(world: World): Contact[] {
+    return world.contacts.map(contact => new Contact(contact.px, contact.py,
+      contact.nx, contact.ny, contact.impulse, contact.bodyAId, contact.bodyBId,
+      contact.wallId, contact.tangentImpulse));
+  }
+
+  private contactRestingAtStart(world: World, key: string): boolean {
+    const [kind, first, second] = key.split(":");
+    const a = world.bodies.find(body => body.id === Number(first));
+    if (a === undefined) return false;
+    let dx: number, dy: number, reach: number, vx = a.vel.x, vy = a.vel.y;
+    if (kind === "body") {
+      const b = world.bodies.find(body => body.id === Number(second));
+      if (b === undefined) return false;
+      dx = b.pos.x - a.pos.x; dy = b.pos.y - a.pos.y;
+      reach = a.radius + b.radius; vx -= b.vel.x; vy -= b.vel.y;
+    } else if (kind === "wall") {
+      const wall = world.walls.find(item => item.id === Number(second));
+      if (wall === undefined) return false;
+      const point = closestOnSegment(a.pos.x, a.pos.y,
+        wall.a.x, wall.a.y, wall.b.x, wall.b.y);
+      dx = point[0] - a.pos.x; dy = point[1] - a.pos.y;
+      reach = a.radius + wall.thickness * 0.5;
+    } else return false;
+    const distance = Math.hypot(dx, dy);
+    return distance <= reach + 1e-9 &&
+      (distance === 0 || (vx * dx + vy * dy) / distance <= RESTING_SPEED);
   }
 
   private bodyAtPulleyStop(world: World, bodyId: number): boolean {
@@ -781,11 +868,13 @@ export class App {
     const bodyView = new Map(from.bodies.map((body) => [body.id, {
       forces: body.showForceComponents,
       slope: body.forceSlopeWallId,
+      resolveWeight: body.resolveWeightOnSlope,
     }]));
     for (const body of to.bodies) {
       const view = bodyView.get(body.id);
       if (view === undefined) continue;
       body.showForceComponents = view.forces;
+      body.resolveWeightOnSlope = view.resolveWeight;
       body.forceSlopeWallId = view.slope !== null &&
         to.walls.some((wall) => wall.id === view.slope) ? view.slope : null;
     }
@@ -837,6 +926,7 @@ export class App {
     this.cancelTimeJump();
     this.ensureInitial();
     this.playing = false;
+    this.ensureRewindBaseline();
     this.capturePhysicsVisualState();
     // Capture in-slice trail points during single-step as well as playback.
     this.syncTraceSpacing();
@@ -847,10 +937,12 @@ export class App {
     for (let q = 0; q < frameQuanta && failure === null; q++) {
       const n = this.pickResolution(quantum);
       const h = quantum / n;
-      failure = this.runPhysicsBatch(
-        this.world, n, h, () => this.recordTrails()).failure;
+      const result = this.runPhysicsBatch(
+        this.world, n, h, () => this.recordTrails(), true);
+      failure = result.failure;
+      if (result.eventStopped) break;
     }
-    this.afterPhysics();
+    this.afterPhysics(true);
     if (this.physicsVisualStateChanged()) this.invalidateCanvas();
     if (failure !== null) this.stopForPhysicsFailure(failure);
     this.onSceneCheckpoint?.(snap.snapshot(this.world));
@@ -863,7 +955,15 @@ export class App {
     this.playing = false;
     const previousWorld = this.world;
     const selectionKeys = this.selection.map((item) => this.selectableKey(item));
+    // Performance checkpoints may be farther apart than display frames.
+    // Commit the live tail before examining the interval being rewound.
+    if (this.rewindInterval.steps.length > 0) this.storeRewindFrame();
+    const collision = this.previousCollisionFrame();
     let world = this.history.back();
+    if (collision !== null && world !== null) {
+      world = collision.world;
+      this.history.push(world, collision.interval);
+    }
     if (world === null) {
       if (this.initialSnapshot === null) return;
       this.clearHistory();
@@ -896,6 +996,8 @@ export class App {
     for (const trail of this.trails.values()) trail.truncateAfter(world.time);
     this.playbackEvents.rewindTo(world.time, world);
     this.lastRewindSampleT = world.time;
+    this.rewindInterval = { steps: [], contacts: [] };
+    this.rewindIntervalOverflow = false;
     this.invalidateCanvas();
     this.onSceneCheckpoint?.(snap.snapshot(this.world));
   }
@@ -908,13 +1010,22 @@ export class App {
     }
   }
 
+  get collisionFrame(): boolean {
+    return !this.playing && !this.seeking && this.history.isCollisionFrame;
+  }
+
   resetSim(): void {
     this.cancelTimeJump();
     if (this.initialSnapshot === null) return;
     // keepInitial: resetting must not consume the thing it resets TO.
     // Without it the second Ctrl+R in a row did nothing at all (no toast,
     // no feedback) and the dE readout went blank until the next play.
-    this.replaceWorld(snap.restoreSnapshot(this.initialSnapshot), true);
+    const world = snap.restoreSnapshot(this.initialSnapshot);
+    this.transferAnalysisPresentation(this.world, world);
+    const selected = this.selection.map((item) => this.selectableKey(item));
+    this.replaceWorld(world, true);
+    this.setSelection(selected.map((key) => this.findSelectable(world, key))
+      .filter((item): item is Selectable => item !== null));
     this.playing = false;
     this.toast("Reset to the initial state");
   }
@@ -1131,7 +1242,14 @@ export class App {
   /** Capture the exact live state before an immediate or continuous edit. */
   beginEdit(): void {
     this.cancelTimeJump();
-    if (this.editBefore === null) this.editBefore = snap.snapshot(this.world);
+    if (this.editBefore === null) {
+      if (this.rewindInterval.steps.length > 0) this.storeRewindFrame();
+      this.editBefore = snap.snapshot(this.world);
+      // Pointer edits and live settings are external inputs, so that interval
+      // cannot be reconstructed by replaying autonomous solver steps alone.
+      this.rewindInterval = { steps: [], contacts: [] };
+      this.rewindIntervalOverflow = true;
+    }
     this.world.wakePerformanceBodies();
     this.world.clearForceDiagnostics();
     // Continuous controls call beginEdit for each live input even though the
@@ -1164,6 +1282,7 @@ export class App {
     const result = before === null
       ? this.undoStack.pushSnapshot(after)
       : this.undoStack.pushTransition(before, after);
+    if (this.history.length > 0) this.storeRewindFrame();
     if (this.world.time === 0.0) {
       this.initialSnapshot = after;
       this.baselineEnergy = this.energyNow().total;
@@ -1217,6 +1336,79 @@ export class App {
       this.replaceWorld(world);
       this.playing = false;
     }
+  }
+
+  /** Tab-only presentation, kept separate from portable physics scene JSON. */
+  tabRecoveryState(): { presentation: Record<string, unknown>; initial: string | null } {
+    return { initial: this.initialSnapshot, presentation: {
+      camera: [this.camera.centre.x, this.camera.centre.y, this.camera.zoom],
+      view: { ...this.view }, speed: this.speed, graph: this.graphMode,
+      autoFitRatio: this.autofitRatio,
+      selection: this.selection.map((item) => this.selectableKey(item)),
+      bodies: this.world.bodies.map((body) => [body.id, body.showForceComponents,
+        body.resolveWeightOnSlope, body.forceSlopeWallId]),
+      links: this.world.links.map((link) => [this.selectableKey(link), link.showTensionVectors]),
+      tool: this.controller.tool, boxFilter: { ...this.boxFilter },
+    } };
+  }
+
+  /** Stored view fields are untrusted: apply only known keys and valid values. */
+  restoreTabPresentation(raw: unknown, initial: World | null = null): void {
+    if (initial !== null) {
+      this.initialSnapshot = snap.snapshot(initial);
+      this.baselineEnergy = initial.energy(this.perfMode
+        ? [12_000, 8_000, 4_000, 2_000][this.performanceLevel] : Infinity).total;
+    }
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return;
+    const data = raw as Record<string, unknown>;
+    const record = (value: unknown): Record<string, unknown> =>
+      value !== null && typeof value === "object" && !Array.isArray(value)
+        ? value as Record<string, unknown> : {};
+    const bounded = (value: unknown, lo: number, hi: number): value is number =>
+      typeof value === "number" && Number.isFinite(value) && value >= lo && value <= hi;
+    const view = record(data.view);
+    for (const key of ["grid", "snap", "velVectors", "accVectors", "forceVectors",
+      "trails", "com", "contacts", "spatialGrid", "labels", "follow", "autoFit"] as const) {
+      if (typeof view[key] === "boolean") this.view[key] = view[key];
+    }
+    if (bounded(view.vectorScale, 0.02, 20)) this.view.vectorScale = view.vectorScale;
+    if (bounded(view.trailLen, 10, 10000)) this.view.trailLen = Math.round(view.trailLen);
+    if (bounded(data.speed, 0.01, 16)) this.speed = data.speed;
+    if (bounded(data.autoFitRatio, 0.02, 1)) this.autofitRatio = data.autoFitRatio;
+    const camera = data.camera;
+    if (Array.isArray(camera) && camera.length === 3 &&
+        bounded(camera[0], -1e12, 1e12) && bounded(camera[1], -1e12, 1e12) &&
+        bounded(camera[2], MIN_ZOOM, MAX_ZOOM)) {
+      this.camera.centre.set(camera[0], camera[1]); this.camera.zoom = camera[2];
+    }
+    const bodies = new Map(this.world.bodies.map((body) => [body.id, body]));
+    const walls = new Set(this.world.walls.map((wall) => wall.id));
+    if (Array.isArray(data.bodies)) for (const entry of data.bodies) {
+      if (!Array.isArray(entry)) continue;
+      const body = bodies.get(entry[0]); if (body === undefined) continue;
+      if (typeof entry[1] === "boolean") body.showForceComponents = entry[1];
+      if (typeof entry[2] === "boolean") body.resolveWeightOnSlope = entry[2];
+      body.forceSlopeWallId = walls.has(entry[3]) ? entry[3] : null;
+    }
+    const links = new Map(this.world.links.map((link) => [this.selectableKey(link), link]));
+    if (Array.isArray(data.links)) for (const entry of data.links) {
+      if (!Array.isArray(entry)) continue;
+      const link = links.get(entry[0]);
+      if (link !== undefined && typeof entry[1] === "boolean") link.showTensionVectors = entry[1];
+    }
+    if (typeof data.tool === "string" && TOOLS.includes(data.tool as Tool))
+      this.controller.setTool(data.tool as Tool);
+    const filter = record(data.boxFilter);
+    for (const key of Object.keys(this.boxFilter) as Array<keyof typeof this.boxFilter>)
+      if (typeof filter[key] === "boolean") this.boxFilter[key] = filter[key];
+    const items = new Map([...this.world.bodies, ...this.world.walls, ...this.world.links]
+      .map((item) => [this.selectableKey(item), item]));
+    if (Array.isArray(data.selection)) this.setSelection([...new Set(data.selection)]
+      .map((key) => items.get(key)).filter((item): item is Selectable => item !== undefined));
+    if (typeof data.graph === "string" && ["Off", "Energy", "Mom.", "Phase",
+      "Displacement", "Distance", "Velocity"].includes(data.graph))
+      this.setGraphMode(data.graph as GraphMode);
+    this.invalidateCanvas();
   }
 
   // -------------------------------------------------------------- scene ops
@@ -1280,10 +1472,10 @@ export class App {
     this.view.trails = hints.trails ?? false;
     this.view.autoFit = hints.autoFit ?? false;
     this.view.velVectors = hints.vectors ?? false;
-    if (hints.graph) {
-      const mode = { energy: "Energy", momentum: "Mom.", phase: "Phase" }[hints.graph];
-      this.setGraphMode(mode as GraphMode);
-    }
+    const graph = hints.graph
+      ? { energy: "Energy", momentum: "Mom.", phase: "Phase" }[hints.graph]
+      : "Off";
+    this.setGraphMode(graph as GraphMode);
     this.framePreset(hints.zoom, hints.centre);
     this.ensureInitial();
     // arm the one-time "right-drag a soft body" hint for soft-body scenes
@@ -1732,6 +1924,7 @@ export class App {
   private update(dtFrame: number): void {
     this.presentationAnimating = false;
     if (this.playing) {
+      this.ensureRewindBaseline();
       // Below 1x, keep stepping at the normal 120 Hz real-time rate but
       // with a proportionally smaller dt: slow motion then produces a
       // fresh state every frame (glassy smooth, and *more* accurate)
@@ -2085,7 +2278,105 @@ export class App {
 
   private trailLive = new Set<number>();
 
-  private afterPhysics(): void {
+  private ensureRewindBaseline(): void {
+    if (this.history.length !== 0 || this.rewindUnavailable) return;
+    this.storeRewindFrame();
+  }
+
+  /** Retain only bounded primitive replay metadata between checkpoints. */
+  private recordRewindStep(startTime: number): void {
+    if (this.editBefore !== null || this.world.contactEventsOverflow) {
+      this.rewindInterval = { steps: [], contacts: [] };
+      this.rewindIntervalOverflow = true;
+    }
+    if (this.rewindIntervalOverflow) return;
+    const interval = this.rewindInterval;
+    if (interval.steps.length >= 8192 || interval.contacts.length >= 65536) {
+      this.rewindInterval = { steps: [], contacts: [] };
+      this.rewindIntervalOverflow = true;
+      return;
+    }
+    const step = interval.steps.length;
+    interval.steps.push({ dt: this.world.time - startTime,
+      performance: this.world.performance, performanceLevel: this.world.performanceLevel });
+    for (const event of this.world.contactEvents) {
+      if (!event.began) continue;
+      if (interval.contacts.length >= 65536) {
+        this.rewindInterval = { steps: [], contacts: [] };
+        this.rewindIntervalOverflow = true;
+        return;
+      }
+      interval.contacts.push({ step, time: event.time, key: event.key });
+    }
+  }
+
+  private storeRewindFrame(): void {
+    const result = this.history.push(this.world,
+      this.rewindIntervalOverflow ? null : this.rewindInterval);
+    this.lastRewindSampleT = this.world.time;
+    this.rewindInterval = { steps: [], contacts: [] };
+    this.rewindIntervalOverflow = false;
+    if (result === "too-large" && !this.rewindUnavailable) {
+      this.rewindUnavailable = true;
+      this.toast("This scene is too large to keep frame-rewind history");
+    }
+  }
+
+  /** Find the latest impact inside the interval being crossed. Ordinary
+   * playback stores its recipe once; this detached replay runs only on Back. */
+  private previousCollisionFrame(): { world: World; interval: snap.RewindInterval } | null {
+    const previous = this.history.previousInterval();
+    if (previous === null) return null;
+    const epsilon = Math.max(1e-10, Math.abs(this.world.time) * Number.EPSILON * 16);
+    const alreadyShown = new Set(previous.interval.collisionKeysAtEnd ?? []);
+    const candidates = previous.interval.contacts.filter(contact =>
+      contact.time <= this.world.time + epsilon &&
+      contact.time > previous.world.time + epsilon &&
+      !(alreadyShown.has(contact.key) && contact.time >= this.world.time - epsilon));
+    const target = candidates[candidates.length - 1];
+    if (target === undefined) return null;
+    const world = previous.world;
+    this.transferAnalysisPresentation(this.world, world);
+    world.trackContactEvents = true;
+    for (let index = 0; index <= target.step; index++) {
+      const step = previous.interval.steps[index];
+      if (step === undefined || !(step.dt > 0)) return null;
+      world.performance = step.performance;
+      world.performanceLevel = step.performanceLevel;
+      if (index !== target.step) {
+        world.step(step.dt);
+        if (world.diverged.length > 0) return null;
+        continue;
+      }
+      const startTime = world.time;
+      const before = snap.snapshot(world);
+      const initialContacts = this.copyContacts(world);
+      const event: PlaybackEvent = { id: 0, kind: "contact", key: target.key,
+        time: target.time, label: "Contact began", bodyIds: [], value: "contact",
+        fraction: Math.min(1, (target.time - startTime) / step.dt) };
+      const targets = candidates.filter(contact => contact.step === index &&
+        Math.abs(contact.time - target.time) <= epsilon).map(contact => contact.key);
+      const refined = this.refinePlaybackEvent(before, step.dt, event, step,
+        targets, true, initialContacts);
+      if (refined === null || refined.diverged.length > 0 ||
+          refined.time >= this.world.time - epsilon ||
+          refined.time <= previous.world.time + epsilon) return null;
+      const interval: snap.RewindInterval = {
+        steps: previous.interval.steps.slice(0, index),
+        contacts: previous.interval.contacts.filter(contact => contact.step < index),
+        collisionKeysAtEnd: [...this.refinedCollisionKeys],
+      };
+      interval.steps.push({ ...step, dt: refined.time - startTime });
+      for (const contact of refined.contactEvents) {
+        if (contact.began) interval.contacts.push({ step: index,
+          time: contact.time, key: contact.key });
+      }
+      return { world: refined, interval };
+    }
+    return null;
+  }
+
+  private afterPhysics(forceRewind = false): void {
     this.sweepTrails();
     // Normal mode records every displayed state. Performance mode samples a
     // progressively coarser rewind timeline so a large world does not spend
@@ -2093,19 +2384,16 @@ export class App {
     const rewindInterval = this.perfMode
       ? [1 / 60, 1 / 30, 1 / 15, 1 / 8][this.performanceLevel]
       : 0;
-    if (this.world.time - this.lastRewindSampleT >= rewindInterval - 1e-12) {
-      this.lastRewindSampleT = this.world.time;
-      const rewindResult = this.history.push(this.world);
-      if (rewindResult === "too-large" && !this.rewindUnavailable) {
-        this.rewindUnavailable = true;
-        this.toast("This scene is too large to keep frame-rewind history");
-      }
+    if (forceRewind || this.world.time - this.lastRewindSampleT >= rewindInterval - 1e-12) {
+      this.storeRewindFrame();
     }
     this.recordGraphSample();
   }
 
   private clearHistory(): void {
     this.history.clear();
+    this.rewindInterval = { steps: [], contacts: [] };
+    this.rewindIntervalOverflow = false;
     this.lastRewindSampleT = -Infinity;
   }
 

@@ -1050,7 +1050,7 @@ export class CanvasController {
     // would grab the (zero-length) arrow and fling it instead of moving it.
     if (app.selection.length === 1 && app.selection[0] instanceof Body) {
       const body = app.selection[0];
-      if (!body.locked && !body.showForceComponents) {
+      if (!body.locked && (app.perfMode || !body.showForceComponents)) {
         const s = VEL_ARROW_SCALE * app.view.vectorScale;
         const tip = app.camera.toScreenXY(body.pos.x + body.vel.x * s,
                                           body.pos.y + body.vel.y * s);
@@ -1565,7 +1565,7 @@ export class CanvasController {
     let body = this.velDrag;
     if (body === null && this.tool === "select" && app.selection.length === 1 &&
         app.selection[0] instanceof Body && !app.selection[0].locked &&
-        !app.selection[0].showForceComponents &&
+        (app.perfMode || !app.selection[0].showForceComponents) &&
         !(this.dragActive &&
           this.dragItems.some((it) => it.body === app.selection[0]))) {
       body = app.selection[0];

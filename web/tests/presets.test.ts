@@ -206,3 +206,43 @@ describe("solver iterations are a ceiling, not a dial", () => {
     }
   });
 });
+
+describe("rough inclined plane", () => {
+  it("is first in its category with diagrams enabled and a mathematically correct rough slope", () => {
+    const preset = PRESETS.find(preset => preset.category === "Projectiles & Friction")!;
+    expect(preset.name).toBe("Rough inclined plane");
+    expect(preset.hints.graph).toBeUndefined();
+    const world = preset.build(), body = world.bodies[0], plane = world.walls[0];
+    expect(world.bodies).toHaveLength(1);
+    expect(body.showForceComponents).toBe(true); expect(body.resolveWeightOnSlope).toBe(true);
+    expect(body.forceSlopeWallId).toBe(plane.id);
+    expect(body.noRotation).toBe(true);
+    expect(Math.sqrt(body.friction * plane.friction)).toBeCloseTo(0.25, 12);
+    const theta = Math.PI / 6, tangent = { x: Math.cos(theta), y: -Math.sin(theta) };
+    const acceleration = 9.81 * (Math.sin(theta) - 0.25 * Math.cos(theta));
+    world.step(0.25);
+    expect(body.vel.x * tangent.x + body.vel.y * tangent.y).toBeCloseTo(acceleration * 0.25, 4);
+    const forces = body.forceSnapshot!.entries;
+    expect(Math.hypot(...[forces.find(force => force.kind === "reaction")!.fx,
+      forces.find(force => force.kind === "reaction")!.fy])).toBeCloseTo(9.81 * Math.cos(theta), 4);
+    const friction = forces.find(force => force.kind === "friction")!;
+    expect(Math.hypot(friction.fx, friction.fy)).toBeCloseTo(0.25 * 9.81 * Math.cos(theta), 4);
+  });
+
+  it("slides onto the connected horizontal platform, stops and remains supported", () => {
+    const world = find("Rough inclined plane").build();
+    const body = world.bodies[0], [plane, platform] = world.walls;
+    expect(platform.a).toEqual(plane.b); expect(platform.a.y).toBe(platform.b.y);
+    for (let i = 0; i < 1200; i++) world.step(DT);
+    expect(body.pos.x).toBeGreaterThan(platform.a.x + body.radius);
+    expect(body.pos.x).toBeLessThan(platform.b.x - body.radius);
+    // The split-impulse solver deliberately tolerates 0.5 mm of penetration.
+    expect(Math.abs(body.pos.y - (platform.a.y + platform.thickness / 2 + body.radius)))
+      .toBeLessThan(0.000501);
+    expect(body.vel.length()).toBeLessThan(1e-6); expect(body.omega).toBe(0);
+    const stopped = body.pos.copy();
+    for (let i = 0; i < 240; i++) world.step(DT);
+    expect(body.pos.x).toBeCloseTo(stopped.x, 6);
+    expect(body.pos.y).toBeCloseTo(stopped.y, 6);
+  });
+});

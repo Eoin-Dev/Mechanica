@@ -196,6 +196,40 @@ describe("grid rendering", () => {
 });
 
 describe("body rendering", () => {
+  it.each(THEME_NAMES)("replaces weight with slope components and keeps other forces in %s", themeName => {
+    setTheme(themeName);
+    const theta = 25 * Math.PI / 180, t = new Vec2(Math.cos(theta), -Math.sin(theta));
+    const body = new Body(new Vec2(-t.y * 0.25, t.x * 0.25), 0.2, 1);
+    body.showForceComponents = true; body.noRotation = true; body.friction = 0; body.constForce.x = 2;
+    const world = worldWith(body); world.gravity = 9.81;
+    const slope = new Wall(t.mul(-3), t.mul(3), 0.1); slope.friction = 0; world.walls.push(slope);
+    body.forceSlopeWallId = slope.id;
+    const camera = new Camera(800, 600); camera.zoom = 100;
+    const { ctx, ops } = recCtx(); const before = world.toDict();
+    drawWorld(ctx, camera, world, view(), [body], null, new Map(), 800, 600);
+    const labels = ops.filter(op => op.op === "fillText").map(op => op.text);
+    expect(labels).toContain("W∥ 4.15 N"); expect(labels).toContain("W⊥ 8.89 N");
+    expect(labels).toContain("f 2.00 N"); expect(labels.some(text => text?.startsWith("R "))).toBe(true);
+    expect(labels.some(text => text?.startsWith("W ") || text?.startsWith("F∥") || text?.startsWith("F⊥"))).toBe(false);
+    expect(world.toDict()).toEqual(before);
+    body.forceSlopeWallId = null; ops.length = 0;
+    drawWorld(ctx, camera, world, view(), [body], null, new Map(), 800, 600);
+    expect(ops.some(op => op.text === "W 9.81 N")).toBe(true);
+    expect(ops.some(op => op.text?.startsWith("W∥") || op.text?.startsWith("W⊥"))).toBe(false);
+    setTheme("dark");
+  });
+
+  it.each([0, 1, 2, 3])("omits all diagram work and keeps particle geometry at Performance tier %s", level => {
+    const body = new Body(new Vec2(0, 0), 0.2, 1); body.showForceComponents = true;
+    const world = worldWith(body); world.performance = true; world.performanceLevel = level;
+    world.step(1 / 120); expect(body.forceSnapshot).toBeNull();
+    const query = vi.spyOn(world, "currentForceSnapshot");
+    const { ctx, ops } = recCtx(); const camera = new Camera(800, 600); camera.zoom = 100;
+    drawWorld(ctx, camera, world, view(), [body], null, new Map(), 800, 600, 1, true, level === 3);
+    expect(ops.some(op => op.op === "arc")).toBe(true);
+    expect(ops.some(op => op.text?.startsWith("W "))).toBe(false); expect(query).not.toHaveBeenCalled();
+    expect(body.showForceComponents).toBe(true);
+  });
   it.each(THEME_NAMES)("draws reaction/friction at the rim and weight at the centre in %s", name => {
     setTheme(name);
     try {
@@ -210,6 +244,10 @@ describe("body rendering", () => {
         const { ctx, ops } = recCtx();
         drawWorld(ctx, camera, world, new ViewSettings(), [body], null, new Map(),
           800, 600, 1, performance, performance);
+        if (performance) {
+          expect(ops.some(op => op.text?.startsWith("W ") || op.text?.startsWith("R ") || op.text?.startsWith("F "))).toBe(false);
+          continue;
+        }
         for (const kind of ["reaction", "friction", "weight"] as const) {
           const starts = ops.filter(op => op.op === "moveTo" && op.style === css(analysisForceColour(kind)));
           expect(starts).toContainEqual(expect.objectContaining({ x: 400, y: kind === "weight" ? 275 : 295 }));
@@ -233,7 +271,7 @@ describe("body rendering", () => {
     expect(ops.filter(op => op.op === "fillText")).toEqual([]);
   });
 
-  it("retains a sleeping body's weight and contact reaction diagram", () => {
+  it("retains a sleeping body's weight and contact reaction on returning to Normal rendering", () => {
     const body = new Body(new Vec2(0, 0), 0.1, 1);
     body.showForceComponents = true;
     body.perfSleeping = true;
@@ -245,7 +283,7 @@ describe("body rendering", () => {
     world.walls.push(floor);
     const { ctx, ops } = recCtx();
     drawWorld(ctx, new Camera(800, 600), world, new ViewSettings(), [body], null,
-      new Map(), 800, 600, 1, true);
+      new Map(), 800, 600, 1, false);
     expect(ops.some(op => op.text?.startsWith("W "))).toBe(true);
     expect(ops.some(op => op.text?.startsWith("R "))).toBe(true);
   });

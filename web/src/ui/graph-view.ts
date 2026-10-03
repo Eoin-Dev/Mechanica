@@ -1,6 +1,6 @@
 /** Responsive, detached graph inspection and portable image rendering. */
 import type { GraphDataSnapshot } from "./graph-data";
-import { chartIndices, chartRange, chartTicks, graphAxes, graphFraction, graphValue, zoomChartWindow,
+import { chartIndices, chartRange, chartTicks, graphAxes, graphFraction, graphValue, zoomChartWindow, panChartWindow,
          nearestChartPoint, type ChartAxes, type ChartPoint, type ChartRange } from "./graph-chart";
 import { button, el } from "./dom";
 import * as theme from "./theme";
@@ -122,6 +122,9 @@ export class GraphSnapshotChart {
   private zoomOut: HTMLButtonElement;
   private resetZoom: HTMLButtonElement;
   private zoomLevel: HTMLElement;
+  private pan: { pointer: number; x: number; y: number; width: number; height: number;
+    windows: { x: ChartRange; y: ChartRange } } | null = null;
+  private panFrame = 0;
 
   constructor() {
     this.host = el("div", { class: "graph-chart-surface", tabindex: "0", role: "group" });
@@ -137,17 +140,24 @@ export class GraphSnapshotChart {
     const tools = el("div", { class: "graph-chart-tools", role: "group", "aria-label": "Graph zoom" },
       this.zoomOut, this.zoomIn, this.resetZoom, this.zoomLevel);
     this.root = el("div", { class: "graph-chart" }, tools, this.host, this.legend, this.reading);
-    this.host.addEventListener("pointermove", event => this.inspect(event));
-    this.host.addEventListener("pointerleave", () => this.showPoint(null));
+    this.host.addEventListener("pointerdown", event => this.startPan(event));
+    this.host.addEventListener("pointermove", event => {
+      if (this.pan !== null) this.movePan(event); else this.inspect(event);
+    });
+    for (const type of ["pointerup", "pointercancel", "lostpointercapture"] as const) {
+      this.host.addEventListener(type, event => { if (this.pan?.pointer === event.pointerId) this.endPan(); });
+    }
+    this.host.addEventListener("pointerleave", () => { if (this.pan === null) this.showPoint(null); });
     this.host.addEventListener("keydown", event => this.key(event));
     this.host.addEventListener("wheel", event => this.wheel(event), { passive: false });
     this.host.addEventListener("blur", () => this.showPoint(null));
   }
 
   set(data: GraphDataSnapshot, variant: number): void {
+    this.endPan();
     this.data = data; this.variant = variant; this.hidden.clear(); this.selected = null;
     this.windows = { x: { min: 0, max: 1 }, y: { min: 0, max: 1 } };
-    this.host.setAttribute("aria-label", `${data.title} graph. Use arrow keys to inspect recorded points.`);
+    this.host.setAttribute("aria-label", `${data.title} graph. Use arrow keys to inspect recorded points. Zoom in to drag the graph; Shift and arrow keys also pan.`);
     this.legend.replaceChildren();
     for (const column of graphAxes(data, variant).ys) {
       const control = button(data.columns[column].label, () => {
@@ -181,6 +191,7 @@ export class GraphSnapshotChart {
   }
 
   clear(): void {
+    this.endPan();
     this.observer?.disconnect(); this.observer = null;
     this.preferences?.disconnect(); this.preferences = null;
     this.data = null; this.axes = null; this.geometry = null; this.svg = null;
@@ -206,6 +217,7 @@ export class GraphSnapshotChart {
     this.svg.append(this.marker); this.host.replaceChildren(this.svg);
     this.showPoint(null); this.onChange();
     const factor = 1 / (this.windows.x.max - this.windows.x.min);
+    this.host.classList.toggle("can-pan", factor > 1);
     this.zoomLevel.textContent = `${Number(factor.toPrecision(3))}×`;
     this.zoomOut.disabled = !this.canExport || factor <= 1;
     this.resetZoom.disabled = factor <= 1;
@@ -231,6 +243,16 @@ export class GraphSnapshotChart {
 
   private key(event: KeyboardEvent): void {
     if (!this.data?.rows.length || !this.axes?.ys.length) return;
+    if (event.shiftKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
+      event.preventDefault(); event.stopPropagation(); this.endPan();
+      const dx = (this.windows.x.max - this.windows.x.min) * 0.1;
+      const dy = (this.windows.y.max - this.windows.y.min) * 0.1;
+      this.windows = {
+        x: panChartWindow(this.windows.x, event.key === "ArrowLeft" ? -dx : event.key === "ArrowRight" ? dx : 0),
+        y: panChartWindow(this.windows.y, event.key === "ArrowDown" ? -dy : event.key === "ArrowUp" ? dy : 0),
+      };
+      this.draw(); return;
+    }
     if (["+", "=", "-", "0"].includes(event.key)) {
       event.preventDefault(); event.stopPropagation();
       if (event.key === "0") this.fit(); else this.zoom(event.key === "-" ? 0.5 : 2);
@@ -255,12 +277,14 @@ export class GraphSnapshotChart {
 
   private zoom(factor: number, x = 0.5, y = 0.5): void {
     if (!this.canExport) return;
+    this.endPan();
     this.windows = { x: zoomChartWindow(this.windows.x, factor, x),
       y: zoomChartWindow(this.windows.y, factor, y) };
     this.draw();
   }
 
   private fit(): void {
+    this.endPan();
     this.windows = { x: { min: 0, max: 1 }, y: { min: 0, max: 1 } }; this.draw();
   }
 
@@ -275,10 +299,48 @@ export class GraphSnapshotChart {
     this.zoom(Math.exp(-Math.max(-500, Math.min(500, event.deltaY)) * 0.003), x, y);
   }
 
+  private startPan(event: PointerEvent): void {
+    if (event.button !== 0 || this.pan !== null || !this.geometry || !this.svg ||
+        !this.canExport || this.windows.x.max - this.windows.x.min >= 1) return;
+    const rect = this.svg.getBoundingClientRect(), m = this.geometry;
+    if (!rect.width || !rect.height) return;
+    const x = (event.clientX - rect.left) * m.width / rect.width;
+    const y = (event.clientY - rect.top) * m.height / rect.height;
+    if (x < m.left || x > m.left + m.plotWidth || y < m.top || y > m.top + m.plotHeight) return;
+    event.preventDefault(); event.stopPropagation();
+    this.host.focus({ preventScroll: true });
+    this.pan = { pointer: event.pointerId, x: event.clientX, y: event.clientY,
+      width: m.plotWidth * rect.width / m.width, height: m.plotHeight * rect.height / m.height,
+      windows: { x: { ...this.windows.x }, y: { ...this.windows.y } } };
+    this.host.setPointerCapture?.(event.pointerId);
+    this.host.classList.add("panning"); this.showPoint(null);
+  }
+
+  private movePan(event: PointerEvent): void {
+    const pan = this.pan;
+    if (pan === null || event.pointerId !== pan.pointer) return;
+    event.preventDefault();
+    this.windows = {
+      x: panChartWindow(pan.windows.x, -(event.clientX - pan.x) / pan.width * (pan.windows.x.max - pan.windows.x.min)),
+      y: panChartWindow(pan.windows.y, (event.clientY - pan.y) / pan.height * (pan.windows.y.max - pan.windows.y.min)),
+    };
+    // Pointer events can arrive faster than paints. Keep one redraw per frame.
+    if (!this.panFrame) this.panFrame = requestAnimationFrame(() => { this.panFrame = 0; this.draw(); });
+  }
+
+  private endPan(): void {
+    const pan = this.pan;
+    this.pan = null;
+    if (this.panFrame) { cancelAnimationFrame(this.panFrame); this.panFrame = 0; this.draw(); }
+    this.host.classList.remove("panning");
+    if (pan && this.host.hasPointerCapture?.(pan.pointer)) this.host.releasePointerCapture(pan.pointer);
+  }
+
   private showPoint(point: ChartPoint | null): void {
     this.selected = point; this.marker?.replaceChildren();
     if (!point || !this.data || !this.axes || !this.geometry || !this.marker) {
-      this.reading.textContent = "Hover or use arrow keys to inspect recorded points."; return;
+      this.reading.textContent = "Hover or use arrow keys to inspect recorded points." +
+        (this.windows.x.max - this.windows.x.min < 1 ? " Drag to pan; Shift + arrows also pan." : ""); return;
     }
     const m = this.geometry, x = px(point.x, m), y = py(point.y, m), ink = colour(point.column - 1);
     this.marker.append(svgNode("line", { x1: x, x2: x, y1: m.top, y2: m.top + m.plotHeight,

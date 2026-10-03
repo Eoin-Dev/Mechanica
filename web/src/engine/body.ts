@@ -137,6 +137,8 @@ export class Body {
   /** Per-particle canvas analysis toggles. Presentation only. */
   showForceComponents = false;
   forceSlopeWallId: number | null = null;
+  /** Transient view choice, including an enabled choice awaiting a contact. */
+  resolveWeightOnSlope = false;
   // transient: true while the user holds the mouse on this body. A held
   // body acts as infinite mass (it stays pinned under the cursor) but
   // everything else still collides with it. Never serialized.

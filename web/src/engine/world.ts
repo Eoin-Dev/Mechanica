@@ -38,7 +38,7 @@ import {
   SCENE_MAX_SURFACE_SPEED, SCENE_MAX_VELOCITY, Wall, WallDict,
   normalizeAngle,
 } from "./body";
-import { Contact, ContactCache, ContactStatic, solveContacts } from "./contacts";
+import { Contact, ContactCache, ContactStatic, ContactTransition, contactKey, solveContacts } from "./contacts";
 import {
   DistanceLink, Link, LinkDict, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS,
   PulleyLink, SpringLink,
@@ -151,6 +151,7 @@ const ENCOUNTER_MAX_SLICES = 256;    // floor: slice >= h / this
 // remaining slices at the substep's own resolution, which is the same
 // answer the non-adaptive path would have given.
 const SLICE_WORK_BUDGET = 24_000;
+const CONTACT_EVENT_LIMIT = 16_384;
 
 /** How far a body may deviate from its straight chord within a step before
  * the path is worth resolving more finely: a small fraction of the body's
@@ -427,6 +428,14 @@ export class World {
 
   time = 0.0;
   contacts: Contact[] = [];
+  /** Optional observations of contacts inside a completed step. These never
+   * enter the solver, and own primitive values rather than pooled contacts. */
+  trackContactEvents = false;
+  readonly contactEvents: ContactTransition[] = [];
+  contactEventsEndTime = -Infinity;
+  contactEventsOverflow = false;
+  private contactKeysBefore = new Set<string>();
+  private contactKeysAfter = new Set<string>();
   stepCount = 0;
   diverged: string[] = []; // names of bodies frozen this step
   // sub-step path samples for motion trails: when the adaptive integrator
@@ -466,6 +475,25 @@ export class World {
   private forcePreviewInputs: unknown[] = [];
   private forcePreviews = new Map<number, ForceSnapshot>();
   private forcePreviewTargets = new Set<number>();
+  private forcePreviewBatchDepth = 0;
+  private forcePreviewBatchChecked = false;
+  private forcePreviewBatchBodies = new Set<Body>();
+
+  /** Read-only synchronous consumers can share one input validation across
+   * many diagrams. Direct, unbatched queries still detect every input edit. */
+  withCurrentForceBatch<T>(read: () => T): T {
+    if (this.forcePreviewBatchDepth++ === 0) {
+      this.forcePreviewBatchChecked = false;
+      this.forcePreviewBatchBodies.clear();
+    }
+    try { return read(); }
+    finally {
+      if (--this.forcePreviewBatchDepth === 0) {
+        this.forcePreviewBatchChecked = false;
+        this.forcePreviewBatchBodies.clear();
+      }
+    }
+  }
 
   /** Discard completed force intervals after an edit. Headless callers can
    * use this when changing authored forces without advancing the world. */
@@ -537,14 +565,20 @@ export class World {
    * advance, live solver/cache mutation, IDs or scene/history edits occur.
    * Repeated paused reads share the result until a physical input changes. */
   currentForceSnapshot(body: Body, requestedBodies: readonly Body[] = []): ForceSnapshot | null {
+    const batched = this.forcePreviewBatchDepth > 0;
+    if (batched && !this.forcePreviewBatchChecked) {
+      for (const candidate of this.bodies) this.forcePreviewBatchBodies.add(candidate);
+    }
+    const contains = (candidate: Body): boolean => batched ? this.forcePreviewBatchBodies.has(candidate) : this.bodies.includes(candidate);
     if ((!body.showForceComponents && !requestedBodies.includes(body)) || body.isAnchor || body.isRodEndpoint || body.locked ||
-        body.held || body.mass <= 0 || !Number.isFinite(body.mass) || !this.bodies.includes(body)) return null;
-    const changed = this.forceInputsChanged();
+        body.held || body.mass <= 0 || !Number.isFinite(body.mass) || !contains(body)) return null;
+    const changed = (!batched || !this.forcePreviewBatchChecked) && this.forceInputsChanged();
+    if (batched) this.forcePreviewBatchChecked = true;
     if (changed) this.forcePreviewTargets.clear();
     let added = false;
     for (const target of requestedBodies) {
       if (target.isAnchor || target.isRodEndpoint || target.locked || target.held ||
-          target.mass <= 0 || !Number.isFinite(target.mass) || !this.bodies.includes(target)) continue;
+          target.mass <= 0 || !Number.isFinite(target.mass) || !contains(target)) continue;
       if (!this.forcePreviewTargets.has(target.id)) {
         this.forcePreviewTargets.add(target.id); added = true;
       }
@@ -1926,14 +1960,22 @@ export class World {
     this.diagnosticBodies.clear();
     for (const link of this.links) {
       if (link instanceof PulleyLink &&
-          (link.showTensionVectors || link.a.showForceComponents || link.b.showForceComponents)) {
+          (link.showTensionVectors || (!this.performance && (link.a.showForceComponents || link.b.showForceComponents)))) {
         this.diagnosticBodies.add(link.a); this.diagnosticBodies.add(link.b);
       }
     }
-    this.forceRecorder.begin(this.bodies, this.time, this.walls, this.diagnosticBodies);
+    this.forceRecorder.begin(this.bodies, this.time, this.walls, this.diagnosticBodies, !this.performance);
     const recorder = this.forceRecorder.active ? this.forceRecorder : null;
     this.prepareStep(h);
     recorder?.velocityChange("initial-constraint", "Initial constraint correction", "correction");
+    this.contactEvents.length = 0;
+    this.contactEventsEndTime = -Infinity;
+    this.contactEventsOverflow = false;
+    if (this.trackContactEvents) {
+      this.contactKeysBefore.clear();
+      if (this.contacts.length > CONTACT_EVENT_LIMIT) this.contactEventsOverflow = true;
+      else for (const contact of this.contacts) this.contactKeysBefore.add(contactKey(contact));
+    }
     this.contacts = [];
     this.diverged = [];
     for (const b of this.bodies) {
@@ -2018,6 +2060,28 @@ export class World {
       solveContacts(this.bodies, this.walls, this.contacts, iters,
                     this.contactStatic.simplified ? null : this.contactCache,
                     this.contactStatic, recorder?.contactImpulse);
+      if (this.trackContactEvents && !this.contactEventsOverflow) {
+        this.contactKeysAfter.clear();
+        if (this.contacts.length > CONTACT_EVENT_LIMIT) this.contactEventsOverflow = true;
+        else for (const contact of this.contacts) this.contactKeysAfter.add(contactKey(contact));
+        for (const key of this.contactKeysAfter) {
+          if (!this.contactKeysBefore.has(key)) {
+            if (this.contactEvents.length < CONTACT_EVENT_LIMIT) {
+              this.contactEvents.push({ key, time: this.time + h, began: true });
+            } else this.contactEventsOverflow = true;
+          }
+        }
+        for (const key of this.contactKeysBefore) {
+          if (!this.contactKeysAfter.has(key)) {
+            if (this.contactEvents.length < CONTACT_EVENT_LIMIT) {
+              this.contactEvents.push({ key, time: this.time + h, began: false });
+            } else this.contactEventsOverflow = true;
+          }
+        }
+        const previous = this.contactKeysBefore;
+        this.contactKeysBefore = this.contactKeysAfter;
+        this.contactKeysAfter = previous;
+      }
       recorder?.velocityChange("contact-correction", "Contact numerical correction", "correction");
       recorder?.captureVelocity();
       // A contact impulse is computed on the particle that touched the wall or
@@ -2093,6 +2157,7 @@ export class World {
       }
     }
     this.stepCount++;
+    if (this.trackContactEvents) this.contactEventsEndTime = this.time;
     recorder?.finish(dt, this.time, this.stepCount);
   }
 

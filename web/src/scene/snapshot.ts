@@ -249,9 +249,32 @@ function captureAnalysis(world: World): FrameAnalysis {
     { forces, contacts, analysisBytes };
 }
 
+export interface ReplayStep {
+  dt: number;
+  performance: boolean;
+  performanceLevel: number;
+}
+
+export interface ReplayContact {
+  step: number;
+  time: number;
+  key: string;
+}
+
+/** The authored steps between two display checkpoints. Replayed only when
+ * rewind needs a collision inside that interval; ordinary playback never
+ * re-simulates an impact just to build history. */
+export interface RewindInterval {
+  steps: ReplayStep[];
+  contacts: ReplayContact[];
+  collisionKeysAtEnd?: string[];
+}
+
 interface Frame extends FrameAnalysis {
   key: number;             // index into `keys` of the snapshot this rests on
   dyn: Float64Array | null; // null retained as a corruption/legacy guard
+  interval: RewindInterval | null;
+  intervalBytes: number;
 }
 
 export type RewindStoreResult = "stored" | "too-large";
@@ -294,6 +317,9 @@ export class RewindBuffer {
 
   get length(): number { return this.frames.length; }
   get bytesUsed(): number { return this.bytes; }
+  get isCollisionFrame(): boolean {
+    return (this.frames[this.frames.length - 1]?.interval?.collisionKeysAtEnd?.length ?? 0) > 0;
+  }
 
   clear(): void {
     this.frames.length = 0;
@@ -325,11 +351,20 @@ export class RewindBuffer {
     return dyn;
   }
 
-  push(world: World): RewindStoreResult {
+  push(world: World, source: RewindInterval | null = null): RewindStoreResult {
     const digest = this.digestWorld(world);
     const dyn = this.captureDynamic(world);
     const analysis = captureAnalysis(world);
-    const frameCost = dyn.byteLength + analysis.analysisBytes;
+    const interval = source === null ? null : {
+      steps: source.steps.map(step => ({ ...step })),
+      contacts: source.contacts.map(contact => ({ ...contact })),
+      ...(source.collisionKeysAtEnd === undefined ? {} :
+        { collisionKeysAtEnd: [...source.collisionKeysAtEnd] }),
+    };
+    const intervalBytes = interval === null ? 0 : 128 + interval.steps.length * 80 +
+      interval.contacts.reduce((sum, contact) => sum + 96 + contact.key.length * 2, 0) +
+      (interval.collisionKeysAtEnd?.reduce((sum, key) => sum + 32 + key.length * 2, 64) ?? 0);
+    const frameCost = dyn.byteLength + analysis.analysisBytes + intervalBytes;
     if (frameCost > RewindBuffer.BUDGET_BYTES) {
       this.clear();
       return "too-large";
@@ -348,10 +383,10 @@ export class RewindBuffer {
       this.haveDigest = true;
       this.structure = captureStructure(world);
       this.bytes += frameCost;
-      this.frames.push({ key: this.keyBase + this.keys.length - 1, dyn, ...analysis });
+      this.frames.push({ key: this.keyBase + this.keys.length - 1, dyn, ...analysis, interval, intervalBytes });
     } else {
       this.bytes += frameCost;
-      this.frames.push({ key: this.keyBase + this.keys.length - 1, dyn, ...analysis });
+      this.frames.push({ key: this.keyBase + this.keys.length - 1, dyn, ...analysis, interval, intervalBytes });
     }
     this.trim();
     // A single delta still owns its keyframe. If that pair cannot fit the
@@ -368,7 +403,7 @@ export class RewindBuffer {
       this.digest = digest;
       this.haveDigest = true;
       this.structure = captureStructure(world);
-      this.frames.push({ key: 0, dyn, ...analysis });
+      this.frames.push({ key: 0, dyn, ...analysis, interval, intervalBytes });
     }
     return "stored";
   }
@@ -376,7 +411,7 @@ export class RewindBuffer {
   /** Bytes a frame owns outright. A keyframe's string is shared with every
    * delta resting on it, so it is charged to the key, not to the frame. */
   private frameBytes(f: Frame): number {
-    return (f.dyn?.byteLength ?? 0) + f.analysisBytes;
+    return (f.dyn?.byteLength ?? 0) + f.analysisBytes + f.intervalBytes;
   }
 
   private trim(): void {
@@ -454,6 +489,20 @@ export class RewindBuffer {
     this.haveDigest = true;
     this.structure = captureStructure(current);
     return current;
+  }
+
+  /** Return a detached earlier world and an owned recipe without moving the
+   * history cursor. Callers may refine on copies before committing a rewind. */
+  previousInterval(): { world: World; interval: RewindInterval } | null {
+    if (this.frames.length < 2) return null;
+    const interval = this.frames[this.frames.length - 1].interval;
+    if (interval === null || interval.contacts.length === 0) return null;
+    return { world: this.at(this.frames.length - 2), interval: {
+      steps: interval.steps.map(step => ({ ...step })),
+      contacts: interval.contacts.map(contact => ({ ...contact })),
+      ...(interval.collisionKeysAtEnd === undefined ? {} :
+        { collisionKeysAtEnd: [...interval.collisionKeysAtEnd] }),
+    } };
   }
 }
 

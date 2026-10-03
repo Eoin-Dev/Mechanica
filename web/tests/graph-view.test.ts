@@ -29,6 +29,48 @@ function view() {
 }
 
 describe("detached graph rendering and inspection", () => {
+  it("drags a zoomed viewport, clamps at its edges and releases the gesture", () => {
+    const { chart, data, surface, key } = view();
+    const rows = JSON.stringify(data.rows);
+    const path = () => chart.root.querySelector('[data-channel="speed"]')!.getAttribute("d");
+    const original = path();
+    key("+"); const zoomed = path();
+    vi.spyOn(chart.root.querySelector("svg")!, "getBoundingClientRect").mockReturnValue({
+      left: 0, top: 0, width: 640, height: 320, right: 640, bottom: 320, x: 0, y: 0, toJSON: () => ({}),
+    });
+    let paint: FrameRequestCallback | null = null;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { paint = callback; return 1; });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+    const pointer = (type: string, x: number, y: number, id = 1) => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.assign(event, { pointerId: id, button: 0, clientX: x, clientY: y });
+      surface.dispatchEvent(event); return event;
+    };
+    const capture = vi.fn(); surface.setPointerCapture = capture;
+    surface.hasPointerCapture = () => true; surface.releasePointerCapture = vi.fn();
+    expect(pointer("pointerdown", 320, 160).defaultPrevented).toBe(true);
+    expect(capture).toHaveBeenCalledWith(1); expect(surface.classList.contains("panning")).toBe(true);
+    pointer("pointermove", 420, 200, 2); expect(paint).toBeNull();
+    pointer("pointermove", 420, 200); pointer("pointermove", 5000, 5000);
+    expect(path()).toBe(zoomed); expect(paint).not.toBeNull();
+    (paint as unknown as FrameRequestCallback)(0); expect(path()).not.toBe(zoomed);
+    expect(chart.root.querySelector(".graph-zoom-level")!.textContent).toBe("2×");
+    pointer("pointercancel", 5000, 5000);
+    expect(surface.classList.contains("panning")).toBe(false);
+    expect(surface.releasePointerCapture).toHaveBeenCalledWith(1);
+    const panned = path(); pointer("pointermove", -5000, -5000); expect(path()).toBe(panned);
+    key("0"); expect(path()).toBe(original); expect(surface.classList.contains("can-pan")).toBe(false);
+    expect(JSON.stringify(data.rows)).toBe(rows);
+  });
+
+  it("supports keyboard panning without changing point-inspection arrow keys", () => {
+    const { chart, surface, key, reading } = view();
+    key("+"); const before = chart.root.querySelector('[data-channel="speed"]')!.getAttribute("d");
+    surface.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", shiftKey: true, bubbles: true }));
+    expect(chart.root.querySelector('[data-channel="speed"]')!.getAttribute("d")).not.toBe(before);
+    key("End"); expect(reading.textContent).toContain("Speed (m/s): 17");
+    key("ArrowLeft"); expect(reading.textContent).toContain("Time (s): 0.25");
+  });
   it("zooms and resets the visible graph without changing recorded coordinates", () => {
     const { chart, data, key } = view();
     const rows = JSON.stringify(data.rows);

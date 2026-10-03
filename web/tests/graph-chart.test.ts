@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartIndices, chartRange, chartTicks, graphAxes, graphFraction, nearestChartPoint, zoomChartWindow } from "../src/ui/graph-chart";
+import { chartIndices, chartRange, chartTicks, graphAxes, graphFraction, nearestChartPoint, zoomChartWindow, panChartWindow } from "../src/ui/graph-chart";
 import type { GraphDataSnapshot } from "../src/ui/graph-data";
 
 function data(name: string, rows: number[][]): GraphDataSnapshot {
@@ -8,6 +8,15 @@ function data(name: string, rows: number[][]): GraphDataSnapshot {
 }
 
 describe("detached graph geometry", () => {
+  it("pans at a fixed scale and stops at both retained-domain edges", () => {
+    const range = { min: 0.25, max: 0.75 };
+    expect(panChartWindow(range, -1)).toEqual({ min: 0, max: 0.5 });
+    expect(panChartWindow(range, 1)).toEqual({ min: 0.5, max: 1 });
+    expect(panChartWindow(range, 0.125)).toEqual({ min: 0.375, max: 0.875 });
+    expect(range).toEqual({ min: 0.25, max: 0.75 });
+    for (const invalid of [NaN, Infinity, -Infinity]) expect(panChartWindow(range, invalid)).toEqual(range);
+    expect(panChartWindow({ min: 0, max: 1 }, 0.5)).toEqual({ min: 0, max: 1 });
+  });
   it("zooms around the pointer without moving its domain coordinate", () => {
     const next = zoomChartWindow({ min: 0.1, max: 0.9 }, 2, 0.25);
     expect(next.min).toBeCloseTo(0.2, 12); expect(next.max).toBeCloseTo(0.6, 12);

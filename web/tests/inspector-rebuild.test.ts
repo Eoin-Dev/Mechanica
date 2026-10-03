@@ -3,7 +3,7 @@
  * Refresh keeps the existing controls when the required layout is unchanged. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/app";
-import { Body, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS, Wall } from "../src/engine/body";
+import { Body, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS, SCENE_MAX_COORDINATE, Wall } from "../src/engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
 import { Driver, ForceField } from "../src/engine/world";
 import { Vec2 } from "../src/core/vec";
@@ -148,6 +148,127 @@ describe("Centre-of-mass coordinates", () => {
     expect(readings.hidden).toBe(false);
     expect(empty.hidden).toBe(true);
     expect(panel.querySelector('[aria-label="Centre of mass x"]')!.textContent).toBe("0.4 m");
+  });
+});
+
+describe("Exact wall angles", () => {
+  function setup(a = new Vec2(-1, 2), b = new Vec2(3, 2)) {
+    const host = makeInspector();
+    const wall = new Wall(a, b, 0.1);
+    host.app.world.walls.push(wall);
+    host.app.undoStack.reset(host.app.world);
+    host.app.setSelection([wall]); host.inspector.refresh();
+    const input = host.panel.querySelector<HTMLInputElement>('[aria-label="Angle (°)"]')!;
+    return { ...host, wall, input };
+  }
+
+  function enter(input: HTMLInputElement, value: string) {
+    input.focus(); input.value = value;
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  }
+
+  it.each([30, -30, 90, -90, 180, -270, 540, 720, -720, -450, 33.123456789, 1e300, -1e300, 1e-12, -1e-12])(
+    "sets %s degrees without changing length, centre or unrelated objects", angle => {
+      const { app, wall, input, inspector } = setup();
+      const neighbour = new Wall(wall.b.copy(), new Vec2(8, 2));
+      app.world.walls.push(neighbour);
+      const body = new Body(new Vec2(0, 3)); app.world.bodies.push(body);
+      const originalNeighbour = neighbour.toDict(), originalBody = body.toDict();
+      enter(input, String(angle)); inspector.refresh();
+      const radians = (angle % 360) * Math.PI / 180;
+      expect(wall.a.x + wall.b.x).toBeCloseTo(2, 12);
+      expect(wall.a.y + wall.b.y).toBeCloseTo(4, 12);
+      expect(wall.b.sub(wall.a).length()).toBeCloseTo(4, 12);
+      expect(wall.b.x - wall.a.x).toBeCloseTo(4 * Math.cos(radians), 12);
+      expect(wall.b.y - wall.a.y).toBeCloseTo(4 * Math.sin(radians), 12);
+      expect(neighbour.toDict()).toEqual(originalNeighbour);
+      expect(body.toDict()).toEqual(originalBody);
+      expect(input.hasAttribute("aria-invalid")).toBe(false);
+    });
+
+  it("retains tiny angles in geometry and the scientific readout", () => {
+    const { wall, input, inspector } = setup(new Vec2(-2, 0), new Vec2(2, 0));
+    enter(input, "1e-12"); inspector.refresh();
+    expect(wall.b.y - wall.a.y).toBeGreaterThan(0);
+    expect((wall.b.y - wall.a.y) / 4).toBeCloseTo(Math.sin(1e-12 * Math.PI / 180), 25);
+    expect(input.value).toBe("1e-12");
+  });
+
+  it("accepts scientific notation and restores both endpoints through undo and redo", () => {
+    const { app, wall, input } = setup();
+    const before = wall.toDict();
+    enter(input, "9e1");
+    expect(wall.a).toEqual(new Vec2(1, 0)); expect(wall.b).toEqual(new Vec2(1, 4));
+    const after = wall.toDict();
+    app.undo(); expect(app.world.walls[0].toDict()).toEqual(before);
+    app.redo(); expect(app.world.walls[0].toDict()).toEqual(after);
+  });
+
+  it("refreshes the derived angle after endpoint edits without replacing the focused field", () => {
+    const { wall, input, inspector } = setup();
+    wall.b.set(-1, 6); inspector.refresh(); expect(input.value).toBe("90");
+    input.focus(); input.value = "45";
+    inspector.refresh(); expect(input.value).toBe("45");
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(input.value).toBe("90"); expect(wall.b).toEqual(new Vec2(-1, 6));
+  });
+
+  it.each(["", "no", "30deg", "1e", "Infinity", "1e309"])(
+    "rejects invalid input %s atomically and retains the draft", value => {
+      const { app, wall, input, inspector } = setup();
+      const before = wall.toDict();
+      enter(input, value); inspector.refresh();
+      expect(input.getAttribute("aria-invalid")).toBe("true");
+      expect(input.value).toBe(value); expect(wall.toDict()).toEqual(before);
+      expect(app.undoStack.canUndo).toBe(false);
+    });
+
+  it("does not round geometry or add history on an unchanged blur", () => {
+    const { app, wall, input } = setup(new Vec2(0, 0), new Vec2(2, 1 / 3));
+    const before = wall.toDict();
+    input.focus(); input.blur();
+    expect(wall.toDict()).toEqual(before); expect(app.undoStack.canUndo).toBe(false);
+  });
+
+  it("disables a directionless wall and becomes editable once it has length", () => {
+    const { wall, input, inspector } = setup(new Vec2(1, 2), new Vec2(1, 2));
+    expect(input.disabled).toBe(true);
+    input.value = "45"; input.dispatchEvent(new Event("blur"));
+    expect(wall.a).toEqual(wall.b);
+    wall.b.set(4, 2); inspector.refresh(); expect(input.disabled).toBe(false);
+    enter(input, "90"); expect(wall.b.sub(wall.a).length()).toBeCloseTo(3, 12);
+  });
+
+  it("rejects an out-of-bounds rotated endpoint without partially moving the wall", () => {
+    const { app, wall, input } = setup(new Vec2(SCENE_MAX_COORDINATE, -2),
+      new Vec2(SCENE_MAX_COORDINATE, 2));
+    const before = wall.toDict(); enter(input, "0");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(wall.toDict()).toEqual(before); expect(app.undoStack.canUndo).toBe(false);
+  });
+
+  it("updates a mounted pulley in the same reversible edit in Normal and Performance modes", () => {
+    for (const performance of [false, true]) {
+      const { app, wall, input } = setup(new Vec2(-2, 0), new Vec2(2, 0));
+      app.world.performance = performance;
+      const wheel = new Body(new Vec2(2, 0), PULLEY_RADIUS);
+      const a = new Body(new Vec2(0, 0.21), PULLEY_PARTICLE_RADIUS);
+      const b = new Body(new Vec2(2.22, -1), PULLEY_PARTICLE_RADIUS);
+      const link = new PulleyLink(a, b, wheel);
+      app.world.bodies.push(wheel, a, b); app.world.links.push(link);
+      app.world.mountPulley(link, wall, 1);
+      app.undoStack.reset(app.world);
+      const before = app.world.toDict();
+      enter(input, "30");
+      const radians = Math.PI / 6, offset = wall.thickness / 2 + PULLEY_PARTICLE_RADIUS - PULLEY_RADIUS;
+      expect(link.guideAOffset.x).toBeCloseTo(-Math.sin(radians) * PULLEY_RADIUS, 12);
+      expect(link.guideAOffset.y).toBeCloseTo(Math.cos(radians) * PULLEY_RADIUS, 12);
+      expect(wheel.pos.x).toBeCloseTo(wall.b.x - Math.sin(radians) * offset, 12);
+      expect(wheel.pos.y).toBeCloseTo(wall.b.y + Math.cos(radians) * offset, 12);
+      const after = app.world.toDict();
+      app.undo(); expect(app.world.toDict()).toEqual(before);
+      app.redo(); expect(app.world.toDict()).toEqual(after);
+    }
   });
 });
 
@@ -454,7 +575,9 @@ describe("Force values and sources", () => {
     expect(rows).toHaveLength(6);
     expect(rows[1].textContent).toContain("Applied force");
     expect(rows[1].textContent).toContain("Fy -4.00e-4 N");
-    expect(rows[1].textContent).toContain("∥ 3.00 N⊥ -4.00e-4 N");
+    expect(rows[0].textContent).toContain("∥ 0.00 N⊥ -19.60 N");
+    expect(rows[1].textContent).not.toContain("∥");
+    expect(rows[5].textContent).not.toContain("∥");
     expect(rows[2].textContent).toContain("<img src=x onerror=alert(1)>");
     expect(details.querySelector("img")).toBeNull();
     expect(rows[3].textContent).toContain(`R: Reaction from ${wall.name}`);
@@ -642,6 +765,75 @@ describe("Pulley assembly navigation", () => {
 });
 
 describe("Inspector structure key", () => {
+  it("resolves weight immediately on a sole contact and leaves physical state untouched", () => {
+    const { app, panel, inspector } = makeInspector();
+    const body = new Body(new Vec2(0, 0.25), 0.2);
+    const floor = new Wall(new Vec2(-2, 0), new Vec2(2, 0), 0.1);
+    app.world.bodies.push(body); app.world.walls.push(floor); app.setSelection([body]); inspector.refresh();
+    const before = app.world.toDict();
+    const toggle = panel.querySelector<HTMLInputElement>('[aria-label="Resolve weight on slope"]')!;
+    toggle.click(); inspector.refresh();
+    expect(body.forceSlopeWallId).toBe(floor.id); expect(body.showForceComponents).toBe(true);
+    expect(toggle.checked).toBe(true);
+    expect(panel.querySelector<HTMLElement>(".weight-slope-row")!.hidden).toBe(true);
+    expect(panel.querySelector(".weight-resolve-note")!.textContent).toContain(`${floor.name}: W∥ and W⊥ replace W`);
+    expect(app.world.toDict()).toEqual(before); expect(app.undoStack.canUndo).toBe(false);
+    toggle.click(); inspector.refresh(); expect(body.forceSlopeWallId).toBeNull();
+    expect(body.resolveWeightOnSlope).toBe(false); expect(body.showForceComponents).toBe(true);
+  });
+
+  it("offers a choice of contact slopes without choosing arbitrarily at a corner", () => {
+    const { app, panel, inspector } = makeInspector();
+    const body = new Body(new Vec2(0.25, 0.25), 0.2);
+    const floor = new Wall(new Vec2(-2, 0), new Vec2(2, 0), 0.1);
+    const side = new Wall(new Vec2(0, -2), new Vec2(0, 2), 0.1);
+    app.world.bodies.push(body); app.world.walls.push(floor, side); app.setSelection([body]); inspector.refresh();
+    panel.querySelector<HTMLInputElement>('[aria-label="Resolve weight on slope"]')!.click(); inspector.refresh();
+    expect(body.resolveWeightOnSlope).toBe(true); expect(body.forceSlopeWallId).toBeNull();
+    const slope = panel.querySelector<HTMLSelectElement>('[aria-label="Resolve forces relative to a slope"]')!;
+    expect(slope.parentElement!.hidden).toBe(false);
+    expect([...slope.options].map(option => option.value)).toEqual(["", String(floor.id), String(side.id)]);
+    slope.value = String(side.id); slope.dispatchEvent(new Event("change")); inspector.refresh();
+    expect(body.forceSlopeWallId).toBe(side.id);
+    body.pos.x = 1; inspector.refresh();
+    expect(body.forceSlopeWallId).toBe(floor.id);
+  });
+
+  it("shows a mixed group state, then enables and disables every selected particle only", () => {
+    const { app, panel, inspector } = makeInspector();
+    const bodies = [0, 1, 2].map(x => new Body(new Vec2(x, 1), 0.2));
+    bodies[0].showForceComponents = true;
+    const anchor = new Body(new Vec2(0, 3)); anchor.isAnchor = anchor.locked = true;
+    const wall = new Wall(new Vec2(-3, 0), new Vec2(3, 0));
+    app.world.bodies.push(...bodies, anchor); app.world.walls.push(wall);
+    app.setSelection([bodies[0], bodies[1], anchor, wall]); inspector.refresh();
+    const before = app.world.toDict();
+    const input = panel.querySelector<HTMLInputElement>('[aria-label="Free-body forces on canvas"]')!;
+    expect(input.indeterminate).toBe(true); expect(input.checked).toBe(false);
+    input.click(); inspector.refresh(); expect(input.indeterminate).toBe(false); expect(input.checked).toBe(true);
+    expect(bodies.map(body => body.showForceComponents)).toEqual([true, true, false]);
+    input.click(); inspector.refresh(); expect(bodies.map(body => body.showForceComponents)).toEqual([false, false, false]);
+    expect(anchor.showForceComponents).toBe(false); expect(app.world.toDict()).toEqual(before);
+    expect(app.undoStack.canUndo).toBe(false);
+  });
+
+  it.each([0, 1, 2, 3])("disables diagrams and weight resolution in Performance tier %s and retains choices", level => {
+    const { app, panel, inspector } = makeInspector();
+    const body = new Body(new Vec2(0, 0.25), 0.2); body.showForceComponents = body.resolveWeightOnSlope = true;
+    app.world.bodies.push(body); app.world.walls.push(new Wall(new Vec2(-2, 0), new Vec2(2, 0), 0.1));
+    app.setSelection([body]); inspector.refresh();
+    app.setPerfMode(true); (app as unknown as { setPerformanceLevel(n: number): void }).setPerformanceLevel(level);
+    inspector.refresh();
+    expect(panel.querySelector<HTMLInputElement>('[aria-label="Free-body forces on canvas"]')!.disabled).toBe(true);
+    expect(panel.querySelector<HTMLInputElement>('[aria-label="Resolve weight on slope"]')!.disabled).toBe(true);
+    expect(panel.querySelector<HTMLElement>(".force-readout")!.hidden).toBe(true);
+    expect(body.showForceComponents).toBe(true); expect(body.resolveWeightOnSlope).toBe(true);
+    app.setPerfMode(false); inspector.refresh();
+    expect(panel.querySelector<HTMLInputElement>('[aria-label="Free-body forces on canvas"]')!.disabled).toBe(false);
+    expect(panel.querySelector<HTMLElement>(".force-readout")!.hidden).toBe(false);
+    expect(body.forceSlopeWallId).toBe(app.world.walls[0].id);
+  });
+
   it("limits slope references to current contacts and disables the retained control on separation", () => {
     const { app, panel, inspector } = makeInspector();
     const body = new Body(new Vec2(0, 0.25), 0.2);
@@ -670,6 +862,8 @@ describe("Inspector structure key", () => {
     expect(slope.parentElement?.title).toBe(slope.title);
     expect(slope.getAttribute("aria-description")).toBe(slope.title);
     expect(body.forceSlopeWallId).toBeNull();
+    expect(slope.parentElement?.hidden).toBe(true);
+    expect(panel.querySelector<HTMLElement>(".weight-resolve-note")!.hidden).toBe(true);
     expect([...slope.options].map(option => option.value)).toEqual([""]);
     expect(app.world.time).toBe(0);
     expect(app.undoStack.canUndo).toBe(false);
@@ -688,8 +882,7 @@ describe("Inspector structure key", () => {
     app.world.fields.push(new ForceField("Ramping", "120*t", "0"));
     app.setSelection([body]);
     inspector.refresh();
-    const checkbox = [...panel.querySelectorAll("label.checkbox")]
-      .find(label => label.textContent === "Free-body forces on canvas")!.querySelector<HTMLInputElement>("input")!;
+    const checkbox = panel.querySelector<HTMLInputElement>('input[aria-label="Free-body forces on canvas"]')!;
     const note = panel.querySelector<HTMLElement>(".force-interval-note")!;
     expect(note.hidden).toBe(true);
     checkbox.click();
@@ -700,7 +893,8 @@ describe("Inspector structure key", () => {
     app.world.step(1 / 60);
     inspector.refresh();
     expect(note.textContent).toContain("Average forces: 0.000–0.017 s");
-    expect(note.textContent).toContain("C: numerical correction");
+    expect(panel.querySelector('.force-notation [aria-label="Numerical correction"]')?.getAttribute("title"))
+      .toBe("Numerical correction");
     expect(document.activeElement).toBe(checkbox);
     expect(panel.querySelector(".force-interval-note")).toBe(note);
     app.beginEdit();
@@ -971,11 +1165,12 @@ describe("Inspector edit transactions", () => {
     panel.querySelector<HTMLDetailsElement>(".force-values")!.open = true;
     app.stepOnce(); app.stepOnce(); app.stepBack(); inspector.refresh();
     expect(panel.querySelector(".force-interval-note")!.textContent)
-      .toContain("Average forces: 0.008–0.017 s.");
+      .toContain("Average forces: 0.008–0.013 s.");
     const disclosure = panel.querySelector<HTMLDetailsElement>(".force-values")!;
     expect(disclosure.open).toBe(true);
     expect(disclosure.textContent).toContain("R: Reaction from Impact floor");
-    expect(disclosure.textContent).toContain("Fy 720.00 N");
+    expect(disclosure.textContent).toContain("Fy 1200.00 N");
+    expect(app.world.time).toBeCloseTo((0.26 - 0.22) / 3, 9);
     const restored = app.world.bodies[0];
     expect(restored).not.toBe(body);
     const mass = panel.querySelector<HTMLInputElement>('[aria-label="Mass (type an exact value)"]')!;
@@ -1048,5 +1243,20 @@ describe("Inspector edit transactions", () => {
     app.undo();
     expect(app.world.bodies[0].name).toBe("Runner");
     expect(app.world.bodies[0].pos.x).toBeCloseTo(evolvedX, 12);
+  });
+});
+
+describe("Inspector tab checkpoint", () => {
+  it("captures the live force disclosure before its deferred native toggle event", () => {
+    const { app, panel, inspector } = makeInspector();
+    const body = new Body(new Vec2(0, 2), 0.2, 1);
+    body.showForceComponents = true; app.world.bodies.push(body);
+    app.setSelection([body]); inspector.refresh();
+    const details = panel.querySelector<HTMLDetailsElement>(".force-values")!;
+    expect(details).not.toBeNull();
+    details.open = true;
+    expect(inspector.tabRecoveryState().forceValuesOpen).toBe(true);
+    details.open = false;
+    expect(inspector.tabRecoveryState().forceValuesOpen).toBe(false);
   });
 });

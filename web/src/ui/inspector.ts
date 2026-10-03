@@ -5,7 +5,7 @@
  * (positions, velocities) stay current without stealing focus.
  */
 import { App, GraphMode, Panel } from "../app";
-import { BODY_PALETTE, Body, Color, MATERIALS, Wall } from "../engine/body";
+import { BODY_PALETTE, Body, Color, MATERIALS, SCENE_MAX_COORDINATE, Wall } from "../engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../engine/links";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
 import { PlaybackEventKind, analysePulley, forceLedger, projectForce, touchingSlopeWall } from "../education/analysis";
@@ -108,6 +108,27 @@ export class Inspector implements Panel {
   private splitter: HTMLElement;
   private reopenStrip: HTMLElement;
   private handle: HTMLElement;
+
+  tabRecoveryState(): { tab: Tab; forceValuesOpen: boolean; eventHistoryOpen: boolean } {
+    const forceValues = this.body.querySelector<HTMLDetailsElement>(".force-values");
+    return { tab: this.tab, forceValuesOpen: forceValues?.open ?? this.forceValuesOpen,
+      eventHistoryOpen: this.eventHistoryOpen };
+  }
+
+  restoreTabPresentation(raw: unknown): void {
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return;
+    const state = (raw as Record<string, unknown>).inspector;
+    if (state === null || typeof state !== "object" || Array.isArray(state)) return;
+    const data = state as Record<string, unknown>;
+    if (typeof data.tab === "string" && TABS.includes(data.tab as Tab)) this.tab = data.tab as Tab;
+    if (typeof data.forceValuesOpen === "boolean") {
+      this.forceValuesOpen = data.forceValuesOpen;
+      const details = this.body.querySelector<HTMLDetailsElement>(".force-values");
+      if (details !== null) details.open = data.forceValuesOpen;
+    }
+    if (typeof data.eventHistoryOpen === "boolean") this.eventHistoryOpen = data.eventHistoryOpen;
+    this.markDirty();
+  }
 
   constructor(app: App, root: HTMLElement, splitter: HTMLElement) {
     this.app = app;
@@ -604,12 +625,19 @@ export class Inspector implements Panel {
   private buildParticleAnalysis(b: Body): void {
     const app = this.app;
     this.sub("Forces on canvas");
-    this.add(checkbox("Free-body forces on canvas", () => b.showForceComponents,
+    const parent = this.target;
+    const controls = el("div", { class: "force-controls" });
+    parent.append(controls);
+    this.target = controls;
+    const diagram = checkbox("Free-body diagram", () => b.showForceComponents,
       (value) => { b.showForceComponents = value; app.invalidateCanvas(); },
-      "Draw current forces immediately. After a step, arrows share the resultant's time interval. R: reaction; F: friction; f: applied force; C: numerical correction."));
+      "Show labelled forces immediately. After a step, values are averages over the displayed interval.", () => app.perfMode);
+    diagram.root.classList.add("force-toggle");
+    diagram.root.querySelector("input")!.setAttribute("aria-label", "Free-body forces on canvas");
+    this.add(diagram);
 
     const readout = el("details", { class: "force-values" },
-      el("summary", { text: "Force values and sources" }));
+      el("summary", { text: "Values and sources", "aria-label": "Force values and sources" }));
     readout.open = this.forceValuesOpen;
     const values = el("ul", { class: "force-value-list", "aria-label": "Force values and sources" });
     readout.append(values);
@@ -624,9 +652,14 @@ export class Inspector implements Panel {
       title: "Current forces are calculated on isolated scene inputs. Contact and impact forces are estimated over one nominal solver interval; a completed step shows its measured average. Current previews use the authored model, including forces suppressed by Performance approximations." });
     // The disclosure may remain visible after its note scrolls away. Observe
     // their combined box so visible scientific values never stop refreshing.
-    const forceReadout = el("div", { class: "force-readout" }, forceNote, readout);
+    const notation = el("div", { class: "force-notation", role: "group", "aria-label": "Force notation" });
+    for (const [symbol, name] of [["W", "Weight"], ["T", "Tension"], ["P", "Thrust"], ["R", "Reaction"], ["F", "Friction"],
+      ["f", "Applied force"], ["C", "Numerical correction"]]) {
+      notation.append(el("abbr", { text: symbol, title: name, "aria-label": name, tabindex: "0" }));
+    }
+    const forceReadout = el("div", { class: "force-readout" }, forceNote, notation, readout);
     this.add({ root: forceReadout, refresh: () => {
-      forceNote.hidden = !b.showForceComponents;
+      forceNote.hidden = !b.showForceComponents || app.perfMode;
       readout.hidden = forceNote.hidden;
       forceReadout.hidden = forceNote.hidden;
       if (forceNote.hidden) return;
@@ -634,9 +667,9 @@ export class Inspector implements Panel {
         app.world.walls.find(candidate => candidate.id === b.forceSlopeWallId) ?? null;
       const ledger = forceLedger(app.world, b, wall);
       const text = ledger.mode === "step-average" && ledger.interval !== null ?
-        `Average forces: ${fmt3dp(ledger.interval.start)}–${fmt3dp(ledger.interval.end)} s. R: reaction; F: friction; f: applied force; C: numerical correction.` :
+        `Average forces: ${fmt3dp(ledger.interval.start)}–${fmt3dp(ledger.interval.end)} s.` :
         ledger.mode === "resting" ? "Resting forces: weight and support balance." :
-          "Current forces. R: reaction; F: friction; f: applied force; C: numerical correction.";
+          "Current forces.";
       if (forceNote.textContent !== text) forceNote.textContent = text;
       if (!readout.open) return;
       const entries = [...ledger.entries, { id: "resultant", label: "Resultant",
@@ -656,7 +689,7 @@ export class Inspector implements Panel {
         const name = symbol === undefined ? entry.label : `${symbol}: ${entry.label}`;
         if (row.name.textContent !== name) row.name.textContent = name;
         const text = [`Fx ${analysisNumber(entry.fx)} N`, `Fy ${analysisNumber(entry.fy)} N`];
-        if (ledger.basis !== null) {
+        if (ledger.basis !== null && ("kind" in entry && (entry.kind === "weight" || entry.kind === "gravity"))) {
           const resolved = projectForce(entry, ledger.basis);
           text.push(`∥ ${analysisNumber(resolved.parallel)} N`, `⊥ ${analysisNumber(resolved.normal)} N`);
         }
@@ -678,15 +711,57 @@ export class Inspector implements Panel {
       }
     } });
 
+    const slopeHelp = "Replace the weight arrow with its components along and perpendicular to the contact slope. Other forces stay unchanged.";
+    const resolve = checkbox("Resolve weight on slope", () => b.resolveWeightOnSlope || b.forceSlopeWallId !== null,
+      value => {
+        b.resolveWeightOnSlope = value;
+        const walls = app.world.walls.filter(wall => touchingSlopeWall(b, wall));
+        b.forceSlopeWallId = value && walls.length === 1 ? walls[0].id : null;
+        if (value) b.showForceComponents = true;
+        app.invalidateCanvas();
+        this.refresh();
+      }, slopeHelp, () => app.perfMode || !app.world.walls.some(wall => touchingSlopeWall(b, wall)));
+    resolve.root.classList.add("weight-resolve-toggle");
+    const resolveInput = resolve.root.querySelector<HTMLInputElement>("input")!;
+    resolveInput.setAttribute("aria-label", "Resolve weight on slope");
+    const resolveRefresh = resolve.refresh;
+    resolve.refresh = () => {
+      const walls = app.world.walls.filter(wall => touchingSlopeWall(b, wall));
+      if (b.forceSlopeWallId !== null && !walls.some(wall => wall.id === b.forceSlopeWallId)) {
+        b.forceSlopeWallId = null;
+        app.invalidateCanvas();
+      }
+      if (b.resolveWeightOnSlope && b.forceSlopeWallId === null && walls.length === 1) {
+        b.forceSlopeWallId = walls[0].id;
+        app.invalidateCanvas();
+      }
+      resolveRefresh?.();
+      resolve.root.title = app.perfMode ? "Weight components are available in Normal mode." :
+        resolveInput.disabled ? "No slope in contact." : slopeHelp;
+      resolveInput.setAttribute("aria-description", resolve.root.title);
+    };
+    const slopeSection = el("div", { class: "weight-slope-controls" });
+    controls.append(slopeSection);
+    this.target = slopeSection;
+    this.add(resolve);
+    const explanation = el("p", { class: "weight-resolve-note", text: "W∥ and W⊥ replace W; other forces keep their own arrows." });
+    this.add({ root: explanation, refresh: () => {
+      explanation.hidden = app.perfMode || !(b.resolveWeightOnSlope || b.forceSlopeWallId !== null) ||
+        !app.world.walls.some(wall => touchingSlopeWall(b, wall));
+      const name = app.world.walls.find(wall => wall.id === b.forceSlopeWallId)?.name;
+      const text = name === undefined ? "Choose a contact slope. W∥ and W⊥ replace W." :
+        `${name}: W∥ and W⊥ replace W; other forces keep their own arrows.`;
+      if (explanation.textContent !== text) explanation.textContent = text;
+    } });
     const slope = el("select", { "aria-label": "Resolve forces relative to a slope" });
     slope.addEventListener("change", () => {
       const wall = app.world.walls.find(wall => String(wall.id) === slope.value && touchingSlopeWall(b, wall));
       b.forceSlopeWallId = wall?.id ?? null;
+      b.resolveWeightOnSlope = b.forceSlopeWallId !== null;
       if (b.forceSlopeWallId !== null) b.showForceComponents = true;
       app.invalidateCanvas();
     });
-    const slopeHelp = "Resolve the resultant along and normal to a wall in contact.";
-    const slopeRow = el("div", { class: "row", role: "group", "aria-label": "Slope reference" },
+    const slopeRow = el("div", { class: "row weight-slope-row", role: "group", "aria-label": "Slope reference" },
       el("span", { class: "lbl", text: "Slope reference" }), slope);
     let slopeOptionsKey = "";
     this.add({ root: slopeRow, refresh: () => {
@@ -702,18 +777,27 @@ export class Inspector implements Panel {
         b.forceSlopeWallId = null;
         app.invalidateCanvas();
       }
-      const disabled = walls.length === 0;
+      const disabled = app.perfMode || walls.length === 0;
+      slopeRow.hidden = walls.length <= 1 || !(b.resolveWeightOnSlope || b.forceSlopeWallId !== null);
       if (slope.disabled !== disabled) slope.disabled = disabled;
       slopeRow.classList.toggle("disabled", disabled);
       const disabledState = String(disabled);
       if (slopeRow.getAttribute("aria-disabled") !== disabledState) slopeRow.setAttribute("aria-disabled", disabledState);
-      const help = disabled ? "No slope in contact." : slopeHelp;
+      const help = app.perfMode ? "Weight components are available in Normal mode." : disabled ? "No slope in contact." : slopeHelp;
       if (slopeRow.title !== help) slopeRow.title = help;
       if (slope.title !== help) slope.title = help;
       if (slope.getAttribute("aria-description") !== help) slope.setAttribute("aria-description", help);
       const value = b.forceSlopeWallId === null ? "" : String(b.forceSlopeWallId);
       if (slope.value !== value) slope.value = value;
     } });
+    const performanceNote = el("div", { class: "faint settings-note force-performance-note",
+      text: "Free-body diagrams are available in Normal mode." });
+    this.add({ root: performanceNote, refresh: () => {
+        performanceNote.hidden = !app.perfMode;
+        diagram.root.title = app.perfMode ? "Free-body diagrams are available in Normal mode." :
+          "Show labelled forces immediately. After a step, values are averages over the displayed interval.";
+      } });
+    this.target = parent;
   }
 
   private buildRodAttachment(b: Body): void {
@@ -910,6 +994,25 @@ export class Inspector implements Panel {
           (v) => bodies.forEach((b) => { b.constForce.x = v; }), "N", this.commit),
         numEdit("Fy", () => first.constForce.y,
           (v) => bodies.forEach((b) => { b.constForce.y = v; }), "N", this.commit));
+      const particles = bodies.filter(body => !body.isRodEndpoint);
+      if (particles.length) {
+        this.sub("Forces on canvas");
+        const diagrams = checkbox("Free-body diagrams", () => particles.every(body => body.showForceComponents),
+          value => {
+            for (const body of particles) body.showForceComponents = value;
+            this.app.invalidateCanvas();
+          }, "Show or hide free-body diagrams for every selected particle.", () => this.app.perfMode);
+        const input = diagrams.root.querySelector<HTMLInputElement>("input")!;
+        input.setAttribute("aria-label", "Free-body forces on canvas");
+        diagrams.root.classList.add("force-toggle");
+        const refresh = diagrams.refresh;
+        diagrams.refresh = () => {
+          refresh?.();
+          const mixed = particles.some(body => body.showForceComponents) && !particles.every(body => body.showForceComponents);
+          if (input.indeterminate !== mixed) input.indeterminate = mixed;
+        };
+        this.add(diagrams);
+      }
       this.buildMultiDrivers(bodies);
       if (bodies.length >= 2) {
         this.sub("Align");
@@ -1119,9 +1222,37 @@ export class Inspector implements Panel {
               "m", this.commit, fmt3dp),
       numEdit("y2", () => w.b.y, (v) => setEndpoint("b", "y", v),
               "m", this.commit, fmt3dp));
-    this.add(slider("Thickness", () => w.thickness, (v) => { w.thickness = v; },
+    const wallLength = (): number => Math.hypot(w.b.x - w.a.x, w.b.y - w.a.y);
+    this.add(numEdit("Angle", () => Math.atan2(w.b.y - w.a.y, w.b.x - w.a.x) * 180 / Math.PI,
+      value => {
+        const length = wallLength();
+        if (!Number.isFinite(value) || !Number.isFinite(length) || length <= 1e-9) return false;
+        // Reduce degrees before converting to radians so even large finite
+        // whole-turn inputs cannot overflow. Rotation changes geometry only.
+        const degrees = value % 360, radians = degrees * Math.PI / 180;
+        let cos = Math.cos(radians), sin = Math.sin(radians);
+        // Only exact cardinal angles snap to zero; tiny valid angles retain
+        // their direction rather than being swallowed by an epsilon.
+        if (degrees % 180 === 0) sin = 0;
+        if (Math.abs(degrees % 180) === 90) cos = 0;
+        const cx = (w.a.x + w.b.x) / 2, cy = (w.a.y + w.b.y) / 2;
+        const dx = length * cos / 2, dy = length * sin / 2;
+        const coordinates = [cx - dx, cy - dy, cx + dx, cy + dy];
+        if (coordinates.some(coordinate => !Number.isFinite(coordinate) ||
+            Math.abs(coordinate) > SCENE_MAX_COORDINATE)) return false;
+        w.a.set(coordinates[0], coordinates[1]);
+        w.b.set(coordinates[2], coordinates[3]);
+        this.app.world.syncPulleyMounts();
+      }, "°", this.commit, value => String(Number(value.toPrecision(12))), {
+        disabled: () => !Number.isFinite(wallLength()) || wallLength() <= 1e-9,
+        tooltip: "From endpoint 1 to endpoint 2, anticlockwise from horizontal. " +
+          "Rotates about the wall centre and keeps its length. Enter applies; Escape cancels.",
+      }));
+    const thickness = slider("Thickness", () => w.thickness, (v) => { w.thickness = v; },
       0.01, 2.0, { unit: "m", log: true, fmt: (v) => v.toFixed(2),
-        onCommit: this.commit, tooltip: "Width of the wall across its length." }));
+        onCommit: this.commit, tooltip: "Width of the wall across its length." });
+    thickness.root.classList.add("wall-thickness");
+    this.add(thickness);
     this.body.append(section("Material"));
     this.materialControls([w]);
 

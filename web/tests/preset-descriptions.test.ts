@@ -478,6 +478,24 @@ const CARD_CLAIMS: Record<string, Claim[]> = {
     }],
   ],
 
+  "Rough inclined plane": [
+    ["A 1 kg particle", w => { expect(movers(w)).toHaveLength(1); expect(movers(w)[0].mass).toBe(1); }],
+    ["30° plane with coefficient of friction μ = 0.25", w => {
+      const plane = w.walls[0], body = movers(w)[0];
+      expect(deg(Math.atan2(plane.a.y - plane.b.y, plane.b.x - plane.a.x))).toBeCloseTo(30, 10);
+      expect(Math.sqrt(plane.friction * body.friction)).toBeCloseTo(0.25, 12);
+      expect(body.noRotation).toBe(true);
+    }],
+    ["rough horizontal platform and stops", w => {
+      const platform = w.walls[1], body = movers(w)[0];
+      expect(platform.a.y).toBe(platform.b.y);
+      for (let i = 0; i < 1200; i++) w.step(1 / 120);
+      expect(body.pos.x).toBeGreaterThan(platform.a.x + body.radius);
+      expect(body.pos.x).toBeLessThan(platform.b.x - body.radius);
+      expect(body.vel.length()).toBeLessThan(1e-6);
+    }],
+  ],
+
   "Friction ramp": [
     ["Three balls on a 25 degree ramp", (w) => {
       expect(movers(w)).toHaveLength(3);

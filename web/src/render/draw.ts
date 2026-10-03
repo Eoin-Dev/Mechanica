@@ -1075,7 +1075,20 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   const fbdLabels: AnalysisLabel[] = [];
   const fbdVectors: AnalysisVector[] = [];
   const contour: Color = theme.themeName === "light" ? [255, 255, 255] : [8, 8, 8];
-  const diagramArrow = (sx: number, sy: number, ex: number, ey: number, color: Color): void => {
+  const diagramEnd = (sx: number, sy: number, dx: number, dy: number): [number, number, boolean] => {
+    // Keep the direction and true label; a break mark distinguishes a
+    // viewport-limited arrow from an arrow drawn to the chosen force scale.
+    const margin = 12;
+    let scale = 1;
+    if (dx > 0) scale = Math.min(scale, (areaW - margin - sx) / dx);
+    else if (dx < 0) scale = Math.min(scale, (margin - sx) / dx);
+    if (dy > 0) scale = Math.min(scale, (areaH - margin - sy) / dy);
+    else if (dy < 0) scale = Math.min(scale, (margin - sy) / dy);
+    scale = Math.max(0, scale);
+    return [sx + dx * scale, sy + dy * scale, scale < 1];
+  };
+  const diagramArrow = (sx: number, sy: number, ex: number, ey: number, color: Color,
+                        shortened: boolean): void => {
     const length = Math.hypot(ex - sx, ey - sy);
     if (length < vectorMinLengthPx) return;
     addArrowXY(ANALYSIS_CONTOURS, ANALYSIS_BACKS, sx, sy, ex, ey, contour, 6, vectorMinLengthPx);
@@ -1088,57 +1101,79 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     addCircle(ANALYSIS_BACKS.path(contour), sx, sy, 4);
     addCircle(FILLS.path(color), sx, sy, 2);
     addArrowXY(STROKES, FILLS, sx, sy, ex, ey, color, 2.5, vectorMinLengthPx);
-  };
-  let fbdCount = 0;
-  let fbdArrows = false;
-  for (const body of world.bodies) {
-    if (body.isRodEndpoint) continue;
-    if (!body.showForceComponents || (body.invMass === 0 && !body.perfSleeping)) continue;
-    if (aggressive && !picked.has(body) && body !== hover) continue;
-    const [sx, sy] = cam.toScreen(body.pos);
-    const radius = body.radius * zoom;
-    if (sx + radius < 0 || sx - radius > areaW || sy + radius < 0 || sy - radius > areaH) continue;
-    if (simplify && fbdCount++ >= 4) break;
-    const wall = body.forceSlopeWallId === null ? null :
-      world.walls.find((candidate) => candidate.id === body.forceSlopeWallId) ?? null;
-    const ledger = forceLedger(world, body, wall);
-    const symbols = forceSymbols(ledger.entries);
-    for (const entry of ledger.entries) {
-      const startX = sx + (entry.contactNx ?? 0) * radius;
-      const startY = sy - (entry.contactNy ?? 0) * radius;
-      const ex = startX + entry.fx * FORCE_ARROW_SCALE * vScale * zoom;
-      const ey = startY - entry.fy * FORCE_ARROW_SCALE * vScale * zoom;
-      const color = analysisForceColour(entry.kind);
-      diagramArrow(startX, startY, ex, ey, color);
-      fbdArrows = true;
-      if (Math.hypot(ex - startX, ey - startY) >= vectorMinLengthPx) {
-        fbdLabels.push({ text: `${symbols.get(entry.id)} ${analysisNumber(Math.hypot(entry.fx, entry.fy))} N`,
-          x: ex, y: ey, color, right: ex >= startX, source: entry.label });
-        fbdVectors.push({ x1: startX, y1: startY, x2: ex, y2: ey });
-      }
-    }
-    if (ledger.basis !== null) {
-      const parallel = projectForce(ledger.resultant, ledger.basis).parallel;
-      const normal = projectForce(ledger.resultant, ledger.basis).normal;
-      for (const component of [
-        { value: parallel, x: ledger.basis.tx, y: ledger.basis.ty,
-          text: "F∥", color: theme.SELECTION },
-        { value: normal, x: ledger.basis.nx, y: ledger.basis.ny,
-          text: "F⊥", color: theme.ACC_COLOR },
-      ]) {
-        const ex = sx + component.value * component.x * FORCE_ARROW_SCALE * vScale * zoom;
-        const ey = sy - component.value * component.y * FORCE_ARROW_SCALE * vScale * zoom;
-        diagramArrow(sx, sy, ex, ey, component.color);
-        fbdArrows = true;
-        if (Math.hypot(ex - sx, ey - sy) >= vectorMinLengthPx) {
-          fbdLabels.push({ text: `${component.text} ${analysisNumber(component.value)} N`,
-            x: ex, y: ey, color: component.color, right: ex >= sx,
-            source: component.text === "F∥" ? "Resultant along the slope" : "Resultant normal to the slope" });
-          fbdVectors.push({ x1: sx, y1: sy, x2: ex, y2: ey });
+    if (shortened && length > 28) {
+      const back = ANALYSIS_CONTOURS.path(contour, 6);
+      const front = STROKES.path(color, 2.5);
+      for (const distance of [15, 21]) {
+        const x = ex - ux * distance, y = ey - uy * distance;
+        for (const path of [back, front]) {
+          path.moveTo(x - ux * 2 - uy * 4, y - uy * 2 + ux * 4);
+          path.lineTo(x + ux * 2 + uy * 4, y + uy * 2 - ux * 4);
         }
       }
     }
-  }
+  };
+  let fbdArrows = false;
+  world.withCurrentForceBatch(() => {
+    for (const body of world.bodies) {
+      if (simplify || world.performance) break;
+      if (body.isRodEndpoint) continue;
+      if (!body.showForceComponents || (body.invMass === 0 && !body.perfSleeping)) continue;
+      if (aggressive && !picked.has(body) && body !== hover) continue;
+      const [sx, sy] = cam.toScreen(body.pos);
+      const radius = body.radius * zoom;
+      if (sx + radius < 0 || sx - radius > areaW || sy + radius < 0 || sy - radius > areaH) continue;
+      const wall = body.forceSlopeWallId === null ? null :
+        world.walls.find((candidate) => candidate.id === body.forceSlopeWallId) ?? null;
+      const ledger = forceLedger(world, body, wall);
+      const symbols = forceSymbols(ledger.entries);
+      for (const entry of ledger.entries) {
+        // Resolution replaces weight; the other physical forces keep their
+        // own arrows and application points. Never double-count its depiction.
+        if ((entry.kind === "weight" || entry.kind === "gravity") && ledger.basis !== null) continue;
+        const startX = sx + (entry.contactNx ?? 0) * radius;
+        const startY = sy - (entry.contactNy ?? 0) * radius;
+        const [ex, ey, shortened] = diagramEnd(startX, startY,
+          entry.fx * FORCE_ARROW_SCALE * vScale * zoom,
+          -entry.fy * FORCE_ARROW_SCALE * vScale * zoom);
+        const color = analysisForceColour(entry.kind);
+        diagramArrow(startX, startY, ex, ey, color, shortened);
+        fbdArrows = true;
+        if (Math.hypot(ex - startX, ey - startY) >= vectorMinLengthPx) {
+          fbdLabels.push({ text: `${symbols.get(entry.id)} ${analysisNumber(Math.hypot(entry.fx, entry.fy))} N`,
+            x: ex, y: ey, color, right: ex >= startX,
+            source: entry.label + (shortened ? " — arrow shortened to fit the canvas" : "") });
+          fbdVectors.push({ x1: startX, y1: startY, x2: ex, y2: ey });
+        }
+      }
+      if (ledger.basis !== null) {
+        for (const weight of ledger.entries) {
+          if (weight.kind !== "weight" && weight.kind !== "gravity") continue;
+          const { parallel, normal } = projectForce(weight, ledger.basis);
+          const symbol = symbols.get(weight.id)!;
+          for (const component of [
+            { value: parallel, x: ledger.basis.tx, y: ledger.basis.ty,
+              text: `${symbol}∥`, color: analysisForceColour("weight") },
+            { value: normal, x: ledger.basis.nx, y: ledger.basis.ny,
+              text: `${symbol}⊥`, color: analysisForceColour("weight") },
+          ]) {
+            const [ex, ey, shortened] = diagramEnd(sx, sy,
+              component.value * component.x * FORCE_ARROW_SCALE * vScale * zoom,
+              -component.value * component.y * FORCE_ARROW_SCALE * vScale * zoom);
+            diagramArrow(sx, sy, ex, ey, component.color, shortened);
+            fbdArrows = true;
+            if (Math.hypot(ex - sx, ey - sy) >= vectorMinLengthPx) {
+              fbdLabels.push({ text: `${component.text} ${analysisNumber(Math.abs(component.value))} N`,
+                x: ex, y: ey, color: component.color, right: ex >= sx,
+                source: `${weight.label} ${component.text.endsWith("∥") ? "along" : "normal to"} the slope` +
+                  (shortened ? " — arrow shortened to fit the canvas" : "") });
+              fbdVectors.push({ x1: sx, y1: sy, x2: ex, y2: ey });
+            }
+          }
+        }
+      }
+    }
+  });
   if (fbdArrows) {
     ANALYSIS_CONTOURS.strokeAll(ctx);
     ANALYSIS_BACKS.fillAll(ctx);

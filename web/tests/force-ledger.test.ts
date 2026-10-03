@@ -4,6 +4,7 @@ import { Body, PULLEY_RADIUS, Wall } from "../src/engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
 import { Driver, ForceField, INTEGRATORS, World } from "../src/engine/world";
 import { forceLedger } from "../src/education/analysis";
+import { PRESETS } from "../src/scene/presets";
 
 function freeParticle() {
   const world = new World();
@@ -14,6 +15,28 @@ function freeParticle() {
   world.bodies.push(body);
   return { world, body };
 }
+
+describe("collision preset impulse units", () => {
+  it("matches the equal-mass elastic and inelastic impulses and their 1/120 s averages", () => {
+    const world = PRESETS.find(preset => preset.name === "Elastic vs inelastic")!.build();
+    for (const body of world.bodies) body.showForceComponents = true;
+    let collision = false;
+    for (let i = 0; i < 180; i++) {
+      world.step(1 / 120);
+      if (world.bodies[0].vel.x < 1.5) { collision = true; break; }
+    }
+    expect(collision).toBe(true);
+    const [a, b, c, d] = world.bodies;
+    expect([a.vel.x, b.vel.x, c.vel.x, d.vel.x]).toEqual([0, 2, 1, 1]);
+    for (const [body, expectedJ, expectedF] of [[a, -2, -240], [b, 2, 240], [c, -1, -120], [d, 1, 120]] as const) {
+      const sample = body.forceSnapshot!;
+      const reaction = sample.entries.find(entry => entry.kind === "reaction")!;
+      expect(sample.endTime - sample.startTime).toBeCloseTo(1 / 120, 12);
+      expect(reaction.fx).toBeCloseTo(expectedF, 10);
+      expect(reaction.fx * (sample.endTime - sample.startTime)).toBeCloseTo(expectedJ, 10);
+    }
+  });
+});
 
 function expectClosure(world: World, body: Body) {
   const ledger = forceLedger(world, body);
@@ -187,7 +210,7 @@ describe("force-diagram impulses and constraints", () => {
     });
   }
 
-  it("uses actual projected spring impulses in Performance mode", () => {
+  it("skips diagram recording while preserving projected spring motion in Performance mode", () => {
     const { world, body } = freeParticle();
     world.performance = true;
     const support = new Body(new Vec2(0, 0));
@@ -195,9 +218,9 @@ describe("force-diagram impulses and constraints", () => {
     world.bodies.push(support);
     world.links.push(new SpringLink(support, body, 0.5, 20, 0.4));
     world.step(1 / 60);
-    const ledger = expectClosure(world, body);
-    expect(ledger.entries.map(entry => entry.label)).toEqual(["Performance spring force"]);
-    expect(ledger.entries[0].kind).toBe("spring");
+    expect(body.forceSnapshot).toBeNull();
+    expect(body.netForce.y).not.toBe(0);
+    expect(body.netForce.y).toBeCloseTo(body.mass * body.vel.y * 60, 10);
   });
 });
 
@@ -302,7 +325,10 @@ describe("force recording lifecycle and determinism", () => {
         expect(recorded.toDict()).toEqual(original.toDict());
         expect(recorded.bodies.map(b => [b.netForce.x, b.netForce.y]))
           .toEqual(original.bodies.map(b => [b.netForce.x, b.netForce.y]));
-        recorded.bodies.forEach(b => expectClosure(recorded, b));
+        recorded.bodies.forEach(b => {
+          if (recorded.performance) expect(b.forceSnapshot).toBeNull();
+          else expectClosure(recorded, b);
+        });
       }
       expect(original.bodies.every(b => b.forceSnapshot === null)).toBe(true);
     });
@@ -343,10 +369,10 @@ describe("force-diagram source ownership", () => {
       world.bodies.push(source);
     }
     world.step(1 / 120);
-    const ledger = expectClosure(world, body);
-    expect(ledger.entries.map(entry => entry.kind)).toEqual(["gravity"]);
-    expect(ledger.entries[0].fx).toBeCloseTo(body.netForce.x, 12);
-    expect(ledger.entries[0].fy).toBeCloseTo(body.netForce.y, 12);
+    expect(body.forceSnapshot).toBeNull();
+    expect(body.netForce.x).toBeGreaterThan(0); expect(body.netForce.y).toBeGreaterThan(0);
+    expect(body.netForce.x).toBeCloseTo(body.mass * body.vel.x * 120, 12);
+    expect(body.netForce.y).toBeCloseTo(body.mass * body.vel.y * 120, 12);
   });
 
   it.each([false, true])("omits hidden rod endpoint gravity (stepped=%s)", stepped => {

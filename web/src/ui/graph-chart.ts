@@ -21,6 +21,14 @@ export function zoomChartWindow(window: ChartRange, factor: number, anchor = 0.5
   return { min, max: min + next };
 }
 
+/** Move a normalized viewport without changing its scale or stored samples. */
+export function panChartWindow(window: ChartRange, delta: number): ChartRange {
+  if (!Number.isFinite(delta)) return { ...window };
+  const span = window.max - window.min;
+  const min = Math.max(0, Math.min(1 - span, window.min + delta));
+  return { min, max: min + span };
+}
+
 /** Momentum dimensions and phase pairs deliberately use separate views. */
 export function graphAxes(data: GraphDataSnapshot, variant = 0): ChartAxes {
   if (data.filename === "mechanica-phase.csv") return variant === 1

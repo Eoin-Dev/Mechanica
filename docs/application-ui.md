@@ -41,21 +41,42 @@ per-frame step/time budgets are reached.
 
 ### Single-step and rewind
 
-`stepOnce()` pauses, advances two 1/120 s quanta (one nominal 60 Hz display
-frame), and uses the same adaptive subdivision and trail recording path as
-normal playback. Playback, single-step, and time-jump all use the same bounded
+`stepOnce()` pauses and advances at most two 1/120 s quanta (one nominal 60 Hz
+display frame). A new detected collision stops the step at its contact
+boundary, refined with 32 deterministic bisection trials on detached worlds.
+The same control then advances another nominal frame or stops at the next
+impact. Existing resting contacts do not repeatedly stop progress. Concurrent
+contact detections are refined together so particle order does not choose a
+later impact. Performance mode retains its selected solver profile during
+manual collision refinement. Single-step uses the same adaptive subdivision
+and trail recording path as normal playback.
+Playback, single-step, and time-jump all use the same bounded
 physics-batch primitive. It stops on the first contained divergence or thrown
 solver error, pauses playback, clears pending accumulated time, aggregates the
 affected body names, and emits one throttled diagnostic instead of repeatedly
 retrying the bad state.
 
-`stepBack()` pauses and asks `RewindBuffer` for the previous recorded display
-frame. It reconstructs a new world, resets all live gestures, retains selected
+`stepBack()` pauses and first looks for a detected collision inside the interval
+being crossed. Display checkpoints own a compact recipe of actual step lengths,
+solver profiles, and copied contact-transition identities/times. Rewind replays
+that interval on a detached world only when needed, refines its latest contact
+boundary, and retains the shortened recipe so another Back can visit an earlier
+impact. Otherwise it restores the previous recorded display frame. The starting
+state is recorded before the first step, including a non-zero scene clock.
+It reconstructs a new world, resets all live gestures, retains selected
   body IDs where the corresponding reconstructed objects exist, and truncates
   energy, momentum, displacement, distance, velocity, timestamped phase-portrait, event-table,
   and motion-trail samples at the rewound clock. Cumulative distance resumes
   from the restored particle position rather than counting the rewind jump.
-The compact rewind buffer is limited to 3,000 frames and 48 MB. A frame that
+Replayed contacts and force readouts belong to the restored collision frame.
+An impact force is an average over the displayed force interval; its product
+with that interval is the impulse. It is not a finite instantaneous force.
+The compact rewind buffer is limited to 3,000 frames and 48 MB, including owned
+replay metadata. Pending recipes are bounded to 8,192 outer steps and 65,536
+contact beginnings. An overflow retains ordinary frame rewind without a
+collision recipe. Edits establish checkpoint boundaries and discard autonomous
+replay recipes during a live gesture, whose pointer input is not reproducible
+from solver steps alone. A frame that
 cannot fit clears rewind history and produces a one-time explanation; ordinary
 undo history remains separate.
 
@@ -129,6 +150,9 @@ paused; press Play separately to start again.
   Failed reads and failed builds leave both the live world and history intact.
 - `initializePreset()` is used only for startup and is the sole scene-loading
   path that resets undo history.
+- Reset preserves current per-object diagram/slope/link choices and rebinds
+  surviving selected objects to the restored initial scene. Repeated resets
+  keep the same physical baseline. Tab recovery also preserves that baseline.
 - Undo/redo restore new object graphs and pause. Every world replacement also
   clears live gestures, trails, graph samples, frame rewind, and other derived
   state before seeding the replacement's baseline.
@@ -310,6 +334,18 @@ drag so the two gestures are not visually conflated.
 
 ### Walls, links, and pending references
 
+The wall's **Angle** field accepts decimal or scientific-notation degrees.
+It measures the direction from endpoint 1 to endpoint 2 anticlockwise from the
+positive horizontal axis. Enter or blur applies the rotation about the wall's
+midpoint while preserving its length; Escape cancels. The displayed angle is
+derived from the endpoints, so endpoint dragging and saved scenes stay coherent
+without an additional serialized parameter. Whole turns are equivalent; the
+readout uses the signed principal angle. Zero-length walls have no direction,
+so their angle field is disabled until the endpoints are separated. Invalid
+input or a rotation outside scene coordinate bounds is rejected without changing
+either endpoint. Attached pulley mount geometry updates before the same undo
+entry is committed. Other walls and particle positions remain independent.
+
 Wall endpoint edits mutate `a` or `b`; whole-wall dragging preserves endpoint
 separation. A mounted pulley follows its chosen endpoint; its wall-side tangent
 and wrapped arc are recomputed from the wall direction. The axle receives the
@@ -366,7 +402,7 @@ For a single object it exposes type-specific state:
   ordinary body but omitted while that body is a system-sized pulley endpoint;
 - anchor position and colour with anchor invariants preserved; a rod-attached
   anchor instead exposes its position along the rod and deletion;
-- wall endpoints, thickness, material, colour, and actions;
+- wall endpoints, an exact degree angle, thickness, material, colour, and actions;
 - spring/string natural length, stiffness, modulus of elasticity, damping,
   ideal extension/force/energy readings, and one-sidedness/conversion;
 - rod/rope length, compliance where applicable, and rope conversion. A selected
@@ -460,76 +496,71 @@ quantitative study. The complete card owns its refresh observation so scrolling
 one explanation out of view cannot freeze another visible reading.
 
 An ordinary selected particle can enable a free-body diagram directly on the
-canvas. After stepping, it draws weight, applied, drag, field, driver, link,
-support/contact, and numerical-correction arrows averaged over the same
+canvas, and a particle group can enable or disable all its diagrams together.
+Mixed groups expose the native checkbox's indeterminate state. These are view
+choices, so they do not change physics or create undo entries.
+
+The compact force card provides a diagram switch, symbol keys and a
+keyboard-operable **Values and sources** disclosure. Weight, including mutual
+gravitational attraction, uses `W`; pulling link forces use `T`, rod/spring
+thrust uses `P`, normal reactions use `R`, friction uses `F`, other forces
+use lowercase `f`, and numerical correction uses `C`. Every repeated kind
+receives subscripts on both arrows and source rows. Each contact has its own
+reaction/friction entry and named source. The readout retains signed x/y
+components, the resultant and the measured interval. Completed-step values
+average the impulses over that interval; they are not estimates of a material's
+physical peak impact force.
+
+**Resolve weight on slope** replaces each gravitational weight arrow with its
+signed parallel and perpendicular projections, labelled `W∥` and `W⊥`.
+It does not split the resultant or other forces. The source readout additionally
+shows those weight components. Geometry determines the currently touching walls
+without requiring a step, including capsule endpoints and either face. A sole
+contact is selected automatically when enabled. With multiple contacts the user
+chooses a wall; with none, the control is greyed out with the brief hover
+explanation “No slope in contact.” An enabled choice can await recontact.
+The selected wall's tangent and outward normal form the basis; projections are
+dot products with the actual weight vectors. Components replace arrows rather
+than duplicating the weight, and no separate canvas component table is drawn.
+
+Before any step, current-force queries calculate link and loaded contact forces
+on isolated copies without advancing or modifying the live scene. Physical
+edits invalidate this preview. After stepping, the diagram uses the same force
 interval as the realised resultant, with closure up to floating-point tolerance.
-The Inspector displays that interval and explains `R` (normal reaction), `F`
-(friction), lowercase `f` (applied force) and `C` (numerical correction). Each loaded neighbour or wall has
-separate reaction/friction arrows and named sources. Repeated symbols use
-subscripts, such as `R₁`/`R₂` or `f₁`/`f₂`, consistently on canvas and in the
-source rows. Friction keeps unindexed `F`, including when several contacts
-contribute; hover identifies its particular source. Springs use `fₛ`, strings
-use `T`, and drag uses `D`. Its keyboard-operable Force values and sources
-disclosure lists every named force, signed x/y components in newtons and the
-resultant; a selected slope adds signed parallel/normal components. It uses
-the same ledger and interval as the arrows, retains unchanged rows/focus, and
-remains a complete text alternative when a dense diagram crowds the canvas.
-Its open or closed choice survives Inspector rebuilds, tab changes and rewind;
-restored rows read the restored particle's forces. This preference is transient.
-Each component keeps its axis, value and unit together; paired columns become
-one column in a narrow or enlarged Inspector.
-Slope reference offers only walls currently touching the selected colliding
-particle, including capsule endpoints and either face. The options use current
-geometry, without requiring a step or relying on old contact records. With no
-contact the control is disabled and grey, with brief hover help: No slope in
-contact. Its group exposes the disabled state to assistive technology, as do
-conditionally unavailable sliders such as Spin. Separation or removal clears
-the old reference; returning to contact
-enables the same retained control.
-Before a recorded step, or after an edit/restore, it immediately calculates
-current applied, link and loaded contact forces on isolated scene inputs. No
-first step is required, and viewing or changing the diagram cannot move the
-live particles or advance the clock. The brief current-force note's hover help
-explains the contact/impact estimate's nominal interval and authored-model
-meaning in Performance mode. It does not reuse old multipliers, invent forces
-from unloaded touching geometry or infer reactions from stale motion.
-Undo/redo preserve surviving particles' diagram/slope choices and surviving
-links' tension-overlay choices while discarding old force intervals.
-Event refinement and time seeking transfer those presentation choices before
-their final simulation pass so the paused result has recorded forces. An optional
-wall reference also shows components parallel and perpendicular to that slope.
-Force captions use opaque themed surfaces, readable neutral text and coloured
-association cues, with bounded attempts to separate nearby captions. A separate
-force palette and opaque contrasting contours on shafts/heads keep arrows
-visible over particle colours. Origin dots mark their actual application point:
-weight and smooth forces start at the centre; contact reaction/friction start
-at the rim in the recorded contact direction. For interval averages this is
-the last sampled contact direction, even if contact ended before the frame.
-Dashed caption leaders distinguish association lines from force arrows.
-Hovering an arrow or caption outlines its caption and displays its source;
-source names and paint work are bounded, with complete names retained in the
-optional disclosure. Their
-placement protects the enabled diagram's arrow shafts and tips, searching
-progressively wider positions when the preferred caption would obscure a
-vector. The same protection applies to parallel/normal arrows.
-Caption positions stay inside the canvas, including when the force arrow extends
-beyond it. They follow the Font size preference and the same Normal/Performance
-visibility threshold as the arrows. Large and tiny nonzero values use compact
-scientific notation without losing their sign. Diagrams belonging to particles
-outside the visible scene are culled before their captions can pin to an edge.
-Slope components are labelled on their arrows without a duplicate canvas card;
-the disclosure retains each source's exact signed components.
-Finite screen space can still crowd diagrams with many enabled forces.
-While this per-particle diagram is active, the selected body's default editable
-green velocity handle is hidden to avoid overlapping the force arrows; the
-View tab's global velocity-vector overlay remains independent.
-Performance-mode sleeping preserves the particle's force diagram, including
-weight and the supporting contact reaction.
+
+Force captions use opaque themed surfaces, neutral text, coloured association
+cues and dashed leaders. Contrasting contours keep shafts/heads distinct from
+particle colours. Origin dots mark the application point: weight and smooth
+forces start at the centre; reaction/friction start at the rim in the recorded
+contact direction. For interval averages this is the last sampled direction
+even if contact ended before the displayed frame. Hovering an arrow or caption
+identifies its source. Placement protects shafts and tips, searches bounded
+candidate positions and keeps captions inside the viewport. Oversized arrows
+retain their direction and value while clipping their tip inside the canvas;
+break marks and hover text identify this shortening.
+
+A renderer batch shares one physical-input validation scan across all enabled
+diagrams. Each canvas context retains only its latest caption layout; reuse
+requires identical geometry, viewport, text scale and measured widths. Text,
+colours and hover sources are painted from current data. Font metrics are
+measured even on a cache hit, and moved arrows use the same placement rules.
+An exact bounding-box rejection avoids unnecessary segment clipping. Normal
+mode keeps all enabled visible diagrams; finite screen space may still crowd
+them, with the disclosure retaining every exact value.
+
+All Performance tiers omit free-body diagram rendering and accounting and
+disable its controls. Stored choices survive returning to Normal mode.
+Explicit per-link tension diagnostics remain independent. Reset, rewind and
+time refinement transfer presentation to matching restored objects. Tab recovery
+also stores these choices; portable scene JSON excludes them.
+While an effective particle diagram is active, its default editable green
+velocity handle is hidden; the global velocity-vector overlay is independent.
+
 The rod attachment inventory retains its button nodes while its displayed
 content is unchanged, preserving keyboard focus through panel refreshes.
 
-Tension-vector choices are per-link view state, are not serialized, and do not
-create undo entries. Multi-selection toggles every matching link, so separate
+Tension-vector choices are per-link view state, excluded from portable scene
+JSON but retained by tab recovery, and do not create undo entries. Multi-selection toggles every matching link, so separate
 members of a chain can display simultaneously. Hovering any link-force arrow
 shows its force as a two-component SI column vector; ordinary and elastic
 strings display pulling tension, while a bilateral spring arrow reverses when
@@ -564,7 +595,18 @@ the current choice's short explanation is shown. The bounded Event history is
 collapsed by default, can be shown or hidden, and can be cleared without
 changing the scene. Normal mode refines collision and pulley-stop times within
 the final physics quantum; Performance mode pauses at its coarser completed
-quantum so event tracking does not undermine its throughput contract.
+quantum so event tracking does not undermine its throughput contract. Optional
+engine contact observations retain beginnings and endings from every substep,
+including elastic impacts already separated at the outer step's end. These
+observations do not change collision solving. Frame stepping and rewind refine
+contacts in both modes; automatic Performance playback still pauses at its
+completed quantum.
+
+Collision boundaries follow the authored numerical integrator and its contact
+detector. Bisection removes the surrounding-frame timing error; it does not
+turn the discrete engine into a general continuous-collision detector or remove
+integration error. Extremely fast trajectories that tunnel past narrowphase
+remain a separate solver limitation.
 
 ### View tab
 
@@ -825,7 +867,11 @@ The graph's name is the modal's main heading, with its position among the six
 families beneath it. **Zoom in**, **Zoom out** and **Fit** adjust both axes of
 the detached plot. The mouse wheel zooms around the pointer inside the plot;
 outside it, normal scrolling remains available. Focused charts also accept
-`+`/`-` for zoom and `0` for Fit. Curves and coordinate markers clip to the plot,
+`+`/`-` for zoom and `0` for Fit. Once zoomed, dragging pans both axes within
+the recorded domain; pointer capture keeps the drag coherent outside the plot.
+Shift plus an arrow key pans by ten percent of the visible span. Rendering is
+coalesced to one animation frame; panning does not change measurements or CSV.
+Fit restores the complete domain. Curves and coordinate markers clip to the plot,
 and PNG export preserves its current visible range. Switching graph families
 or physical dimensions restores the full range.
 

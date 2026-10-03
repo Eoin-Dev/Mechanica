@@ -29,8 +29,14 @@ describe("rewound diagnostic ownership", () => {
       const buffer = new RewindBuffer(); buffer.push(world);
       world.step(1 / 60); buffer.push(world);
       const original = forceLedger(world, body);
-      expect(original.mode).toBe("step-average");
-      expect(original.entries.find(e => e.kind === "reaction")!.fy).toBeCloseTo(360, 9);
+      expect(body.netForce.y).toBeCloseTo(360, 9);
+      if (performance) {
+        expect(body.forceSnapshot).toBeNull();
+        expect(original.mode).toBe("current");
+      } else {
+        expect(original.mode).toBe("step-average");
+        expect(original.entries.find(e => e.kind === "reaction")!.fy).toBeCloseTo(360, 9);
+      }
       expect(body.vel.y).toBeCloseTo(3, 9);
       if (!performance) expect(world.contacts).toHaveLength(0);
       const state = snapshot(world);
@@ -38,8 +44,13 @@ describe("rewound diagnostic ownership", () => {
       const restored = buffer.back()!; show(restored);
       expect(snapshot(restored)).toBe(state);
       expect(forceLedger(restored, restored.bodies[0])).toEqual(original);
-      expect(Object.isFrozen(restored.bodies[0].forceSnapshot)).toBe(true);
-      expect(restored.bodies[0].forceSnapshot!.entries.every(Object.isFrozen)).toBe(true);
+      expect(restored.bodies[0].netForce.y).toBeCloseTo(360, 9);
+      if (performance) {
+        expect(restored.bodies[0].forceSnapshot).toBeNull();
+      } else {
+        expect(Object.isFrozen(restored.bodies[0].forceSnapshot)).toBe(true);
+        expect(restored.bodies[0].forceSnapshot!.entries.every(Object.isFrozen)).toBe(true);
+      }
     });
   }
 

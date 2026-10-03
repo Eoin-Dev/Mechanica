@@ -53,7 +53,7 @@ test.beforeEach(async ({ page }) => {
     };
     const fill = CanvasRenderingContext2D.prototype.fillText;
     CanvasRenderingContext2D.prototype.fillText = function(text, x, y, maxWidth) {
-      if (this.canvas.id === "canvas" && /^(?:[WRTFf]|fₛ|F[∥⊥])[₀-₉]*\s.*N$/.test(text)) {
+      if (this.canvas.id === "canvas" && /^[WRTFPfC][₀-₉]*[∥⊥]?\s.*N$/.test(text)) {
         const metrics = this.measureText(text);
         captions.push({ text, left: x - metrics.actualBoundingBoxLeft,
           right: x + metrics.actualBoundingBoxRight, top: y - metrics.actualBoundingBoxAscent,
@@ -93,23 +93,22 @@ test("current diagrams show all loaded slope contacts and update immediately thr
   await expect(clock).toHaveValue("0.00");
   await expect(page.locator(".force-interval-note")).toContainText("Current forces.");
   await expect(page.locator(".force-interval-note")).not.toContainText("Step once");
-  const slope = page.getByRole("combobox", { name: "Resolve forces relative to a slope", exact: true });
-  await slope.selectOption("1");
+  await page.getByRole("checkbox", { name: "Resolve weight on slope", exact: true }).check();
   const readCaptions = () => page.evaluate(() =>
     (window as unknown as { contactCaptions: Caption[] }).contactCaptions.slice());
   await expect.poll(async () => (await readCaptions()).map(caption => caption.text).sort())
-    .toEqual(["R₁ 4.15 N", "R₂ 8.29 N", "R₃ 8.89 N", "W 9.81 N"].sort());
+    .toEqual(["R₁ 4.15 N", "R₂ 8.29 N", "R₃ 8.89 N", "W∥ 4.15 N", "W⊥ 8.89 N"].sort());
   const mass = page.getByRole("textbox", { name: "Mass (type an exact value)", exact: true });
   await mass.fill("2"); await mass.press("Enter");
   await expect.poll(async () => (await readCaptions()).map(caption => caption.text).sort())
-    .toEqual(["R₁ 4.15 N", "R₂ 12.44 N", "R₃ 17.78 N", "W 19.62 N"].sort());
+    .toEqual(["R₁ 4.15 N", "R₂ 12.44 N", "R₃ 17.78 N", "W∥ 8.29 N", "W⊥ 17.78 N"].sort());
   await expect(clock).toHaveValue("0.00");
   await page.locator("#canvas").click({ position: { x: 15, y: 15 } });
   await page.keyboard.press("Control+z");
   await pickParticle(page, [120, 190, 120]);
   await expect(toggle).toBeChecked(); await expect(mass).toHaveValue("1 kg");
   await expect.poll(async () => (await readCaptions()).map(caption => caption.text).sort())
-    .toEqual(["R₁ 4.15 N", "R₂ 8.29 N", "R₃ 8.89 N", "W 9.81 N"].sort());
+    .toEqual(["R₁ 4.15 N", "R₂ 8.29 N", "R₃ 8.89 N", "W∥ 4.15 N", "W⊥ 8.89 N"].sort());
   for (const [layout, width, theme] of [
     ["light", 1440, "Light"], ["dark", 1440, "Dark"], ["void", 1440, "Void"],
     ["phone-enlarged", 390, "Light"],
@@ -225,23 +224,23 @@ test("rewinding restores completed impact captions and their measured interval a
     (window as unknown as { contactCaptions: Caption[] }).contactCaptions.map(caption => caption.text));
   const canvas = page.locator("#canvas");
   await canvas.focus(); await page.keyboard.press(".");
-  await expect(clock).toHaveValue("0.02");
-  await expect(page.locator(".force-interval-note")).toContainText("Average forces: 0.008–0.017 s.");
-  await expect(sources.getByRole("listitem").filter({ hasText: "Reaction from Impact floor" })).toContainText("Fy 720.00 N");
-  await expect.poll(captions).toContain("R 720.00 N");
+  await expect(clock).toHaveValue("0.013333");
+  await expect(page.locator(".force-interval-note")).toContainText("Average forces: 0.008–0.013 s.");
+  await expect(sources.getByRole("listitem").filter({ hasText: "Reaction from Impact floor" })).toContainText("Fy 1200.00 N");
+  await expect.poll(captions).toContain("R 1200.00 N");
   await page.screenshot({ path: testInfo.outputPath("completed-impact-before-rewind.png") });
 
   await page.keyboard.press(".");
   await expect(clock).toHaveValue("0.03");
   await expect(sources).not.toContainText("Reaction from Impact floor");
-  await expect.poll(captions).not.toContain("R 720.00 N");
+  await expect.poll(captions).not.toContain("R 1200.00 N");
   await page.keyboard.press(",");
-  await expect(clock).toHaveValue("0.02"); await expect(toggle).toBeChecked();
+  await expect(clock).toHaveValue("0.013333"); await expect(toggle).toBeChecked();
   const disclosure = page.locator(".force-values");
   await expect(disclosure).toHaveJSProperty("open", true);
-  await expect(page.locator(".force-interval-note")).toContainText("Average forces: 0.008–0.017 s.");
-  await expect(sources.getByRole("listitem").filter({ hasText: "Reaction from Impact floor" })).toContainText("Fy 720.00 N");
-  await expect.poll(captions).toContain("R 720.00 N");
+  await expect(page.locator(".force-interval-note")).toContainText("Average forces: 0.008–0.013 s.");
+  await expect(sources.getByRole("listitem").filter({ hasText: "Reaction from Impact floor" })).toContainText("Fy 1200.00 N");
+  await expect.poll(captions).toContain("R 1200.00 N");
   await page.screenshot({ path: testInfo.outputPath("completed-impact-restored.png") });
   expect(errors).toEqual([]);
 });

@@ -627,21 +627,47 @@ button.pulley-part[aria-current="true"] {
   font-size: calc(11px * var(--fs, 1));
   font-variant-numeric: tabular-nums;
 }
-.force-values { margin: 6px 0 9px; font-size: calc(12px * var(--fs, 1)); }
+.force-controls { border: 1px solid var(--outline); border-radius: var(--radius);
+  padding: 10px 12px; margin: 4px 0 9px; min-width: 0; }
+label.force-toggle { width: 100%; justify-content: space-between; flex-direction: row-reverse;
+  gap: 12px; min-height: 28px; font-weight: 600; }
+label.force-toggle > input { appearance: none; width: 32px; height: 18px; padding: 0;
+  border: 1px solid var(--text-faint); border-radius: 20px; background: var(--panel-hover);
+  position: relative; cursor: pointer; }
+label.force-toggle > input::before { content: ""; position: absolute; width: 12px; height: 12px;
+  left: 2px; top: 2px; border-radius: 50%; background: var(--text); }
+label.force-toggle > input:checked { background: var(--accent); border-color: var(--accent); }
+label.force-toggle > input:checked::before { left: 16px; background: var(--accent-ink); }
+label.force-toggle > input:indeterminate::before { left: 9px; border-radius: 2px; height: 3px; top: 6px; }
+.force-controls .force-interval-note { margin: 5px 0; overflow-wrap: anywhere; }
+.force-notation { display: flex; gap: 6px; flex-wrap: wrap; margin: 5px 0 7px; }
+.force-notation abbr { display: inline-flex; justify-content: center; align-items: center;
+  min-width: 24px; min-height: 24px; padding: 0 5px; border-radius: 4px; font-size: calc(11px * var(--fs, 1));
+  text-decoration: none; font-weight: 600; color: var(--text-dim); background: var(--panel-light); cursor: help; }
+.force-values { margin: 0; font-size: calc(12px * var(--fs, 1)); }
 .force-values > summary {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 8px;
-  border: 1px solid var(--outline);
-  border-radius: var(--radius);
-  background: var(--panel-light);
+  padding: 6px 0;
+  min-height: 28px;
+  color: var(--text-dim);
   cursor: pointer;
   list-style: none;
 }
 .force-values > summary::-webkit-details-marker { display: none; }
 .force-values > summary::before { content: "›"; font-size: 1.2em; line-height: 1; }
 .force-values[open] > summary::before { transform: rotate(90deg); }
+.force-values > summary:hover { color: var(--text); }
+.weight-slope-controls { border-top: 1px solid var(--outline); padding-top: 8px; margin-top: 8px; }
+.weight-resolve-toggle { font-size: calc(12px * var(--fs, 1)); line-height: 1.4; }
+.weight-resolve-note { color: var(--text-dim); font-size: calc(11px * var(--fs, 1));
+  line-height: 1.5; margin: 5px 0 0; overflow-wrap: anywhere; }
+.weight-slope-row > select { appearance: none; padding: 6px 30px 6px 8px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%;
+  background-size: 5px 5px; background-repeat: no-repeat; }
 .force-value-list { list-style: none; margin: 0; padding: 2px 0; }
 .force-value-list > li { display: grid; gap: 3px; padding: 7px 3px; }
 .force-value-name { font-weight: 600; overflow-wrap: anywhere; }
@@ -878,6 +904,9 @@ button.perf-banner-btn:hover:not(:disabled) {
   .row:has(> input[type="range"]) > .lbl { width: auto; overflow-wrap: anywhere; }
   .row:has(> input[type="range"]) > .val { width: calc(74px * var(--fs, 1)); }
   .row > input[type="range"] { grid-column: 1 / -1; grid-row: 2; width: 100%; }
+  .row.wall-thickness:has(> input[type="range"]) { grid-template-columns: max-content minmax(0, 1fr); }
+  .row.wall-thickness > .lbl { white-space: nowrap; }
+  .row.wall-thickness > input.val { width: 100%; }
   .btn-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .btn-grid > button { padding: 6px 8px; }
 }
@@ -1063,6 +1092,9 @@ button.perf-banner-btn:hover:not(:disabled) {
   flex-direction: column;
   overflow: hidden;
 }
+/* Library content changes height when switching tabs or filtering examples.
+   Keep its navigation anchored instead of recentering the shorter result. */
+#library { align-items: flex-start; }
 .overlay-header {
   display: flex;
   align-items: center;
@@ -1542,10 +1574,14 @@ button.swatch-add:hover:not(:disabled) { background: transparent; color: var(--t
 /* Palette chips align below the labelled swatch and exact-value field. */
 .colour-row {
   display: grid;
-  grid-template-columns: 46px minmax(0, 1fr);
+  --colour-control-height: max(30px, calc(24px * var(--fs, 1) + 10px));
+  grid-template-columns: var(--colour-control-height) minmax(0, 1fr);
+  align-items: stretch;
   gap: 5px 8px;
 }
 .colour-row > .lbl { grid-column: 1 / -1; width: auto; }
+.colour-row > input { height: var(--colour-control-height); }
+.colour-row > .colour-well { width: var(--colour-control-height); }
 .colour-presets { margin: 5px 0 2px; gap: 6px; }
 .colour-presets button.swatch { width: 20px; height: 20px; }
 .colour-presets button.swatch.active {
@@ -2143,6 +2179,8 @@ kbd {
   overflow: hidden; border: 1px solid var(--outline); border-radius: var(--radius);
   background: var(--panel-light); touch-action: pan-y; }
 .graph-chart-surface > svg { display: block; width: 100%; height: 100%; }
+.graph-chart-surface.can-pan { touch-action: none; cursor: grab; user-select: none; }
+.graph-chart-surface.panning { cursor: grabbing; }
 .graph-chart-surface:focus-visible { outline-offset: 3px; }
 .graph-chart-legend { display: flex; flex-wrap: wrap; gap: 7px; padding-top: 10px; }
 .graph-chart-channel { font-size: calc(12px * var(--fs, 1)); justify-content: flex-start; }

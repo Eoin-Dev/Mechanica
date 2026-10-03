@@ -84,17 +84,19 @@ test("shared Inspector colour and select controls fit themes and enlarged text",
     expect(colour.hexRight).toBeLessThanOrEqual(colour.rowRight + 1);
     expect(normalizeCssColor(colour.background)).toBe("rgb(26,122,178)");
     await inspector.screenshot({ path: testInfo.outputPath(`inspector-colour-${layout}.png`) });
-    const slope = inspector.getByRole("combobox", { name: "Resolve forces relative to a slope", exact: true });
+    const slope = inspector.getByRole("checkbox", { name: "Resolve weight on slope", exact: true });
     await slope.scrollIntoViewIfNeeded();
-    const control = await slope.evaluate(select => {
-      const label = select.parentElement!.querySelector(".lbl")!.getBoundingClientRect();
-      const box = select.getBoundingClientRect();
-      return { font: parseFloat(getComputedStyle(select).fontSize), top: box.top,
-        labelBottom: label.bottom, right: box.right,
-        parentRight: select.parentElement!.getBoundingClientRect().right };
+    await expect(slope).toBeDisabled();
+    await expect(slope).toHaveAttribute("aria-description", "No slope in contact.");
+    const control = await slope.evaluate(input => {
+      const root = input.closest("label")!;
+      const text = [...root.childNodes].find(node => node.nodeType === Node.TEXT_NODE && node.textContent?.trim())!;
+      const range = document.createRange(); range.selectNodeContents(text);
+      const box = root.getBoundingClientRect();
+      return { font: parseFloat(getComputedStyle(root).fontSize), right: range.getBoundingClientRect().right,
+        parentRight: box.right };
     });
-    expect(control.font).toBeCloseTo(12 * scale, 1);
-    expect(control.top).toBeGreaterThanOrEqual(control.labelBottom);
+    expect(control.font).toBeGreaterThanOrEqual(12 * scale);
     expect(control.right).toBeLessThanOrEqual(control.parentRight + 1);
     expect(await inspector.evaluate(panel => panel.scrollWidth <= panel.clientWidth + 1)).toBe(true);
     if (scale === 2) {
@@ -1371,6 +1373,7 @@ test("narrow graph controls remain reachable with enlarged application text", as
   await skipFirstRunTour(page, { theme: "light", studio_mode: true });
   await page.goto("/");
   await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
+  await page.locator("#canvas").focus(); await page.keyboard.press("1");
   const dock = page.locator("#dock");
   for (const name of ["Energy", "Mom.", "Phase", "Displacement", "Distance", "Velocity"]) {
     const button = dock.getByRole("button", { name, exact: true });
@@ -1390,6 +1393,7 @@ test("graph legends retain keyboard focus and expose channel visibility", async 
   await page.setViewportSize({ width: 320, height: 844 });
   await skipFirstRunTour(page, { theme: "light", studio_mode: true });
   await page.goto("/");
+  await page.locator("#canvas").focus(); await page.keyboard.press("1");
   const dock = page.locator("#dock");
   await dock.getByRole("button", { name: "Energy", exact: true }).click();
   const kinetic = dock.getByRole("button", { name: "KE series", exact: true });
@@ -1488,6 +1492,7 @@ test("mechanics analysis is integrated into graphs, particles, rods, and playbac
   await skipFirstRunTour(page, { theme: "dark", studio_mode: true });
   await page.goto("/");
 
+  await page.locator("#canvas").focus(); await page.keyboard.press("1");
   await page.getByRole("button", { name: "Distance", exact: true }).click();
   await expect(page.locator(".dock-hint")).toContainText("Select a particle");
   await expect(page.getByRole("button", { name: "Velocity", exact: true }))
@@ -1705,6 +1710,7 @@ test("320 CSS pixels and 200% application text remain contained", async ({ page 
   await page.setViewportSize({ width: 320, height: 844 });
   await skipFirstRunTour(page, { theme: "dark", studio_mode: true });
   await page.goto("/");
+  await page.locator("#canvas").focus(); await page.keyboard.press("1");
   await page.evaluate(() => document.documentElement.style.setProperty("--fs", "2"));
 
   await expect(page.locator("#canvas")).toBeVisible();

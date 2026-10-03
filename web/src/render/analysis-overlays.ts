@@ -11,6 +11,13 @@ export interface AnalysisVector {
   x1: number; y1: number; x2: number; y2: number;
 }
 interface Box { x: number; y: number; width: number; height: number; }
+interface OverlayLayout {
+  width: number; height: number; scale: number; inputs: Float64Array;
+  labelCount: number; vectorCount: number; widths: Float64Array; boxes: Box[];
+}
+// One owned layout per canvas, released with that context. Reuse never relies
+// on physics clocks: pointer moves and UI repaints can share identical geometry.
+const LAYOUTS = new WeakMap<CanvasRenderingContext2D, OverlayLayout>();
 
 const DARK_FORCES: Record<string, Color> = {
   weight: [255, 116, 165], reaction: [80, 225, 245], friction: [232, 181, 255],
@@ -25,6 +32,7 @@ const LIGHT_FORCES: Record<string, Color> = {
  * The renderer surrounds it with an opaque contrasting contour. */
 export function analysisForceColour(kind: ForceKind): Color {
   if (kind === "correction") return theme.TEXT_DIM;
+  if (kind === "gravity") kind = "weight";
   const palette = theme.themeName === "light" ? LIGHT_FORCES : DARK_FORCES;
   return palette[kind] ?? palette[
     kind === "string" || kind === "spring" || kind === "pulley" || kind === "rod"
@@ -99,9 +107,13 @@ function placeBox(x: number, y: number, width: number, height: number,
     }
     for (let i = Math.max(0, vectors.length - 128); i < vectors.length; i++) {
       const vector = vectors[i];
-      if (crosses(vector, candidate, 7 * scale)) penalty += 20;
-      if (vector.x2 >= candidate.x - 7 * scale && vector.x2 <= candidate.x + width + 7 * scale &&
-          vector.y2 >= candidate.y - 7 * scale && vector.y2 <= candidate.y + height + 7 * scale) penalty += 40;
+      const pad = 7 * scale, left = candidate.x - pad, right = candidate.x + width + pad;
+      const top = candidate.y - pad, bottom = candidate.y + height + pad;
+      // Exact broad-phase rejection avoids segment clipping for remote arrows.
+      if ((vector.x1 < left && vector.x2 < left) || (vector.x1 > right && vector.x2 > right) ||
+          (vector.y1 < top && vector.y2 < top) || (vector.y1 > bottom && vector.y2 > bottom)) continue;
+      if (crosses(vector, candidate, pad)) penalty += 20;
+      if (vector.x2 >= left && vector.x2 <= right && vector.y2 >= top && vector.y2 <= bottom) penalty += 40;
     }
     if (penalty === 0) { occupied.push(candidate); return candidate; }
     const score = penalty + Math.hypot(candidate.x - preferred.x, candidate.y - preferred.y) * 0.001;
@@ -126,11 +138,32 @@ export function drawAnalysisOverlays(ctx: CanvasRenderingContext2D,
     textScale = 1, pointer: readonly [number, number] | null = null): void {
   if (labels.length === 0 || areaW < 24 || areaH < 24) return;
   const scale = Number.isFinite(textScale) ? Math.max(0.9, Math.min(2, textScale)) : 1;
-  const occupied: Box[] = [];
   ctx.save();
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
   ctx.font = `600 ${12 * scale}px system-ui, sans-serif`;
+  let cached = LAYOUTS.get(ctx);
+  const length = (labels.length + vectors.length) * 4;
+  if (cached === undefined || cached.inputs.length !== length || cached.labelCount !== labels.length) {
+    cached = { width: 0, height: 0, scale: 0, inputs: new Float64Array(length),
+      labelCount: labels.length, vectorCount: vectors.length, widths: new Float64Array(labels.length), boxes: [] };
+  }
+  let reusable = cached.width === areaW && cached.height === areaH && cached.scale === scale &&
+    cached.vectorCount === vectors.length && cached.boxes.length === labels.length;
+  // Measure in the current canvas font even on a cache hit: font loading and
+  // browser text metrics can change without an application preference edit.
+  for (let i = 0; i < labels.length; i++) {
+    const label = labels[i], width = Math.min(areaW - 12, ctx.measureText(label.text).width + 18 * scale), j = i * 4;
+    cached.widths[i] = width;
+    if (cached.inputs[j] !== label.x || cached.inputs[j + 1] !== label.y ||
+        cached.inputs[j + 2] !== width || cached.inputs[j + 3] !== Number(label.right)) reusable = false;
+  }
+  for (let i = 0; i < vectors.length; i++) {
+    const v = vectors[i], j = (labels.length + i) * 4;
+    if (cached.inputs[j] !== v.x1 || cached.inputs[j + 1] !== v.y1 ||
+        cached.inputs[j + 2] !== v.x2 || cached.inputs[j + 3] !== v.y2) reusable = false;
+  }
+  const occupied: Box[] = reusable ? cached.boxes : [];
   let hot = -1, closest = 49;
   if (pointer !== null) for (let i = 0; i < vectors.length; i++) {
     const v = vectors[i], dx = v.x2 - v.x1, dy = v.y2 - v.y1;
@@ -143,10 +176,11 @@ export function drawAnalysisOverlays(ctx: CanvasRenderingContext2D,
   }
   for (let i = 0; i < labels.length; i++) {
     const label = labels[i];
-    const width = Math.min(areaW - 12, ctx.measureText(label.text).width + 18 * scale);
+    const width = cached.widths[i];
     const height = 24 * scale;
     const preferredX = label.right ? label.x + 7 : label.x - width - 7;
-    const box = placeBox(preferredX, label.y - height - 6, width, height, areaW, areaH, occupied, vectors, scale);
+    const box = reusable ? occupied[i] :
+      placeBox(preferredX, label.y - height - 6, width, height, areaW, areaH, occupied, vectors, scale);
     if (pointer !== null && pointer[0] >= box.x && pointer[0] <= box.x + width &&
         pointer[1] >= box.y && pointer[1] <= box.y + height) hot = i;
     const anchorX = Math.max(0, Math.min(areaW, label.x));
@@ -168,6 +202,21 @@ export function drawAnalysisOverlays(ctx: CanvasRenderingContext2D,
     ctx.fillRect(box.x + 4 * scale, box.y + 5 * scale, 2 * scale, height - 10 * scale);
     ctx.fillStyle = theme.css(theme.TEXT);
     ctx.fillText(label.text, box.x + 10 * scale, box.y + 16 * scale);
+  }
+  if (!reusable) {
+    cached.width = areaW; cached.height = areaH; cached.scale = scale;
+    cached.vectorCount = vectors.length; cached.boxes = occupied;
+    for (let i = 0; i < labels.length; i++) {
+      const label = labels[i], j = i * 4;
+      cached.inputs[j] = label.x; cached.inputs[j + 1] = label.y;
+      cached.inputs[j + 2] = cached.widths[i]; cached.inputs[j + 3] = Number(label.right);
+    }
+    for (let i = 0; i < vectors.length; i++) {
+      const vector = vectors[i], j = (labels.length + i) * 4;
+      cached.inputs[j] = vector.x1; cached.inputs[j + 1] = vector.y1;
+      cached.inputs[j + 2] = vector.x2; cached.inputs[j + 3] = vector.y2;
+    }
+    LAYOUTS.set(ctx, cached);
   }
   if (pointer !== null && hot >= 0 && labels[hot]?.source && areaH >= 60 * scale && areaW >= 80 * scale) {
     const label = labels[hot], box = occupied[hot];

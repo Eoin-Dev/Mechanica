@@ -5,7 +5,7 @@
  * event detection can be verified directly.
  */
 import { Body, Wall } from "../engine/body";
-import { closestOnSegment, Contact } from "../engine/contacts";
+import { closestOnSegment, contactKey } from "../engine/contacts";
 import { DistanceLink, PulleyLink, SpringLink } from "../engine/links";
 import { World } from "../engine/world";
 import type { ForceEntry, ForceKind, ForceSnapshot } from "../engine/force-diagnostics";
@@ -398,13 +398,25 @@ export class EventTracker {
     }
 
     const nextContacts = contactKeys(world);
+    const transitions = interval > 0 && world.contactEventsEndTime === time
+      ? world.contactEvents : [];
+    for (const transition of transitions) {
+      added.push(this.push({ kind: transition.began ? "contact" : "contact-end",
+        time: transition.time, label: transition.began ? "Contact began" : "Contact ended",
+        bodyIds: contactBodyIds(transition.key),
+        value: transition.began ? contactValue(world, transition.key) : "separated",
+        key: transition.key,
+        fraction: interval > 0 ? (transition.time - this.sampleTime) / interval : 1 }));
+    }
     for (const key of nextContacts) {
+      if (transitions.some(transition => transition.key === key)) continue;
       if (!this.contacts.has(key)) {
         added.push(this.push({ kind: "contact", time, label: "Contact began",
           bodyIds: contactBodyIds(key), value: contactValue(world, key), key }));
       }
     }
     for (const key of this.contacts) {
+      if (transitions.some(transition => transition.key === key)) continue;
       if (!nextContacts.has(key)) {
         added.push(this.push({ kind: "contact-end", time, label: "Contact ended",
           bodyIds: contactBodyIds(key), value: "separated", key }));
@@ -455,19 +467,7 @@ export class EventTracker {
 
 /** Stable event identity shared by detection and automatic-pause refinement.
  * Explicit namespaces preserve ID zero and unordered body pairs. */
-export function contactKey(contact: Contact): string {
-  const a = contact.bodyAId;
-  const b = contact.bodyBId;
-  if (a !== undefined && a >= 0) {
-    if (b !== null && b !== undefined && b >= 0) {
-      return `body:${Math.min(a, b)}:${Math.max(a, b)}`;
-    }
-    if (contact.wallId !== null && contact.wallId !== undefined) {
-      return `wall:${a}:${contact.wallId}`;
-    }
-  }
-  return `point:${contact.px.toFixed(4)}:${contact.py.toFixed(4)}`;
-}
+export { contactKey } from "../engine/contacts";
 
 function contactKeys(world: World): Set<string> {
   return new Set(world.contacts.map(contactKey));

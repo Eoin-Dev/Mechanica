@@ -233,6 +233,7 @@ describe("pulley motion beyond the guide rays", () => {
     const a = new Body(new Vec2(-2, -0.01), 0.16, 1);
     const b = new Body(new Vec2(2, -2), 0.16, 1);
     const link = new PulleyLink(a, b, wheel, 20);
+    link.showTensionVectors = true;
     a.collides = b.collides = false; a.showForceComponents = true; a.vel.set(0, 0.2);
     world.bodies.push(wheel, a, b); world.links.push(link);
     expect(world.effectiveIntegrator).toBe(mode === "normal" ? integrator : "Symplectic Euler");

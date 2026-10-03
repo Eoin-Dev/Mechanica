@@ -68,3 +68,34 @@ describe("tab recovery", () => {
     expect(store.write(state)).toBe("saved");
   });
 });
+
+describe("versioned tab presentation", () => {
+  it("round-trips the view envelope and its original reset state while accepting legacy scenes", () => {
+    const world = PRESETS.find(preset => preset.name === "Rough inclined plane")!.build();
+    const initial = snapshot(world); world.step(0.25);
+    const presentation = { camera: [2, -3, 500], selection: ["b:" + world.bodies[0].id],
+      bodies: [[world.bodies[0].id, true, true, world.walls[0].id]] };
+    const store = recovery();
+    expect(store.write(snapshot(world), presentation, initial)).toBe("saved");
+    const read = recovery().read();
+    expect(read.status).toBe("loaded");
+    if (read.status !== "loaded") throw new Error("Expected recovery");
+    expect(snapshot(read.world)).toBe(snapshot(world));
+    expect(read.presentation).toEqual(presentation);
+    expect(snapshot(read.initial!)).toBe(initial);
+    expect(store.write(snapshot(world), presentation, initial)).toBe("unchanged");
+    sessionStorage.setItem(RECOVERY_KEY, initial);
+    expect(recovery().read().status).toBe("loaded");
+  });
+
+  it("retains a valid scene when optional presentation or reset data is damaged", () => {
+    sessionStorage.setItem(RECOVERY_KEY, JSON.stringify({ kind: "mechanica-tab", version: 1,
+      scene: snapshot(new World()), initial: "broken", presentation: "broken" }));
+    const read = recovery().read();
+    expect(read.status).toBe("loaded");
+    if (read.status === "loaded") expect(read.initial).toBeUndefined();
+    sessionStorage.setItem(RECOVERY_KEY, JSON.stringify({ kind: "mechanica-tab", version: 99,
+      scene: snapshot(new World()) }));
+    expect(recovery().read().status).toBe("invalid");
+  });
+});

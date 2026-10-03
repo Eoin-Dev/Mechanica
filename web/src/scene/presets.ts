@@ -943,6 +943,26 @@ function buildElasticVsInelastic(): World {
   return w;
 }
 
+function buildRoughInclinedPlane(): World {
+  const world = solver(new World(), 8, 12);
+  world.gravity = 9.81;
+  const theta = Math.PI / 6;
+  const tangent = new Vec2(Math.cos(theta), -Math.sin(theta));
+  const normal = new Vec2(Math.sin(theta), Math.cos(theta));
+  const plane = new Wall(tangent.mul(-3), tangent.mul(1.8), 0.1);
+  plane.name = "30° rough plane"; plane.friction = 0.25; plane.restitution = 0;
+  const body = new Body(tangent.mul(-1.6).add(normal.mul(0.25)), 0.2, 1);
+  body.name = "Sliding particle · μ = 0.25"; body.color = [86, 157, 214];
+  body.friction = 0.25; body.restitution = 0; body.noRotation = true;
+  body.showForceComponents = body.resolveWeightOnSlope = true;
+  body.forceSlopeWallId = plane.id;
+  const platform = new Wall(plane.b.copy(), new Vec2(7.5, plane.b.y), 0.1);
+  platform.name = "Rough horizontal run-out";
+  platform.friction = 0.25; platform.restitution = 0;
+  world.walls.push(plane, platform); world.bodies.push(body);
+  return world;
+}
+
 function buildTerminalVelocity(): World {
   const w = new World();
   solver(w, 6);
@@ -1371,7 +1391,7 @@ export const PRESETS: Preset[] = [
   new Preset("Earth & Moon", "Gravity & Orbits",
     "A light moon in a circular orbit around a heavy planet. Momentum " +
     "is balanced so the pair orbits its common centre of mass.",
-    buildEarthMoon, { zoom: 60, trails: true, graph: "energy" }, ["Circular motion", "Gravity"]),
+    buildEarthMoon, { zoom: 60, trails: true }, ["Circular motion", "Gravity"]),
   new Preset("Kepler ellipse", "Gravity & Orbits",
     "Launching a planet below circular speed gives an ellipse. Watch " +
     "it speed up near the star: equal areas in equal times.",
@@ -1411,7 +1431,7 @@ export const PRESETS: Preset[] = [
     "masses chase each other around a figure-eight forever. A " +
     "razor-thin periodic solution - almost any other three-body " +
     "start turns chaotic.",
-    buildFigure8, { zoom: 220, trails: true, graph: "energy" }),
+    buildFigure8, { zoom: 220, trails: true }),
   new Preset("Lagrange's triangle", "Three-Body Problem",
     "Lagrange proved three bodies at an equilateral triangle can " +
     "rotate rigidly forever. For equal masses it is unstable: watch " +
@@ -1434,8 +1454,7 @@ export const PRESETS: Preset[] = [
     "3-4-5 triangle. They swing through wild close encounters until " +
     "two bind into a binary and eject the third - the fate of almost " +
     "every three-body system.",
-    buildPythagorean, { zoom: 70, centre: [-0.5, 1.0], trails: true,
-                        graph: "energy" }),
+    buildPythagorean, { zoom: 70, centre: [-0.5, 1.0], trails: true }),
 
   new Preset("Simple pendulum", "Pendulums",
     "A small-angle pendulum. Its period is 2*pi*sqrt(L/g), roughly 2.46 s " +
@@ -1444,11 +1463,11 @@ export const PRESETS: Preset[] = [
   new Preset("Double pendulum", "Pendulums",
     "Two links released from high up: the classic chaotic system. " +
     "Energy stays constant while the motion never repeats.",
-    buildDoublePendulum, { zoom: 130, trails: true, graph: "energy" }),
+    buildDoublePendulum, { zoom: 130, trails: true }),
   new Preset("Triple pendulum", "Pendulums",
     "Three rigid links - even wilder than the double pendulum. Watch " +
     "the energy graph stay flat while the tip whips around.",
-    buildTriplePendulum, { zoom: 110, trails: true, graph: "energy" }),
+    buildTriplePendulum, { zoom: 110, trails: true }),
   new Preset("Swinging rope", "Pendulums",
     "Twenty-four elastic string segments approximate a flexible rope: " +
     "taut ones stretch a hair and pull, slack ones carry nothing, " +
@@ -1461,7 +1480,7 @@ export const PRESETS: Preset[] = [
   new Preset("Coupled pendulums", "Pendulums",
     "Two pendulums joined by a weak spring trade energy back and " +
     "forth - the swinging slowly migrates from one to the other.",
-    buildCoupledPendulums, { zoom: 130, graph: "energy" }),
+    buildCoupledPendulums, { zoom: 130 }),
 
   new Preset("Mass on a spring", "Oscillators",
     "Simple harmonic motion: period 2*pi*sqrt(m/k) = 1.26 s here. Open " +
@@ -1518,17 +1537,23 @@ export const PRESETS: Preset[] = [
     "Fifty particles bouncing elastically in zero gravity - a toy " +
     "ideal gas. Elastic impacts preserve kinetic energy; the fixed walls " +
     "exchange momentum with the particles.",
-    () => gasWorld(50, 2.0, 1), { zoom: 130, graph: "energy" }),
+    () => gasWorld(50, 2.0, 1), { zoom: 130 }),
   new Preset("Gas in a box (200)", "Collisions & Gas",
     "Two hundred particles stress-test the collision engine. The " +
     "spatial hash keeps this fast; press G to see the grid.",
-    () => gasWorld(200, 6.0, 2), { zoom: 45, graph: "energy" }),
+    () => gasWorld(200, 6.0, 2), { zoom: 45 }),
   new Preset("Brownian motion", "Collisions & Gas",
     "A heavy grain jostled by a swarm of light, fast particles - the " +
     "random walk Einstein explained in 1905, cementing the case that " +
     "atoms exist. Turn on trails.",
     buildBrownian, { zoom: 105, trails: false }),
 
+  new Preset("Rough inclined plane", "Projectiles & Friction",
+    "A 1 kg particle slides down a 30° plane with coefficient of friction μ = 0.25. " +
+    "Weight components, normal reaction and friction are shown immediately. " +
+    "No rotation models an A-level particle: R = mg cos 30°, F = μR and " +
+    "a = g(sin 30° − μ cos 30°). The particle slides onto a rough horizontal platform and stops.",
+    buildRoughInclinedPlane, { zoom: 105 }, ["Friction", "Inclined planes", "Newton’s laws"]),
   new Preset("Projectile drag race", "Projectiles & Friction",
     "Two identical launches; a custom force field applies quadratic " +
     "air drag to one (selected by mass). Drag shortens the range and " +

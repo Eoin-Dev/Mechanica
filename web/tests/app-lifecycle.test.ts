@@ -1410,10 +1410,14 @@ describe("rewind interval and trail clocks", () => {
     floor.restitution = 1; floor.friction = 0;
     app.world.bodies.push(body); app.world.walls.push(floor); app.setSelection([body]);
     app.stepOnce();
-    const recorded = forceLedger(app.world, body);
+    const impactBody = app.world.bodies.find(item => item.id === body.id)!;
+    const recorded = forceLedger(app.world, impactBody);
     expect(recorded.mode).toBe("step-average");
-    expect(recorded.entries.find(entry => entry.kind === "reaction")!.fy).toBeCloseTo(720, 9);
-    expect(app.world.contacts).toHaveLength(0);
+    expect(app.world.time).toBeCloseTo((0.26 - 0.22) / 3, 9);
+    const sample = impactBody.forceSnapshot!;
+    expect(recorded.entries.find(entry => entry.kind === "reaction")!.fy *
+      (sample.endTime - sample.startTime)).toBeCloseTo(6, 9);
+    expect(app.world.contacts).toHaveLength(1);
     const original = snapshot(app.world);
     app.stepOnce(); app.stepBack();
     const restored = app.world.bodies[0];
@@ -1436,5 +1440,84 @@ describe("rewind interval and trail clocks", () => {
     trail.truncateAfter(0.06);
     expect(trail.count).toBe(1); expect(trail.time(0)).toBe(0.04);
     expect([trail.x(0), trail.y(0)]).toEqual([-0.03, 0.97]);
+  });
+});
+
+describe("reset analysis presentation", () => {
+  it.each([true, false])("keeps the latest diagram choices through repeated resets (%s)", enabled => {
+    const app = makeApp();
+    const preset = PRESETS.find(preset => preset.name === "Rough inclined plane")!;
+    app.initializePreset(preset);
+    const first = app.world.bodies[0], slope = app.world.walls[0];
+    const original = snapshot(app.world);
+    app.setSelection([first]); app.stepOnce();
+    app.world.bodies[0].showForceComponents = enabled;
+    app.world.bodies[0].resolveWeightOnSlope = enabled;
+    app.world.bodies[0].forceSlopeWallId = enabled ? slope.id : null;
+    for (let i = 0; i < 2; i++) {
+      app.resetSim();
+      const body = app.world.bodies[0];
+      expect(snapshot(app.world)).toBe(original);
+      expect(body.showForceComponents).toBe(enabled);
+      expect(body.resolveWeightOnSlope).toBe(enabled);
+      expect(body.forceSlopeWallId).toBe(enabled ? slope.id : null);
+      expect(app.selection).toEqual([body]);
+    }
+  });
+
+  it("uses each preset's graph hint and closes an unrelated previous graph", () => {
+    const app = makeApp();
+    for (const preset of PRESETS) {
+      app.setGraphMode("Velocity");
+      app.initializePreset(preset);
+      const expected = preset.hints.graph
+        ? { energy: "Energy", momentum: "Mom.", phase: "Phase" }[preset.hints.graph] : "Off";
+      expect(app.graphMode, preset.name).toBe(expected);
+    }
+  });
+});
+
+describe("tab presentation ownership", () => {
+  it("restores the camera, overlays, selection, diagrams, link arrows, speed and original reset baseline", () => {
+    const app = makeApp(); app.initializePreset(PRESETS.find(p => p.name === "Double pendulum")!);
+    const initial = snapshot(app.world), body = app.world.bodies.find(b => !b.isAnchor)!;
+    app.setSelection([body]); app.stepOnce();
+    const selected = app.selection[0] as Body;
+    selected.showForceComponents = true; selected.resolveWeightOnSlope = true;
+    app.world.links[0].showTensionVectors = true;
+    app.camera.centre.set(3.5, -8.25); app.camera.zoom = 437;
+    app.view.grid = false; app.view.trails = true; app.view.trailLen = 900;
+    app.view.vectorScale = 2.5; app.view.labels = true; app.speed = 0.5;
+    app.controller.setTool("pan"); app.boxFilter.walls = false; app.setGraphMode("Velocity");
+    const state = app.tabRecoveryState(), physical = snapshot(app.world);
+    const recovered = makeApp(); recovered.loadWorld(restoreSnapshot(physical), "recovered", false);
+    recovered.restoreTabPresentation(state.presentation, restoreSnapshot(state.initial!));
+    expect(snapshot(recovered.world)).toBe(physical);
+    expect(recovered.camera.centre).toEqual(app.camera.centre);
+    expect(recovered.camera.zoom).toBe(437); expect(recovered.view).toEqual(app.view);
+    expect(recovered.selection[0]).toBe(recovered.world.bodies.find(b => b.id === body.id));
+    expect((recovered.selection[0] as Body).showForceComponents).toBe(true);
+    expect((recovered.selection[0] as Body).resolveWeightOnSlope).toBe(true);
+    expect(recovered.world.links[0].showTensionVectors).toBe(true);
+    expect(recovered.speed).toBe(0.5); expect(recovered.graphMode).toBe("Velocity");
+    expect(recovered.controller.tool).toBe("pan"); expect(recovered.boxFilter.walls).toBe(false);
+    recovered.resetSim(); expect(snapshot(recovered.world)).toBe(initial);
+    expect((recovered.selection[0] as Body).showForceComponents).toBe(true);
+  });
+
+  it("ignores invalid optional values and stale object references without changing physics", () => {
+    const app = makeApp(); app.initializePreset(PRESETS.find(p => p.name === "Rough inclined plane")!);
+    const physical = snapshot(app.world), camera = app.camera.zoom, id = app.world.bodies[0].id;
+    app.restoreTabPresentation({ camera: [0, 0, -50], speed: Infinity, tool: "unknown",
+      view: { grid: "false", trailLen: 1e100, vectorScale: NaN, labels: true },
+      bodies: [[id, "false", "true", 999999], [999999, true, true, null]],
+      links: [["r:999999", true]], selection: ["b:999999", {}, "b:" + id, "b:" + id],
+      graph: "missing", boxFilter: { walls: "false" } });
+    expect(snapshot(app.world)).toBe(physical); expect(app.camera.zoom).toBe(camera);
+    expect(app.speed).toBe(1); expect(app.view.grid).toBe(true);
+    expect(app.view.trailLen).toBe(350); expect(app.view.vectorScale).toBe(1);
+    expect(app.view.labels).toBe(true); expect(app.world.bodies[0].forceSlopeWallId).toBeNull();
+    expect(app.selection).toEqual([app.world.bodies[0]]); expect(app.graphMode).toBe("Off");
+    expect(app.controller.tool).toBe("select"); expect(app.boxFilter.walls).toBe(true);
   });
 });

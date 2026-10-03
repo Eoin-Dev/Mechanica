@@ -179,3 +179,33 @@ describe("scientific canvas annotations", () => {
       expect(analysisNumber(value)).not.toBe("-0.00");
     });
 });
+
+describe("annotation layout reuse", () => {
+  it("matches a fresh layout after viewport, font, text, arrow and preference changes", () => {
+    const pooled = recorder();
+    const labels: AnalysisLabel[] = [
+      { text: "W 9.81 N", source: "Weight", x: 210, y: 140, color: theme.BAD, right: true },
+      { text: "R 8.50 N", source: "Plane", x: 210, y: 140, color: theme.GOOD, right: false },
+    ];
+    const vectors = [{ x1: 170, y1: 100, x2: 210, y2: 140 }];
+    let width = 450, height = 320, scale = 1, metrics = 1;
+    const compare = () => {
+      pooled.text.length = 0; pooled.surfaces.length = 0;
+      const fresh = recorder();
+      for (const capture of [pooled, fresh])
+        capture.ctx.measureText = value => ({ width: value.length * 12 * scale * 0.6 * metrics }) as TextMetrics;
+      drawAnalysisOverlays(pooled.ctx, labels, vectors, width, height, scale, [190, 120]);
+      drawAnalysisOverlays(fresh.ctx, labels, vectors, width, height, scale, [190, 120]);
+      expect(pooled.text).toEqual(fresh.text); expect(pooled.surfaces).toEqual(fresh.surfaces);
+    };
+    compare(); compare();
+    labels[0].text = "W 1.23 N"; labels[0].source = "Updated source"; labels[0].color = theme.WARN; compare();
+    labels[0].x += 10; compare(); labels[0].right = false; compare();
+    vectors[0].x2 += 20; compare();
+    width = 280; height = 190; compare();
+    scale = 1.2; compare(); metrics = 1.4; compare();
+    theme.setTheme("light"); compare();
+    labels.push({ ...labels[0], text: "T 2.00 N" }); compare();
+    vectors.push({ x1: 1, y1: 1, x2: 270, y2: 180 }); compare();
+  });
+});

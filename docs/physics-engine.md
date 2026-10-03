@@ -237,7 +237,9 @@ fixed order.
 ### Force-diagram interval accounting
 
 For particles with `showForceComponents` enabled, the headless `ForceRecorder`
-records the forces already evaluated during `World.step`. Euler samples carry
+records the forces already evaluated during `World.step`. All Performance
+tiers skip per-particle diagram accounting; explicitly enabled link diagnostics
+can still request their endpoints. Euler samples carry
 weight `h`, Verlet samples `h/2`, and RK4 stages `h/6`, `h/3`, `h/3`, `h/6`.
 Adaptive slices use their own duration; extra adaptive seed evaluations carry
 zero weight. No expression is re-evaluated and recording never changes motion.
@@ -289,7 +291,10 @@ body/link ownership without allocating IDs or sharing mutable vectors. Its
 optional requested-body list lets readers obtain hidden endpoint measurements
 by enabling diagnostics only on the copies; live display flags and live force
 snapshots remain unchanged. The cache expands to new requested endpoints and
-invalidates on physical edits. It
+invalidates on physical edits. `withCurrentForceBatch` shares one exact input
+validation and body-membership set across synchronous, read-only consumers.
+Nested batches and exceptions release the batch correctly; mutations between
+batches are observed. A callback must not mutate physical inputs while reading. It
 evaluates fields/drivers at the current clock, resolves springs/rods/pulley
 forces, predicts velocities over one nominal solver interval at fixed geometry
 and calculates loaded contact impulses. A microscopic query-only skin includes
@@ -627,6 +632,16 @@ coarse resolution.
 `solveContacts()` creates transient manifolds, resolves them together, exposes
 a simplified `Contact` snapshot for diagnostics, and stores warm-start data for
 the next substep.
+
+`World.trackContactEvents` optionally records primitive contact beginnings and
+endings at the substep clocks. `contactEventsEndTime` identifies the completed
+step to which they belong; final `contacts` still describes only the last
+substep. A bounce can therefore remain observable after separation without
+duplicating arrows or feeding historical contacts into the solver. Headless
+worlds leave observation disabled unless requested. Observation storage is
+capped at 16,384 transitions/contact identities per step; overflow is exposed
+through `contactEventsOverflow`, and the application drops that interval's
+precise collision-replay recipe while retaining ordinary frame history.
 
 ### Broadphase
 

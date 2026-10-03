@@ -522,26 +522,41 @@ metadata JSON reads as an empty description.
 
 ## Tab recovery
 
-`TabRecovery` stores one compact scene snapshot under `mechanica.tab-recovery`
-in `sessionStorage`, independently of named scenes in `localStorage`. It
-survives refreshes of that tab; closing a tab may discard it. New independent
-tabs have their own checkpoints. Duplicating a tab may copy its initial session
-storage, after which the two tabs remain independent.
+`TabRecovery` stores one bounded, versioned checkpoint under
+`mechanica.tab-recovery` in `sessionStorage`, independently of named scenes
+in `localStorage`. Refreshes of the same tab retain it; closing a tab may
+discard it. New independent tabs have separate checkpoints. Duplicating a tab
+may copy its initial session storage, after which the tabs remain independent.
 
-Startup validates the checkpoint through the untrusted `restore()` boundary,
-restores it paused, fits the view, and makes the replacement undoable. Undo
-history, graph samples, camera/view choices, and the earlier reset baseline are
-not included; the recovered clock becomes the new reset baseline.
+The envelope has `kind: "mechanica-tab"`, `version: 1`, a compact `scene`
+string, optional original `initial` reset snapshot and `presentation` data.
+Legacy bare scene checkpoints remain readable. Both physics snapshots pass the
+untrusted `restore()` boundary. A damaged optional baseline is ignored while
+the valid live scene still loads. Unknown envelope versions are rejected.
 
-Committed edits reuse their existing serialized snapshot. Pause, step/rewind,
-and world replacements also checkpoint. Playback saves at five-second intervals;
-automatic event pauses and solver failure stops checkpoint their final state.
-Visibility loss and page exit capture the latest live scene. Unchanged writes
-are skipped. A one-million-character ceiling bounds the checkpoint's storage
-cost; unavailable/quota-limited storage and oversized scenes report a single
-session warning and retain the previous successfully saved checkpoint.
-Corrupt stored data is retained until a later successful write replaces it.
-Named saves and downloads remain the durable way to keep a scene.
+Startup loads the live scene paused, then restores the original reset baseline
+and validated presentation after scene framing. Presentation includes camera
+centre and zoom, view overlays/vector scale/trail length, auto-fit ratio, speed,
+graph family, selected object keys, particle diagrams and slope-weight choices,
+per-link tension arrows, active canvas tool, box-selection filters, Inspector
+tab and force/event disclosure choices. Only known keys, booleans, finite
+bounded values and object references present in the recovered scene are applied.
+Theme, Performance preference, adaptive resolution and panel sizes retain
+their existing independent preference storage.
+
+Undo/rewind history, historical graph samples, motion-trail points, pointer
+gestures and open modal viewers are not stored. Reload does not resume playing
+or a partly completed gesture. The selected graph starts with the recovered
+current sample. Named saves and downloads remain the durable way to keep scenes.
+
+Committed edits reuse their serialized snapshot. Pause, step/rewind and world
+replacements checkpoint, and a five-second interval captures both playing and
+paused view changes. Visibility loss and page exit capture the latest scene
+and presentation. Unchanged writes are skipped. The one-million-character
+ceiling applies to the entire envelope, including the baseline. Storage/quota
+failures and oversized checkpoints produce one session warning and retain the
+last successfully saved checkpoint. Corrupt data remains until a later
+successful write replaces it.
 
 ## File import and export
 
@@ -762,6 +777,19 @@ optional view hints:
 - continuous auto-fit; and
 - energy, momentum, or phase graph.
 
+Preset loading sets the graph to its explicit hint or Off; an unrelated graph
+from the preceding scene never carries over. Energy, momentum and phase graphs
+open for demonstrations where that measurement is part of the comparison;
+other examples start with the canvas available in full.
+
+The first Projectiles & Friction example, **Rough inclined plane**, has one
+non-rotating 1 kg particle on a 30° slope with effective contact friction 0.25,
+free-body diagrams and resolved weight enabled. Both materials use 0.25 so the
+geometric-mean mixing rule produces the stated coefficient. A connected rough
+horizontal platform provides enough run-out for the particle to stop. Its
+initial forces satisfy R = mg cos 30° and F = 0.25R, with downhill acceleration
+g(sin 30° − 0.25 cos 30°). It opens without a graph.
+
 Calling `build()` invokes the builder and then the shared solver cost cap. Every
 builder returns a fresh `World`; randomized layouts use a local seeded
 Mulberry32 generator, so repeated builds are deterministic and do not consume
@@ -783,7 +811,7 @@ The registry is ordered for the library and currently contains these groups:
 | Pendulums | Simple pendulum; Double pendulum; Triple pendulum; Swinging rope; Newton's cradle; Coupled pendulums |
 | Oscillators | Mass on a spring; Elastic string release; Damping regimes; Driven resonance; Coupled oscillators; Spring pendulum |
 | Collisions & Gas | Billiard break; Restitution ladder; Elastic vs inelastic; Direct collision; Gas in a box (50); Gas in a box (200); Brownian motion |
-| Projectiles & Friction | Projectile drag race; Friction ramp; Pulley on an incline; Galileo's drop; Which lands first?; Projectile angles; Terminal velocity; Wrecking ball; Chain bridge |
+| Projectiles & Friction | Rough inclined plane; Projectile drag race; Friction ramp; Pulley on an incline; Galileo's drop; Which lands first?; Projectile angles; Terminal velocity; Wrecking ball; Chain bridge |
 | Soft Bodies | Jelly block; Squishy ball; Trampoline; Soft wheel; Jelly smash |
 | Chaos | Butterfly effect; Orbit dance; Sinai billiard; Cyclone |
 
