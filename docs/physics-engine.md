@@ -153,14 +153,19 @@ sweeps the particle centre from its starting position against the wheel
 expanded by the particle radius, so a fast particle is clamped at its first
 impact even when both sampled endpoints lie outside the wheel.
 
-The reference guide rays define angular coordinates, not collision surfaces.
-Particles may cross either ray or move around the wheel while the string is
-slack. `currentWrapTurns()` resolves each trial angle against the accepted
+Each assembly also keeps a particle on its assigned side of its reference
+guide ray. These are terminal routing limits of this pulley model, rather than
+ordinary scene walls. Swept position stops prevent crossing even with slack or
+high speed. Their reactions remove acceleration and velocity into the forbidden
+side, while allowing movement back into the permitted half-plane. A taut
+particle exactly on a valid boundary retains its tension: acceleration,
+position and velocity rows use the feasible projected gradient and inverse mass.
+Only an invalid intermediate integrator trial suppresses the tension row. `currentWrapTurns()` resolves each trial angle against the accepted
 substep/edit positions and wheel centre, lifting the relative path onto its
 continuous angular sheet. `captureSafePositions()` commits the sheet at a
 boundary; geometry and current-force reads do not mutate it. Serialization and
 structural history use the resolved current sheet even before the next capture.
-The physical wheel-frame sweep and continuous routing apply in Normal and every
+The wheel-frame and guide stops, including direct-edit limits, apply in Normal and every
 Performance profile. Creating an assembly selects its initial route after both
 particles are placed; subsequent motion retains that route.
 
@@ -561,16 +566,30 @@ that occurred in one much shorter solver substep. The rate propagates through
 the rigid component in O(rows); untouched constraints retain the ordinary fast
 path. The solve exits early once correction is negligible.
 
-A standalone massless beam keeps a 32-pass minimum in every solver profile
-because its tiny hidden endpoint masses and several mounted loads form a poorly
-conditioned row set. When a fixed support exists, a final geometric polish
-places the exact rod line through that support and every movable attachment at
-its declared affine coordinate. Velocity is then orthogonally projected onto
-the beam's valid rigid modes: translation plus rotation for a free beam,
-rotation about one support, or zero motion with multiple supports. The same
-non-energy-increasing velocity projection runs after contact impulses so an
-impact is transferred through the assembly before the next substep rather than
-becoming deformation velocity and an energy spike.
+Standalone massless beams with zero compliance use a block solve over their attached physical
+point masses. Per-step member groups include hidden endpoints for setting the
+geometry, but those endpoints contribute no physical mass, torque, energy or
+inertia. Force evaluation solves the valid rigid accelerations directly:
+free-beam translation is total external force divided by mass; angular
+acceleration is torque divided by point-mass inertia, about the centre of mass
+or one fixed support. Each point also receives the inward `−ω² r` acceleration.
+Distinct fixed supports remove rotation; coincident supports retain it. The
+block participates in the ordinary coupled rod iteration, avoiding dependence
+on convergence of nearly massless endpoint / massive attachment scalar rows.
+A load's change of acceleration is recorded as its rod attachment reaction.
+
+Position correction fits the closest mass-weighted rigid line through a fixed
+support, or around the preserved centre of mass for a free beam, then installs
+all affine coordinates exactly. The solver retains a 32-pass budget floor in
+every profile for coupling to other links, with ordinary convergence exits;
+isolated blocks normally finish immediately. Correction feedback retains the
+pointer-time rule above. Velocity is orthogonally projected onto translation
+plus rotation for a free beam, rotation about one support, or zero motion with
+distinct supports. This projection cannot add physical kinetic energy and also
+runs after contacts to transmit mounted-particle impacts through the assembly.
+Nonzero-compliance beams retain their existing scalar force/XPBD route and
+supported-line/free-stretch finishing rule. A rod with attached point masses
+does not model a uniform solid rod's inertia.
 
 Pulley strings run an analogous one-sided XPBD pass on their summed live path.
 Feasible corrections are mass-weighted along the current tangent directions

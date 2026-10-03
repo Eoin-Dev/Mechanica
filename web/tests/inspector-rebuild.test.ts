@@ -42,6 +42,42 @@ beforeEach(() => {
 });
 
 describe("Centre-of-mass coordinates", () => {
+  it.each(["commit", "escape", "selection-change"])("keeps heterogeneous group masses exact across scrub %s", outcome => {
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+    const cancelRaf = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    try {
+      const { app, panel, inspector } = makeInspector();
+      const a = new Body(new Vec2(-1, 0), 0.15, 2), b = new Body(new Vec2(1, 0), 0.15, 5);
+      app.edit(() => app.world.bodies.push(a, b)); app.setSelection([a, b]); inspector.refresh();
+      const label = [...panel.querySelectorAll<HTMLElement>(".numeric-scrub-handle")].find(item => item.textContent === "Mass")!;
+      const send = (target: EventTarget, type: string, x: number): void => {
+        const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, button: 0 });
+        Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: "mouse" } });
+        target.dispatchEvent(event);
+      };
+      send(label, "pointerdown", 100); send(document, "pointermove", 130);
+      // A second move and frame flush are unnecessary for the committed value:
+      // releasing must flush the last coalesced pointer update itself.
+      if (outcome === "commit") {
+        send(document, "pointerup", 130);
+        expect(app.world.bodies.map(body => body.mass)).toEqual([2.6, 2.6]);
+        app.undo(); expect(app.world.bodies.map(body => body.mass)).toEqual([2, 5]);
+        app.redo(); expect(app.world.bodies.map(body => body.mass)).toEqual([2.6, 2.6]);
+        app.undo(); app.undo(); expect(app.world.bodies).toHaveLength(0);
+      } else {
+        // Execute only the scrub's pending callback, not the application's
+        // continuous render loop, to verify cancellation of a live preview.
+        const callbacks = raf.mock.calls.map(([fn]) => fn);
+        callbacks.at(-1)!(0);
+        expect(app.world.bodies.map(body => body.mass)).toEqual([2.6, 2.6]);
+        if (outcome === "escape") document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        else { app.setSelection([]); inspector.refresh(); }
+        expect(app.world.bodies.map(body => body.mass)).toEqual([2, 5]);
+        expect(document.documentElement.classList.contains("numeric-scrubbing")).toBe(false);
+        app.undo(); expect(app.world.bodies).toHaveLength(0);
+      }
+    } finally { raf.mockRestore(); cancelRaf.mockRestore(); }
+  });
   function setup() {
     const host = makeInspector();
     const a = new Body(new Vec2(-2, 1), 0.15, 2);
@@ -890,11 +926,12 @@ describe("Inspector structure key", () => {
     inspector.refresh();
     expect(note.textContent).toContain("Current forces.");
     expect(note.textContent).not.toContain("Step once");
+    expect(panel.querySelectorAll(".force-notation abbr")).toHaveLength(0);
     app.world.step(1 / 60);
     inspector.refresh();
     expect(note.textContent).toContain("Average forces: 0.000–0.017 s");
-    expect(panel.querySelector('.force-notation [aria-label="Numerical correction"]')?.getAttribute("title"))
-      .toBe("Numerical correction");
+    expect([...panel.querySelectorAll(".force-notation abbr")].map(item => item.textContent)).toEqual(["f"]);
+    expect(panel.querySelector('.force-notation [aria-label="Numerical correction"]')).toBeNull();
     expect(document.activeElement).toBe(checkbox);
     expect(panel.querySelector(".force-interval-note")).toBe(note);
     app.beginEdit();
@@ -902,6 +939,7 @@ describe("Inspector structure key", () => {
     app.commitEdit();
     inspector.refresh();
     expect(panel.querySelector(".force-interval-note")?.textContent).toContain("Current forces.");
+    expect([...panel.querySelectorAll(".force-notation abbr")].map(item => item.textContent)).toEqual(["f₁", "f₂"]);
   });
 
   it("selects displacement from View and follows graph changes without replacing its control", () => {

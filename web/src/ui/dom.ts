@@ -6,6 +6,8 @@
  * monitor-rate DOM polling, unless the user is actively editing.
  */
 
+import { numericScrub, type ScrubOptions } from "./numeric-scrub";
+
 type Child = Node | string | null | undefined;
 
 export function el<K extends keyof HTMLElementTagNameMap>(
@@ -27,6 +29,8 @@ export function el<K extends keyof HTMLElementTagNameMap>(
 export interface Control {
   root: HTMLElement;
   refresh?: () => void;
+  dispose?: () => void;
+  cancelInteraction?: () => void;
 }
 
 /** A media query kept as one live MediaQueryList.
@@ -90,6 +94,7 @@ export const reducedMotion = media("(prefers-reduced-motion: reduce)");
 
 /** Collects controls so a panel can refresh them all each frame. */
 export class RefreshGroup {
+  private disposers: Array<() => void> = [];
   private items: Array<{ el: HTMLElement; fn: () => void; visible: boolean }> = [];
   private byEl = new Map<Element, { visible: boolean }>();
   private io: IntersectionObserver | null = null;
@@ -130,6 +135,7 @@ export class RefreshGroup {
   }
 
   add<T extends Control>(c: T): T {
+    if (c.dispose) this.disposers.push(c.dispose);
     if (c.refresh) {
       // visible until the observer reports otherwise, so nothing is
       // stale during the first frames after a rebuild
@@ -148,6 +154,9 @@ export class RefreshGroup {
   }
 
   clear(): void {
+    const disposers = this.disposers;
+    this.disposers = [];
+    for (const dispose of disposers) dispose();
     this.io?.disconnect();
     this.items = [];
     this.byEl.clear();
@@ -435,6 +444,7 @@ export function button(label: string, onClick: () => void,
 
 // -------------------------------------------------------------------- slider
 export interface SliderOpts {
+  scrub?: false | ScrubOptions;
   unit?: string;
   fmt?: (v: number) => string;
   log?: boolean;
@@ -548,6 +558,7 @@ export function slider(label: string, get: () => number,
   let editText = "";
   let cancelled = false;
   let invalid = false;
+  let scrub: ReturnType<typeof numericScrub> | undefined;
   const show = (v: number) => {
     if (editing || invalid) return;
     const s = opts.unit ? `${fmt(v)} ${opts.unit}` : fmt(v);
@@ -633,6 +644,7 @@ export function slider(label: string, get: () => number,
     // delivers its `change` (pointer released off-window, cancelled touch)
     // would leave it live indefinitely.
     const dis = opts.disabled?.() ?? false;
+    scrub?.cancelIfDisabled();
     if (input.disabled !== dis) {
       input.disabled = dis;
       val.disabled = dis;
@@ -651,12 +663,26 @@ export function slider(label: string, get: () => number,
     if (input.value !== pos) input.value = pos;
     show(v);
   };
+  if (opts.scrub !== false) {
+    const options = opts.scrub ?? { sensitivity: opts.log ?
+      (value: number) => Math.max(opts.step ?? 0.001, Math.abs(value) / 100, Math.max(0, min) / 20) :
+      (max - min) / 200, step: opts.step, precision: opts.unit === "deg" ? 2 : 4 };
+    scrub = numericScrub({ root: row, handle: row.querySelector<HTMLElement>(".lbl")!, input: val,
+      get, set, commit: opts.onCommit, disabled: () => (opts.disabled?.() ?? false) || val.disabled || val.readOnly,
+      refresh: () => {
+        invalid = false; inputError(val, false);
+        const v = get(); val.value = editing ? fmt(v) : opts.unit ? `${fmt(v)} ${opts.unit}` : fmt(v);
+        editText = val.value; input.value = String(toPos(v)); show(v);
+      },
+    }, { ...options, min, max });
+  }
   refresh();
-  return { root: row, refresh };
+  return { root: row, refresh, dispose: scrub?.dispose, cancelInteraction: scrub?.cancel };
 }
 
 // ------------------------------------------------------------------ numEdit
 export interface NumEditOpts {
+  scrub?: ScrubOptions;
   disabled?: () => boolean;
   tooltip?: string;
 }
@@ -679,6 +705,7 @@ export function numEdit(label: string, get: () => number,
   let editText = "";
   let cancelled = false;
   let invalid = false;
+  let scrub: ReturnType<typeof numericScrub> | undefined;
   input.addEventListener("focus", () => {
     focused = true;
     cancelled = false;
@@ -709,6 +736,7 @@ export function numEdit(label: string, get: () => number,
     e.stopPropagation();
   });
   const refresh = () => {
+    scrub?.cancelIfDisabled();
     const disabled = opts.disabled?.() ?? false;
     if (input.disabled !== disabled) {
       input.disabled = disabled;
@@ -725,8 +753,28 @@ export function numEdit(label: string, get: () => number,
       input.value = s;
     }
   };
+  if (opts.scrub !== undefined) {
+    scrub = numericScrub({ root: wrap, handle: wrap.querySelector<HTMLElement>(".lbl")!, input,
+      get, set, commit: onCommit, disabled: () => (opts.disabled?.() ?? false) || input.disabled || input.readOnly,
+      refresh: () => {
+        invalid = false; inputError(input, false);
+        input.value = fmt(get()); editText = input.value;
+      },
+    }, opts.scrub);
+  }
   refresh();
-  return { root: wrap, refresh };
+  return { root: wrap, refresh, dispose: scrub?.dispose, cancelInteraction: scrub?.cancel };
+}
+
+/** Opt-in quantity editor; IDs, formula text and observational data use other controls. */
+export function tunableNumEdit(label: string, get: () => number,
+                               set: (value: number) => void | boolean, unit = "",
+                               onCommit?: () => void, fmt: (value: number) => string = fmt3g,
+                               opts: NumEditOpts = {}): Control {
+  return numEdit(label, get, set, unit, onCommit, fmt, { ...opts,
+    scrub: opts.scrub ?? { sensitivity: unit === "deg" ? 1 : unit === "N" ? 0.1 : 0.01,
+      precision: unit === "deg" ? 2 : 3 },
+  });
 }
 
 // ----------------------------------------------------------------- checkbox

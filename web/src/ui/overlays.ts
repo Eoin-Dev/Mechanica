@@ -4,7 +4,7 @@ import { CATEGORIES, PRESETS } from "../scene/presets";
 import { buildPresetSearchIndex, searchPresets } from "../scene/preset-search";
 import * as snap from "../scene/snapshot";
 import { Control, ModalFocus, button, checkbox, el, isTouch, refreshTabs,
-         fmt3dp, numEdit, segmented, wireTabs } from "./dom";
+         fmt3dp, tunableNumEdit as numEdit, segmented, wireTabs } from "./dom";
 import { ICONS } from "./icons";
 import { ThemeName, css, defaultAccent } from "./theme";
 
@@ -762,7 +762,8 @@ export class SettingsPanel {
 
     group("New scene defaults");
     add(numEdit("Gravity after Clear", () => app.newSceneGravity,
-      (value) => app.setNewSceneGravity(value), "m/s²", undefined, fmt3dp));
+      (value) => app.setNewSceneGravity(value, false), "m/s²", () => app.saveSettings(), fmt3dp,
+      { scrub: { sensitivity: 0.05, step: 0.001, min: 0, max: 100 } }));
     note("Defaults to 9.8 m/s². This is applied only when the toolbar's Clear " +
          "button creates an empty workspace; premades and imported scenes " +
          "keep their own gravity.");
@@ -824,6 +825,7 @@ export class SettingsPanel {
 
   close(): void {
     if (!this.visible) return;
+    for (const control of this.controls) control.cancelInteraction?.();
     this.visible = false;
     this.root.hidden = true;
     this.focus.exit();

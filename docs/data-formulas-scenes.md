@@ -433,6 +433,7 @@ prevent startup.
 | `inspector_w` | Finite number clamped to `240..620` CSS pixels. |
 | `dock_h` | Finite number clamped to `110..1200` CSS pixels. |
 | `tour_done` | Boolean first-visit marker. |
+| `scene_load_hint_seen` | Boolean indicating that the first successful user scene-load announcement has explained Ctrl+Z. Silent startup and recovery loads do not set it. |
 | `theme` | Base palette: `dark`, `void`, or `light`; default dark when applied. A legacy `studio` value without an explicit `studio_mode` is read as Dark with Studio enabled. |
 | `studio_mode` | Boolean presentation layer over the selected base palette; default off. |
 | `dyslexic_font` | Boolean body-font preference. |
@@ -813,6 +814,7 @@ The registry is ordered for the library and currently contains these groups:
 | Gravity & Orbits | Earth & Moon; Kepler ellipse; Inner planets; Binary stars; Gravity slingshot; Newton's cannon; Trojan asteroids |
 | Three-Body Problem | Sun, Earth & Moon; Three-body figure-8; Lagrange's triangle; Choreography: moth; Choreography: butterfly; Pythagorean three-body |
 | Pendulums | Simple pendulum; Double pendulum; Triple pendulum; Swinging rope; Newton's cradle; Coupled pendulums |
+| Rods & Pulleys | Atwood machine; Rough table and pulley; Balanced beam; Loaded rod pendulum; Rod rotor; Swinging Atwood machine |
 | Oscillators | Mass on a spring; Elastic string release; Damping regimes; Driven resonance; Coupled oscillators; Spring pendulum |
 | Collisions & Gas | Billiard break; Restitution ladder; Elastic vs inelastic; Direct collision; Gas in a box (50); Gas in a box (200); Brownian motion |
 | Projectiles & Friction | Rough inclined plane; Projectile drag race; Friction ramp; Pulley on an incline; Galileo's drop; Which lands first?; Projectile angles; Terminal velocity; Wrecking ball; Chain bridge |
@@ -825,10 +827,27 @@ cannon shots also attract each other through mutual gravity. Their descriptions
 explain that keeping one projectile at a time gives an isolated trajectory;
 the displayed ideal formulas assume the stated isolated/equal-height conditions.
 
-The Friction ramp places three deliberately non-rotating balls 1.5 m apart
-along its 25-degree surface. Its friction levels demonstrate fast sliding,
-slower sliding, and static holding without rotational motion obscuring the
-comparison.
+The Friction ramp places three non-rotating balls on separate parallel
+25-degree tracks. Each particle and its own wall use matching material
+coefficients, so the engine's geometric mean gives the advertised contact μ
+of 0, 0.25 or 0.8. Independent tracks prevent collisions from disturbing the
+comparison. Each track has a horizontal run-out and an inelastic end stop.
+
+Earth & Moon distributes the circular relative velocity between both bodies
+in proportion to the opposite mass, using the authored softened gravity law.
+The total momentum is zero without adding recoil twice to the relative speed.
+Trojan asteroids uses moving barycentric Sun/Jupiter initial conditions and
+corotating velocities for very light perturbed asteroids. Small radial/angular
+perturbations illustrate bounded libration rather than imposing a track.
+The primary mass ratio is 125, within the stable triangular-point regime
+[described by NASA](https://science.nasa.gov/resource/what-is-a-lagrange-point/).
+
+Projectile drag race and Projectile angles have terminal bumpers that retain
+rolling particles after touchdown. Jelly smash has an extended floor and side
+walls to keep struck debris in the demonstration. Triple pendulum opens the
+energy graph it advertises; graph-free cards keep the dock closed. Chaos cards
+distinguish ideal behaviours from a softened finite-precision simulation and
+do not promise universal eventual ejection or separation at every bounce.
 
 Direct collision isolates two smooth, non-rotating particles in zero gravity:
 `mA = 2 kg`, `mB = 3 kg`, `uA = +4 m/s`, `uB = −1 m/s`. Their material
@@ -857,6 +876,30 @@ at the upper endpoint of a sloped wall, places a `2 kg` non-rotating particle
 on the slope and a `1.1 kg` hanging particle on the other leg, and joins them
 with one inextensible `PulleyLink`; both particles retain ordinary friction and
 restitution behavior.
+
+Rods & Pulleys separates connected-particle study from point-mass rod
+investigations and motion showcases. Every example in that section starts with
+its graph closed. Atwood machine has `2 kg`/`3 kg` vertical tangent loads,
+`g = 9.8 m/s²`, acceleration `1.96 m/s²` and equal tension `23.52 N` before
+any stop. Rough table and pulley has a wall-mounted horizontal tangent leg,
+`2 kg` on a `μ = 0.2` table and `1 kg` hanging: initial acceleration `1.96 m/s²`,
+tension `7.84 N`, reaction `19.6 N` and friction `3.92 N`. Both start with
+particle diagrams enabled and have lower catching platforms. Later contact
+penetration within the solver's `0.5 mm` tolerance can slightly incline the
+table string and perturb its forces; neither description claims the ideal
+values apply after an impact or terminal stop.
+
+Balanced beam has a massless `4 m` rod with its centre fixed, `2 kg` at `1 m`
+left and `1 kg` at `2 m` right, with immediate load-force diagrams. Loaded rod
+pendulum carries `1 kg` at `1.2 m` and `2 kg` at `2.55 m` from an off-centre
+pivot, initially `45°` from downward vertical. Rod rotor has equal `1 kg` loads
+at `±1.5 m`, initial angular speed `1 rad/s` and zero gravity. These use hidden
+non-colliding rod coordinates and attached point masses, rather than the
+inertia of a uniform solid rod. Hidden coordinate masses are solver metadata
+and contribute neither weight, energy nor physical rigid-mode inertia.
+The rod pendulum, rotor and equal-mass Swinging Atwood machine start with
+trails enabled and particle diagrams disabled. Swinging Atwood permits the
+loads' ordinary collisions while the string follows its finite-wheel route.
 
 The Trampoline has lower anchors at the wall bases and upper anchors exactly
 on both wall-top endpoints. Two maximum-stiffness side springs run from those

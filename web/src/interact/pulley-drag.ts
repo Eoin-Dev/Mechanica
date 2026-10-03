@@ -24,6 +24,17 @@ function wheelFraction(start: Vec2, target: Vec2, wheel: Body, radius: number): 
   return Math.max(0, Math.min(1, nonnegativeGap / (-toward + Math.sqrt(discriminant))));
 }
 
+/** The assembly keeps each endpoint on its assigned side of the guide ray. */
+function guideFraction(link: PulleyLink, body: Body, start: Vec2, target: Vec2): number {
+  const offset = body === link.a ? link.guideAOffset : link.guideBOffset;
+  const sigma = link.wrapSweep < 0 ? -1 : 1;
+  const side = body === link.a ? -sigma : sigma;
+  const nx = -offset.y * side, ny = offset.x * side;
+  const from = (start.x - link.pulley.pos.x) * nx + (start.y - link.pulley.pos.y) * ny;
+  const to = (target.x - link.pulley.pos.x) * nx + (target.y - link.pulley.pos.y) * ny;
+  return to >= 0 ? 1 : from > 0 ? Math.max(0, Math.min(1, from / (from - to))) : 0;
+}
+
 /** Read-only direct-edit plan: preserve natural length without stepping.
  * A free partner takes up only the extra length, along its current straight
  * string leg; held/locked/rod-attached/rigid-linked partners remain fixed.
@@ -37,7 +48,8 @@ export function pulleyParticleDragPlan(links: readonly Link[], body: Body, propo
   if (!Number.isFinite(dx) || !Number.isFinite(dy)) return { target: start.copy(), partners: [] };
   let fraction = 1;
   const queries = incident.map(link => {
-    fraction = Math.min(fraction, wheelFraction(start, proposed, link.pulley, PULLEY_RADIUS + body.radius));
+    fraction = Math.min(fraction, wheelFraction(start, proposed, link.pulley, PULLEY_RADIUS + body.radius),
+      guideFraction(link, body, start, proposed));
     const other = link.a === body ? link.b : link.a;
     // Constructor-free views own candidate positions and share only read inputs.
     const trial = Object.create(link) as PulleyLink;
@@ -63,7 +75,8 @@ export function pulleyParticleDragPlan(links: readonly Link[], body: Body, propo
       const nx = link.a === other ? geom.nax : geom.nbx;
       const ny = link.a === other ? geom.nay : geom.nby;
       const raw = new Vec2(other.pos.x - nx * excess, other.pos.y - ny * excess);
-      const wheelLimit = wheelFraction(other.pos, raw, link.pulley, PULLEY_RADIUS + other.radius);
+      const wheelLimit = Math.min(wheelFraction(other.pos, raw, link.pulley, PULLEY_RADIUS + other.radius),
+        guideFraction(link, other, other.pos, raw));
       let target = new Vec2(other.pos.x + (raw.x - other.pos.x) * wheelLimit,
         other.pos.y + (raw.y - other.pos.y) * wheelLimit);
       if (walls.length && other.collides) {

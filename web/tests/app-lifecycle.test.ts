@@ -46,6 +46,31 @@ afterEach(() => {
 });
 
 describe("App construction", () => {
+  it.each([320, 390, 768, 1440])("preserves preset framing margins at %s px, including hinted centres", width => {
+    const app = makeApp(); app.camera.resize(width, 900);
+    for (const preset of PRESETS) {
+      app.loadPreset(preset, false);
+      for (const body of app.world.bodies) {
+        const [x, y] = app.camera.toScreen(body.pos), r = body.radius * app.camera.zoom;
+        expect(x - r, preset.name).toBeGreaterThanOrEqual(width * 0.075 - 1e-7);
+        expect(x + r, preset.name).toBeLessThanOrEqual(width * 0.925 + 1e-7);
+        expect(y - r, preset.name).toBeGreaterThanOrEqual(900 * 0.075 - 1e-7);
+        expect(y + r, preset.name).toBeLessThanOrEqual(900 * 0.925 + 1e-7);
+      }
+    }
+  });
+  it("announces undo guidance on the first user scene load only, including after reload", () => {
+    const app = makeApp(), toast = vi.fn(); app.toastFn = toast;
+    app.loadPreset(PRESETS[0], false);
+    expect(app.settings.scene_load_hint_seen).toBeUndefined();
+    app.loadWorld(new World(), "First");
+    expect(toast).toHaveBeenLastCalledWith("Loaded 'First' — Ctrl+Z restores the previous scene");
+    app.loadPreset(PRESETS[0]);
+    expect(toast).toHaveBeenLastCalledWith(`Loaded '${PRESETS[0].name}'`);
+    const next = makeApp(); next.toastFn = toast;
+    next.loadWorld(new World(), "Later");
+    expect(toast).toHaveBeenLastCalledWith("Loaded 'Later'");
+  });
   it.each([
     [undefined, true], [false, false], [true, true], ["false", true], [0, true],
   ])("defaults wall collisions on without overriding a saved preference (%s)", (saved, expected) => {

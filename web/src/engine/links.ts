@@ -443,8 +443,8 @@ export class PulleyLink {
   get legLimit(): number { return Math.max(0.0, this.length - this.wrapLength); }
   currentLength(): number { return this.geometry().totalLength; }
 
-  /** Signed distance from the reference guide ray, for geometry inspection.
-   * The reference rays select angular coordinates and are not physical barriers. */
+  /** Signed clearance from the endpoint's assembly routing limit.
+   * Simulation and direct edits keep each particle on its assigned side. */
   branchDistance(endpoint: "a" | "b"): number {
     const offset = endpoint === "a" ? this.guideAOffset : this.guideBOffset;
     const body = endpoint === "a" ? this.a : this.b;

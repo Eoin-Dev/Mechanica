@@ -41,7 +41,7 @@ async function ropeInk(page: Page) {
       baseY = canvas.clientHeight / 2 + (cy + 1) * zoom;
     const data = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
     let depth = -Infinity, count = 0;
-    for (let y = Math.max(0, Math.floor((baseY - 2) * sy)); y < Math.min(canvas.height, (baseY + 60) * sy); y++) {
+    for (let y = Math.max(0, Math.floor((baseY - 2) * sy)); y < Math.min(canvas.height, (baseY + 220) * sy); y++) {
       for (let x = Math.max(0, Math.floor((middleX - zoom * 0.5) * sx)); x < Math.min(canvas.width, (middleX + zoom * 0.5) * sx); x++) {
         const k = (y * canvas.width + x) * 4;
         if (data[k] > data[k + 1] + 4 && data[k + 1] > data[k + 2] + 5) {
@@ -65,7 +65,7 @@ for (const theme of ["dark", "light"]) {
       await expect.poll(async () => (await ropeInk(page)).count).toBeGreaterThan(10);
       const before = await state(page), ink = await ropeInk(page);
       expect(ink.depth).toBeGreaterThan(previous + 1); previous = ink.depth;
-      expect(ink.depth).toBeLessThanOrEqual(50);
+      expect(ink.depth).toBeLessThanOrEqual(110); // 108 px sag plus antialiasing
       await page.screenshot({ path: testInfo.outputPath(`slack-${extra}-${theme}.png`) });
       const after = await state(page); expect(after.scene).toEqual(before.scene);
       expect(after.presentation.camera).toEqual(before.presentation.camera);

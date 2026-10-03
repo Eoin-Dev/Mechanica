@@ -1329,20 +1329,15 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   }
   // Endpoint letters are editing landmarks, so they appear only on the
   // selected rod. Draw them last: attached particles can occupy the actual
-  // endpoint and used to paint over a badge drawn in the link layer. Moving
-  // each badge a few pixels beyond its end also keeps the particle readable.
+  // endpoint and would paint over a badge drawn in the link layer. Each badge
+  // is centred on its endpoint so the editing landmark locates the exact tip.
   for (const link of world.links) {
     if (!(link instanceof DistanceLink) || link.isRope || !picked.has(link)) continue;
     const [ax, ay] = cam.toScreen(link.a.pos);
     const [bx, by] = cam.toScreen(link.b.pos);
-    const dx = bx - ax;
-    const dy = by - ay;
-    const d = Math.hypot(dx, dy);
-    const ux = d > 1e-9 ? dx / d : 1;
-    const uy = d > 1e-9 ? dy / d : 0;
     for (const [x, y, label] of [
-      [ax - ux * 13, ay - uy * 13, "A"],
-      [bx + ux * 13, by + uy * 13, "B"],
+      [ax, ay, "A"],
+      [bx, by, "B"],
     ] as const) {
       fillCircle(ctx, x, y, 9, theme.PANEL);
       ringCircle(ctx, x, y, 9, 2, theme.ACCENT);
@@ -1353,6 +1348,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
       ctx.fillText(label, x, y + 0.5);
     }
     ctx.textBaseline = "alphabetic";
+    ctx.textAlign = "left";
   }
   picked.clear();
   LABEL_NAMES.length = 0;

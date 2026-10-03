@@ -146,7 +146,9 @@ paused; press Play separately to start again.
   frames the initial bounds, captures reset/energy baselines, and arms a
   one-time soft-body drag hint as one undoable scene replacement.
 - `loadWorld()` handles saved and imported worlds the same way, fits the new
-  scene, pauses, and announces that Ctrl+Z restores the previous scene.
+  scene and pauses. Successful user scene loads announce only the scene name;
+  the first user load adds Ctrl+Z undo guidance and persists
+  `scene_load_hint_seen`. Silent startup/recovery loads do not consume the hint.
   Failed reads and failed builds leave both the live world and history intact.
 - `initializePreset()` is used only for startup and is the sole scene-loading
   path that resets undo history.
@@ -480,13 +482,12 @@ During swinging, the readout reports mean scalar tension while an arrow shows
 its mean vector. Hidden diagram flags stay hidden when a readout requests an
 isolated current calculation, and enabled separate-vector measurements survive
 rewind without stepping again.
-The rendered string follows its retained route continuously across a full
-turn. A vanishing wrap becomes a straight segment, and later contact on the
-other side follows that side's tangent arc. A straight string has no wheel
-tension arrows; its endpoint forces act along the direct string. Export and
-rewind retain the angular route, including an initially small wrap imported
-from an older scene. Reference guide rays do not block free particle motion
-or create reactions; only physical wheel-frame or ordinary contacts do so.
+Live pulley particles stop at their assigned routing guide and at the finite
+wheel frame; they can retreat from either stop. The string still preserves
+its retained angular sheet for imported legacy routes, queries, save/load and
+rewind. Legacy vanishing wraps render as one straight string, without wheel
+tension arrows. Guide-stop support is reported as a reaction, separately from
+string tension and numerical correction.
 
 Ordinary name, mass, colour and other value commits keep the current controls
 when the structure key is unchanged. A subsequent focused edit therefore
@@ -695,9 +696,10 @@ Major behavior includes:
   zooms in instead of multiplying decorative segments per link;
 - distinct taut/slack string styling with a one-millimetre visual tolerance so
   microscopic projection residuals cannot make a pulley string flicker;
-- Normal-mode slack ropes, elastic strings and pulley legs use a stable bowed
-  visual whose depth increases with excess natural length, up to 48 CSS pixels
-  per nondegenerate segment. Coincident ends draw a small bounded loop. Pulley
+- Normal-mode slack ropes, elastic strings and pulley legs use a stable cubic
+  sag. Nearly vertical segments develop an S fold as excess length increases;
+  horizontal segments sag downwards. The bow parameter is capped at 72 CSS
+  pixels and every control offset stays within 216 CSS pixels of its segment. Coincident ends draw a small bounded loop. Pulley
   legs bow away from the wheel and divide the cue according to straight-leg
   length; a released route uses one curve. Endpoints and wrapped contact points
   remain fixed. This is a display cue rather than a simulated hanging-string
@@ -707,7 +709,8 @@ Major behavior includes:
   Every Performance tier keeps straight strings and bypasses the curve/picking
   workload;
 - routed pulley strings with two live tangent legs and a finite wrapped arc;
-- standalone rods as two parallel rails, selected endpoint badges `A` and `B`,
+- standalone rods as two parallel rails, selected endpoint badges `A` and `B`
+  centred on their actual tips and painted above attached particles,
   and rod supports whose triangular glyph dimensions scale with physical rod
   length and camera zoom instead of staying a fixed on-screen size;
 - body fills/rings, anchor treatment, selection/hover outlines, labels, and
@@ -1006,6 +1009,36 @@ the commit callback. Numeric controls can also disable reactively, dropping a
 pending draft and rejecting blur writes while disabled. Slider endpoints remain exact
 when their bounds are not multiples of the step. Native colour and hex controls
 have separate accessible names, and unchanged colour refreshes avoid DOM writes.
+Tunable quantities opt into `numericScrub` through their existing slider or
+`tunableNumEdit`. The label is the pointer handle; a click focuses the numeric
+field, and a horizontal movement of three CSS pixels starts relative adjustment.
+Mouse, trackpad and pen use pointer capture with document fallback. Touch retains
+ordinary direct entry and scrolling. Live writes are coalesced to animation
+frames; release flushes the final value through the canonical setter and commits
+once. Shift scales subsequent motion by ten, Alt by one tenth. Clamping discards
+overshoot debt, and rejected dependent values rebase to the last accepted value.
+Integer steps remain integral. Exact fields keep decimal/scientific text entry
+and gain Arrow Up/Down adjustments. Read-only or disabled controls cannot scrub.
+The handle has a theme-native hover/active cue and an `ew-resize` cursor, while
+inputs retain their accessible labels, units and tab order.
+
+Escape, pointer cancellation, lost capture, window blur, disabling and panel
+rebuild cancel the gesture. The Inspector captures a transaction before the
+first accepted change; `rollbackEdit()` restores the complete original world,
+including unequal group values and dependent properties, while retaining the
+camera, plots and rewind/trail stores. Transient callbacks and cursor/selection
+styles are removed before commit/cancellation can rebuild the controls.
+`RefreshGroup.clear()` disposes controls before removing their DOM; closing
+Settings cancels interactions while preserving handlers for reopening. The
+new-scene gravity preference persists at commit, rather than on raw moves.
+
+| Numeric area | Interaction |
+| --- | --- |
+| Mass, radius, spin, materials, driver quantities, world force/solver controls, vector/trail scale and playback speed | Tunable sliders with scrub labels and exact readouts. |
+| Particle/anchor coordinates and velocities, applied forces, wall endpoints/angle, elastic modulus, event line position and new-scene gravity | Opted-in numeric fields; existing domain setters and displayed units apply. |
+| Mathematical formula fields and position-along-rod expressions | Exact expression editors remain primary; label scrubbing is omitted. |
+| Simulation clock, measured coordinates, force/pulley diagnostics, graph numbers, IDs and scene names | Seek/read-only/semantic controls; label scrubbing is omitted. |
+
 Colour rows place the label above a swatch and exact hex field, with palette
 chips aligned below; the layout keeps enlarged labels out of neighbouring
 controls. The swatch also receives its current colour as a guarded CSS property
@@ -1292,3 +1325,14 @@ geometry and Library contrast/containment, open-overlay 320 px/200% reflow,
 pointer alignment, scene-replacement undo, tour spotlights, and shortcut
 ownership. Chromium, Firefox and WebKit axe checks cover WCAG A/AA rules at boot and with the
 Library open. See [testing and operations](testing-and-operations.md).
+
+
+The particle force key lists only nonzero forces in its current or completed
+measurement, including nonzero measured scalar tension when an interval's
+vector average cancels. Symbols and source explanations refresh even with
+Values and sources closed. Hover uses the ordinary cursor; focusable symbols
+retain their accessible source labels. The disclosure includes scalar tension
+alongside vector components where the solver measured both.
+
+Preset camera hints retain the full-fit 7.5 percent edge margins on each axis.
+An authored action centre cannot place a particle on the viewport boundary.

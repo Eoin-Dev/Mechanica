@@ -173,7 +173,7 @@ with the behavior it protects rather than an exact assertion count.
 | [`pulley-analytic-forces.test.ts`](../web/tests/pulley-analytic-forces.test.ts) | Independent Newton-law incline tension, reaction and limiting-friction answers across integrators and timesteps; terminal and fixed-wall/body equilibrium across extreme mass ratios with matching leg tensions, owned rim reactions, unchanged immediate-query inputs, disabled partner diagrams and cache invalidation; stationary position/velocity in actual Normal/Performance profiles; and an analytic inelastic tension impulse with non-increasing kinetic energy. Force-ledger closure and motion accuracy are checked separately. |
 | [`pulley-diagnostics.test.ts`](../web/tests/pulley-diagnostics.test.ts) | Immediate Atwood acceleration/tension and whole-axle support, compatible force intervals and full tightening impulses, hidden endpoint/query ownership and caching, scalar/vector averaging, disabled-display work and rewind retention. |
 | [`pulley-drag.test.ts`](../web/tests/pulley-drag.test.ts) | Independent vertical-length answers across translated/rotated free, held and locked fixtures; all fixed search budgets, wheel first-hit and overlap escape, partner wall and incline contact, existing extension/slack, compound rigid ownership, shared selected endpoints, repeated parked targets, and pure planning without clock/velocity/multiplier/route mutation. |
-| [`pulley-routing.test.ts`](../web/tests/pulley-routing.test.ts) | Independent path continuity at vanishing and full-turn wraps in both orientations, release and opposite-side wheel-clearance/tangent oracles, relative-velocity straight-string tension, saved and legacy route ownership, query/rewind structural invalidation, guarded import defaults, seeded gradient/curvature checks over varied port spans, and seam energy bounds across actual Normal/Performance integrators and timesteps; free-flight/applied-force oracles across empty guide rays, repeated winding with pure query/save/rewind ownership, jointly translated/rotated routes and zero-port arc coherence. |
+| [`pulley-routing.test.ts`](../web/tests/pulley-routing.test.ts) | Independent path continuity at vanishing and full-turn wraps in both orientations, release and opposite-side wheel-clearance/tangent oracles, relative-velocity straight-string tension, saved and legacy route ownership, query/rewind structural invalidation, guarded import defaults, seeded gradient/curvature checks over varied port spans, and seam energy bounds across actual Normal/Performance integrators and timesteps; assigned-guide stops with permitted tangent motion, independent support/tension force balance, retained angular-sheet with pure query/save/rewind ownership, jointly translated/rotated routes and zero-port arc coherence. |
 
 ### Presets, determinism, stress, and long runs
 
@@ -181,7 +181,7 @@ with the behavior it protects rather than an exact assertion count.
 | --- | --- |
 | [`presets.test.ts`](../web/tests/presets.test.ts) | Central solver affordability, shipped-scene survival/coherence, dynamic Sun/Earth/Moon barycentre and hierarchy bounds, trampoline response, Brownian trails-off hint, incline-pulley structure, dense containment, penetration bounds, and contact iteration ceilings. |
 | [`preset-invariants.test.ts`](../web/tests/preset-invariants.test.ts) | Catalogue uniqueness/completeness, finite sane structures, pulley-axle ownership invariants, link identity, deterministic builders/steps, and exact save/load continuation. |
-| [`preset-descriptions.test.ts`](../web/tests/preset-descriptions.test.ts) | Educational card claims agree with measured scene properties, including Friction ramp non-rotation/spacing, incline-pulley wall/string/mass geometry, and Trampoline anchor/suspension/ball geometry, and every preset is covered by the description audit. |
+| [`preset-descriptions.test.ts`](../web/tests/preset-descriptions.test.ts) | Educational card claims agree with measured scene properties, including Friction ramp independent tracks/matching material coefficients, incline-pulley wall/string/mass geometry, and Trampoline anchor/suspension/ball geometry, and every preset is covered by the description audit. |
 | [`determinism.test.ts`](../web/tests/determinism.test.ts) | Bit-identical repeated runs and independence from performance scheduling for demanding scenes. |
 | [`contact-broadphase.test.ts`](../web/tests/contact-broadphase.test.ts) | Exhaustive pair-oracle comparisons across compact/sparse layouts, negative boundaries, tangency, coincident centres, mixed sizes, exclusions and locked/disabled colliders; exact large cell identities, grid reuse after membership/size/layout changes, non-finite position exclusion, and Performance sleeping wakeups. |
 | [`lifecycle-stress.test.ts`](../web/tests/lifecycle-stress.test.ts) | Continuous create/delete, integrator switching, repeated preset loads, violent reset, and sustained high-body-count consistency without cost drift. |
@@ -234,6 +234,8 @@ recorded interval averages in the text alternative.
 
 | Test file | Protected behavior |
 | --- | --- |
+| [`standalone-rod-maths.test.ts`](../web/tests/standalone-rod-maths.test.ts) | Independent closed-form free/supported beam force and torque cases across translations, rotations, hidden coordinate masses, all actual integrators, coincident/distinct supports, centre-of-mass momentum and mechanical energy. |
+| [`rod-pulley-presets.test.ts`](../web/tests/rod-pulley-presets.test.ts) | Shipped Atwood acceleration/tension, rough-table reaction/friction/tension and velocity, balanced moments in all profiles, physical-pendulum angular acceleration and energy, rotor centripetal acceleration/speed, swinging-string pre-impact energy, round-trip continuation and bounded ten-second Normal/all-tier motion. |
 | [`drag-velocity.test.ts`](../web/tests/drag-velocity.test.ts) | Primary drag preserves pre-grab velocity across paused/running/release/abort paths while temporary motion remains solver-visible; its progressively stronger speed-sensitive hand response and matching pointer-time rod correction avoid fast-drag and substep-amplified anchor lunges, while linked response is chase-capped only in Performance mode. |
 | [`interaction-behaviour.test.ts`](../web/tests/interaction-behaviour.test.ts) | Cancelled eraser/wall gestures and tool switching without later unintended edits, click activation threshold, asymptotically bounded speed-sensitive drag energy, continuously maintained parked velocity aims, selected-body FBD velocity-handle suppression independent from View vectors, standalone rod creation, unified Anchor support placement, slow-acquire/hysteretic body attachment, filtered box select, pick ordering/tolerance, distance-based trail sampling, plot restart/non-finite rejection, auto-fit guarantees, and deleted gesture targets; Normal/Performance visible-string picking, actual paused/running pulley particle reach stops, parked/reversed targets, all Performance tiers, and paired undo/redo after release, cancellation and capture loss. |
 | [`selection-delete.test.ts`](../web/tests/selection-delete.test.ts) | Selection/hover/pending-state reconciliation after removal, linear batched deletion with cascades, one-transaction continuous eraser scrubs, and duplication of bodies/walls/links/drivers. |
@@ -619,3 +621,32 @@ unrelated edits:
 
 Document any resulting behavior change in present tense in the appropriate
 handbook page; do not append a release history to these pages.
+
+The production [rod/pulley Library tests](../web/e2e/rod-pulley-presets.spec.ts)
+exercise category discovery, readable desktop/phone cards, default/fit camera
+views, graph-free starts, immediate actual-particle force readouts and motion
+through the toolbar clock in every browser engine.
+
+
+Preset checks cover three different contracts. The invariant suite protects
+construction and persistence; description checks protect advertised input
+values; `preset-outcomes.test.ts` requires an explicit behavioural check for
+every registered card. Outcomes include measured orbit/oscillator periods,
+Newton-law accelerations, catches, landing order, rebound heights, transfer,
+conservation, deformation and containment at shipped Normal settings.
+Chaotic showcases use stated finite observation windows; none of these checks
+proves every possible future trajectory or every edited model.
+
+`premade-library.spec.ts` loads every card through the real production Library,
+checks graph defaults, seeks to ten seconds, records both views, and catches
+browser errors across all three engines. Repaired friction/projectile/jelly
+worlds also have phone screenshots. It waits for the resulting simulation time
+as well as the clock's busy attribute: the attribute can still reflect the
+previous UI refresh while an asynchronous seek is starting.
+
+`numeric-scrub.test.ts` exercises threshold/click handling, incremental modifiers,
+clamp reversal, canonical rejection, RAF batching, touch/pen input, precise text,
+keyboard access, disabling, cancellation and disposal. Inspector integration
+checks heterogeneous group rollback and one-entry undo/redo. Production
+`numeric-scrub.spec.ts` covers themes, high-DPI rendering, actual pointer capture,
+modifiers, cancellation, concise scene feedback and centred rod-tip badges.

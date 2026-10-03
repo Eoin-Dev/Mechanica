@@ -222,7 +222,7 @@ describe("continuous pulley routing", () => {
   });
 });
 
-describe("pulley motion beyond the guide rays", () => {
+describe("pulley assigned-guide limits", () => {
   const modes = INTEGRATORS.flatMap(integrator =>
     (["normal", 0, 1, 2, 3] as const).map(mode => ({ integrator, mode })));
 
@@ -241,34 +241,35 @@ describe("pulley motion beyond the guide rays", () => {
     return { world, wheel, a, b, link };
   }
 
-  it.each(modes)("keeps unforced slack motion across an empty guide: $integrator, $mode", ({ integrator, mode }) => {
+  it.each(modes)("stops slack motion at its assigned guide: $integrator, $mode", ({ integrator, mode }) => {
     const { world, a, b, link } = free(integrator, mode);
     for (let i = 0; i < 12; i++) {
       world.step(1 / 60);
-      expect(a.pos.y).toBeCloseTo(-0.01 + 0.2 * world.time, 12);
-      expect(a.vel.y).toBe(0.2); expect(a.pos.x).toBe(-2);
-      expect(b.vel.length()).toBe(0);
-      expect(world.energy().ke).toBeCloseTo(0.02, 14);
+      expect(a.pos.y).toBeLessThanOrEqual(1e-12);
+      expect(link.branchDistance("a")).toBeGreaterThanOrEqual(-1e-12);
+      expect(a.pos.x).toBe(-2); expect(b.vel.length()).toBe(0);
+      expect(world.energy().ke).toBeLessThanOrEqual(0.02 + 1e-12);
       expect(link.length - link.currentLength()).toBeGreaterThan(14);
-      expect(a.forceSnapshot?.entries ?? []).toHaveLength(0);
     }
+    expect(a.pos.y).toBeCloseTo(0, 12); expect(a.vel.length()).toBe(0);
+    a.vel.set(0, -0.2);
+    world.step(1 / 60);
+    expect(a.pos.y).toBeLessThan(0); expect(a.vel.y).toBeCloseTo(-0.2, 12);
   });
 
-  it.each(modes)("keeps applied acceleration and current forces at the empty guide: $integrator, $mode", ({ integrator, mode }) => {
-    const { world, a } = free(integrator, mode);
-    a.pos.y = 0; a.constForce.set(0, 0.5);
+  it.each(modes)("balances applied acceleration at the guide without mutating previews: $integrator, $mode", ({ integrator, mode }) => {
+    const { world, a, link } = free(integrator, mode);
+    a.pos.y = 0; a.vel.set(0, 0); a.constForce.set(0, 0.5);
     const original = world.toDict(), nextId = Body.nextId;
-    const current = world.currentForceSnapshot(a);
-    if (current === null) throw new Error("Expected forces for the free particle");
-    expect(current.fy).toBeCloseTo(0.5, 12);
-    expect(current.entries.every(entry => entry.kind !== "reaction" && entry.kind !== "correction")).toBe(true);
+    const current = world.currentForceSnapshot(a)!;
+    expect(current.fy).toBeCloseTo(0, 12);
+    expect(current.entries.find(entry => entry.kind === "reaction")!.fy).toBeCloseTo(-0.5, 12);
+    expect(current.entries.some(entry => entry.kind === "correction")).toBe(false);
     expect(world.toDict()).toEqual(original); expect(Body.nextId).toBe(nextId);
-    const h = 1 / 60 / world.effectiveSubsteps;
     for (let i = 0; i < 12; i++) world.step(1 / 60);
-    const eulerOffset = world.effectiveIntegrator === "Symplectic Euler" ? 0.5 * world.time * h / 2 : 0;
-    expect(a.pos.y).toBeCloseTo(0.2 * world.time + 0.5 * 0.5 * world.time ** 2 + eulerOffset, 11);
-    expect(a.vel.y).toBeCloseTo(0.2 + 0.5 * world.time, 12);
-    expect(a.forceSnapshot?.entries.every(entry => entry.kind !== "reaction" && entry.kind !== "correction")).toBe(true);
+    expect(a.pos.y).toBeCloseTo(0, 12); expect(a.vel.length()).toBeLessThan(1e-10);
+    expect(link.branchDistance("a")).toBeGreaterThanOrEqual(-1e-12);
+    if (mode === "normal") expect(a.forceSnapshot!.entries.some(entry => entry.kind === "correction")).toBe(false);
   });
 
   it.each([[-1, "a"], [-1, "b"], [1, "a"], [1, "b"]] as const)(

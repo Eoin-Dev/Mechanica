@@ -28,6 +28,77 @@ const lightest = (bs: Body[]): Body => bs.reduce((a, b) => (a.mass < b.mass ? a 
 type Claim = [phrase: string, check: (w: World) => void];
 
 const CARD_CLAIMS: Record<string, Claim[]> = {
+  "Atwood machine": [
+    ["A (2 kg) and B (3 kg), g = 9.8", w => {
+      const string = w.links[0] as PulleyLink;
+      expect([string.a.mass, string.b.mass, w.gravity]).toEqual([2, 3, 9.8]);
+      expect(w.walls).toHaveLength(1);
+      expect(string.a.showForceComponents && string.b.showForceComponents).toBe(true);
+    }],
+    ["accelerates downwards at 1.96 m/s² and tension is 23.52 N", w => {
+      const string = w.links[0] as PulleyLink;
+      const acceleration = (string.b.mass - string.a.mass) * w.gravity / (string.a.mass + string.b.mass);
+      expect(acceleration).toBeCloseTo(1.96, 12);
+      expect(string.b.mass * (w.gravity - acceleration)).toBeCloseTo(23.52, 12);
+    }],
+  ],
+  "Rough table and pulley": [
+    ["A (2 kg), B (1 kg), μ = 0.2 and g = 9.8", w => {
+      const string = w.links[0] as PulleyLink;
+      expect([string.a.mass, string.b.mass, w.gravity]).toEqual([2, 1, 9.8]);
+      expect(string.a.friction).toBe(0.2);
+      expect(w.walls[0].friction).toBe(0.2);
+      expect(string.a.noRotation && string.b.noRotation).toBe(true);
+    }],
+    ["acceleration 1.96, tension 7.84, reaction 19.6 and friction 3.92", w => {
+      const string = w.links[0] as PulleyLink;
+      const normal = string.a.mass * w.gravity, friction = 0.2 * normal;
+      const acceleration = (string.b.mass * w.gravity - friction) / (string.a.mass + string.b.mass);
+      expect(normal).toBeCloseTo(19.6, 12);
+      expect(friction).toBeCloseTo(3.92, 12);
+      expect(acceleration).toBeCloseTo(1.96, 12);
+      expect(string.b.mass * (w.gravity - acceleration)).toBeCloseTo(7.84, 12);
+    }],
+  ],
+  "Balanced beam": [
+    ["4 m rod: 2 kg at 1 m left, 1 kg at 2 m right", w => {
+      const rod = w.links[0] as DistanceLink;
+      expect(rod.length).toBe(4);
+      const loads = w.bodies.filter(b => !b.isRodEndpoint && !b.isAnchor);
+      expect(loads.map(b => [b.mass, b.pos.x])).toEqual([[2, -1], [1, 2]]);
+      expect(rod.a.mass).toBe(0.001);
+      expect(rod.b.mass).toBe(0.001);
+    }],
+  ],
+  "Loaded rod pendulum": [
+    ["1 kg inner load, 2 kg outer load, released at 45°", w => {
+      const rod = w.links[0] as DistanceLink;
+      expect(w.bodies.filter(b => !b.isRodEndpoint && !b.isAnchor).map(b => b.mass)).toEqual([1, 2]);
+      const axis = rod.b.pos.sub(rod.a.pos);
+      expect(deg(Math.atan2(axis.x, -axis.y))).toBeCloseTo(45, 12);
+    }],
+  ],
+  "Rod rotor": [
+    ["Two equal loads ... begins at 1 rad/s", w => {
+      const loads = w.bodies.filter(b => !b.isRodEndpoint && !b.isAnchor);
+      expect(loads).toHaveLength(2);
+      expect(loads[0].mass).toBe(loads[1].mass);
+      expect(w.gravity).toBe(0);
+      for (const body of loads) {
+        expect(body.vel.x).toBe(-body.pos.y || 0);
+        expect(body.vel.y).toBe(body.pos.x);
+      }
+    }],
+  ],
+  "Swinging Atwood machine": [
+    ["Equal 1 kg loads share a light inextensible string", w => {
+      const string = w.links[0] as PulleyLink;
+      expect([string.a.mass, string.b.mass]).toEqual([1, 1]);
+      expect(string.compliance).toBe(0);
+      expect(Math.abs(string.a.pos.x - string.pulley.pos.x)).toBeGreaterThan(1);
+      expect(string.currentLength()).toBeCloseTo(string.length, 12);
+    }],
+  ],
   "Direct collision": [
     ["A (2 kg) starts at +4 m/s; B (3 kg) at −1 m/s", w => {
       expect(movers(w).map(body => [body.mass, body.vel.x])).toEqual([[2, 4], [3, -1]]);
@@ -175,31 +246,33 @@ const CARD_CLAIMS: Record<string, Claim[]> = {
 
   "Trojan asteroids": [
     ["60 degrees ahead (L4) and behind (L5)", (w) => {
-      const bs = movers(w);
-      const jupiter = heaviest(bs);
-      const jAng = Math.atan2(jupiter.pos.y, jupiter.pos.x);
+      const sun = w.bodies.find(b => b.name === "Sun")!;
+      const jupiter = w.bodies.find(b => b.name === "Jupiter")!;
+      const bs = w.bodies.filter(b => b.name.startsWith("Trojan"));
+      const jAng = Math.atan2(jupiter.pos.y - sun.pos.y, jupiter.pos.x - sun.pos.x);
       const lead: number[] = [];
       const trail: number[] = [];
       for (const b of bs) {
         if (b === jupiter) continue;
-        let d = deg(Math.atan2(b.pos.y, b.pos.x) - jAng);
+        let d = deg(Math.atan2(b.pos.y - sun.pos.y, b.pos.x - sun.pos.x) - jAng);
         while (d > 180) d -= 360;
         while (d < -180) d += 360;
         (d > 0 ? lead : trail).push(d);
       }
       expect(lead).toHaveLength(6);  // "the swarms", one at each point
       expect(trail).toHaveLength(6);
-      // the builder jitters by +-0.15 rad (8.6 deg) about the exact angles
+      // The builder jitters by ±0.08 rad about the equilateral points.
       for (const d of lead) expect(Math.abs(d - 60)).toBeLessThan(10);
       for (const d of trail) expect(Math.abs(d + 60)).toBeLessThan(10);
     }],
     ["Asteroids sharing Jupiter's orbit", (w) => {
-      const bs = movers(w);
-      const jupiter = heaviest(bs);
-      const a = jupiter.pos.length();
+      const sun = w.bodies.find(b => b.name === "Sun")!;
+      const jupiter = w.bodies.find(b => b.name === "Jupiter")!;
+      const bs = w.bodies.filter(b => b.name.startsWith("Trojan"));
+      const a = jupiter.pos.distTo(sun.pos);
       for (const b of bs) {
         if (b === jupiter) continue;
-        expect(Math.abs(b.pos.length() / a - 1)).toBeLessThan(0.05);
+        expect(Math.abs(b.pos.distTo(sun.pos) / a - 1)).toBeLessThan(0.02);
       }
     }],
   ],
@@ -509,12 +582,17 @@ const CARD_CLAIMS: Record<string, Claim[]> = {
       expect(mus[1]).toBeGreaterThan(0);
       expect(mus[2]).toBeGreaterThan(0);
     }],
-    ["Three non-rotating balls spread along", (w) => {
+    ["Three non-rotating balls on separate parallel ramps", (w) => {
       const balls = movers(w).sort((a, b) => a.pos.x - b.pos.x);
       expect(balls.every((b) => b.noRotation)).toBe(true);
       expect(balls.every((b) => b.omega === 0)).toBe(true);
       const gaps = balls.slice(1).map((b, i) => b.pos.distTo(balls[i].pos));
       expect(Math.min(...gaps)).toBeGreaterThan(1.4);
+      expect(w.walls).toHaveLength(9);
+      movers(w).forEach((ball, i) => {
+        const ramp = w.walls[3 * i];
+        expect(Math.sqrt(ball.friction * ramp.friction)).toBeCloseTo(ball.friction, 12);
+      });
     }],
   ],
 
@@ -748,7 +826,7 @@ const CARD_CLAIMS: Record<string, Claim[]> = {
       expect(bs[0].pos.distTo(bs[1].pos)).toBeLessThan(0.2);
       expect(Math.abs(bs[0].vel.length() - bs[1].vel.length())).toBeLessThan(0.05);
     }],
-    ["while energy stays exactly flat", (w) => {
+    ["elastic contacts preserve kinetic energy", (w) => {
       expect(w.gravity).toBe(0);
       for (const b of movers(w)) expect(b.restitution).toBe(1.0);
       for (const wall of w.walls) expect(wall.restitution).toBe(1.0);
@@ -821,7 +899,7 @@ describe("the card audit is complete", () => {
   it("keeps the tour example count in sync with the category registry", () => {
     expect(STEPS.find(step => step.title === "Start from a worked example")!.body)
       .toContain(`${PRESETS.length} ready-made simulations`);
-    expect(CATEGORIES.filter((c) => c !== "All")).toHaveLength(8);
+    expect(CATEGORIES).toEqual(["All", ...new Set(PRESETS.map(p => p.category))]);
     expect(new Set(PRESETS.map((p) => p.name)).size).toBe(PRESETS.length);
   });
 });

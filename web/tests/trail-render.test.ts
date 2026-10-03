@@ -35,6 +35,9 @@ class FakePath2D {
   quadraticCurveTo(cx: number, cy: number, x: number, y: number): void {
     this.ops.push({ op: "quadraticCurveTo", x, y, cx, cy });
   }
+  bezierCurveTo(cx: number, cy: number, _c2x: number, _c2y: number, x: number, y: number): void {
+    this.ops.push({ op: "bezierCurveTo", x, y, cx, cy });
+  }
 }
 (globalThis as unknown as { Path2D: unknown }).Path2D = FakePath2D;
 
@@ -812,7 +815,7 @@ describe("adaptive slack strings", () => {
       drawWorld(normal.ctx, cam, world, new ViewSettings(), [], null, new Map(), 800, 600);
       drawWorld(repeated.ctx, cam, world, new ViewSettings(), [], null, new Map(), 800, 600);
       expect(snapshot(world)).toBe(before); expect(repeated.ops).toEqual(normal.ops);
-      const curves = normal.ops.filter(op => op.op === "quadraticCurveTo" && op.style === "rgb(140,125,100)");
+      const curves = normal.ops.filter(op => op.op === "bezierCurveTo" && op.style === "rgb(140,125,100)");
       expect(curves).toHaveLength(kind === "pulley" ? 2 : 1);
       // With these fixed horizontal/angled endpoints, increased excess moves
       // the control further from the taut segment. No solver quantity changes.
@@ -824,7 +827,7 @@ describe("adaptive slack strings", () => {
   it.each(kinds)("leaves a taut %s straight", kind => {
     const { world } = scene(kind, 0), recorder = recCtx();
     drawWorld(recorder.ctx, new Camera(800, 600), world, new ViewSettings(), [], null, new Map(), 800, 600);
-    expect(recorder.ops.some(op => op.op === "quadraticCurveTo")).toBe(false);
+    expect(recorder.ops.some(op => op.op === "quadraticCurveTo" || op.op === "bezierCurveTo")).toBe(false);
   });
 
   it.each([false, true])("draws a released slack pulley as one string (performance=%s)", performance => {
@@ -838,7 +841,7 @@ describe("adaptive slack strings", () => {
     const recorder = recCtx(), before = snapshot(world);
     drawWorld(recorder.ctx, new Camera(800, 600), world, new ViewSettings(), [], null,
       new Map(), 800, 600, 1, performance);
-    expect(recorder.ops.filter(op => op.op === "quadraticCurveTo")).toHaveLength(performance ? 0 : 1);
+    expect(recorder.ops.filter(op => op.op === "bezierCurveTo")).toHaveLength(performance ? 0 : 1);
     expect(snapshot(world)).toBe(before);
   });
 
@@ -848,7 +851,7 @@ describe("adaptive slack strings", () => {
       const recorder = recCtx();
       drawWorld(recorder.ctx, new Camera(800, 600), world, new ViewSettings(), [], null,
         new Map(), 800, 600, 1, true, level === 3);
-      expect(recorder.ops.some(op => op.op === "quadraticCurveTo")).toBe(false);
+      expect(recorder.ops.some(op => op.op === "quadraticCurveTo" || op.op === "bezierCurveTo")).toBe(false);
       expect(recorder.ops.some(op => op.op === "lineTo" && op.style === "rgb(140,125,100)")).toBe(true);
     }
   });
@@ -858,8 +861,8 @@ describe("adaptive slack strings", () => {
     world.links.push(new DistanceLink(a, b, 2.2, true));
     const cam = new Camera(400, 300); cam.zoom = 100; const recorder = recCtx();
     drawWorld(recorder.ctx, cam, world, new ViewSettings(), [], null, new Map(), 400, 300);
-    const q = recorder.ops.find(op => op.op === "quadraticCurveTo" && op.style === "rgb(140,125,100)")!;
-    expect(q).toBeDefined(); expect((-20 + 2 * q.cy! - 20) / 4).toBeGreaterThan(0);
+    const q = recorder.ops.find(op => op.op === "bezierCurveTo" && op.style === "rgb(140,125,100)")!;
+    expect(q).toBeDefined(); expect(-20 + 0.75 * (q.cy! + 20)).toBeGreaterThan(0);
   });
 
   it.each([false, true])("retains the wrapped wheel arc at the viewport edge (simplify=%s)", simplify => {

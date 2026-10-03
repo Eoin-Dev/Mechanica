@@ -651,7 +651,7 @@ describe("visible slack-string picking", () => {
       const a = new Body(new Vec2(-1, 0)), b = new Body(new Vec2(1, 0));
       const link = elastic ? new SpringLink(a, b, 3, 20, 0, true) : new DistanceLink(a, b, 3, true);
       app.world.bodies.push(a, b); app.world.links.push(link);
-      const mid = app.camera.toScreen(new Vec2(0, -48 / app.camera.zoom));
+      const mid = app.camera.toScreen(new Vec2(0, -108 / app.camera.zoom));
       expect(app.controller.pick(mid)).toBe(performance ? null : link);
       const straight = app.camera.toScreen(new Vec2());
       expect(app.controller.pick(straight)).toBe(performance ? link : null);

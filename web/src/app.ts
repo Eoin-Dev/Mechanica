@@ -68,6 +68,7 @@ export interface Settings {
   inspector_w?: number;
   dock_h?: number;
   tour_done?: boolean;
+  scene_load_hint_seen?: boolean;
   theme?: ThemeName;
   studio_mode?: boolean;       // layered workspace styling over the base theme
   dyslexic_font?: boolean;
@@ -84,7 +85,7 @@ export interface Settings {
  * and a new one cannot be added to `Settings` and forgotten here. */
 const BOOL_SETTINGS = [
   "adaptive_dt", "inspector_visible", "tour_done", "dyslexic_font",
-  "cull", "perf_mode", "drag_hits_walls", "studio_mode",
+  "cull", "perf_mode", "drag_hits_walls", "studio_mode", "scene_load_hint_seen",
 ] as const satisfies ReadonlyArray<keyof Settings>;
 
 /** A "#rrggbb" colour, the only shape the accent settings may hold. Values
@@ -432,10 +433,10 @@ export class App {
     return this.settings.new_scene_gravity ?? 9.8;
   }
 
-  setNewSceneGravity(value: number): void {
+  setNewSceneGravity(value: number, persist = true): void {
     if (!Number.isFinite(value)) return;
     this.settings.new_scene_gravity = Math.min(100, Math.max(0, value));
-    this.saveSettings();
+    if (persist) this.saveSettings();
   }
 
   /** Point a world at the current solver mode. Called on every world the app
@@ -1272,6 +1273,16 @@ export class App {
     this.invalidateEnergy();
   }
 
+  /** Cancel a live numeric transaction, including dependent and grouped values.
+   * Unlike loading a scene, this retains the camera, graphs, trails and history. */
+  rollbackEdit(): void {
+    const before = this.editBefore;
+    this.cancelEdit();
+    if (before === null) return;
+    this.installPlaybackRefinement(snap.restoreSnapshot(before));
+    this.restoreTrailHistory(this.world.time);
+  }
+
   /** Commit one edit boundary. A captured pre-edit state is inserted before
    * the result, so undo remains exact even when physics ran since the last
    * edit. Existing callers that only call pushUndo retain legacy behavior. */
@@ -1435,10 +1446,7 @@ export class App {
       this.cancelEdit();
       throw exc;
     }
-    if (announce) {
-      this.toast(`Loaded '${preset.name}' - Ctrl+Z restores the previous scene; ` +
-                 "press Space to run");
-    }
+    if (announce) this.announceSceneLoad(preset.name);
   }
 
   /** The composition root uses this once at startup. It is deliberately the
@@ -1461,8 +1469,15 @@ export class App {
       this.cancelEdit();
       throw exc;
     }
-    if (announce) {
-      this.toast(`Loaded '${name}' - Ctrl+Z restores the previous scene`);
+    if (announce) this.announceSceneLoad(name);
+  }
+
+  private announceSceneLoad(name: string): void {
+    const hint = this.settings.scene_load_hint_seen ? "" : " — Ctrl+Z restores the previous scene";
+    this.toast(`Loaded '${name}'${hint}`);
+    if (!this.settings.scene_load_hint_seen) {
+      this.settings.scene_load_hint_seen = true;
+      this.saveSettings();
     }
   }
 
@@ -1508,8 +1523,11 @@ export class App {
       const [minX, maxX, minY, maxY] = bounds;
       const w = this.camera.screenW;
       const h = this.camera.screenH;
-      cx = Math.min(Math.max(hx, maxX - (w * 0.5) / zoom), minX + (w * 0.5) / zoom);
-      cy = Math.min(Math.max(hy, maxY - (h * 0.5) / zoom), minY + (h * 0.5) / zoom);
+      // Preserve the full-fit margin when applying an authored action centre.
+      // Otherwise an asymmetric scene can place a particle exactly on the edge.
+      const halfW = w * 0.425 / zoom, halfH = h * 0.425 / zoom;
+      cx = Math.min(Math.max(hx, maxX - halfW), minX + halfW);
+      cy = Math.min(Math.max(hy, maxY - halfH), minY + halfH);
     }
     cam.zoom = zoom;
     cam.centre.set(cx, cy);

@@ -44,6 +44,28 @@ function closure(snapshot: ForceSnapshot): void {
 }
 
 describe("pulley forces against independent mathematical answers", () => {
+  it.each(INTEGRATORS)("retains taut-string tension at a valid guide boundary with %s", integrator => {
+    const world = new World(); world.gravity = 0; world.integrator = integrator;
+    const wheel = new Body(new Vec2(), PULLEY_RADIUS);
+    const a = new Body(new Vec2(-2, 0), 0.16, 1), b = new Body(new Vec2(2, -2), 0.16, 1);
+    a.collides = b.collides = false; a.showForceComponents = b.showForceComponents = true;
+    b.constForce.set(0, -1);
+    const link = new PulleyLink(a, b, wheel); world.bodies.push(wheel, a, b); world.links.push(link);
+    const geometry = link.geometry();
+    expect(geometry.nay).toBeLessThan(0);
+    // A's guide removes the vertical response. Newton's equations plus
+    // zero string-length acceleration determine the common tension directly.
+    const tension = -geometry.nby / (geometry.nax ** 2 + geometry.nbx ** 2 + geometry.nby ** 2);
+    const current = world.currentForceSnapshot(a)!;
+    expect(magnitude(current, "pulley")).toBeCloseTo(tension, 9);
+    expect(current.fx).toBeCloseTo(-tension * geometry.nax, 9);
+    expect(current.fy).toBeCloseTo(0, 9);
+    expect(current.entries.find(entry => entry.kind === "reaction")!.fy).toBeCloseTo(tension * geometry.nay, 9);
+    for (let i = 0; i < 10; i++) world.step(1e-5);
+    expect(link.branchDistance("a")).toBeGreaterThanOrEqual(-1e-12);
+    expect(magnitude(a.forceSnapshot!, "pulley")).toBeCloseTo(tension, 5);
+    expect(magnitude(a.forceSnapshot!, "correction")).toBeLessThan(1e-5);
+  });
   for (const integrator of INTEGRATORS) {
     it.each([1, 2, 10, 100, 10_000])(`${integrator} calculates both tensions at a terminal stop (mass=%s)`, mass => {
       const { world, wheel, a, b, link } = assembly(mass, 1, true);

@@ -227,9 +227,13 @@ function buildEarthMoon(): World {
   const w = spaceWorld(6);
   const earth = addBody(w, 0, 0, { r: 0.6, m: 1000.0, color: [86, 140, 214], name: "Earth" });
   const moon = addBody(w, 4.5, 0, { r: 0.16, m: 12.0, color: [190, 190, 200], name: "Moon" });
-  const v = Math.sqrt((w.G * (earth.mass + moon.mass)) / 4.5);
-  moon.vel.set(0, v);
-  earth.vel.set(0, (-v * moon.mass) / earth.mass); // net momentum zero
+  const totalMass = earth.mass + moon.mass, separation = 4.5;
+  const v = Math.sqrt(w.G * totalMass * separation ** 2 /
+    (separation ** 2 + w.softening ** 2) ** 1.5);
+  // v is the relative speed. Share it around the barycentre without adding
+  // the Earth's recoil to the circular relative speed a second time.
+  moon.vel.set(0, v * earth.mass / totalMass);
+  earth.vel.set(0, -v * moon.mass / totalMass);
   return w;
 }
 
@@ -331,20 +335,25 @@ function buildNewtonsCannon(): World {
 /** Asteroids librating around Jupiter's L4/L5 Lagrange points. */
 function buildTrojans(): World {
   const w = spaceWorld(6);
-  const sun = addBody(w, 0, 0, { r: 0.5, m: 1000.0, locked: true,
+  const sun = addBody(w, 0, 0, { r: 0.5, m: 1000.0,
                                  color: [235, 200, 90], name: "Sun" });
   const a = 3.5;
-  const v = Math.sqrt((w.G * sun.mass) / a);
-  addBody(w, a, 0, { r: 0.22, m: 8.0, vy: v, color: [210, 160, 110], name: "Jupiter" });
+  const jupiter = addBody(w, a, 0, { r: 0.22, m: 8.0, color: [210, 160, 110], name: "Jupiter" });
+  const totalMass = sun.mass + jupiter.mass;
+  const omega = Math.sqrt(w.G * totalMass / (a * a + w.softening ** 2) ** 1.5);
+  sun.pos.x = -a * jupiter.mass / totalMass;
+  jupiter.pos.x = a * sun.mass / totalMass;
+  sun.vel.y = omega * sun.pos.x; jupiter.vel.y = omega * jupiter.pos.x;
   const rng = new Random(5);
   for (let k = 0; k < 12; k++) {
     const base = k < 6 ? Math.PI / 3 : -Math.PI / 3; // L4 leads, L5 trails
-    const th = base + rng.uniform(-0.15, 0.15);
-    const rr = a * (1.0 + rng.uniform(-0.03, 0.03));
+    const th = base + rng.uniform(-0.08, 0.08);
+    const rr = a * (1.0 + rng.uniform(-0.01, 0.01));
     const grey = 160 + rng.randint(0, 60);
-    const b = addBody(w, rr * Math.cos(th), rr * Math.sin(th),
-                      { r: 0.045, m: 0.001,
-                        vx: -v * Math.sin(th), vy: v * Math.cos(th),
+    const x = sun.pos.x + rr * Math.cos(th), y = rr * Math.sin(th);
+    const b = addBody(w, x, y,
+                      { r: 0.045, m: 1e-6,
+                         vx: -omega * y, vy: omega * x,
                         color: [grey, grey, grey] });
     b.collides = false;
     b.name = `Trojan ${k + 1}`;
@@ -720,6 +729,9 @@ function buildDragRace(): World {
   floor.restitution = 0.3;
   floor.friction = 0.6;
   w.walls.push(floor);
+  const bumper = new Wall(floor.b.copy(), floor.b.add(new Vec2(0, 1.4)), 0.12);
+  bumper.restitution = 0; bumper.friction = 0.6;
+  w.walls.push(bumper);
   addBody(w, 0, 0.4, { r: 0.12, m: 1.0, vx: 9.0, vy: 9.0,
                        color: [86, 156, 214], name: "Vacuum" });
   const b = addBody(w, -0.4, 0.4, { r: 0.12, m: 1.0, vx: 9.0, vy: 9.0,
@@ -737,16 +749,8 @@ function buildFrictionRamp(): World {
   solver(w, 8);
   const ang = (-25 * Math.PI) / 180;
   const length = 8.0;
-  const ramp = new Wall(new Vec2(0, 0),
-                        new Vec2(length * Math.cos(ang), length * Math.sin(ang)), 0.12);
-  ramp.friction = 1.0;
-  ramp.restitution = 0.05;
-  w.walls.push(ramp);
-  const runOut = new Wall(new Vec2(length * Math.cos(ang), length * Math.sin(ang)),
-                          new Vec2(length * Math.cos(ang) + 8, length * Math.sin(ang)), 0.12);
-  runOut.friction = 1.0;
-  runOut.restitution = 0.05;
-  w.walls.push(runOut);
+  const tangent = new Vec2(Math.cos(ang), Math.sin(ang));
+  const normal = new Vec2(-Math.sin(ang), Math.cos(ang));
   const rows: Array<[number, Color, string]> = [
     [0.0, [110, 200, 210], "mu = 0 (slides fastest)"],
     [0.25, [120, 190, 120], "mu = 0.25 (slides slower)"],
@@ -754,10 +758,16 @@ function buildFrictionRamp(): World {
   ];
   for (let i = 0; i < rows.length; i++) {
     const [mu, col, label] = rows[i];
-    const n = new Vec2(-Math.sin(ang), Math.cos(ang));
-    const along = 0.6 + i * 1.5;
-    const pos = new Vec2(along * Math.cos(ang), along * Math.sin(ang))
-      .add(n.mul(0.06 + 0.16));
+    const origin = normal.mul((2 - i) * 1.6);
+    const ramp = new Wall(origin.copy(), origin.add(tangent.mul(length)), 0.12);
+    const runOut = new Wall(ramp.b.copy(), ramp.b.add(new Vec2(8, 0)), 0.12);
+    const bumper = new Wall(runOut.b.copy(), runOut.b.add(new Vec2(0, 1)), 0.12);
+    for (const wall of [ramp, runOut, bumper]) {
+      // Matching materials make the geometric-mean contact coefficient μ.
+      wall.friction = mu; wall.restitution = 0; wall.name = `μ = ${mu}`;
+    }
+    w.walls.push(ramp, runOut, bumper);
+    const pos = origin.add(tangent.mul(0.6)).add(normal.mul(0.06 + 0.16));
     const b = addBody(w, pos.x, pos.y, { r: 0.16, m: 1.0, e: 0.05, mu,
                                          color: col, name: label });
     b.noRotation = true;
@@ -796,6 +806,102 @@ function buildInclinePulley(): World {
   hanging.pos = wheel.pos.add(string.guideBOffset).add(new Vec2(0, -1.55));
   string.resetRouting();
   string.length = string.currentLength();
+  return w;
+}
+
+/** Vertical tangent legs isolate the textbook connected-particle model. */
+function buildAtwood(swinging = false): World {
+  const w = solver(new World(), 8, 12);
+  w.gravity = 9.8;
+  const wheel = addBody(w, 0, 2.0);
+  // Give B enough unobstructed travel to reach the floor before A reaches
+  // the wheel. The lighter load still has clearance for its post-catch coast.
+  const a = addBody(w, -PULLEY_RADIUS, swinging ? 0.4 : -1.8, {
+    r: PULLEY_PARTICLE_RADIUS, m: swinging ? 1 : 2, e: 0, mu: 0,
+    color: [86, 156, 214], name: swinging ? "Swinging load" : "A · 2 kg",
+  });
+  const b = addBody(w, PULLEY_RADIUS, swinging ? 0.1 : 0.4, {
+    r: PULLEY_PARTICLE_RADIUS, m: swinging ? 1 : 3, e: 0, mu: 0,
+    color: [220, 130, 90], name: swinging ? "Counterweight" : "B · 3 kg",
+  });
+  if (swinging) a.pos.set(-1.45, 0.4);
+  a.showForceComponents = b.showForceComponents = !swinging;
+  w.links.push(new PulleyLink(a, b, wheel));
+  const floor = new Wall(new Vec2(-3, -2.4), new Vec2(3, -2.4), 0.12);
+  floor.friction = floor.restitution = 0;
+  w.walls.push(floor);
+  return w;
+}
+
+/** The horizontal string is exactly tangent to the table-mounted wheel. */
+function buildTablePulley(): World {
+  const w = solver(new World(), 8, 12);
+  w.gravity = 9.8;
+  const table = new Wall(new Vec2(-3.5, 0), new Vec2(0.5, 0), 0.12);
+  table.friction = 0.2;
+  table.restitution = 0;
+  const floor = new Wall(new Vec2(-3.5, -2.4), new Vec2(2.0, -2.4), 0.12);
+  floor.friction = floor.restitution = 0;
+  w.walls.push(table, floor);
+  const wheel = addBody(w, table.b.x, table.b.y);
+  const a = addBody(w, -2, 0.22, { m: 2, e: 0, mu: 0.2,
+    color: [86, 156, 214], name: "A · 2 kg on table" });
+  const b = addBody(w, 1, -0.7, { m: 1, e: 0, mu: 0.2,
+    color: [220, 130, 90], name: "B · 1 kg hanging" });
+  const string = new PulleyLink(a, b, wheel);
+  w.links.push(string);
+  w.mountPulley(string, table, 1);
+  a.pos = wheel.pos.add(string.guideAOffset).add(new Vec2(-2.5, 0));
+  b.pos = wheel.pos.add(string.guideBOffset).add(new Vec2(0, -1.15));
+  string.resetRouting();
+  string.length = string.currentLength();
+  a.showForceComponents = b.showForceComponents = true;
+  return w;
+}
+
+/** Standalone light rod: hidden coordinates carry small symmetric masses;
+ * visible attached loads determine the demonstrated moments and inertia. */
+function buildLoadedRod(kind: "balance" | "pendulum" | "rotor"): World {
+  const w = solver(new World(), 8, 12);
+  w.gravity = 9.8;
+  if (kind === "rotor") w.gravity = 0;
+  const length = kind === "pendulum" ? 3 : 4;
+  const pivotT = kind === "pendulum" ? 0.15 : 0.5;
+  const theta = kind === "pendulum" ? Math.PI / 4 : Math.PI / 2;
+  const dx = Math.sin(theta), dy = kind === "pendulum" ? -Math.cos(theta) : 0;
+  const ax = -pivotT * length * dx, ay = -pivotT * length * dy || 0;
+  const a = addBody(w, ax, ay, { r: 0.04, m: 1e-3, color: PIVOT_GREY, name: "Rod endpoint" });
+  const b = addBody(w, ax + length * dx, ay + length * dy,
+    { r: 0.04, m: 1e-3, color: PIVOT_GREY, name: "Rod endpoint" });
+  a.isRodEndpoint = b.isRodEndpoint = true;
+  a.collides = b.collides = false;
+  a.noRotation = b.noRotation = true;
+  const rod = new DistanceLink(a, b, length);
+  w.links.push(rod);
+  const pivot = addBody(w, 0, 0, { r: 0.07, anchor: true });
+  pivot.isPivot = true;
+  pivot.collides = false;
+  pivot.rodAttachmentId = rod.id;
+  pivot.rodAttachmentT = pivotT;
+  const loads: readonly [number, number, string][] = kind === "balance"
+    ? [[0.25, 2, "2 kg · 1 m left"], [1, 1, "1 kg · 2 m right"]]
+    : kind === "pendulum"
+      ? [[0.55, 1, "1 kg inner load"], [1, 2, "2 kg outer load"]]
+      : [[0.125, 1, "Left load"], [0.875, 1, "Right load"]];
+  for (const [t, mass, name] of loads) {
+    const load = addBody(w, ax + t * length * dx, ay + t * length * dy,
+      { m: mass, color: t < 0.6 ? [86, 156, 214] : [220, 130, 90], name });
+    load.collides = false;
+    load.noRotation = true;
+    load.rodAttachmentId = rod.id;
+    load.rodAttachmentT = t;
+    load.showForceComponents = kind === "balance";
+  }
+  if (kind === "rotor") {
+    for (const body of w.bodies) {
+      if (!body.locked) body.vel.set(-body.pos.y || 0, body.pos.x || 0);
+    }
+  }
   return w;
 }
 
@@ -907,6 +1013,9 @@ function buildProjectileAngles(): World {
   floor.restitution = 0.05;
   floor.friction = 0.8;
   w.walls.push(floor);
+  const bumper = new Wall(floor.b.copy(), floor.b.add(new Vec2(0, 1.4)), 0.12);
+  bumper.restitution = 0; bumper.friction = 0.8;
+  w.walls.push(bumper);
   const v0 = 10.0;
   const shots: Array<[number, Color]> = [
     [30, [110, 200, 210]], [45, [120, 190, 120]],
@@ -1323,10 +1432,14 @@ function buildJellySmash(): World {
   solver(w, 8);
   // floor sits below the swing arc's lowest point (y = 0.344 minus the
   // ball radius), so the ball reaches the jelly before touching ground
-  const floor = new Wall(new Vec2(-5.0, -0.5), new Vec2(5.0, -0.5), 0.14);
+  const floor = new Wall(new Vec2(-7.0, -0.5), new Vec2(7.0, -0.5), 0.14);
   floor.friction = 0.7;
   floor.restitution = 0.1;
   w.walls.push(floor);
+  for (const x of [-7, 7]) {
+    const side = new Wall(new Vec2(x, -0.5), new Vec2(x, 3.5), 0.14);
+    side.friction = 0.7; side.restitution = 0.1; w.walls.push(side);
+  }
   softGrid(w, -1.6, -0.34, 8, 6, 0.24, 3.5, 1100.0, 3.2, [170, 140, 230]);
   const pivot = addBody(w, -3.2, 3.6, { r: 0.06, m: 1.0, anchor: true });
   const ball = addBody(w, -5.6, 1.4, { r: 0.4, m: 18.0, e: 0.2, mu: 0.4,
@@ -1451,9 +1564,9 @@ export const PRESETS: Preset[] = [
     buildButterflyOrbit, { zoom: 220, trails: true }),
   new Preset("Pythagorean three-body", "Three-Body Problem",
     "Burrau's 1913 problem: masses 3, 4 and 5 dropped at rest from a " +
-    "3-4-5 triangle. They swing through wild close encounters until " +
-    "two bind into a binary and eject the third - the fate of almost " +
-    "every three-body system.",
+    "3-4-5 triangle. They swing through wild close encounters; " +
+    "two can bind into a binary and eject the third. This softened simulation " +
+    "illustrates close encounters; its long-term outcome is not enforced.",
     buildPythagorean, { zoom: 70, centre: [-0.5, 1.0], trails: true }),
 
   new Preset("Simple pendulum", "Pendulums",
@@ -1466,8 +1579,8 @@ export const PRESETS: Preset[] = [
     buildDoublePendulum, { zoom: 130, trails: true }),
   new Preset("Triple pendulum", "Pendulums",
     "Three rigid links - even wilder than the double pendulum. Watch " +
-    "the energy graph stay flat while the tip whips around.",
-    buildTriplePendulum, { zoom: 110, trails: true }),
+    "the energy graph remain nearly constant while the tip whips around.",
+    buildTriplePendulum, { zoom: 110, trails: true, graph: "energy" }),
   new Preset("Swinging rope", "Pendulums",
     "Twenty-four elastic string segments approximate a flexible rope: " +
     "taut ones stretch a hair and pull, slack ones carry nothing, " +
@@ -1481,6 +1594,49 @@ export const PRESETS: Preset[] = [
     "Two pendulums joined by a weak spring trade energy back and " +
     "forth - the swinging slowly migrates from one to the other.",
     buildCoupledPendulums, { zoom: 130 }),
+
+  new Preset("Atwood machine", "Rods & Pulleys",
+    "A (2 kg) and B (3 kg) hang on a light inextensible string over a smooth " +
+    "fixed pulley. Before a load reaches a stop, B accelerates downwards at " +
+    "1.96 m/s² and the tension is 23.52 N, using g = 9.8 m/s². " +
+    "Force diagrams are on; the lower platform catches the descending load.",
+    () => buildAtwood(), { zoom: 120, centre: [0, 0.15], trails: false },
+    ["Connected particles", "Pulleys", "Newton's laws"]),
+  new Preset("Rough table and pulley", "Rods & Pulleys",
+    "A (2 kg) slides on a rough horizontal table, pulled by B (1 kg). " +
+    "With μ = 0.2 and g = 9.8 m/s², the initial acceleration is 1.96 m/s², " +
+    "tension 7.84 N, reaction 19.6 N and friction 3.92 N. " +
+    "The particles cannot rotate; these values apply before either reaches a stop.",
+    buildTablePulley, { zoom: 120, centre: [-0.7, -0.7], trails: false },
+    ["Connected particles", "Friction", "Pulleys"]),
+  new Preset("Balanced beam", "Rods & Pulleys",
+    "A light 4 m rod is supported at its centre. A 2 kg load sits 1 m to " +
+    "the left and a 1 kg load 2 m to the right: their moments balance. " +
+    "Move a load or change its mass to explore equilibrium and the centre of mass. " +
+    "The rod is modelled as massless; its weight belongs to the attached loads.",
+    () => buildLoadedRod("balance"), { zoom: 145, trails: false },
+    ["Moments", "Equilibrium", "Centres of mass"]),
+  new Preset("Loaded rod pendulum", "Rods & Pulleys",
+    "A light pivoted rod carries a 1 kg inner load and a 2 kg outer load. " +
+    "Released at 45° from the downward vertical, it swings as a rigid assembly. " +
+    "Explore how moving a load changes its rotational inertia and period. " +
+    "This is a rod with point masses, rather than a uniform solid rod.",
+    () => buildLoadedRod("pendulum"), { zoom: 125, centre: [0, -0.8], trails: true },
+    ["Pivots", "Pendulums", "Circular motion"]),
+  new Preset("Rod rotor", "Rods & Pulleys",
+    "Two equal loads rotate around a central fixed pivot in zero gravity. " +
+    "The light rod begins at 1 rad/s; its rigid attachments carry the loads " +
+    "around together. Enable their force diagrams to inspect the inward " +
+    "centripetal forces, or move the loads to explore rotational inertia.",
+    () => buildLoadedRod("rotor"), { zoom: 140, trails: true },
+    ["Pivots", "Circular motion", "Centripetal force"]),
+  new Preset("Swinging Atwood machine", "Rods & Pulleys",
+    "Equal 1 kg loads share a light inextensible string over a smooth pulley. " +
+    "The blue load starts to the side, so sideways motion and vertical " +
+    "counterweight motion interact. Follow the trails to explore this " +
+    "coupled system beyond the straight-line exam model.",
+    () => buildAtwood(true), { zoom: 110, centre: [0, 0], trails: true },
+    ["Pulleys", "Coupled motion", "Beyond the specification"]),
 
   new Preset("Mass on a spring", "Oscillators",
     "Simple harmonic motion: period 2*pi*sqrt(m/k) = 1.26 s here. Open " +
@@ -1560,9 +1716,11 @@ export const PRESETS: Preset[] = [
     "steepens the descent.",
     buildDragRace, { zoom: 42, trails: true, vectors: true }, ["Projectiles", "Air resistance"]),
   new Preset("Friction ramp", "Projectiles & Friction",
-    "Three non-rotating balls spread along a 25 degree ramp. The " +
+    "Three non-rotating balls on separate parallel 25 degree ramps. With contact " +
+    "coefficients μ = 0, 0.25 and 0.8, the " +
     "frictionless ball slides fastest, moderate friction slows the next, " +
-    "and high static friction holds the last in place.",
+    "and high static friction holds the last in place. Separate tracks keep " +
+    "collisions from changing the comparison; run-outs catch the sliding balls.",
     buildFrictionRamp, { zoom: 70 }, ["Friction", "Inclined planes"]),
   new Preset("Pulley on an incline", "Projectiles & Friction",
     "Two particles share one light inextensible string over a smooth fixed " +
@@ -1645,9 +1803,9 @@ export const PRESETS: Preset[] = [
     buildOrbitDance, { zoom: 55, trails: true }),
   new Preset("Sinai billiard", "Chaos",
     "Two balls launched a hair apart in a box with a circular " +
-    "scatterer. Every bounce off the curved wall stretches their " +
-    "separation - exponential divergence, while energy stays exactly " +
-    "flat. The founding example of provable chaos.",
+    "scatterer. Nearby trajectories can diverge after repeated impacts, " +
+    "while elastic contacts preserve kinetic energy. The ideal Sinai " +
+    "billiard is a classic example of chaotic motion.",
     buildSinaiBilliard, { zoom: 125, trails: true, graph: "energy" }),
   new Preset("Cyclone", "Chaos",
     "Sixty particles caught in a storm written entirely as two force-field " +

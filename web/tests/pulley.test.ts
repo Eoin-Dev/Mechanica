@@ -121,13 +121,13 @@ describe("ideal pulley constraint", () => {
       expect(world.energy().ke).toBeLessThanOrEqual(initial * 1.000001);
     });
 
-  it.each([false, true])("allows a slack particle past an empty guide, clear of the wheel (performance=%s)",
+  it.each([false, true])("stops a slack particle at its assigned guide and allows retreat (performance=%s)",
     (performance) => {
       const { world, a, b, wheel, string } = assembly(1, 1);
       world.gravity = 0;
       world.performance = performance;
       world.performanceLevel = 3;
-      string.length = 100; // isolate free flight from tension
+      string.length = 100; // isolate the guide stop from tension
       a.pos.set(-2, wheel.pos.y - 0.5);
       a.vel.set(0, 180); // misses the wheel and crosses the A-side reference ray
       b.vel.set(0, 0);
@@ -135,11 +135,15 @@ describe("ideal pulley constraint", () => {
 
       world.step(1 / 60);
 
-      expect(a.pos.y).toBeCloseTo(wheel.pos.y + 2.5, 12);
-      expect(a.vel.y).toBe(180);
+      expect(a.pos.y).toBeCloseTo(wheel.pos.y, 12);
+      expect(a.vel.y).toBeLessThanOrEqual(1e-9);
       expect(a.pos.distTo(wheel.pos)).toBeGreaterThan(wheel.radius + a.radius);
       expect(b.vel.length()).toBeLessThan(1e-9);
-      expect(world.energy().ke).toBe(initial);
+      expect(world.energy().ke).toBeLessThanOrEqual(initial);
+      a.vel.set(0, -1);
+      world.step(1 / 60);
+      expect(a.pos.y).toBeCloseTo(wheel.pos.y - 1 / 60, 12);
+      expect(a.vel.y).toBeCloseTo(-1, 12);
     });
 
   it.each([

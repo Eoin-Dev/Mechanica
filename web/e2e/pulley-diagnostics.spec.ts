@@ -164,7 +164,7 @@ test("a legacy vanishing-wrap pulley stays continuous through stepping, rewind a
 });
 
 
-test("a slack particle crosses the guide freely with current forces and rewind", async ({ page }, testInfo) => {
+test("a slack particle stops at its guide with current forces and coherent rewind", async ({ page }, testInfo) => {
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
   await page.addInitScript(() => localStorage.setItem("mechanica.settings",
     JSON.stringify({ tour_done: true, theme: "dark" })));
@@ -214,15 +214,15 @@ test("a slack particle crosses the guide freely with current forces and rewind",
   await expect(clock).toHaveValue("0.00"); await canvas.focus();
   for (let i = 0; i < 12; i++) await page.keyboard.press(".");
   await expect(clock).toHaveValue("0.20");
-  await expect(y).toHaveValue("0.040"); await expect(vy).toHaveValue("0.300");
-  await expect(sources).not.toContainText(/reaction|correction/i);
+  await expect(y).toHaveValue("0.000"); await expect(vy).toHaveValue("0.000");
+  await expect(sources).toContainText("reaction"); await expect(sources).not.toContainText(/correction/i);
   await canvas.focus(); await page.keyboard.press(",");
-  await expect(clock).toHaveValue("0.18"); await expect(vy).toHaveValue("0.292");
+  await expect(clock).toHaveValue("0.18"); await expect(vy).toHaveValue("0.000");
   await page.keyboard.press(".");
-  await expect(y).toHaveValue("0.040"); await expect(vy).toHaveValue("0.300");
-  await expect(sources.getByRole("listitem")).toHaveCount(2);
+  await expect(y).toHaveValue("0.000"); await expect(vy).toHaveValue("0.000");
+  await expect(sources.getByRole("listitem")).toHaveCount(3);
   expect((await new AxeBuilder({ page }).include("#inspector")
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"]).analyze()).violations).toEqual([]);
-  await page.screenshot({ path: testInfo.outputPath("pulley-free-guide-motion.png") });
+  await page.screenshot({ path: testInfo.outputPath("pulley-guide-stop.png") });
   expect(errors).toEqual([]);
 });

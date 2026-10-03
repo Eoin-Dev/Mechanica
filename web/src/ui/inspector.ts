@@ -16,9 +16,10 @@ import { analysisNumber } from "../render/analysis-overlays";
 import { isMathRenderable } from "../core/mathfmt";
 import { INSPECTOR_W_MAX, INSPECTOR_W_MIN, PHONE_QUERY, RefreshGroup, button,
          checkbox, colourEdit, countNoun, el, fmt3dp, fmt3g, halfRow, isPhone, isTouch,
-         numEdit, onMediaChange, pluralNoun, refreshTabs, section, segmented,
+         tunableNumEdit as numEdit, onMediaChange, pluralNoun, refreshTabs, section, segmented,
          slider, splitterDrag, textEdit, wireTabs } from "./dom";
 import { ICONS } from "./icons";
+import { NUMERIC_EDIT_EVENT, type NumericEditPhase } from "./numeric-scrub";
 import { mathEdit } from "./mathedit";
 import { overlayToggles } from "./panels";
 
@@ -163,6 +164,12 @@ export class Inspector implements Panel {
     root.addEventListener("input", beginControlEdit, true);
     root.addEventListener("change", beginControlEdit, true);
     root.addEventListener("blur", beginControlEdit, true);
+    root.addEventListener(NUMERIC_EDIT_EVENT, event => {
+      const phase = (event as CustomEvent<NumericEditPhase>).detail;
+      if (this.tab === "View") { app.invalidateCanvas(); return; }
+      if (phase === "cancel") app.rollbackEdit();
+      else app.beginEdit();
+    });
     root.addEventListener("click", (event) => {
       if (this.tab === "View") return;
       const target = event.target instanceof Element ? event.target : null;
@@ -653,10 +660,7 @@ export class Inspector implements Panel {
     // The disclosure may remain visible after its note scrolls away. Observe
     // their combined box so visible scientific values never stop refreshing.
     const notation = el("div", { class: "force-notation", role: "group", "aria-label": "Force notation" });
-    for (const [symbol, name] of [["W", "Weight"], ["T", "Tension"], ["P", "Thrust"], ["R", "Reaction"], ["F", "Friction"],
-      ["f", "Applied force"], ["C", "Numerical correction"]]) {
-      notation.append(el("abbr", { text: symbol, title: name, "aria-label": name, tabindex: "0" }));
-    }
+    let notationKey = "";
     const forceReadout = el("div", { class: "force-readout" }, forceNote, notation, readout);
     this.add({ root: forceReadout, refresh: () => {
       forceNote.hidden = !b.showForceComponents || app.perfMode;
@@ -671,10 +675,21 @@ export class Inspector implements Panel {
         ledger.mode === "resting" ? "Resting forces: weight and support balance." :
           "Current forces.";
       if (forceNote.textContent !== text) forceNote.textContent = text;
+      const present = ledger.entries.filter(entry => Number.isFinite(entry.fx) && Number.isFinite(entry.fy) &&
+        (Math.abs(entry.fx) + Math.abs(entry.fy) > 1e-10 ||
+          Number.isFinite(entry.axialForce) && (entry.axialForce ?? 0) > 1e-10));
+      const symbols = forceSymbols(present);
+      const nextNotationKey = JSON.stringify(present.map(entry => [entry.id, symbols.get(entry.id), entry.label]));
+      if (notationKey !== nextNotationKey) {
+        notation.replaceChildren(...present.map(entry => el("abbr", {
+          text: symbols.get(entry.id)!, title: entry.label, "aria-label": entry.label, tabindex: "0",
+        })));
+        notationKey = nextNotationKey;
+      }
+      notation.hidden = present.length === 0;
       if (!readout.open) return;
-      const entries = [...ledger.entries, { id: "resultant", label: "Resultant",
+      const entries = [...present, { id: "resultant", label: "Resultant",
         fx: ledger.resultant.fx, fy: ledger.resultant.fy }];
-      const symbols = forceSymbols(ledger.entries);
       const key = entries.map(entry => entry.id).join(",");
       for (const entry of entries) {
         let row = rows.get(entry.id);
@@ -689,6 +704,9 @@ export class Inspector implements Panel {
         const name = symbol === undefined ? entry.label : `${symbol}: ${entry.label}`;
         if (row.name.textContent !== name) row.name.textContent = name;
         const text = [`Fx ${analysisNumber(entry.fx)} N`, `Fy ${analysisNumber(entry.fy)} N`];
+        if ("axialForce" in entry && entry.axialForce !== undefined) {
+          text.push(`Tension ${analysisNumber(entry.axialForce)} N`);
+        }
         if (ledger.basis !== null && ("kind" in entry && (entry.kind === "weight" || entry.kind === "gravity"))) {
           const resolved = projectForce(entry, ledger.basis);
           text.push(`∥ ${analysisNumber(resolved.parallel)} N`, `⊥ ${analysisNumber(resolved.normal)} N`);
@@ -895,6 +913,7 @@ export class Inspector implements Panel {
       const control = slider(label, () => objects[0][property],
         value => objects.forEach(item => { item[property] = value; }), 0, maximum,
         { fmt: value => value.toFixed(2), onCommit: this.commit,
+          scrub: { sensitivity: property === "friction" ? 0.01 : 0.005, step: 0.01 },
           log: property === "friction", logFloor: 0.01 });
       control.root.classList.add("material-control");
       const caption = control.root.querySelector<HTMLElement>(".lbl")!;
