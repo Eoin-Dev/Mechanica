@@ -4,8 +4,8 @@
 import { describe, expect, it } from "vitest";
 import { App } from "../src/app";
 import { Vec2 } from "../src/core/vec";
-import { Body } from "../src/engine/body";
-import { DistanceLink } from "../src/engine/links";
+import { Body, PULLEY_RADIUS } from "../src/engine/body";
+import { DistanceLink, PulleyLink } from "../src/engine/links";
 import { VEL_ARROW_SCALE } from "../src/render/draw";
 import { TimeSeries } from "../src/ui/plots";
 
@@ -547,5 +547,98 @@ describe("a gesture whose target is deleted stops driving it", () => {
     expect(body.vel.x).toBeCloseTo(velBefore.x, 9);
     expect(body.vel.y).toBeCloseTo(velBefore.y, 9);
     send(canvas, "pointerup", sx + 120, sy, 2);
+  });
+});
+
+
+describe("pulley particle drag limits", () => {
+  function setup(playing: boolean, slack: number) {
+    const { app, canvas } = makeApp(); app.newScene(); app.world.gravity = 0;
+    const wheel = new Body(new Vec2(0, 1)), a = new Body(new Vec2(-PULLEY_RADIUS, -0.25)),
+      b = new Body(new Vec2(PULLEY_RADIUS, -0.25));
+    const string = new PulleyLink(a, b, wheel); string.length += slack;
+    app.world.bodies.push(wheel, a, b); app.world.links.push(string);
+    app.playing = playing; app.setDragHitsWalls(false); app.controller.setTool("select");
+    const pointer = (type: string, target: Vec2) => {
+      const [x, y] = app.camera.toScreen(target); send(canvas, type, x, y);
+    };
+    pointer("pointerdown", a.pos.copy());
+    return { app, canvas, a, b, wheel, string, pointer };
+  }
+
+  it.each([false, true])("consumes only available slack and stops at the string limit (playing=%s)", playing => {
+    const { app, a, b, string, pointer } = setup(playing, 0.4);
+    const target = a.pos.add(new Vec2(0, -2));
+    const terminalY = 1 - Math.sqrt((PULLEY_RADIUS + b.radius) ** 2 - PULLEY_RADIUS ** 2);
+    const lowerY = -0.65 - (terminalY + 0.25);
+    pointer("pointermove", target); app.controller.updateDrag();
+    expect(a.pos.x).toBe(-PULLEY_RADIUS);
+    expect(a.pos.y).toBeCloseTo(lowerY, 8);
+    expect(string.currentLength()).toBeLessThanOrEqual(string.length + 1e-8);
+    expect(b.pos.y).toBeCloseTo(terminalY, 8);
+    pointer("pointermove", target.add(new Vec2(0, -1))); app.controller.updateDrag();
+    expect(a.pos.y).toBeCloseTo(lowerY, 8); expect(a.vel.length()).toBeLessThan(1e-7);
+    pointer("pointermove", new Vec2(-PULLEY_RADIUS, -0.4)); app.controller.updateDrag();
+    expect(a.pos.y).toBeCloseTo(-0.4, 9);
+    pointer("pointerup", a.pos.copy());
+    expect(a.held).toBe(false); expect(a.vel.length()).toBe(0);
+  });
+
+  it.each([false, true])("stops at the first wheel-frame contact instead of crossing it (playing=%s)", playing => {
+    const { app, a, wheel, pointer } = setup(playing, 10);
+    const target = new Vec2(-PULLEY_RADIUS, wheel.pos.y + 2);
+    pointer("pointermove", target); app.controller.updateDrag();
+    const expected = wheel.pos.y - Math.sqrt((PULLEY_RADIUS + a.radius) ** 2 - PULLEY_RADIUS ** 2);
+    expect(a.pos.y).toBeCloseTo(expected, 9);
+    expect(a.pos.distTo(wheel.pos)).toBeCloseTo(PULLEY_RADIUS + a.radius, 9);
+    pointer("pointermove", target); app.controller.updateDrag();
+    expect(a.pos.y).toBeCloseTo(expected, 9);
+    expect(a.vel.length()).toBeLessThan(1e-7);
+  });
+});
+
+
+describe("pulley drag transaction and mode boundaries", () => {
+  it.each([null, 0, 1, 2, 3])("keeps the reach limit in actual Performance tier %s", tier => {
+    const { app, canvas } = makeApp(); app.newScene(); app.world.gravity = 0;
+    const wheel = new Body(new Vec2(0, 1)), a = new Body(new Vec2(-PULLEY_RADIUS, -0.25)),
+      b = new Body(new Vec2(PULLEY_RADIUS, -0.25)), link = new PulleyLink(a, b, wheel);
+    link.length += 0.4; app.world.bodies.push(wheel, a, b); app.world.links.push(link);
+    app.setPerfMode(tier !== null); if (tier !== null) app.performanceLevel = tier;
+    expect(app.perfMode).toBe(tier !== null); expect(app.performanceLevel).toBe(tier ?? 0);
+    app.playing = true; app.setDragHitsWalls(false);
+    send(canvas, "pointerdown", ...app.camera.toScreen(a.pos));
+    send(canvas, "pointermove", ...app.camera.toScreen(a.pos.add(new Vec2(0, -2))));
+    app.controller.updateDrag();
+    expect(link.currentLength()).toBeLessThanOrEqual(link.length + 2e-9);
+    const stop = -0.65 - (1.25 - Math.sqrt((PULLEY_RADIUS + b.radius) ** 2 - PULLEY_RADIUS ** 2));
+    const iterations = tier === null ? 40 : 24 - 2 * tier;
+    expect(a.pos.y).toBeGreaterThanOrEqual(stop - 1e-9);
+    expect(a.pos.y - stop).toBeLessThan(2 / 2 ** iterations + 2e-9);
+    send(canvas, "pointerup", ...app.camera.toScreen(a.pos));
+    expect(a.held).toBe(false); expect(b.speedCap).toBe(Infinity);
+  });
+
+  it.each(["pointerup", "pointercancel", "lostpointercapture"])("restores both positions through undo after %s", ending => {
+    const { app, canvas } = makeApp(); app.newScene(); app.world.gravity = 0;
+    const wheel = new Body(new Vec2(0, 1)), a = new Body(new Vec2(-PULLEY_RADIUS, -0.25)),
+      b = new Body(new Vec2(PULLEY_RADIUS, -0.25)), link = new PulleyLink(a, b, wheel);
+    app.world.bodies.push(wheel, a, b); app.world.links.push(link); app.setDragHitsWalls(false);
+    a.vel.set(0.1, 0.2); b.vel.set(-0.3, 0.4);
+    const idA = a.id, idB = b.id, clock = app.world.time;
+    send(canvas, "pointerdown", ...app.camera.toScreen(a.pos));
+    send(canvas, "pointermove", ...app.camera.toScreen(a.pos.add(new Vec2(0, -0.3))));
+    app.controller.updateDrag();
+    expect(a.pos.y).toBeCloseTo(-0.55, 9); expect(b.pos.y).toBeCloseTo(0.05, 9);
+    send(canvas, ending, ...app.camera.toScreen(a.pos));
+    expect(a.held).toBe(false); expect(a.vel).toEqual(new Vec2(0.1, 0.2));
+    expect(b.vel).toEqual(new Vec2(-0.3, 0.4)); expect(app.world.time).toBe(clock);
+    app.undo();
+    const restoredA = app.world.bodies.find(body => body.id === idA)!;
+    const restoredB = app.world.bodies.find(body => body.id === idB)!;
+    expect(restoredA.pos.y).toBe(-0.25); expect(restoredB.pos.y).toBe(-0.25);
+    app.redo();
+    expect(app.world.bodies.find(body => body.id === idA)!.pos.y).toBeCloseTo(-0.55, 9);
+    expect(app.world.bodies.find(body => body.id === idB)!.pos.y).toBeCloseTo(0.05, 9);
   });
 });

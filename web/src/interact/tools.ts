@@ -22,6 +22,7 @@
  * fingers pinch-zoom and pan.
  */
 import { nameTable } from "../core/expr";
+import { pulleyParticleDragPlan } from "./pulley-drag";
 import { Vec2 } from "../core/vec";
 import { sweepClearOfWalls } from "../engine/contacts";
 import { Body, Wall } from "../engine/body";
@@ -319,8 +320,8 @@ export class CanvasController {
   /** Refresh the drag every frame (pointer-move events stop while the
    * cursor is parked, but the simulation keeps running).
    *
-   * Grabbed bodies follow the cursor EXACTLY - the position is never limited.
-   * The solver-facing velocity is measured from the true per-frame distance
+   * Grabbed bodies follow the cursor within wall and pulley reach limits.
+   * The solver-facing velocity is measured from the permitted per-frame distance
    * and time, then reduced by a speed-sensitive response: slow movements stay
    * precise while faster movements are damped progressively more. Rod position
    * corrections use the same scaled pointer interval instead of the solver
@@ -364,6 +365,7 @@ export class CanvasController {
             sweepClearOfWalls(app.world.walls, body.pos, t, body.radius);
           t = new Vec2(cx, cy);
         }
+        if (pulleyLink === null) t = this.planPulleyParticleDrag(body, t, solidPaused);
         if (pulleyLink !== null && pulleyTarget !== null) {
           app.world.movePulleyForEdit(pulleyLink, t, pulleyTarget.mount);
         } else if (this.movePivotForEdit(body, t)) {
@@ -372,6 +374,9 @@ export class CanvasController {
           body.pos.setVec(t);
         }
         body.kinematicCorrectionRate = Infinity;
+        for (const link of app.world.links) {
+          if (link instanceof PulleyLink && (link.a === body || link.b === body)) link.captureSafePositions();
+        }
       }
       return;
     }
@@ -399,7 +404,8 @@ export class CanvasController {
           sweepClearOfWalls(this.app.world.walls, body.pos, t, body.radius);
         t = new Vec2(cx, cy);
       }
-      // Solver-facing hand velocity: exact cursor displacement / elapsed
+      if (pulleyLink === null) t = this.planPulleyParticleDrag(body, t, solid);
+      // Solver-facing hand velocity: permitted displacement / elapsed
       // pointer time, passed through a continuous response curve whose
       // gentling increases with hand speed. The first activation frame
       // contributes no impulse because its displacement includes the
@@ -424,6 +430,11 @@ export class CanvasController {
         app.world.movePulleyForEdit(pulleyLink, t, pulleyTarget.mount);
       } else {
         body.pos.setVec(t);
+      }
+    }
+    for (const link of app.world.links) {
+      if (link instanceof PulleyLink && this.dragItems.some(item => link.a === item.body || link.b === item.body)) {
+        link.captureSafePositions();
       }
     }
     this.applyChaseCaps();
@@ -493,6 +504,15 @@ export class CanvasController {
       }
     }
     return mount;
+  }
+
+  private planPulleyParticleDrag(body: Body, proposed: Vec2, solid: boolean): Vec2 {
+    const app = this.app;
+    const plan = pulleyParticleDragPlan(app.world.links, body, proposed,
+      solid ? app.world.walls : [], app.perfMode ? 24 - 2 * app.performanceLevel : 40);
+    if (plan === null) return proposed;
+    for (const partner of plan.partners) partner.body.pos.setVec(partner.target);
+    return plan.target;
   }
 
   private pulleyLink(body: Body): PulleyLink | null {

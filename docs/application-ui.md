@@ -280,8 +280,8 @@ does not mark a body held or touch its motion. Once active:
 
 - each dragged body retains its cursor-to-centre offset;
 - while paused, position changes only and the original velocity is untouched;
-- while playing, position follows the cursor exactly and `held` makes the body
-  infinite-mass to the solvers;
+- while playing, position follows the permitted cursor target and `held` makes
+  the body infinite-mass to the solvers;
 - the temporary solver-facing velocity is the actual per-frame displacement
   divided by elapsed pointer time and passed through a smooth speed-sensitive
   response. Slow positioning stays close to one fifth of hand speed, while
@@ -300,6 +300,25 @@ does not mark a body held or touch its motion. Once active:
 
 Position dragging is therefore placement, not throwing. Intentional velocity
 changes use right-drag or the velocity handle.
+
+Pulley particles stop at the first wheel-frame contact and at the available
+string reach, including during a paused edit. Extra cursor travel leaves the
+particle at that boundary; moving back makes it follow again. Existing slack
+is consumed first. If more string is needed, a free partner moves inward along
+its current string leg by only that amount, until a wall or the wheel stops it.
+Lifting a particle may create slack and never pushes its partner away. A locked,
+held, anchor, rod-mounted or otherwise distance/pulley-linked partner stays fixed;
+compound assemblies use the conservative shared reach rather than deforming an
+unselected rigid component. The optional wall-drag setting applies to the partner
+too. A legacy wheel overlap may escape outward but cannot deepen. Pre-existing
+string extension may shorten, but the edit cannot add more extension.
+
+The planner reads geometry without advancing time or evaluating a physics step.
+Accepted position edits retain the string's angular route and form one undoable
+transaction for both particles. The running hand velocity comes from permitted
+movement, so a parked cursor beyond the limit supplies no extra hand velocity.
+Normal mode uses 40 boundary-search iterations; Performance tiers use
+24/22/20/18 and keep the conservative permitted side of the boundary.
 
 An ordinary particle dragged slowly within 18 screen pixels of a rod snaps to
 the closest affine point and then slides along the rod. The latch tolerates up
