@@ -317,6 +317,10 @@ export class RewindBuffer {
 
   get length(): number { return this.frames.length; }
   get bytesUsed(): number { return this.bytes; }
+  get earliestTime(): number | null {
+    const first = this.frames[0]?.dyn;
+    return first === undefined || first === null ? null : first[first.length - 2];
+  }
   get isCollisionFrame(): boolean {
     return (this.frames[this.frames.length - 1]?.interval?.collisionKeysAtEnd?.length ?? 0) > 0;
   }

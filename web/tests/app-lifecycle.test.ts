@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, PHYSICS_DT } from "../src/app";
 import { Body, Wall } from "../src/engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
-import { World } from "../src/engine/world";
+import { INTEGRATORS, World } from "../src/engine/world";
 import { forceLedger } from "../src/education/analysis";
+import { TrailHistory } from "../src/render/trail-history";
 import { PRESETS } from "../src/scene/presets";
 import { Vec2 } from "../src/core/vec";
 import { captureGraphData, graphCSV } from "../src/ui/graph-data";
@@ -1519,5 +1520,155 @@ describe("tab presentation ownership", () => {
     expect(app.view.labels).toBe(true); expect(app.world.bodies[0].forceSlopeWallId).toBeNull();
     expect(app.selection).toEqual([app.world.bodies[0]]); expect(app.graphMode).toBe("Off");
     expect(app.controller.tool).toBe("select"); expect(app.boxFilter.walls).toBe(true);
+  });
+});
+
+
+describe("historical motion trails", () => {
+  function flight(integrator: World["integrator"] = "Symplectic Euler") {
+    const app = makeApp(); app.newScene(); app.world.gravity = 0;
+    app.adaptiveDt = false; app.world.integrator = integrator;
+    app.view.trailLen = 100; app.camera.zoom = 100;
+    const body = new Body(new Vec2(0, 1), 0.1, 1);
+    body.collides = false; body.vel.x = 1; app.world.bodies.push(body);
+    app.setTrails(true);
+    return { app, body };
+  }
+  function path(app: App, id: number) {
+    const trail = app.trails.get(id)!;
+    return Array.from({ length: trail.count }, (_, k) =>
+      [trail.x(k), trail.y(k), trail.time(k), trail.firstSerial + k]);
+  }
+  function archive(app: App) {
+    return (app as unknown as { trailHistory: TrailHistory }).trailHistory;
+  }
+  function sweep(app: App) {
+    (app as unknown as { sweepTrails(): void }).sweepTrails();
+  }
+  function forward(app: App, frames: number) {
+    for (let k = 0; k < frames; k++) { app.stepOnce(); sweep(app); }
+  }
+  function back(app: App, frames: number) {
+    for (let k = 0; k < frames; k++) app.stepBack();
+  }
+
+  it.each(INTEGRATORS)(
+    "recovers an overwritten path and its starting point with %s", integrator => {
+    const { app, body } = flight(integrator);
+    const initial = path(app, body.id), original = snapshot(app.world);
+    expect(app.world.effectiveIntegrator).toBe(integrator);
+    forward(app, 15); const earlier = path(app, body.id), time = app.world.time;
+    forward(app, 120); expect(path(app, body.id)).not.toEqual(earlier);
+    expect(path(app, body.id).every(row => row[2] > time)).toBe(true);
+    back(app, 120);
+    expect(app.world.time).toBeCloseTo(time, 12);
+    expect(path(app, body.id)).toEqual(earlier);
+    back(app, 15); expect(app.world.time).toBe(0);
+    expect(path(app, body.id)).toEqual(initial);
+    expect(snapshot(app.world)).toBe(original);
+    expect(app.world.effectiveIntegrator).toBe(integrator);
+  });
+
+  it("discards the old future before a changed trajectory resumes", () => {
+    const { app, body } = flight(); forward(app, 15);
+    const earlier = path(app, body.id); forward(app, 120); back(app, 120);
+    app.world.bodies[0].vel.x = -1; forward(app, 10);
+    const branched = path(app, body.id);
+    expect(branched.slice(0, earlier.length)).toEqual(earlier);
+    expect(branched.slice(earlier.length).every(row => row[0] < earlier.at(-1)![0])).toBe(true);
+    expect(branched.at(-1)![0]).toBeCloseTo(app.world.bodies[0].pos.x, 12);
+    expect(branched.every(row => row[2] <= app.world.time + 1e-12)).toBe(true);
+  });
+
+  it("recovers a path that aged away while its particle was stationary", () => {
+    const { app, body } = flight(); forward(app, 15); const moving = path(app, body.id);
+    app.world.bodies[0].vel.x = 0; forward(app, 120);
+    expect(app.trails.get(body.id)!.count).toBeLessThanOrEqual(1);
+    back(app, 120); expect(path(app, body.id)).toEqual(moving);
+  });
+
+  it("recovers a deleted particle's earlier path without retaining its visible ring", () => {
+    const { app, body } = flight(); forward(app, 15); const previous = path(app, body.id);
+    app.edit(() => app.world.removeBody(app.world.bodies[0])); sweep(app);
+    expect(app.trails.has(body.id)).toBe(false);
+    app.stepBack(); expect(app.world.bodies.some(item => item.id === body.id)).toBe(true);
+    expect(path(app, body.id)).toEqual(previous);
+  });
+
+  it("retains the newest historical subset when Trail length is reduced", () => {
+    const { app, body } = flight(); forward(app, 15); const previous = path(app, body.id);
+    forward(app, 120); app.view.trailLen = 10; back(app, 120);
+    const cutoff = app.world.time - 10 * PHYSICS_DT;
+    expect(path(app, body.id)).toEqual(previous.filter(row => row[2] >= cutoff).slice(-10));
+    expect(app.trails.get(body.id)!.capacity).toBe(10);
+  });
+
+  it("keeps recording idempotent, clears it when disabled, and starts fresh on re-enable", () => {
+    const { app, body } = flight(); forward(app, 15); const previous = path(app, body.id);
+    const count = archive(app).count;
+    app.setTrails(true); expect(archive(app).count).toBe(count);
+    forward(app, 120); back(app, 120); expect(path(app, body.id)).toEqual(previous);
+    app.setTrails(false); expect(archive(app).bytesUsed).toBe(0); expect(app.trails.size).toBe(0);
+    forward(app, 20); app.setTrails(true);
+    expect(path(app, body.id)).toEqual([[app.world.bodies[0].pos.x, 1, app.world.time, 0]]);
+  });
+
+  it.each(["reset", "replace", "undo"] as const)("clears old path storage on %s", route => {
+    const { app, body } = flight(); forward(app, 15);
+    expect(archive(app).count).toBeGreaterThan(0);
+    if (route === "reset") app.resetSim();
+    else if (route === "replace") app.newScene();
+    else { app.edit(() => { app.world.bodies[0].mass = 2; }); app.undo(); }
+    expect(archive(app).bytesUsed).toBe(0); expect(app.trails.has(body.id)).toBe(false);
+    if (app.world.bodies.length) {
+      app.stepOnce(); expect(path(app, body.id).every(row => row[2] >= app.world.time - 2 * PHYSICS_DT)).toBe(true);
+    }
+  });
+
+  it("stays bounded when the archive cannot hold the requested rewind path", () => {
+    const { app, body } = flight();
+    (app as unknown as { trailHistory: TrailHistory }).trailHistory = new TrailHistory(48 * 7);
+    forward(app, 120); expect(archive(app).count).toBe(7);
+    expect(archive(app).bytesUsed).toBe(48 * 7);
+    back(app, 110);
+    const trail = path(app, body.id);
+    // The physical rewind still works; an evicted visual path starts at the
+    // restored position rather than displaying points from its old future.
+    expect(app.world.time).toBeCloseTo(10 / 60, 12);
+    expect(trail.map(row => row.slice(0, 3))).toEqual([[app.world.bodies[0].pos.x, 1, app.world.time]]);
+  });
+
+  it("includes a refined collision point and removes the later rebound", () => {
+    const app = makeApp(); app.newScene(); app.world.gravity = 0; app.adaptiveDt = false;
+    const body = new Body(new Vec2(0, 0.23), 0.2, 1);
+    body.vel.y = -3; body.restitution = 1; body.friction = 0;
+    const floor = new Wall(new Vec2(-3, 0), new Vec2(3, 0), 0.04);
+    floor.restitution = 1; floor.friction = 0;
+    app.world.bodies.push(body); app.world.walls.push(floor); app.setTrails(true);
+    app.stepOnce(); const collision = path(app, body.id), clock = app.world.time;
+    expect(clock).toBeCloseTo(1 / 300, 9);
+    expect(collision.at(-1)![1]).toBeCloseTo(0.22, 9);
+    expect(collision.at(-1)![2]).toBe(clock);
+    forward(app, 70); back(app, 70);
+    expect(path(app, body.id)).toEqual(collision);
+    expect(app.world.time).toBe(clock);
+  });
+
+  it.each(INTEGRATORS)("leaves physical motion unchanged under %s", integrator => {
+    const { app } = flight(integrator), twin = makeApp();
+    twin.replaceWorld(restoreSnapshot(snapshot(app.world))); twin.setTrails(false); twin.adaptiveDt = false;
+    for (let k = 0; k < 70; k++) { app.stepOnce(); twin.stepOnce(); }
+    expect(app.world.effectiveIntegrator).toBe(integrator);
+    expect(snapshot(app.world)).toBe(snapshot(twin.world));
+  });
+
+  it.each([0, 1, 2, 3])("does no archive append or reconstruction in Performance tier %s", level => {
+    const { app } = flight(); forward(app, 10); app.setPerfMode(true);
+    (app as unknown as { setPerformanceLevel(level: number): void }).setPerformanceLevel(level);
+    expect(app.performanceLevel).toBe(level); expect(app.world.performanceLevel).toBe(level);
+    const tape = archive(app), push = vi.spyOn(tape, "push"), restore = vi.spyOn(tape, "restoreTrail");
+    forward(app, 10); back(app, 5);
+    expect(push).not.toHaveBeenCalled(); expect(restore).not.toHaveBeenCalled();
+    expect(tape.bytesUsed).toBe(0); expect(app.trails.size).toBe(0);
   });
 });

@@ -448,7 +448,6 @@ function appendTrail(paths: Path2D[], m: number, bands: number): void {
   }
   const edges = m - 1;
   let band = 0;
-  let boundary = Math.ceil(edges / bands);
   let path = paths[0];
   path.moveTo(SX[0], SY[0]);
   let curX = SX[0];
@@ -480,13 +479,19 @@ function appendTrail(paths: Path2D[], m: number, bands: number): void {
       curX = mx;
       curY = my;
     }
-    if (i >= boundary && band < bands - 1) {
-      // split on the curve: the next band resumes from exactly here
-      band++;
-      boundary = Math.ceil(((band + 1) * edges) / bands);
+    const nextBand = Math.min(bands - 1, Math.floor(i * bands / edges));
+    if (nextBand !== band) {
+      // Short trails skip unused shades; every split remains on the curve.
+      band = nextBand;
       path = paths[band];
       path.moveTo(curX, curY);
     }
+  }
+  // The recent endpoint reaches the same full colour for short and long
+  // paths. Resume the final half-edge without changing its geometry.
+  if (band !== bands - 1) {
+    path = paths[bands - 1];
+    path.moveTo(curX, curY);
   }
   path.lineTo(SX[m - 1], SY[m - 1]);
 }

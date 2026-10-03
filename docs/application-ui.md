@@ -724,7 +724,7 @@ Each moving body can own a `Trail`, a fixed-capacity typed-array ring buffer of
 x/y/time samples.
 
 Trails are unavailable in Performance mode. Enabling the mode clears existing
-trail buffers and pending trace samples, stops sampling/aging/rendering work,
+trail buffers, the path archive and pending trace samples, stops sampling/aging/rendering work,
 and blocks both the Inspector control and the `T` shortcut from changing the
 preserved Normal-mode choice. Turning Performance mode off restores that
 choice and begins a fresh trail rather than joining across the disabled span.
@@ -735,16 +735,33 @@ choice and begins a fresh trail rather than joining across the disabled span.
 - Ordinary endpoints are added only after sufficient screen-space motion.
 - Trail age is based on simulated time, so a stopped body's old path still
   expires and speed multipliers do not change the simulated history span.
-- Rewind/re-simulation discards only future samples from the remaining trail;
-  whole-world replacement, including undo/redo, clears all trail samples.
-  Samples already expired or evicted from the ring cannot currently be recovered
-  by rewinding.
-- Trails belonging to removed bodies are deleted.
+- A separate `TrailHistory` archive retains recorded points beyond visible-ring
+  expiration and eviction. Stepping back refills each live body's ring at the
+  restored clock, preserves recorded sample serials and discards the abandoned
+  future. A refined collision between samples adds its actual restored position.
+- Removed bodies lose their visible rings. Their archived samples can return
+  with the body through frame rewind. Whole-world replacement, including
+  reset and undo/redo, clears both visible paths and the archive.
+- Changing trail recording on/off clears both stores; reapplying an unchanged
+  setting preserves history. Enabling recording captures the current position.
 - Capacity changes retain the newest points and preserve monotonic serials.
+
+The archive allocates lazily, with at most 16 MiB of retained typed-array
+storage (48 bytes per point), plus bounded body-tail indices and a reused
+restoration scratch array. Growth can temporarily retain the preceding arrays
+until garbage collection. Oldest points are evicted at this budget and pruned
+beyond the retained physics-rewind window plus the selected visible trail span.
+These limits are shared across all bodies: an older physical frame may survive
+after its path has been evicted. In that case rewind starts the visible path at
+the restored position; it does not fabricate an intervening trajectory. The
+existing per-body display rings have their own capacity and memory. Neither
+store is written to scene JSON or tab recovery.
 
 Rendering decimates using a serial-based stride so the same physical samples
 remain selected as the ring rotates. Corners and endpoints are preserved,
-vertices are split into fading bands for sparse Normal scenes, and global/per-
+vertices are split into fading bands for sparse Normal scenes. Short paths
+skip unused shades and reach the same full-colour recent endpoint as long
+paths; band boundaries remain on the curve. Global/per-
 trail budgets limit work. Dense Normal-mode scenes use one bounded gradient
 current path per trail instead of a disjoint colour-wide `Path2D`. App trail
 quality rises slowly during cheap frames and falls quickly

@@ -763,3 +763,26 @@ describe("trail curve fidelity", () => {
     expect(kept).toBeGreaterThan(coarse.size * 0.9);
   });
 });
+
+
+describe("short trail fade coverage", () => {
+  it.each(THEME_NAMES.flatMap(name => [3, 4, 7, 10, 25, 100].map(count => [name, count] as const)))(
+    "uses the recent-end colour in %s with %s samples", (name, count) => {
+    setTheme(name);
+    const body = new Body(new Vec2(1000, 1000), 0.1, 1);
+    body.color = [50, 170, 150];
+    const trail = new Trail(count);
+    for (let k = 0; k < count; k++) trail.push(-1 + 2 * k / (count - 1), 0, k / 100);
+    const cam = new Camera(800, 600), { ctx, ops } = recCtx();
+    drawWorld(ctx, cam, worldWith(body), view(), [], null, new Map([[body.id, trail]]), 800, 600);
+    const [x, y] = cam.toScreen(new Vec2(1, 0));
+    const end = ops.find(op => op.op === "lineTo" && op.x === x && op.y === y)!;
+    const colour = (end.style?.match(/\d+/g) ?? []).map(Number);
+    expect(colour).toHaveLength(3);
+    // The most recent position must reach the coloured end of the fade,
+    // including when there are fewer samples than available colour bands.
+    expect(Math.max(...colour.map((value, k) => Math.abs(value - body.color[k])))).toBeLessThanOrEqual(5);
+    expect(trail.count).toBe(count); expect(trail.x(count - 1)).toBe(1);
+    setTheme("dark");
+  });
+});

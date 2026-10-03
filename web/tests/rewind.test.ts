@@ -31,6 +31,17 @@ function scene(): World {
 }
 
 describe("rewind buffer", () => {
+  it("exposes the oldest retained clock without reconstructing a world", () => {
+    const world = new World(), buffer = new RewindBuffer();
+    expect(buffer.earliestTime).toBeNull();
+    for (let k = 0; k < RewindBuffer.MAX_FRAMES + 3; k++) {
+      world.time = k / 100; buffer.push(world);
+    }
+    expect(buffer.earliestTime).toBe(0.03);
+    buffer.back(); expect(buffer.earliestTime).toBe(0.03);
+    buffer.clear(); expect(buffer.earliestTime).toBeNull();
+  });
+
   it("replays a run frame for frame, exactly", () => {
     const w = scene();
     const buf = new RewindBuffer();

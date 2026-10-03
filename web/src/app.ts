@@ -8,6 +8,7 @@ import { contactKey, EventTracker, PlaybackEvent, PlaybackEventKind } from "./ed
 import { Camera, MAX_ZOOM, MIN_ZOOM } from "./render/camera";
 import { Selectable, ViewSettings, drawGrid, drawScaleBar, drawWorld } from "./render/draw";
 import { Trail } from "./render/trail";
+import { TrailHistory } from "./render/trail-history";
 import * as snap from "./scene/snapshot";
 import { PRESETS, Preset } from "./scene/presets";
 import { CanvasController, TOOLS, type Tool } from "./interact/tools";
@@ -262,6 +263,7 @@ export class App {
   clipboardProps: Record<string, number | boolean> | null = null;
 
   trails = new Map<number, Trail>();
+  private readonly trailHistory = new TrailHistory();
   energySeries = new TimeSeries(["KE", "PE", "Total"]);
   momentumSeries = new TimeSeries(["|p|", "px", "py", "L"]);
   displacementSeries = new TimeSeries(["sx", "sy"]);
@@ -410,6 +412,7 @@ export class App {
       // view preference so turning the mode off restores the user's choice,
       // but discard old samples instead of retaining invisible trail data.
       this.trails.clear();
+      this.trailHistory.clear();
       this.world.trace.length = 0;
       this.world.traceSpacing = 0;
     }
@@ -993,7 +996,7 @@ export class App {
     this.phasePlot.truncate(world.time);
     this.restoreKinematicsAfterRewind();
     this.lastGraphSampleT = -Infinity;
-    for (const trail of this.trails.values()) trail.truncateAfter(world.time);
+    this.restoreTrailHistory(world.time);
     this.playbackEvents.rewindTo(world.time, world);
     this.lastRewindSampleT = world.time;
     this.rewindInterval = { steps: [], contacts: [] };
@@ -1200,6 +1203,7 @@ export class App {
     // world to an object that is not in it (see resetInteraction).
     this.controller.resetInteraction();
     this.trails.clear();
+    this.trailHistory.clear();
     this.energySeries.clear();
     this.momentumSeries.clear();
     this.displacementSeries.clear();
@@ -1796,11 +1800,15 @@ export class App {
       this.toast("Motion trails are not available in performance mode");
       return;
     }
-    // Re-enabling starts fresh, so no bogus straight line joins where
-    // recording stopped to where it resumed.
-    if (on && !this.view.trails) this.trails.clear();
+    // A recording-state change starts a fresh path rather than joining
+    // positions across an interval where recording was disabled.
+    if (on !== this.view.trails) {
+      this.trails.clear();
+      this.trailHistory.clear();
+    }
     this.view.trails = on;
-    if (!on) this.world.trace.length = 0;
+    this.world.trace.length = 0;
+    if (on) this.recordTrails();
     this.invalidateCanvas();
   }
 
@@ -2216,12 +2224,17 @@ export class App {
       }
       return t;
     };
+    const pushPoint = (bid: number, trail: Trail, x: number, y: number, time: number): void => {
+      const serial = trail.firstSerial + trail.count;
+      trail.push(x, y, time);
+      this.trailHistory.push(bid, serial, x, y, time);
+    };
     // sub-step path samples captured inside the adaptive integrator
     // (close encounters turn around within a single step)
     if (this.world.trace.length > 0) {
       for (const [bid, x, y, time] of this.world.trace) {
         if (internalRodEnds.has(bid)) continue;
-        trailFor(bid).push(x, y, time);
+        pushPoint(bid, trailFor(bid), x, y, time);
         changed = true;
       }
       this.world.trace.length = 0;
@@ -2232,7 +2245,7 @@ export class App {
       const n = t.count;
       if (n === 0 ||
           Math.abs(t.x(n - 1) - b.pos.x) + Math.abs(t.y(n - 1) - b.pos.y) > threshold) {
-        t.push(b.pos.x, b.pos.y, now);
+        pushPoint(b.id, t, b.pos.x, b.pos.y, now);
         changed = true;
       }
     }
@@ -2276,10 +2289,34 @@ export class App {
     }
   }
 
+  /** Recover recorded samples before the target and discard the abandoned
+   * branch. The display rings retain their allocated buffers and serials. */
+  private restoreTrailHistory(time: number): void {
+    this.trailHistory.truncateAfter(time);
+    if (!this.view.trails || this.perfMode) return;
+    const live = new Set<number>();
+    const start = time - this.view.trailLen * PHYSICS_DT;
+    for (const body of this.world.bodies) {
+      if (body.locked || body.isRodEndpoint) continue;
+      live.add(body.id);
+      let trail = this.trails.get(body.id);
+      if (trail === undefined) {
+        trail = new Trail(this.view.trailLen);
+        this.trails.set(body.id, trail);
+      } else if (trail.capacity !== this.view.trailLen) trail.setCapacity(this.view.trailLen);
+      this.trailHistory.restoreTrail(body.id, trail, start, time);
+    }
+    for (const id of this.trails.keys()) if (!live.has(id)) this.trails.delete(id);
+    // A refined collision may fall between recorded samples. Include its
+    // actual restored position, without solving or changing the live body.
+    this.recordTrails();
+  }
+
   private trailLive = new Set<number>();
 
   private ensureRewindBaseline(): void {
     if (this.history.length !== 0 || this.rewindUnavailable) return;
+    this.recordTrails();
     this.storeRewindFrame();
   }
 
@@ -2314,6 +2351,8 @@ export class App {
     const result = this.history.push(this.world,
       this.rewindIntervalOverflow ? null : this.rewindInterval);
     this.lastRewindSampleT = this.world.time;
+    const oldest = this.history.earliestTime;
+    if (oldest !== null) this.trailHistory.expireBefore(oldest - this.view.trailLen * PHYSICS_DT);
     this.rewindInterval = { steps: [], contacts: [] };
     this.rewindIntervalOverflow = false;
     if (result === "too-large" && !this.rewindUnavailable) {

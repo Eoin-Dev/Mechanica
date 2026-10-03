@@ -411,10 +411,14 @@ newly constructed world. If an individual keyframe or dynamic frame cannot fit,
 the buffer clears and reports `too-large`; if a keyframe/delta pair cannot fit,
 it retains the latest state as a fresh keyframe when that snapshot fits.
 
+`earliestTime` exposes the oldest retained frame clock without reconstructing
+a world. App uses this boundary to prune its separately bounded trail archive.
 Rewind state is session-only and is not written to local storage or scene JSON.
 Energy, momentum, distance, velocity, phase-portrait, event-table, and trail
 samples carry simulation time or are explicitly rebased/truncated when the
-world rewinds.
+world rewinds. Visible trails are restored from a separate lazy 16 MiB native
+path archive, within its retained sample and rewind-window limits; the archive
+does not change physical frames or the portable scene schema.
 
 ## Browser settings
 
