@@ -438,10 +438,41 @@ zero second derivative:
 d²C/dt² = normal · (accB - accA) + |relativeTangentialVelocity|² / distance = 0
 ```
 
-Rows are packed into reusable arrays. The previous force multiplier is warm
-started, then a small fixed number of Gauss-Seidel sweeps propagates tension
-through chains. A rope multiplier is clamped so it can pull but never push; a
-slack rope clears its warm start.
+Ordinary particle chains pack rows into reusable arrays, warm start the previous
+force multiplier, and use a bounded number of Gauss-Seidel sweeps. A rope can
+pull but never push; slack clears its warm start.
+
+When a rigid massless beam has an external distance constraint or pulley, its
+attached physical masses determine the response to a force at any point:
+
+```text
+point displacement/acceleration response = F/M + (r cross F)/I * (-r_y, r_x)
+directional inverse mass = 1/M + (r cross direction)^2/I
+```
+
+The translation term is zero for a supported beam. Hidden endpoint coordinate
+mass contributes neither to `M` nor to `I`. A force at a mounted particle or
+hidden tip therefore moves the whole beam rather than accelerating one solver
+coordinate independently. Position and pulley velocity corrections use the
+same response; guide gradients project in this mass metric.
+
+Normal-mode assemblies with at most 64 active rows solve distance constraints,
+pulley strings and eligible guide/frame/query supports together. The symmetric
+matrix contains their cross-responses through shared bodies and beams. An
+active-set solve permits signed rod forces, requires nonnegative string tensions,
+and removes a string whose constraint is shortening. This prevents two strings
+from each receiving an isolated answer when both turn the same beam. Matrix and
+row storage is reused. Degenerate matrices, larger systems, non-rigid attachment
+groups and Performance mode retain the bounded iterative route; this is an
+approximation and does not guarantee exact forces in arbitrary linked networks.
+Rough tangential contact remains owned by the friction/rotation contact solve.
+
+A coupled string's taut/slack state is sampled at the accepted substep boundary.
+Integrator trial coordinates can shorten a taut path numerically; that temporary
+shortening does not drop its force row. Its nonnegative multiplier can still
+release the string when the load reverses. Authored slack remains force-free.
+A previously tensioned string retains the active row through a `1e-7` m
+roundoff skin at the boundary; cold previews use the ordinary `1e-9` m skin.
 
 Each mounted body adds two affine acceleration rows,
 `aBody = (1-t)*aA + t*aB`. Solving these alongside rod length transfers weight,
@@ -542,6 +573,25 @@ actual slice-start clock, before integration, rather than the enclosing step's
 end time. This preserves a visually smooth U-turn inside one externally visible
 step and allows intermediate samples to expire or truncate at the correct time.
 
+### Coupled beam/string slices
+
+Normal-mode beams coupled to other distance links or pulleys also refine a full
+substep when their angular motion or directional mobility changes rapidly.
+Near alignment, a beam's response along a string can approach zero. With a heavy
+partner this force time scale is much shorter than a simple beam-angle estimate
+suggests. The estimate includes the derivative of the string direction and the
+lever arm, scaled by the total directional inverse mass.
+
+Refined slices use RK4, and each slice runs the position, contact and velocity
+pipeline before proceeding. This prevents a whole coarse step's projection from
+compensating for a poorly resolved force. Refinement is deterministic, limited
+to a factor of 256 and a scene-size work budget of 64,000 units per displayed
+step, including a cubic estimate for the small matrix solve. Remaining allowance
+also bounds slice size so exhaustion cannot leave an arbitrarily abrupt final
+slice. Extremely stiff or large systems can still reach the work/resolution
+limits. All Performance tiers bypass this refinement and the dense force solve;
+ordinary particles and isolated beams retain their direct route.
+
 ## Post-integration constraints
 
 ### Rod/rope XPBD position pass
@@ -553,7 +603,7 @@ each distance row:
 ```text
 alpha = compliance / h²
 deltaLambda = (-constraint - alpha*lambda) /
-              (invMassA + invMassB + alpha)
+              (directionalInverseMassA + directionalInverseMassB + alpha)
 ```
 
 Position corrections are mass-weighted and accumulated per body. After the
@@ -574,8 +624,10 @@ free-beam translation is total external force divided by mass; angular
 acceleration is torque divided by point-mass inertia, about the centre of mass
 or one fixed support. Each point also receives the inward `−ω² r` acceleration.
 Distinct fixed supports remove rotation; coincident supports retain it. The
-block participates in the ordinary coupled rod iteration, avoiding dependence
-on convergence of nearly massless endpoint / massive attachment scalar rows.
+block supplies whole-assembly responses to coupled distance and pulley rows,
+avoiding dependence on nearly massless endpoint / massive attachment scalar rows.
+The ordinary iterative fallback also applies each external force through that
+physical response.
 A load's change of acceleration is recorded as its rod attachment reaction.
 
 Position correction fits the closest mass-weighted rigid line through a fixed

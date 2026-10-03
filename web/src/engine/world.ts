@@ -32,13 +32,14 @@
 import { CompiledExpr, ExprError, compileExpr } from "../core/expr";
 import { arrayOr, boolOr, idOr, intIn, numIn, numOr, strOr } from "../core/guards";
 import { Vec2 } from "../core/vec";
-import { ForceRecorder, type ForceSnapshot } from "./force-diagnostics";
+import { ForceRecorder, type ForceSnapshot, type ForceKind } from "./force-diagnostics";
 import {
   Body, BodyDict, SCENE_MAX_COORDINATE, SCENE_MAX_FORCE,
   SCENE_MAX_SURFACE_SPEED, SCENE_MAX_VELOCITY, Wall, WallDict,
   normalizeAngle,
 } from "./body";
 import { Contact, ContactCache, ContactStatic, ContactTransition, contactKey, solveContacts } from "./contacts";
+import { ConstraintForceSolve } from "./constraint-forces";
 import {
   DistanceLink, Link, LinkDict, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS,
   PulleyLink, SpringLink,
@@ -53,6 +54,33 @@ import {
 
 export const INTEGRATORS = ["Velocity Verlet", "Symplectic Euler", "RK4"] as const;
 export type Integrator = (typeof INTEGRATORS)[number];
+
+interface RigidRodResponse {
+  members: readonly Body[];
+  x: number;
+  y: number;
+  inverseMass: number;
+  inverseInertia: number;
+  vx: number;
+  vy: number;
+}
+
+interface CoupledForceRow {
+  a: Body;
+  b: Body | null;
+  gax: number;
+  gay: number;
+  gbx: number;
+  gby: number;
+  curvature: number;
+  unilateral: boolean;
+  link: DistanceLink | PulleyLink | null;
+  id: string;
+  label: string;
+  kind: ForceKind;
+  contactNx?: number;
+  contactNy?: number;
+}
 
 const FORCE_BODY_INPUTS = ["id", "name", "mass", "radius", "angle", "omega",
   "restitution", "friction", "locked", "collides", "noRotation", "isAnchor",
@@ -456,6 +484,8 @@ export class World {
   /** Complete point-mass assemblies, prepared once per step. Block projection
    * avoids conditioning the force solve on nearly massless rod coordinates. */
   private standaloneRodMembers = new Map<DistanceLink, Body[]>();
+  private rigidRodResponses: RigidRodResponse[] = [];
+  private rigidRodByBody = new Map<Body, RigidRodResponse>();
   private springs: SpringLink[] = [];
   private pulleys: PulleyLink[] = [];
   private perf = new PerfSolver();    // performance mode's spring projection
@@ -768,6 +798,8 @@ export class World {
     pulleys.length = 0;
     rodAttachments.length = 0;
     this.standaloneRodMembers.clear();
+    this.rigidRodResponses.length = 0;
+    this.rigidRodByBody.clear();
     noCollide.clear();
     this.syncPulleyMounts();
     for (const ln of this.links) {
@@ -812,10 +844,18 @@ export class World {
         if (group === undefined) groups.set(attachment.rod.id, [attachment]);
         else group.push(attachment);
       }
+      const needsResponse = pulleys.length > 0 || rods.some(rod => rod.isRope ||
+        !rod.a.isRodEndpoint || !rod.b.isRodEndpoint || !groups.has(rod.id));
       for (const group of groups.values()) {
         const rod = group[0].rod;
         if (rod.a.isRodEndpoint && rod.b.isRodEndpoint) {
-          this.standaloneRodMembers.set(rod, [rod.a, rod.b, ...group.map(item => item.body)]);
+          const members = [rod.a, rod.b, ...group.map(item => item.body)];
+          this.standaloneRodMembers.set(rod, members);
+          if (needsResponse && rod.compliance === 0 && members.some(body => body.invMass !== 0 && !body.isRodEndpoint)) {
+            const response: RigidRodResponse = { members, x: 0, y: 0, vx: 0, vy: 0, inverseMass: 0, inverseInertia: 0 };
+            this.rigidRodResponses.push(response);
+            for (const body of members) this.rigidRodByBody.set(body, response);
+          }
         }
         group.sort((left, right) => left.t - right.t);
         let maxRadius = 0;
@@ -944,6 +984,7 @@ export class World {
       this.contactStatic.wallSweep = false;
       this.contactStatic.simplified = false;
     }
+    if (!this.performance && this.rigidRodResponses.length > 0) this.prepareRigidStringStages();
   }
 
   /** Set each spring's effective stiffness and damping for this step.
@@ -1265,6 +1306,13 @@ export class World {
         recorder?.add(body, "global-damping", "Global damping", "drag", fx, fy, diagnosticWeight);
       }
     }
+    if (!this.performance && this.rigidRodResponses.length > 0) {
+      recorder?.captureAcceleration();
+      if (this.solveRigidConstraintForces(diagnosticWeight)) {
+        recorder?.accelerationChange("rod-support", "Rod attachment reaction", "reaction", diagnosticWeight);
+        return;
+      }
+    }
     if (this.rods.length > 0 || this.rodAttachments.length > 0) {
       recorder?.captureAcceleration();
       this.solveRodForces(diagnosticWeight);
@@ -1349,8 +1397,9 @@ export class World {
   private rodLink: DistanceLink[] = [];
   private rodA: Body[] = [];
   private rodB: Body[] = [];
-  private rodNum = new Float64Array(0); // wa, wb, wSum, nx, ny, d, mu
+  private rodNum = new Float64Array(0); // projected inverse mass, nx, ny, d, mu, invMa, invMb
   private static ROD_W = 7;
+  private rodForceSolve = new ConstraintForceSolve();
 
   private pulleyCurvature(body: Body, pulley: Body, radialX: number,
                           radialY: number, tangentCoeff: number,
@@ -1373,10 +1422,296 @@ export class World {
       2 * tangentCoeff * vr * vt / d;
   }
 
+  /** Refresh geometry without allocating per force evaluation or XPBD pass.
+   * A force at a mounted load or massless tip moves the entire assembly:
+   * translation F/M plus rotation (r cross F)/I about its COM or support. */
+  private updateRigidRodResponses(): void {
+    for (const response of this.rigidRodResponses) {
+      let support: Body | null = null, fixed = false, mass = 0, x = 0, y = 0, vx = 0, vy = 0;
+      for (const body of response.members) {
+        if (body.invMass === 0) {
+          if (support === null) support = body;
+          else if (body.pos.distTo(support.pos) > 1e-9) fixed = true;
+        } else if (!body.isRodEndpoint) {
+          mass += body.mass; x += body.mass * body.pos.x; y += body.mass * body.pos.y;
+          vx += body.mass * body.vel.x; vy += body.mass * body.vel.y;
+        }
+      }
+      if (support === null) { x /= mass; y /= mass; vx /= mass; vy /= mass; }
+      else { x = support.pos.x; y = support.pos.y; vx = support.vel.x; vy = support.vel.y; }
+      let inertia = 0;
+      for (const body of response.members) if (body.invMass !== 0 && !body.isRodEndpoint) {
+        const rx = body.pos.x - x, ry = body.pos.y - y;
+        inertia += body.mass * (rx * rx + ry * ry);
+      }
+      response.x = x; response.y = y; response.vx = vx; response.vy = vy;
+      response.inverseMass = support === null ? 1 / mass : 0;
+      response.inverseInertia = !fixed && inertia > 0 ? 1 / inertia : 0;
+    }
+  }
+
+  private rodDirectionMass(body: Body, nx: number, ny: number): number {
+    if (body.invMass === 0) return 0;
+    const response = this.rigidRodByBody.get(body);
+    if (response === undefined) return body.invMass;
+    const cross = (body.pos.x - response.x) * ny - (body.pos.y - response.y) * nx;
+    return response.inverseMass + cross * cross * response.inverseInertia;
+  }
+
+  private applyRodForce(body: Body, fx: number, fy: number, diagnosticWeight = 0): void {
+    if (body.invMass === 0) return;
+    const response = this.rigidRodByBody.get(body);
+    if (response === undefined) {
+      body.acc.x += body.invMass * fx; body.acc.y += body.invMass * fy; return;
+    }
+    const alpha = ((body.pos.x - response.x) * fy - (body.pos.y - response.y) * fx) * response.inverseInertia;
+    for (const member of response.members) if (member.invMass !== 0) {
+      const ax = response.inverseMass * fx - alpha * (member.pos.y - response.y);
+      const ay = response.inverseMass * fy + alpha * (member.pos.x - response.x);
+      member.acc.x += ax; member.acc.y += ay;
+      if (diagnosticWeight !== 0 && !member.isRodEndpoint) this.forceRecorder.add(member,
+        "rod-support", "Rod attachment reaction", "reaction",
+        member.mass * ax - (member === body ? fx : 0), member.mass * ay - (member === body ? fy : 0), diagnosticWeight);
+    }
+  }
+
+  private applyRodPosition(body: Body, fx: number, fy: number, diagnosticRate = 0): void {
+    if (body.invMass === 0) return;
+    const response = this.rigidRodByBody.get(body);
+    if (response === undefined) {
+      const x = body.invMass * fx, y = body.invMass * fy;
+      body.pos.x += x; body.pos.y += y; body.corrX += x; body.corrY += y; return;
+    }
+    const alpha = ((body.pos.x - response.x) * fy - (body.pos.y - response.y) * fx) * response.inverseInertia;
+    for (const member of response.members) if (member.invMass !== 0) {
+      const x = response.inverseMass * fx - alpha * (member.pos.y - response.y);
+      const y = response.inverseMass * fy + alpha * (member.pos.x - response.x);
+      member.pos.x += x; member.pos.y += y; member.corrX += x; member.corrY += y;
+      if (diagnosticRate !== 0 && !member.isRodEndpoint) this.forceRecorder.add(member,
+        "rod-support", "Rod attachment reaction", "reaction",
+        member.mass * x - (member === body ? fx : 0), member.mass * y - (member === body ? fy : 0), diagnosticRate);
+    }
+  }
+
+  private applyRodVelocity(body: Body, fx: number, fy: number, diagnostics = false): void {
+    if (body.invMass === 0) return;
+    const response = this.rigidRodByBody.get(body);
+    if (response === undefined) { body.vel.x += body.invMass * fx; body.vel.y += body.invMass * fy; return; }
+    const alpha = ((body.pos.x - response.x) * fy - (body.pos.y - response.y) * fx) * response.inverseInertia;
+    for (const member of response.members) if (member.invMass !== 0) {
+      const x = response.inverseMass * fx - alpha * (member.pos.y - response.y);
+      const y = response.inverseMass * fy + alpha * (member.pos.x - response.x);
+      member.vel.x += x; member.vel.y += y;
+      if (diagnostics && !member.isRodEndpoint) this.forceRecorder.add(member,
+        "rod-support", "Rod attachment reaction", "reaction",
+        member.mass * x - (member === body ? fx : 0), member.mass * y - (member === body ? fy : 0), 1);
+    }
+  }
+
+  private rodForceInfluence(target: Body, source: Body, nx: number, ny: number,
+                            fx: number, fy: number): number {
+    if (target.invMass === 0 || source.invMass === 0) return 0;
+    const response = this.rigidRodByBody.get(source);
+    if (response !== undefined && response === this.rigidRodByBody.get(target)) {
+      const torque = (source.pos.x - response.x) * fy - (source.pos.y - response.y) * fx;
+      const lever = (target.pos.x - response.x) * ny - (target.pos.y - response.y) * nx;
+      return response.inverseMass * (nx * fx + ny * fy) + response.inverseInertia * torque * lever;
+    }
+    return target === source ? target.invMass * (nx * fx + ny * fy) : 0;
+  }
+
+  private coupledForceRows: CoupledForceRow[] = [];
+  private coupledForceCount = 0;
+  private rigidStageTaut = new Set<DistanceLink | PulleyLink>();
+
+  private prepareRigidStringStages(): void {
+    this.rigidStageTaut.clear();
+    if (this.rigidRodResponses.length === 0) return;
+    for (const link of this.rods) if (link.isRope) {
+      const gap = link.length - link.a.pos.distTo(link.b.pos);
+      if (gap <= 1e-9 || (link.mu > 0 && gap <= 1e-7)) this.rigidStageTaut.add(link);
+    }
+    for (const link of this.pulleys) {
+      const gap = link.length - link.currentLength();
+      if (gap <= 1e-9 || (link.mu > 0 && gap <= 1e-7)) this.rigidStageTaut.add(link);
+    }
+  }
+
+  private addCoupledForceRow(a: Body, b: Body | null, gax: number, gay: number,
+                            gbx: number, gby: number, curvature: number, unilateral: boolean,
+                            link: DistanceLink | PulleyLink | null, id: string, label: string,
+                            kind: ForceKind, contactNx?: number, contactNy?: number): void {
+    const index = this.coupledForceCount++;
+    let row = this.coupledForceRows[index];
+    if (row === undefined) {
+      row = { a, b, gax, gay, gbx, gby, curvature, unilateral, link, id, label, kind };
+      this.coupledForceRows[index] = row;
+    } else {
+      row.a = a; row.b = b; row.gax = gax; row.gay = gay; row.gbx = gbx; row.gby = gby;
+      row.curvature = curvature; row.unilateral = unilateral; row.link = link;
+      row.id = id; row.label = label; row.kind = kind;
+    }
+    row.contactNx = contactNx; row.contactNy = contactNy;
+  }
+
+  /** Small rod/string/pulley assemblies share the same physical mass matrix.
+   * Every row balances at once, including active guide/frame supports. Solving
+   * each string separately gives the wrong force when they turn the same beam.
+   * Ordinary particle scenes retain their allocation-free iterative fast path. */
+  private solveRigidConstraintForces(weight: number): boolean {
+    if (this.performance || this.rigidRodResponses.length === 0 ||
+        this.rodAttachments.some(item => !this.rigidRodByBody.has(item.body)) ||
+        this.rods.length + this.pulleys.length > ConstraintForceSolve.LIMIT) return false;
+    this.updateRigidRodResponses();
+    this.projectStandaloneRodAccelerations();
+    this.coupledForceCount = 0;
+    for (const link of this.rods) {
+      if (link.compliance === 0 && this.standaloneRodMembers.has(link)) { link.mu = 0; continue; }
+      const a = link.a, b = link.b, dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 1e-9 || (link.isRope && !this.rigidStageTaut.has(link))) { link.mu = 0; continue; }
+      const nx = dx / d, ny = dy / d, response = this.rigidRodByBody.get(a);
+      if (response !== undefined && response === this.rigidRodByBody.get(b)) { link.mu = 0; continue; }
+      if (this.rodDirectionMass(a, nx, ny) + this.rodDirectionMass(b, nx, ny) <= 0) { link.mu = 0; continue; }
+      const vx = b.vel.x - a.vel.x, vy = b.vel.y - a.vel.y, vn = nx * vx + ny * vy;
+      this.addCoupledForceRow(a, b, nx, ny, -nx, -ny, Math.max(0, vx * vx + vy * vy - vn * vn) / d,
+        link.isRope, link, `distance-${link.id}`, link.isRope ? "String tension" : "Rod force", link.isRope ? "string" : "rod");
+    }
+    for (const link of this.pulleys) {
+      const a = link.a, b = link.b, g = link.geometry();
+      if (link.branchDistance("a") < -1e-8 || link.branchDistance("b") < -1e-8 ||
+          g.da < 1e-9 || g.db < 1e-9 || !this.rigidStageTaut.has(link)) { link.mu = 0; continue; }
+      const perpendicular = (a.vel.x - b.vel.x) * g.nay - (a.vel.y - b.vel.y) * g.nax;
+      const curvature = g.wrapped ?
+        this.pulleyCurvature(a, link.pulley, g.aRadialX, g.aRadialY, g.aTangentCoeff, g.da, g.nax, g.nay) +
+        this.pulleyCurvature(b, link.pulley, g.bRadialX, g.bRadialY, g.bTangentCoeff, g.db, g.nbx, g.nby) :
+        perpendicular * perpendicular / g.totalLength;
+      if (this.rodDirectionMass(a, g.nax, g.nay) + this.rodDirectionMass(b, g.nbx, g.nby) > 0) {
+        this.addCoupledForceRow(a, b, -g.nax, -g.nay, -g.nbx, -g.nby, curvature, true,
+          link, `pulley-${link.id}`, "Pulley-string tension", "pulley");
+      } else link.mu = 0;
+    }
+    // A support row is added once even when a particle has multiple strings.
+    // Normal-aligned query contacts are exact here; rough tangential contact
+    // remains owned by the existing friction/rotation contact solve.
+    for (const link of this.pulleys) {
+      const sigma = link.wrapSweep < 0 ? -1 : 1;
+      this.addCoupledPulleySupports(link.a, link.pulley, link.guideAOffset, -sigma);
+      this.addCoupledPulleySupports(link.b, link.pulley, link.guideBOffset, sigma);
+    }
+    const count = this.coupledForceCount, solve = this.rodForceSolve, rows = this.coupledForceRows;
+    if (count === 0) return true;
+    if (count > ConstraintForceSolve.LIMIT) return false;
+    solve.prepare(count);
+    for (let i = 0; i < count; i++) {
+      const row = rows[i];
+      solve.rhs[i] = row.curvature - row.gax * row.a.acc.x - row.gay * row.a.acc.y -
+        (row.b === null ? 0 : row.gbx * row.b.acc.x + row.gby * row.b.acc.y);
+      solve.bilateral[i] = row.unilateral ? 0 : 1;
+      for (let j = 0; j <= i; j++) {
+        const other = rows[j];
+        let value = this.rodForceInfluence(row.a, other.a, row.gax, row.gay, other.gax, other.gay);
+        if (other.b !== null) value += this.rodForceInfluence(row.a, other.b, row.gax, row.gay, other.gbx, other.gby);
+        if (row.b !== null) {
+          value += this.rodForceInfluence(row.b, other.a, row.gbx, row.gby, other.gax, other.gay);
+          if (other.b !== null) value += this.rodForceInfluence(row.b, other.b, row.gbx, row.gby, other.gbx, other.gby);
+        }
+        solve.matrix[i * count + j] = solve.matrix[j * count + i] = value;
+      }
+    }
+    if (!solve.solve(count)) return false;
+    const recorder = weight !== 0 && this.forceRecorder.active ? this.forceRecorder : null;
+    for (let i = 0; i < count; i++) {
+      const row = rows[i], force = solve.solution[i], fx = force * row.gax, fy = force * row.gay;
+      if (row.link !== null) row.link.mu = force;
+      this.applyRodForce(row.a, fx, fy);
+      recorder?.add(row.a, row.id, row.label, row.kind, fx, fy, weight,
+        row.link !== null ? force : 0, row.contactNx, row.contactNy);
+      if (row.b !== null) {
+        this.applyRodForce(row.b, force * row.gbx, force * row.gby);
+        recorder?.add(row.b, row.id, row.label, row.kind, force * row.gbx, force * row.gby, weight, force);
+      }
+    }
+    return true;
+  }
+
+  private addCoupledPulleySupports(body: Body, pulley: Body, fallback: Vec2, side: number): void {
+    if (body.invMass === 0) return;
+    const dx = body.pos.x - pulley.pos.x, dy = body.pos.y - pulley.pos.y, d = Math.hypot(dx, dy);
+    const fd = Math.max(1e-12, fallback.length()), bx = -fallback.y * side / fd, by = fallback.x * side / fd;
+    if (dx * bx + dy * by <= 1e-7 && body.vel.x * bx + body.vel.y * by <= 1e-10) {
+      this.addCoupledSupport(body, bx, by, true, `pulley-guide-${pulley.id}`, "Pulley guide reaction");
+    }
+    if (d <= PULLEY_RADIUS + body.radius + 1e-7 && d > 1e-12) {
+      const nx = dx / d, ny = dy / d;
+      this.addCoupledSupport(body, -ny, nx, false, `pulley-frame-tangent-${pulley.id}`, "Pulley-frame reaction", -nx, -ny);
+      if (body.vel.x * nx + body.vel.y * ny <= 1e-10) {
+        this.addCoupledSupport(body, nx, ny, true, `pulley-frame-${pulley.id}`, "Pulley-frame reaction", -nx, -ny);
+      }
+    }
+    for (const contact of this.pulleyQueryContacts.get(body) ?? []) {
+      let aligned = contact.friction === 0;
+      if (!aligned) {
+        aligned = true;
+        for (let i = 0; i < this.coupledForceCount; i++) {
+          const row = this.coupledForceRows[i];
+          if (row.link === null) continue;
+          const x = row.a === body ? row.gax : row.b === body ? row.gbx : 0;
+          const y = row.a === body ? row.gay : row.b === body ? row.gby : 0;
+          if ((x !== 0 || y !== 0) && Math.abs(x * contact.ny - y * contact.nx) > 1e-10) { aligned = false; break; }
+        }
+      }
+      if (aligned) this.addCoupledSupport(body, -contact.nx, -contact.ny, true, contact.id, contact.label, contact.nx, contact.ny);
+    }
+  }
+
+  private addCoupledSupport(body: Body, x: number, y: number, unilateral: boolean,
+                            id: string, label: string, nx?: number, ny?: number): void {
+    if (this.rodDirectionMass(body, x, y) <= 1e-18) return;
+    for (let i = 0; i < this.coupledForceCount; i++) {
+      const row = this.coupledForceRows[i];
+      if (row.a === body && row.id === id) return;
+    }
+    this.addCoupledForceRow(body, null, x, y, 0, 0, 0, unilateral, null, id, label, "reaction", nx, ny);
+  }
+
+  private solveCoupledRodForces(count: number): boolean {
+    if (this.performance || count < 2 || count > ConstraintForceSolve.LIMIT || this.rigidRodResponses.length === 0 ||
+        this.rodAttachments.some(item => !this.rigidRodByBody.has(item.body))) return false;
+    const solve = this.rodForceSolve, num = this.rodNum, W = World.ROD_W;
+    solve.prepare(count);
+    for (let i = 0; i < count; i++) {
+      const o = i * W, a = this.rodA[i], b = this.rodB[i], nx = num[o + 1], ny = num[o + 2];
+      const rvx = b.vel.x - a.vel.x, rvy = b.vel.y - a.vel.y, vn = rvx * nx + rvy * ny;
+      solve.rhs[i] = (b.acc.x - a.acc.x) * nx + (b.acc.y - a.acc.y) * ny +
+        (rvx * rvx + rvy * rvy - vn * vn) / num[o + 3];
+      solve.bilateral[i] = this.rodLink[i].isRope ? 0 : 1;
+      for (let j = 0; j <= i; j++) {
+        const p = j * W, ca = this.rodA[j], cb = this.rodB[j], gx = num[p + 1], gy = num[p + 2];
+        const value = this.rodForceInfluence(a, ca, nx, ny, gx, gy) - this.rodForceInfluence(a, cb, nx, ny, gx, gy) -
+          this.rodForceInfluence(b, ca, nx, ny, gx, gy) + this.rodForceInfluence(b, cb, nx, ny, gx, gy);
+        solve.matrix[i * count + j] = solve.matrix[j * count + i] = value;
+      }
+    }
+    // Accelerations already include the warm start. Recover the external
+    // right-hand side before solving for the absolute common multipliers.
+    for (let i = 0; i < count; i++) for (let j = 0; j < count; j++) solve.rhs[i] += solve.matrix[i * count + j] * num[j * W + 4];
+    if (!solve.solve(count)) return false;
+    for (let i = 0; i < count; i++) {
+      const o = i * W, delta = solve.solution[i] - num[o + 4];
+      num[o + 4] = solve.solution[i];
+      this.applyRodForce(this.rodA[i], delta * num[o + 1], delta * num[o + 2]);
+      this.applyRodForce(this.rodB[i], -delta * num[o + 1], -delta * num[o + 2]);
+    }
+    return true;
+  }
+
   private solveRodForces(diagnosticWeight: number): void {
     const links = this.rods;
     const attachments = this.rodAttachments;
     if (links.length === 0 && attachments.length === 0) return;
+    const generalized = this.rigidRodResponses.length > 0;
+    if (generalized) { this.updateRigidRodResponses(); this.projectStandaloneRodAccelerations(); }
     const W = World.ROD_W;
     if (this.rodNum.length < links.length * W) {
       this.rodNum = new Float64Array(Math.max(16, links.length * 2) * W);
@@ -1392,7 +1727,7 @@ export class World {
       const b = ln.b;
       const wa = a.invMass;
       const wb = b.invMass;
-      const wSum = wa + wb;
+      let wSum = wa + wb;
       if (wSum === 0.0) continue;
       const dx = b.pos.x - a.pos.x;
       const dy = b.pos.y - a.pos.y;
@@ -1405,53 +1740,59 @@ export class World {
       }
       const nx = dx / d;
       const ny = dy / d;
+      const response = generalized ? this.rigidRodByBody.get(a) : undefined;
+      // A distance between two points of the same rigid beam is redundant.
+      if (response !== undefined && response === this.rigidRodByBody.get(b)) { ln.mu = 0; continue; }
+      if (generalized) wSum = this.rodDirectionMass(a, nx, ny) + this.rodDirectionMass(b, nx, ny);
+      if (!(wSum > 0)) { ln.mu = 0; continue; }
       let mu = ln.mu;
       if (ln.isRope && mu < 0.0) mu = 0.0;
       if (mu !== 0.0) { // apply the warm-start guess immediately
-        a.acc.x += mu * wa * nx;
-        a.acc.y += mu * wa * ny;
-        b.acc.x -= mu * wb * nx;
-        b.acc.y -= mu * wb * ny;
+        if (generalized) {
+          this.applyRodForce(a, mu * nx, mu * ny); this.applyRodForce(b, -mu * nx, -mu * ny);
+        } else {
+          a.acc.x += mu * wa * nx; a.acc.y += mu * wa * ny;
+          b.acc.x -= mu * wb * nx; b.acc.y -= mu * wb * ny;
+        }
       }
       rodLink[n] = ln;
       rodA[n] = a;
       rodB[n] = b;
       const o = n * W;
-      num[o] = wa;
-      num[o + 1] = wb;
-      num[o + 2] = wSum;
-      num[o + 3] = nx;
-      num[o + 4] = ny;
-      num[o + 5] = d;
-      num[o + 6] = mu;
+      num[o] = wSum;
+      num[o + 1] = nx;
+      num[o + 2] = ny;
+      num[o + 3] = d;
+      num[o + 4] = mu; num[o + 5] = wa; num[o + 6] = wb;
       n++;
     }
     if (n === 0 && attachments.length === 0) return;
-    for (let pass = 0; pass < ROD_FORCE_PASSES; pass++) {
+    const coupled = this.solveCoupledRodForces(n);
+    for (let pass = 0; !coupled && pass < ROD_FORCE_PASSES; pass++) {
       let worst = 0.0;
       for (let i = 0; i < n; i++) {
         const o = i * W;
         const a = rodA[i];
         const b = rodB[i];
-        const wa = num[o];
-        const wb = num[o + 1];
-        const nx = num[o + 3];
-        const ny = num[o + 4];
+        const nx = num[o + 1];
+        const ny = num[o + 2];
         const rvx = b.vel.x - a.vel.x;
         const rvy = b.vel.y - a.vel.y;
         const vn = rvx * nx + rvy * ny;
         const vt2 = rvx * rvx + rvy * rvy - vn * vn;
         const an = (b.acc.x - a.acc.x) * nx + (b.acc.y - a.acc.y) * ny;
-        const mu = num[o + 6];
-        let newMu = mu + (an + vt2 / num[o + 5]) / num[o + 2];
+        const mu = num[o + 4];
+        let newMu = mu + (an + vt2 / num[o + 3]) / num[o];
         if (rodLink[i].isRope && newMu < 0.0) newMu = 0.0;
         const dmu = newMu - mu;
-        num[o + 6] = newMu;
+        num[o + 4] = newMu;
         if (dmu !== 0.0) {
-          a.acc.x += dmu * wa * nx;
-          a.acc.y += dmu * wa * ny;
-          b.acc.x -= dmu * wb * nx;
-          b.acc.y -= dmu * wb * ny;
+          if (generalized) {
+            this.applyRodForce(a, dmu * nx, dmu * ny); this.applyRodForce(b, -dmu * nx, -dmu * ny);
+          } else {
+            a.acc.x += dmu * num[o + 5] * nx; a.acc.y += dmu * num[o + 5] * ny;
+            b.acc.x -= dmu * num[o + 6] * nx; b.acc.y -= dmu * num[o + 6] * ny;
+          }
           const dAbs = dmu > 0.0 ? dmu : -dmu;
           if (dAbs > worst) worst = dAbs;
         }
@@ -1493,10 +1834,10 @@ export class World {
     for (let i = 0; i < n; i++) {
       const link = rodLink[i];
       const o = i * W;
-      link.mu = num[o + 6];
+      link.mu = num[o + 4];
       if (recorder !== null) {
-        const fx = link.mu * num[o + 3];
-        const fy = link.mu * num[o + 4];
+        const fx = link.mu * num[o + 1];
+        const fy = link.mu * num[o + 2];
         const kind = link.isRope ? "string" : "rod";
         const label = link.isRope ? "String tension" : "Rod force";
         recorder.add(link.a, `distance-${link.id}`, label, kind, fx, fy, diagnosticWeight, link.mu);
@@ -1554,10 +1895,8 @@ export class World {
       const nby = geom.nby;
       let mu = Math.max(0.0, ln.mu);
       if (mu !== 0.0) {
-        a.acc.x -= mu * wa * nax;
-        a.acc.y -= mu * wa * nay;
-        b.acc.x -= mu * wb * nbx;
-        b.acc.y -= mu * wb * nby;
+        this.applyRodForce(a, -mu * nax, -mu * nay, diagnosticWeight);
+        this.applyRodForce(b, -mu * nbx, -mu * nby, diagnosticWeight);
       }
       for (let pass = 0; pass < ROD_FORCE_PASSES; pass++) {
         const sigma = ln.wrapSweep < 0 ? -1 : 1;
@@ -1582,10 +1921,8 @@ export class World {
         const dmu = next - mu;
         mu = next;
         if (dmu === 0.0) break;
-        a.acc.x -= dmu * wa * nax;
-        a.acc.y -= dmu * wa * nay;
-        b.acc.x -= dmu * wb * nbx;
-        b.acc.y -= dmu * wb * nby;
+        this.applyRodForce(a, -dmu * nax, -dmu * nay, diagnosticWeight);
+        this.applyRodForce(b, -dmu * nbx, -dmu * nby, diagnosticWeight);
         if (Math.abs(dmu) < 1e-9) break;
       }
       ln.mu = mu;
@@ -1601,9 +1938,43 @@ export class World {
     this.clampPulleyStopAccelerations(links, diagnosticWeight);
   }
 
+  private projectRodGradient(body: Body, gx: number, gy: number, nx: number, ny: number, target: Vec2): void {
+    const weight = this.rodDirectionMass(body, nx, ny);
+    const normal = weight > 1e-18 ? this.rodForceInfluence(body, body, nx, ny, gx, gy) / weight : 0;
+    target.set(gx - normal * nx, gy - normal * ny);
+  }
+
+  private projectedRodPulleyWeight(body: Body, pulley: Body, fallback: Vec2,
+                                  side: number, nx: number, ny: number): number {
+    const dx = body.pos.x - pulley.pos.x, dy = body.pos.y - pulley.pos.y, d = Math.hypot(dx, dy);
+    const target = this.pulleyVelocityGA;
+    let gx = nx, gy = ny;
+    if (d <= PULLEY_RADIUS + body.radius + 1e-7 && d > 1e-12) {
+      const rx = dx / d, ry = dy / d;
+      if (body.acc.x * rx + body.acc.y * ry <= 1e-12) return 0;
+      this.projectRodGradient(body, gx, gy, -ry, rx, target);
+      return this.rodDirectionMass(body, target.x, target.y);
+    }
+    const fd = Math.max(1e-12, fallback.length()), bx = -fallback.y * side / fd, by = fallback.x * side / fd;
+    if (dx * bx + dy * by <= 1e-7 && body.acc.x * bx + body.acc.y * by <= 1e-12 &&
+        this.rodForceInfluence(body, body, bx, by, gx, gy) > 0) {
+      this.projectRodGradient(body, gx, gy, bx, by, target); gx = target.x; gy = target.y;
+    }
+    let firstX = 0, firstY = 0, active = false;
+    for (const contact of this.pulleyQueryContacts.get(body) ?? []) {
+      if (contact.friction !== 0 && Math.abs(nx * contact.ny - ny * contact.nx) > 1e-10) continue;
+      if (body.acc.x * contact.nx + body.acc.y * contact.ny < -1e-12) continue;
+      if (active && Math.abs(firstX * contact.ny - firstY * contact.nx) > 1e-8) return 0;
+      this.projectRodGradient(body, gx, gy, contact.nx, contact.ny, target); gx = target.x; gy = target.y;
+      firstX = contact.nx; firstY = contact.ny; active = true;
+    }
+    return this.rodDirectionMass(body, gx, gy);
+  }
+
   /** Feasible response derivative after active assembly/contact projection. */
   private pulleyQueryWeight(body: Body, pulley: Body, fallback: Vec2,
                             side: number, nx: number, ny: number): number {
+    if (this.rigidRodByBody.has(body)) return this.projectedRodPulleyWeight(body, pulley, fallback, side, nx, ny);
     const dx = body.pos.x - pulley.pos.x, dy = body.pos.y - pulley.pos.y;
     const d = Math.hypot(dx, dy);
     if (d <= PULLEY_RADIUS + body.radius + 1e-7 && d > 1e-12) {
@@ -1973,6 +2344,61 @@ export class World {
   }
 
   // ------------------------------------------------------------------- step
+  /** Bound the change of a mounted point's directional mobility. Near an
+   * aligned string, its rotational mobility approaches zero; resolving only
+   * the beam angle misses this much faster force time scale at large mass ratios. */
+  private rodMobilityRate(body: Body, nx: number, ny: number, ndx: number, ndy: number, weight: number): number {
+    const response = this.rigidRodByBody.get(body);
+    if (response === undefined || response.inverseInertia === 0 || weight <= 0) return 0;
+    const rx = body.pos.x - response.x, ry = body.pos.y - response.y;
+    const derivative = (body.vel.x - response.vx) * ny - (body.vel.y - response.vy) * nx + rx * ndy - ry * ndx;
+    return 2 * Math.abs(derivative) * Math.sqrt(response.inverseInertia / weight);
+  }
+
+  private coupledConstraintSlice(h: number): number {
+    let rate = 0;
+    for (const response of this.rigidRodResponses) {
+      let omega = 0, alpha = 0;
+      for (const body of response.members) if (!body.isRodEndpoint && body.invMass !== 0) {
+        const rx = body.pos.x - response.x, ry = body.pos.y - response.y;
+        omega += body.mass * (rx * (body.vel.y - response.vy) - ry * (body.vel.x - response.vx)) * response.inverseInertia;
+        alpha += body.mass * (rx * body.acc.y - ry * body.acc.x) * response.inverseInertia;
+      }
+      rate = Math.max(rate, Math.abs(omega), Math.sqrt(Math.abs(alpha)));
+    }
+    for (const link of this.rods) {
+      if (this.standaloneRodMembers.has(link)) continue;
+      const a = link.a, b = link.b, dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y, d = Math.hypot(dx, dy);
+      if (d < 1e-9 || (link.isRope && d < link.length - 1e-7)) continue;
+      const nx = dx / d, ny = dy / d, vx = b.vel.x - a.vel.x, vy = b.vel.y - a.vel.y, vn = vx * nx + vy * ny;
+      const ndx = (vx - vn * nx) / d, ndy = (vy - vn * ny) / d;
+      const weight = this.rodDirectionMass(a, nx, ny) + this.rodDirectionMass(b, nx, ny);
+      rate = Math.max(rate, this.rodMobilityRate(a, nx, ny, ndx, ndy, weight), this.rodMobilityRate(b, nx, ny, ndx, ndy, weight));
+    }
+    for (const link of this.pulleys) {
+      const a = link.a, b = link.b, g = link.geometry();
+      if (g.totalLength < link.length - 1e-7 || g.da < 1e-9 || g.db < 1e-9) continue;
+      const weight = this.rodDirectionMass(a, g.nax, g.nay) + this.rodDirectionMass(b, g.nbx, g.nby) +
+        2 * this.rodForceInfluence(a, b, g.nax, g.nay, g.nbx, g.nby);
+      if (g.wrapped) {
+        const ad = Math.hypot(a.pos.x - link.pulley.pos.x, a.pos.y - link.pulley.pos.y);
+        const bd = Math.hypot(b.pos.x - link.pulley.pos.x, b.pos.y - link.pulley.pos.y);
+        const av = (g.aRadialX * a.vel.y - g.aRadialY * a.vel.x) / Math.max(1e-9, ad) -
+          g.aTangentCoeff * (g.aRadialX * a.vel.x + g.aRadialY * a.vel.y) / g.da;
+        const bv = (g.bRadialX * b.vel.y - g.bRadialY * b.vel.x) / Math.max(1e-9, bd) -
+          g.bTangentCoeff * (g.bRadialX * b.vel.x + g.bRadialY * b.vel.y) / g.db;
+        rate = Math.max(rate, this.rodMobilityRate(a, g.nax, g.nay, -av * g.nay, av * g.nax, weight),
+          this.rodMobilityRate(b, g.nbx, g.nby, -bv * g.nby, bv * g.nbx, weight));
+      } else {
+        const vx = a.vel.x - b.vel.x, vy = a.vel.y - b.vel.y, vn = vx * g.nax + vy * g.nay;
+        const nx = (vx - vn * g.nax) / g.totalLength, ny = (vy - vn * g.nay) / g.totalLength;
+        rate = Math.max(rate, this.rodMobilityRate(a, g.nax, g.nay, nx, ny, weight),
+          this.rodMobilityRate(b, g.nbx, g.nby, -nx, -ny, weight));
+      }
+    }
+    return rate > 0 ? Math.min(h, 0.0025 / rate) : h;
+  }
+
   /** Advance the world by dt seconds using the configured substeps. */
   step(dt: number): void {
     if (!Number.isFinite(dt) || dt < 0.0) {
@@ -1983,7 +2409,8 @@ export class World {
     // remain untouched.
     if (dt === 0.0) return;
     const n = this.effectiveSubsteps;
-    const h = dt / n;
+    const baseH = dt / n;
+    let h = baseH;
     // Constraint compliance and predictor terms use h squared. If that
     // product underflows, running would manufacture infinities/NaNs even
     // though h itself is still positive (notably with one configured
@@ -1991,7 +2418,7 @@ export class World {
     const h2 = h * h;
     if (h === 0.0 || h2 === 0.0 || !Number.isFinite(1.0 / h2)) return;
     this.clearCurrentForcePreviews();
-    const invH = 1.0 / h;
+    let invH = 1.0 / h;
     const bodyCount = this.bodies.length;
     if (this.diagnosticVel.length < bodyCount * 2) {
       this.diagnosticVel = new Float64Array(Math.max(32, bodyCount * 4));
@@ -2054,130 +2481,153 @@ export class World {
       this.sliceBudget = Math.min(ENCOUNTER_MAX_SLICES * n,
         Math.floor(SLICE_WORK_BUDGET / (4 * Math.max(1, perEval))));
     }
+    const coupledAdaptive = !this.performance && this.rigidRodResponses.length > 0 &&
+      (this.rods.length > this.standaloneRodMembers.size || this.pulleys.length > 0);
+    const constraintCount = this.rods.length - this.standaloneRodMembers.size + this.pulleys.length;
+    const coupledWork = this.bodies.length + constraintCount ** 3 +
+      (this.mutualGravity ? this.bodies.length * (this.bodies.length - 1) / 2 : 0);
+    let coupledBudget = coupledAdaptive ? Math.min(n * ENCOUNTER_MAX_SLICES,
+      Math.floor(64_000 / (4 * Math.max(1, coupledWork)))) : 0;
     for (let s = 0; s < n; s++) {
-      // Continuous wheel stops need the beginning of this exact substep. A
-      // final-position overlap test alone lets a fast particle tunnel through
-      // the wheel and land outside it on the opposite string branch.
-      for (const pulley of this.pulleys) pulley.captureSafePositions();
-      // (spin integration happens inside the integrator body loops;
-      // torque only arises from contacts, applied there)
-      if (adaptive) this.integrateAdaptive(h, this.time);
-      else this.integrate(h, this.time);
-      recorder?.captureVelocity();
+      let remaining = baseH;
+      do {
+        h = remaining;
+        if (coupledAdaptive) this.prepareRigidStringStages();
+        let refined = false;
+        if (coupledAdaptive && coupledBudget > 0) {
+          this.accumulateForces(this.time, 0);
+          h = Math.min(remaining, Math.max(baseH / ENCOUNTER_MAX_SLICES, remaining / (coupledBudget + 1),
+            Math.sqrt(1 / Number.MAX_VALUE), this.coupledConstraintSlice(remaining)));
+          refined = h < remaining;
+          if (refined) coupledBudget--;
+        }
+        invH = 1 / h;
+        // Continuous wheel stops need the beginning of this exact substep. A
+        // final-position overlap test alone lets a fast particle tunnel through
+        // the wheel and land outside it on the opposite string branch.
+        for (const pulley of this.pulleys) pulley.captureSafePositions();
+        // (spin integration happens inside the integrator body loops;
+        // torque only arises from contacts, applied there)
+        if (adaptive) this.integrateAdaptive(h, this.time);
+        else if (refined) this.integrateRk4(h, this.time);
+        else this.integrate(h, this.time);
+        recorder?.captureVelocity();
 
-      // Springs first, rods second: a rod is an exact constraint and must
-      // have the final say where an assembly mixes the two.
-      if (projected !== null && projected.length > 0) {
-        const level = performanceLevel(this.performanceLevel);
-        this.perf.solve(projected, h, PERF_SPRING_PASSES_BY_LEVEL[level]);
-      }
-      recorder?.velocityChange("projected-springs", "Performance spring force", "spring");
-      recorder?.captureVelocity();
-      if (this.pulleys.length > 0) {
-        // A pulley row is cheap (two live tangent legs) but nonlinear.
-        // Keep eight refinement passes even in the most aggressive tier so
-        // dropping general scene iterations cannot visibly stretch a taut
-        // A-level mechanics string, including at an active wheel stop. Each
-        // pass is one two-particle row and is still cheap compared with
-        // contact generation or an ordinary dense scene solve.
-        this.solvePulleyPositions(this.pulleys, invH, Math.max(8, iters));
-      }
-      if (rigid.length > 0) {
-        // A standalone beam adds only two solver coordinates but couples its
-        // length row to every mounted particle/support. The endpoints are nearly
-        // massless, which is physically appropriate but deliberately creates a
-        // poorly conditioned row set. A 32-pass floor is still only a few
-        // hundred scalar operations for an ordinary classroom beam and keeps
-        // it rigid in every Performance tier instead of trading stability for
-        // an imperceptible saving.
-        const standalone = this.rodAttachments.some(({ rod }) =>
-          rod.a.isRodEndpoint && rod.b.isRodEndpoint);
-        this.solveRodPositions(rigid, invH, standalone ? Math.max(32, iters) : iters);
-      }
-      recorder?.velocityChange("constraint-correction", "Constraint correction", "correction");
-      recorder?.captureVelocity();
+        // Springs first, rods second: a rod is an exact constraint and must
+        // have the final say where an assembly mixes the two.
+        if (projected !== null && projected.length > 0) {
+          const level = performanceLevel(this.performanceLevel);
+          this.perf.solve(projected, h, PERF_SPRING_PASSES_BY_LEVEL[level]);
+        }
+        recorder?.velocityChange("projected-springs", "Performance spring force", "spring");
+        recorder?.captureVelocity();
+        if (this.pulleys.length > 0) {
+          // A pulley row is cheap (two live tangent legs) but nonlinear.
+          // Keep eight refinement passes even in the most aggressive tier so
+          // dropping general scene iterations cannot visibly stretch a taut
+          // A-level mechanics string, including at an active wheel stop. Each
+          // pass is one two-particle row and is still cheap compared with
+          // contact generation or an ordinary dense scene solve.
+          this.solvePulleyPositions(this.pulleys, invH, Math.max(8, iters));
+        }
+        if (rigid.length > 0) {
+          // A standalone beam adds only two solver coordinates but couples its
+          // length row to every mounted particle/support. The endpoints are nearly
+          // massless, which is physically appropriate but deliberately creates a
+          // poorly conditioned row set. A 32-pass floor is still only a few
+          // hundred scalar operations for an ordinary classroom beam and keeps
+          // it rigid in every Performance tier instead of trading stability for
+          // an imperceptible saving.
+          const standalone = this.rodAttachments.some(({ rod }) =>
+            rod.a.isRodEndpoint && rod.b.isRodEndpoint);
+          this.solveRodPositions(rigid, invH, standalone ? Math.max(32, iters) : iters);
+        }
+        recorder?.velocityChange("constraint-correction", "Constraint correction", "correction");
+        recorder?.captureVelocity();
 
-      // `contacts` is a snapshot of the contacts that exist NOW, for the
-      // overlay and the status-bar count - so each substep replaces the
-      // last rather than appending. Accumulating meant a 4-substep step
-      // reported (and drew) every contact four times over.
-      solveContacts(this.bodies, this.walls, this.contacts, iters,
-                    this.contactStatic.simplified ? null : this.contactCache,
-                    this.contactStatic, recorder?.contactImpulse);
-      if (this.trackContactEvents && !this.contactEventsOverflow) {
-        this.contactKeysAfter.clear();
-        if (this.contacts.length > CONTACT_EVENT_LIMIT) this.contactEventsOverflow = true;
-        else for (const contact of this.contacts) this.contactKeysAfter.add(contactKey(contact));
-        for (const key of this.contactKeysAfter) {
-          if (!this.contactKeysBefore.has(key)) {
-            if (this.contactEvents.length < CONTACT_EVENT_LIMIT) {
-              this.contactEvents.push({ key, time: this.time + h, began: true });
-            } else this.contactEventsOverflow = true;
+        // `contacts` is a snapshot of the contacts that exist NOW, for the
+        // overlay and the status-bar count - so each substep replaces the
+        // last rather than appending. Accumulating meant a 4-substep step
+        // reported (and drew) every contact four times over.
+        solveContacts(this.bodies, this.walls, this.contacts, iters,
+                      this.contactStatic.simplified ? null : this.contactCache,
+                      this.contactStatic, recorder?.contactImpulse);
+        if (this.trackContactEvents && !this.contactEventsOverflow) {
+          this.contactKeysAfter.clear();
+          if (this.contacts.length > CONTACT_EVENT_LIMIT) this.contactEventsOverflow = true;
+          else for (const contact of this.contacts) this.contactKeysAfter.add(contactKey(contact));
+          for (const key of this.contactKeysAfter) {
+            if (!this.contactKeysBefore.has(key)) {
+              if (this.contactEvents.length < CONTACT_EVENT_LIMIT) {
+                this.contactEvents.push({ key, time: this.time + h, began: true });
+              } else this.contactEventsOverflow = true;
+            }
+          }
+          for (const key of this.contactKeysBefore) {
+            if (!this.contactKeysAfter.has(key)) {
+              if (this.contactEvents.length < CONTACT_EVENT_LIMIT) {
+                this.contactEvents.push({ key, time: this.time + h, began: false });
+              } else this.contactEventsOverflow = true;
+            }
+          }
+          const previous = this.contactKeysBefore;
+          this.contactKeysBefore = this.contactKeysAfter;
+          this.contactKeysAfter = previous;
+        }
+        recorder?.velocityChange("contact-correction", "Contact numerical correction", "correction");
+        recorder?.captureVelocity();
+        // A contact impulse is computed on the particle that touched the wall or
+        // another body. Mounted particles must immediately hand the incompatible
+        // part of that impulse to their massless beam/support; otherwise they
+        // begin the next substep moving away from the rod and the position solver
+        // has to remove the error as a violent correction.
+        if (this.rodAttachments.length > 0) this.projectStandaloneRodVelocities();
+        // Ordinary contacts intentionally exclude the axle. Reassert the
+        // particle stop after every other position solver so no later correction
+        // can leave a particle inside the wheel for the next force evaluation.
+        if (this.pulleys.length > 0) {
+          this.enforcePulleyStops(this.pulleys, true);
+          this.projectPulleyVelocities(this.pulleys);
+        }
+        recorder?.velocityChange("constraint-stop", "Constraint / frame impulse", "reaction");
+        recorder?.captureVelocity();
+
+        if (this.globalDamping > 0.0) {
+          const decay = Math.max(0.0, 1.0 - this.globalDamping * h);
+          for (const b of this.bodies) {
+            b.vel.x *= decay;
+            b.vel.y *= decay;
+            b.omega *= decay;
           }
         }
-        for (const key of this.contactKeysBefore) {
-          if (!this.contactKeysAfter.has(key)) {
-            if (this.contactEvents.length < CONTACT_EVENT_LIMIT) {
-              this.contactEvents.push({ key, time: this.time + h, began: false });
-            } else this.contactEventsOverflow = true;
-          }
-        }
-        const previous = this.contactKeysBefore;
-        this.contactKeysBefore = this.contactKeysAfter;
-        this.contactKeysAfter = previous;
-      }
-      recorder?.velocityChange("contact-correction", "Contact numerical correction", "correction");
-      recorder?.captureVelocity();
-      // A contact impulse is computed on the particle that touched the wall or
-      // another body. Mounted particles must immediately hand the incompatible
-      // part of that impulse to their massless beam/support; otherwise they
-      // begin the next substep moving away from the rod and the position solver
-      // has to remove the error as a violent correction.
-      if (this.rodAttachments.length > 0) this.projectStandaloneRodVelocities();
-      // Ordinary contacts intentionally exclude the axle. Reassert the
-      // particle stop after every other position solver so no later correction
-      // can leave a particle inside the wheel for the next force evaluation.
-      if (this.pulleys.length > 0) {
-        this.enforcePulleyStops(this.pulleys, true);
-        this.projectPulleyVelocities(this.pulleys);
-      }
-      recorder?.velocityChange("constraint-stop", "Constraint / frame impulse", "reaction");
-      recorder?.captureVelocity();
+        recorder?.velocityChange("global-damping", "Global damping", "drag");
+        recorder?.captureVelocity();
 
-      if (this.globalDamping > 0.0) {
-        const decay = Math.max(0.0, 1.0 - this.globalDamping * h);
+        // interactive speed caps (drag tone-down): clamping at the end of
+        // every substep bounds whatever the integrator, springs, rods and
+        // contacts injected this substep, so a dragged assembly can chase
+        // and jiggle but never run away
         for (const b of this.bodies) {
-          b.vel.x *= decay;
-          b.vel.y *= decay;
-          b.omega *= decay;
-        }
-      }
-      recorder?.velocityChange("global-damping", "Global damping", "drag");
-      recorder?.captureVelocity();
-
-      // interactive speed caps (drag tone-down): clamping at the end of
-      // every substep bounds whatever the integrator, springs, rods and
-      // contacts injected this substep, so a dragged assembly can chase
-      // and jiggle but never run away
-      for (const b of this.bodies) {
-        const cap = b.speedCap;
-        if (cap !== Infinity) {
-          const v2 = b.vel.x * b.vel.x + b.vel.y * b.vel.y;
-          if (v2 > cap * cap) {
-            const s = cap / Math.sqrt(v2);
-            b.vel.x *= s;
-            b.vel.y *= s;
+          const cap = b.speedCap;
+          if (cap !== Infinity) {
+            const v2 = b.vel.x * b.vel.x + b.vel.y * b.vel.y;
+            if (v2 > cap * cap) {
+              const s = cap / Math.sqrt(v2);
+              b.vel.x *= s;
+              b.vel.y *= s;
+            }
           }
         }
-      }
 
-      // Performance mode's last guard, applied where it bounds everything the
-      // substep did rather than only the springs: a hard speed ceiling, so
-      // nothing can walk out to the range sanitize() has to freeze.
-      if (projected !== null) clampSpeeds(this.bodies, PERF_MAX_SPEED);
-      recorder?.velocityChange("speed-limit", "Speed-limit correction", "correction");
+        // Performance mode's last guard, applied where it bounds everything the
+        // substep did rather than only the springs: a hard speed ceiling, so
+        // nothing can walk out to the range sanitize() has to freeze.
+        if (projected !== null) clampSpeeds(this.bodies, PERF_MAX_SPEED);
+        recorder?.velocityChange("speed-limit", "Speed-limit correction", "correction");
 
-      this.time += h;
+        this.time += h;
+        remaining -= h;
+      } while (remaining > 0);
     }
     recorder?.captureVelocity();
     this.updatePerformanceSleep();
@@ -2213,12 +2663,13 @@ export class World {
       ln: DistanceLink;
       a: Body;
       b: Body;
+      alpha: number;
       wa: number;
       wb: number;
-      wSum: number;
-      alpha: number;
+      ordinaryWeight: number;
     }
     const rows: Row[] = [];
+    const generalized = this.rigidRodResponses.length > 0;
     for (const ln of rigid) {
       if (ln.compliance === 0 && this.standaloneRodMembers.has(ln)) { ln.lambda = 0; continue; }
       const a = ln.a;
@@ -2227,8 +2678,7 @@ export class World {
       const wb = b.invMass;
       if (wa + wb === 0.0) continue;
       ln.lambda = 0.0;
-      rows.push({ ln, a, b, wa, wb, wSum: wa + wb,
-                  alpha: ln.compliance * invH * invH });
+      rows.push({ ln, a, b, alpha: ln.compliance * invH * invH, wa, wb, ordinaryWeight: wa + wb });
     }
     const attachments = this.rodAttachments;
     if (rows.length === 0 && attachments.length === 0) return;
@@ -2255,8 +2705,9 @@ export class World {
       }
     }
     for (let pass = 0; pass < iterations; pass++) {
+      if (generalized) this.updateRigidRodResponses();
       let worst = 0.0;
-      for (const { ln, a, b, wa, wb, wSum, alpha } of rows) {
+      for (const { ln, a, b, alpha, wa, wb, ordinaryWeight } of rows) {
         const dx = b.pos.x - a.pos.x;
         const dy = b.pos.y - a.pos.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -2265,22 +2716,21 @@ export class World {
         if (ln.isRope && c <= 0.0) continue;
         const nx = dx / dist;
         const ny = dy / dist;
+        const response = generalized ? this.rigidRodByBody.get(a) : undefined;
+        if (response !== undefined && response === this.rigidRodByBody.get(b)) continue;
+        const wSum = generalized ? this.rodDirectionMass(a, nx, ny) + this.rodDirectionMass(b, nx, ny) : ordinaryWeight;
+        if (!(wSum > 0)) continue;
         const dlam = (-c - alpha * ln.lambda) / (wSum + alpha);
         ln.lambda += dlam;
         const error = c > 0.0 ? c : -c;
         if (error > worst) worst = error;
-        const ax = -wa * dlam * nx;
-        const ay = -wa * dlam * ny;
-        const bx = wb * dlam * nx;
-        const by = wb * dlam * ny;
-        a.pos.x += ax;
-        a.pos.y += ay;
-        b.pos.x += bx;
-        b.pos.y += by;
-        a.corrX += ax;
-        a.corrY += ay;
-        b.corrX += bx;
-        b.corrY += by;
+        if (generalized) {
+          this.applyRodPosition(a, -dlam * nx, -dlam * ny); this.applyRodPosition(b, dlam * nx, dlam * ny);
+        } else {
+          const ax = -wa * dlam * nx, ay = -wa * dlam * ny, bx = wb * dlam * nx, by = wb * dlam * ny;
+          a.pos.x += ax; a.pos.y += ay; a.corrX += ax; a.corrY += ay;
+          b.pos.x += bx; b.pos.y += by; b.corrX += bx; b.corrY += by;
+        }
       }
       for (const { body, rod, t } of attachments) {
         if (rod.compliance === 0 && this.standaloneRodMembers.has(rod)) continue;
@@ -2629,14 +3079,18 @@ export class World {
         ln.b.corrY = 0.0;
       }
     }
+    for (const body of [...touched.values()]) {
+      for (const member of this.rigidRodByBody.get(body)?.members ?? []) if (!touched.has(member.id)) {
+        touched.set(member.id, member); member.corrX = member.corrY = 0;
+      }
+    }
     for (let pass = 0; pass < iterations; pass++) {
       this.enforcePulleyStops(links, false);
       let worst = 0.0;
       for (const ln of links) {
+        this.updateRigidRodResponses();
         const a = ln.a;
         const b = ln.b;
-        const wa = a.invMass;
-        const wb = b.invMass;
         const geom = ln.geometry();
         const da = geom.da;
         const db = geom.db;
@@ -2653,14 +3107,12 @@ export class World {
         // so no per-pass closures or tuple allocations belong here.
         let gax = geom.nax;
         let gay = geom.nay;
-        let ga2 = 1.0;
         const arx = a.pos.x - ln.pulley.pos.x;
         const ary = a.pos.y - ln.pulley.pos.y;
         const ad = Math.hypot(arx, ary);
         if (ad <= PULLEY_RADIUS + a.radius + 1e-7 && ad >= 1e-12) {
           gax = 0.0;
           gay = 0.0;
-          ga2 = 0.0;
         } else if (ln.branchDistance("a") <= 1e-7) {
           const fd = Math.max(1e-12, ln.guideAOffset.length());
           const sigma = ln.wrapSweep < 0 ? -1 : 1;
@@ -2668,77 +3120,58 @@ export class World {
           const bny = -ln.guideAOffset.x * sigma / fd;
           // dlam is negative for an overlong string. A positive gradient
           // component along the allowed normal would therefore cross out.
-          const normal = gax * bnx + gay * bny;
+          const mass = this.rodDirectionMass(a, bnx, bny);
+          const normal = mass > 1e-18 ? this.rodForceInfluence(a, a, bnx, bny, gax, gay) / mass : 0;
           if (normal > 0.0) {
             gax -= normal * bnx;
             gay -= normal * bny;
-            ga2 = gax * gax + gay * gay;
           }
         }
         let gbx = geom.nbx;
         let gby = geom.nby;
-        let gb2 = 1.0;
         const brx = b.pos.x - ln.pulley.pos.x;
         const bry = b.pos.y - ln.pulley.pos.y;
         const bd = Math.hypot(brx, bry);
         if (bd <= PULLEY_RADIUS + b.radius + 1e-7 && bd >= 1e-12) {
           gbx = 0.0;
           gby = 0.0;
-          gb2 = 0.0;
         } else if (ln.branchDistance("b") <= 1e-7) {
           const fd = Math.max(1e-12, ln.guideBOffset.length());
           const sigma = ln.wrapSweep < 0 ? -1 : 1;
           const bnx = -ln.guideBOffset.y * sigma / fd;
           const bny = ln.guideBOffset.x * sigma / fd;
-          const normal = gbx * bnx + gby * bny;
+          const mass = this.rodDirectionMass(b, bnx, bny);
+          const normal = mass > 1e-18 ? this.rodForceInfluence(b, b, bnx, bny, gbx, gby) / mass : 0;
           if (normal > 0.0) {
             gbx -= normal * bnx;
             gby -= normal * bny;
-            gb2 = gbx * gbx + gby * gby;
           }
         }
-        const wSum = wa * ga2 + wb * gb2;
+        const wSum = this.rodDirectionMass(a, gax, gay) + this.rodDirectionMass(b, gbx, gby) +
+          2 * this.rodForceInfluence(a, b, gax, gay, gbx, gby);
         if (wSum === 0.0) continue;
         const alpha = ln.compliance * invH * invH;
         const dlam = (-c - alpha * ln.lambda) / (wSum + alpha);
         ln.lambda += dlam;
-        const ax = wa * dlam * gax;
-        const ay = wa * dlam * gay;
-        const bx = wb * dlam * gbx;
-        const by = wb * dlam * gby;
-        a.pos.x += ax;
-        a.pos.y += ay;
-        b.pos.x += bx;
-        b.pos.y += by;
-        a.corrX += ax;
-        a.corrY += ay;
-        b.corrX += bx;
-        b.corrY += by;
+        const rateA = a.held && Number.isFinite(a.kinematicCorrectionRate) ? Math.min(invH, a.kinematicCorrectionRate) : invH;
+        const rateB = b.held && Number.isFinite(b.kinematicCorrectionRate) ? Math.min(invH, b.kinematicCorrectionRate) : invH;
+        this.applyRodPosition(a, dlam * gax, dlam * gay, recorder === null ? 0 : rateA);
+        this.applyRodPosition(b, dlam * gbx, dlam * gby, recorder === null ? 0 : rateB);
         if (recorder !== null) {
-          const rateA = a.held && Number.isFinite(a.kinematicCorrectionRate)
-            ? Math.min(invH, a.kinematicCorrectionRate) : invH;
-          const rateB = b.held && Number.isFinite(b.kinematicCorrectionRate)
-            ? Math.min(invH, b.kinematicCorrectionRate) : invH;
-          const fullAX = wa * dlam * geom.nax, fullAY = wa * dlam * geom.nay;
-          const fullBX = wb * dlam * geom.nbx, fullBY = wb * dlam * geom.nby;
           recorder.add(a, `pulley-${ln.id}`, "Pulley-string tension", "pulley",
-            fullAX * a.mass * rateA, fullAY * a.mass * rateA, 1, -dlam * rateA);
+            dlam * geom.nax * rateA, dlam * geom.nay * rateA, 1, -dlam * rateA);
           recorder.add(b, `pulley-${ln.id}`, "Pulley-string tension", "pulley",
-            fullBX * b.mass * rateB, fullBY * b.mass * rateB, 1, -dlam * rateB);
-          // A stopped leg still bears the common string multiplier. Its
-          // frame/guide supplies the part removed by the feasible gradient.
+            dlam * geom.nbx * rateB, dlam * geom.nby * rateB, 1, -dlam * rateB);
           const frameA = ad <= PULLEY_RADIUS + a.radius + 1e-7;
           const frameB = bd <= PULLEY_RADIUS + b.radius + 1e-7;
           recorder.add(a, `pulley-${frameA ? "frame" : "guide"}-${ln.pulley.id}`,
             frameA ? "Pulley-frame reaction" : "Pulley guide reaction", "reaction",
-            (ax - fullAX) * a.mass * rateA, (ay - fullAY) * a.mass * rateA, 1, 0,
-            frameA && ad > 1e-12 ? -arx / ad : undefined,
-            frameA && ad > 1e-12 ? -ary / ad : undefined);
+            dlam * (gax - geom.nax) * rateA, dlam * (gay - geom.nay) * rateA, 1, 0,
+            frameA && ad > 1e-12 ? -arx / ad : undefined, frameA && ad > 1e-12 ? -ary / ad : undefined);
           recorder.add(b, `pulley-${frameB ? "frame" : "guide"}-${ln.pulley.id}`,
             frameB ? "Pulley-frame reaction" : "Pulley guide reaction", "reaction",
-            (bx - fullBX) * b.mass * rateB, (by - fullBY) * b.mass * rateB, 1, 0,
-            frameB && bd > 1e-12 ? -brx / bd : undefined,
-            frameB && bd > 1e-12 ? -bry / bd : undefined);
+            dlam * (gbx - geom.nbx) * rateB, dlam * (gby - geom.nby) * rateB, 1, 0,
+            frameB && bd > 1e-12 ? -brx / bd : undefined, frameB && bd > 1e-12 ? -bry / bd : undefined);
         }
         worst = Math.max(worst, Math.abs(dlam));
       }
@@ -2763,6 +3196,7 @@ export class World {
       let worst = 0;
       for (const ln of links) {
         if (ln.compliance !== 0) continue;
+        this.updateRigidRodResponses();
         const a = ln.a, b = ln.b, geometry = ln.geometry();
         if (geometry.totalLength < ln.length - 1e-7 || geometry.da < 1e-12 || geometry.db < 1e-12) continue;
         const rate = a.vel.x * geometry.nax + a.vel.y * geometry.nay +
@@ -2772,22 +3206,19 @@ export class World {
         const ga = this.pulleyVelocityGA, gb = this.pulleyVelocityGB;
         this.pulleyVelocityGradient(a, ln.pulley, ln.guideAOffset, -sigma, geometry.nax, geometry.nay, ga);
         this.pulleyVelocityGradient(b, ln.pulley, ln.guideBOffset, sigma, geometry.nbx, geometry.nby, gb);
-        const weight = a.invMass * (ga.x * ga.x + ga.y * ga.y) +
-          b.invMass * (gb.x * gb.x + gb.y * gb.y);
+        const weight = this.rodDirectionMass(a, ga.x, ga.y) + this.rodDirectionMass(b, gb.x, gb.y) +
+          2 * this.rodForceInfluence(a, b, ga.x, ga.y, gb.x, gb.y);
         if (weight <= 1e-18) continue;
         const impulse = rate / weight;
-        const ax = -impulse * a.invMass * ga.x, ay = -impulse * a.invMass * ga.y;
-        const bx = -impulse * b.invMass * gb.x, by = -impulse * b.invMass * gb.y;
-        a.vel.x += ax; a.vel.y += ay; b.vel.x += bx; b.vel.y += by;
+        this.applyRodVelocity(a, -impulse * ga.x, -impulse * ga.y, recorder !== null);
+        this.applyRodVelocity(b, -impulse * gb.x, -impulse * gb.y, recorder !== null);
         recorder?.add(a, `pulley-${ln.id}`, "Pulley-string tension", "pulley",
           -impulse * geometry.nax, -impulse * geometry.nay, 1, impulse);
         recorder?.add(b, `pulley-${ln.id}`, "Pulley-string tension", "pulley",
           -impulse * geometry.nbx, -impulse * geometry.nby, 1, impulse);
         if (recorder !== null) {
-          this.recordPulleyVelocitySupport(a, ln.pulley, ax * a.mass + impulse * geometry.nax,
-            ay * a.mass + impulse * geometry.nay);
-          this.recordPulleyVelocitySupport(b, ln.pulley, bx * b.mass + impulse * geometry.nbx,
-            by * b.mass + impulse * geometry.nby);
+          this.recordPulleyVelocitySupport(a, ln.pulley, impulse * (geometry.nax - ga.x), impulse * (geometry.nay - ga.y));
+          this.recordPulleyVelocitySupport(b, ln.pulley, impulse * (geometry.nbx - gb.x), impulse * (geometry.nby - gb.y));
         }
         worst = Math.max(worst, rate);
       }
@@ -2802,14 +3233,15 @@ export class World {
     if (d <= PULLEY_RADIUS + body.radius + 1e-7 && d > 1e-12) {
       const rx = dx / d, ry = dy / d;
       if (body.vel.x * rx + body.vel.y * ry <= 1e-10) { target.set(0, 0); return; }
+      if (this.rigidRodByBody.has(body)) { this.projectRodGradient(body, nx, ny, -ry, rx, target); return; }
       const projection = nx * rx + ny * ry;
       target.set(rx * projection, ry * projection); return;
     }
     const fd = Math.max(1e-12, fallback.length());
     const bx = -fallback.y * side / fd, by = fallback.x * side / fd;
-    const projection = nx * bx + ny * by;
+    const projection = this.rodForceInfluence(body, body, bx, by, nx, ny);
     if (dx * bx + dy * by <= 1e-7 && body.vel.x * bx + body.vel.y * by <= 1e-10 && projection > 0) {
-      target.set(nx - projection * bx, ny - projection * by); return;
+      this.projectRodGradient(body, nx, ny, bx, by, target); return;
     }
     target.set(nx, ny);
   }
