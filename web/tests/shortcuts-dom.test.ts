@@ -8,7 +8,7 @@ const togglePlay = vi.fn();
 const host: ShortcutHost = {
   app: { togglePlay } as unknown as App,
   tour: { visible: false }, overlays: [],
-  toggleLibrary() {}, toggleHelp() {}, toggleInspector() {},
+  toggleLibrary() {}, toggleHelp() {}, openSettings() {}, toggleInspector() {},
 };
 
 beforeEach(() => {

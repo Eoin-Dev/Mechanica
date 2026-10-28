@@ -48,14 +48,14 @@ const VOID: Palette = {
 };
 
 const LIGHT: Palette = {
-  BG: [246, 247, 249], PANEL: [255, 255, 255], PANEL_LIGHT: [240, 242, 245],
-  PANEL_HOVER: [227, 230, 235], OUTLINE: [203, 208, 216], ACCENT: [35, 110, 180],
+  BG: [248, 248, 248], PANEL: [255, 255, 255], PANEL_LIGHT: [245, 245, 245],
+  PANEL_HOVER: [229, 229, 229], OUTLINE: [118, 128, 142], ACCENT: [30, 99, 167],
   ACCENT_HOT: [25, 95, 170], ACCENT_DARK: [200, 222, 242],
-  TEXT: [28, 32, 38], TEXT_DIM: [96, 103, 113], TEXT_FAINT: [105, 111, 120],
-  GOOD: [40, 145, 60], WARN: [185, 145, 15], BAD: [200, 55, 55],
-  GRID: [233, 235, 239], GRID_MAJOR: [216, 219, 225], AXIS: [152, 158, 168],
-  SELECTION: [25, 118, 210], VEL_COLOR: [25, 145, 60],
-  ACC_COLOR: [205, 125, 25], FORCE_COLOR: [200, 55, 55],
+  TEXT: [24, 29, 37], TEXT_DIM: [64, 74, 88], TEXT_FAINT: [78, 89, 104],
+  GOOD: [30, 110, 52], WARN: [142, 101, 0], BAD: [183, 39, 47],
+  GRID: [231, 231, 231], GRID_MAJOR: [203, 203, 203], AXIS: [118, 118, 118],
+  SELECTION: [25, 99, 180], VEL_COLOR: [27, 115, 60],
+  ACC_COLOR: [155, 85, 0], FORCE_COLOR: [183, 39, 47],
 };
 
 const PALETTES: Record<ThemeName, Palette> = {
@@ -225,6 +225,7 @@ export function setTheme(requested: ThemeName): void {
   ACCENT_TEXT = contrastSafe(ACCENT, [BG, PANEL, PANEL_LIGHT, PANEL_HOVER,
     tint(PANEL_LIGHT, 0.14), tint(PANEL_HOVER, 0.08)], 4.6);
   FOCUS = contrastSafe(ACCENT, [BG, PANEL, PANEL_LIGHT, PANEL_HOVER], 3.0);
+  SELECTION = contrastSafe(SELECTION, [BG, PANEL], 3.0);
   ACCENT_INK = surfaceInk(ACCENT);
   ACCENT_DARK_INK = surfaceInk(ACCENT_DARK);
   paletteRevision++;

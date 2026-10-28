@@ -4,11 +4,13 @@
  * stable, controls refresh in place on the panel cadence so live values
  * (positions, velocities) stay current without stealing focus.
  */
+import { choiceSelect } from "./choice-select";
 import { App, GraphMode, Panel } from "../app";
 import { BODY_PALETTE, Body, Color, MATERIALS, SCENE_MAX_COORDINATE, Wall } from "../engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../engine/links";
+import { DeleteZone, DELETE_ZONE_SHAPES } from "../engine/delete-zone";
 import { Driver, ForceField, INTEGRATORS, Integrator } from "../engine/world";
-import { PlaybackEventKind, analysePulley, forceLedger, projectForce, touchingSlopeWall } from "../education/analysis";
+import { PlaybackEventKind, displayForceResultant, forceLedger, projectForce, touchingSlopeWall, sustainedForceLedger, rodMomentAnalysis } from "../education/analysis";
 import { forceSymbols } from "../engine/force-diagnostics";
 import { analyseElasticLink, elasticModulus, stiffnessForModulus } from "../education/elasticity";
 import { Selectable } from "../render/draw";
@@ -21,7 +23,9 @@ import { INSPECTOR_W_MAX, INSPECTOR_W_MIN, PHONE_QUERY, RefreshGroup, button,
 import { ICONS } from "./icons";
 import { NUMERIC_EDIT_EVENT, type NumericEditPhase } from "./numeric-scrub";
 import { mathEdit } from "./mathedit";
+import { upgradeMath } from "./guide";
 import { overlayToggles } from "./panels";
+import type { TourInspectorSection, TourInspectorSession } from "./tour";
 
 /** A saved width, held to the same bounds the splitter enforces. */
 function clampInspectorW(w: number): number {
@@ -43,7 +47,7 @@ function clampInspectorW(w: number): number {
  */
 function selectionKey(o: Selectable): string {
   const kind = o instanceof Body ? "b"
-    : o instanceof Wall ? "w"
+    : o instanceof Wall ? "w" : o instanceof DeleteZone ? "z"
       : o instanceof PulleyLink ? "p"
         : o instanceof SpringLink ? "s" : "r";
   return `${kind}${o.id}`;
@@ -58,6 +62,29 @@ const RESTITUTION_HELP = "Coefficient of restitution e: relative separation spee
 const FRICTION_HELP = "Coefficient of friction μ. Contact uses √(μ₁ × μ₂) from the two " +
   "materials; either value at zero makes contact frictionless. Tangential friction " +
   "is limited by μ times the normal reaction and acts separately from restitution.";
+
+/** Static equations remain properly typeset even before the optional font
+ * chunk arrives. The shared Guide upgrader replaces this MathML with MathLive. */
+function elasticEquation(kind: "force" | "energy"): HTMLElement {
+  const node = (tag: string, ...children: Array<Node | string>): MathMLElement => {
+    const element = document.createElementNS("http://www.w3.org/1998/Math/MathML", tag);
+    element.append(...children); return element;
+  };
+  const variable = (name: string): MathMLElement => node("mi", name);
+  const squared = (): MathMLElement => node("msup", variable("x"), node("mn", "2"));
+  const force = kind === "force";
+  const equation = node("math", node("mrow", variable(force ? "F" : "E"), node("mo", "="),
+    ...(force ? [] : [node("mfrac", node("mn", "1"), node("mn", "2"))]),
+    variable("k"), force ? variable("x") : squared(), node("mo", "="),
+    node("mfrac", node("mrow", variable("λ"), force ? variable("x") : squared()),
+      force ? variable("ℓ") : node("mrow", node("mn", "2"), variable("ℓ")))));
+  equation.setAttribute("display", "block"); equation.setAttribute("aria-hidden", "true");
+  const root = el("div", { class: "guide-math elastic-equation", role: "math", tabindex: "0",
+    "aria-label": force ? "F equals k times x equals lambda times x divided by natural length ell"
+      : "E equals one half k times x squared equals lambda times x squared divided by two times natural length ell" }, equation);
+  root.dataset.latex = force ? "F=kx=\\frac{\\lambda x}{\\ell}" : "E=\\frac{1}{2}kx^{2}=\\frac{\\lambda x^{2}}{2\\ell}";
+  return root;
+}
 
 /** A Performance-mode banner above controls the mode makes unavailable: why
  * they are greyed out, and the single click that gives them back. Present
@@ -86,6 +113,9 @@ function perfModeBanner(app: App, message: string): { root: HTMLElement; refresh
 export class Inspector implements Panel {
   private app: App;
   private root: HTMLElement;
+  private contextIcon!: HTMLElement;
+  private contextType!: HTMLElement;
+  private contextName!: HTMLElement;
   private body: HTMLElement;
   private tabBtns = new Map<Tab, HTMLButtonElement>();
   private tab: Tab = "Selection";
@@ -109,6 +139,60 @@ export class Inspector implements Panel {
   private splitter: HTMLElement;
   private reopenStrip: HTMLElement;
   private handle: HTMLElement;
+
+  /** Reveal the tour's actual controls without persisting temporary layout or
+   * selection changes. The tour restores this view even when it is skipped. */
+  beginTour(): TourInspectorSession {
+    const previous = { tab: this.tab, scroll: this.body.scrollTop,
+      desktop: this.desktopCollapsed, phone: this.phoneCollapsed,
+      selection: [...this.app.selection] };
+    const diagrams = new Map(this.app.world.bodies.map(body => [body, body.showForceComponents]));
+    const particle = (): Body | undefined => {
+      const eligible = (body: Body): boolean => !body.isAnchor && !body.isPivot && !body.isRodEndpoint && !body.isPulley;
+      return this.app.selection.find((item): item is Body => item instanceof Body && eligible(item)) ??
+        this.app.world.bodies.find(eligible);
+    };
+    return {
+      canShow: section => section !== "particle" && section !== "forces" || particle() !== undefined,
+      reveal: (section: TourInspectorSection) => {
+        const tab: Tab = section === "graphs" ? "View" : section === "fields" ? "World" : "Selection";
+        this.desktopCollapsed = false; this.phoneCollapsed = false;
+        this.applyCollapsed();
+        if (section === "particle" || section === "forces") {
+          const body = particle();
+          if (body) {
+            if (section === "forces" && !this.app.perfMode && !body.showForceComponents) {
+              body.showForceComponents = true; this.app.invalidateCanvas();
+            }
+            if (this.app.selection.length !== 1 || this.app.selection[0] !== body) this.app.setSelection([body]);
+          }
+        }
+        if (this.tab !== tab) { this.tab = tab; this.rebuild(); }
+        else this.refresh();
+        const selector = section === "forces" ? ".force-toggle" : section === "particle" ? ".inspector-object-head" :
+          section === "graphs" ? '[role="combobox"][aria-label="Graph shown in the dock"]' : ".field-actions";
+        const target = this.body.querySelector<HTMLElement>(selector) ?? this.body;
+        const panel = this.body.getBoundingClientRect(), box = target.getBoundingClientRect();
+        if (box.top < panel.top + 12 || box.bottom > panel.bottom - 12) {
+          this.body.scrollTop += box.top - panel.top - 12;
+        }
+        return target;
+      },
+      restore: () => {
+        for (const [body, enabled] of diagrams) {
+          if (this.app.world.bodies.includes(body)) body.showForceComponents = enabled;
+        }
+        const live = new Set<Selectable>([...this.app.world.bodies, ...this.app.world.walls,
+          ...this.app.world.links, ...this.app.world.deleteZones]);
+        this.tab = previous.tab;
+        this.app.setSelection(previous.selection.filter(item => live.has(item)));
+        this.rebuild();
+        this.desktopCollapsed = previous.desktop; this.phoneCollapsed = previous.phone;
+        this.applyCollapsed(); this.body.scrollTop = previous.scroll;
+        this.app.invalidateCanvas();
+      },
+    };
+  }
 
   tabRecoveryState(): { tab: Tab; forceValuesOpen: boolean; eventHistoryOpen: boolean } {
     const forceValues = this.body.querySelector<HTMLDetailsElement>(".force-values");
@@ -148,6 +232,7 @@ export class Inspector implements Panel {
       const target = event.target instanceof Element ? event.target : null;
       const control = target?.closest("input, math-field") ?? null;
       if (control === null) return;
+      if (control.closest("[data-inspector-navigation]") !== null) return;
       if (event.type === "input" &&
           !control.matches('input[type="range"], input[type="color"]')) {
         return;
@@ -175,6 +260,7 @@ export class Inspector implements Panel {
       const target = event.target instanceof Element ? event.target : null;
       if (target === null || target.closest("button") === null) return;
       if (target.closest("[data-inspector-navigation]") !== null) return;
+      if (target.closest('.tabs, .reopen-strip, .mobile-inspector-handle') !== null) return;
       app.beginEdit();
       // Mutation buttons synchronously commit in their own handler. A tab,
       // collapse or guide button does not; clear that speculative boundary
@@ -221,7 +307,12 @@ export class Inspector implements Panel {
     // long panels (many drivers/fields) only refresh the controls that
     // are actually scrolled into view
     this.group.cullWithin(this.body);
-    root.append(tabs, this.body);
+    this.contextIcon = el("span", { class: "studio-context-icon", "aria-hidden": "true" });
+    this.contextType = el("span", { class: "studio-context-type" });
+    this.contextName = el("strong", { class: "studio-context-name" });
+    const context = el("div", { class: "studio-inspector-heading" }, this.contextIcon,
+      el("div", { class: "studio-context-copy" }, this.contextType, this.contextName));
+    root.append(context, tabs, this.body);
 
     // width splitter (persisted)
     const saved = app.settings.inspector_w;
@@ -232,7 +323,7 @@ export class Inspector implements Panel {
     };
     splitterDrag(splitter, (e) => {
       const w = Math.max(INSPECTOR_W_MIN,
-                         Math.min(INSPECTOR_W_MAX, window.innerWidth - e.clientX));
+                         Math.min(INSPECTOR_W_MAX, root.getBoundingClientRect().right - e.clientX));
       applyWidth(w);
     }, () => {
       app.settings.inspector_w = root.getBoundingClientRect().width;
@@ -266,6 +357,7 @@ export class Inspector implements Panel {
     this.handle.insertAdjacentHTML("beforeend", ICONS.chev_left);
     this.handle.addEventListener("click", () => this.toggleCollapsed());
     document.body.append(this.handle);
+    app.registerCanvasOverlay(this.handle);
     this.applyCollapsed();
     // re-apply when the viewport crosses the phone breakpoint (media-change
     // AND resize: some webviews throttle one or the other)
@@ -290,6 +382,7 @@ export class Inspector implements Panel {
   private applyCollapsed(): void {
     const phone = isPhone();
     const collapsed = phone ? this.phoneCollapsed : this.desktopCollapsed;
+    if (collapsed) this.group.cancelInteractions();
     this.root.classList.toggle("collapsed", collapsed);
     this.root.classList.toggle("mobile-open", !collapsed && phone);
     this.body.hidden = collapsed;
@@ -380,7 +473,9 @@ export class Inspector implements Panel {
         (link.a === body || link.b === body || link.pulley === body))
         .map((link) => link.id).join(",");
     }
-    return `sel:${ids}:${drivers}:w${app.world.walls.length}${inventory}:p${pulleyMembership}:${bodyRole}`;
+    const rodMembership = sel.length === 1 ? this.selectedRods(sel[0]).map(rod =>
+      `${rod.id}:${this.rodParts(rod).map(body => body.id).join(",")}`).join("|") : "";
+    return `sel:${ids}:${drivers}:w${app.world.walls.length}:z${app.world.deleteZones.length}:t${app.controller.tool}${inventory}:p${pulleyMembership}:${bodyRole}:r${rodMembership}`;
   }
 
   private refreshStructure(): void {
@@ -394,7 +489,33 @@ export class Inspector implements Panel {
   refresh(): void {
     if (isPhone() ? this.phoneCollapsed : this.desktopCollapsed) return;
     this.refreshStructure();
+    this.refreshContext();
     this.group.refreshAll();
+  }
+
+  private refreshContext(): void {
+    const selection = this.app.selection;
+    let kind: string = this.tab, name = this.tab === "World" ? "Simulation setup" : "Canvas & analysis", icon = ICONS.gear;
+    if (this.tab === "Selection") {
+      const selected = selection[0];
+      if (selection.length > 1) { kind = "Selection"; name = `${selection.length} objects`; icon = ICONS.select; }
+      else if (!selected) { kind = "Selection"; name = "No selection"; icon = ICONS.select; }
+      else if (selected instanceof Body) {
+        kind = selected.isPulley ? "Pulley" : selected.isAnchor ? "Anchor" : "Particle";
+        name = kind;
+        icon = selected.isPulley ? ICONS.pulley : selected.isAnchor ? ICONS.anchor : ICONS.body;
+      } else if (selected instanceof DeleteZone) { kind = "Delete zone"; name = kind; icon = ICONS.eraser; }
+      else if (selected instanceof Wall) { kind = "Wall"; name = kind; icon = ICONS.wall; }
+      else {
+        kind = selected instanceof PulleyLink ? "Pulley assembly" : selected instanceof SpringLink ? "Spring" : selected.isRope ? "String" : "Rod";
+        name = kind;
+        icon = selected instanceof PulleyLink ? ICONS.pulley : selected instanceof SpringLink ? ICONS.spring : selected.isRope ? ICONS.rope : ICONS.rod;
+      }
+    }
+    const context = this.tab === "Selection" ? "Inspector" : this.tab;
+    if (this.contextType.textContent !== context) this.contextType.textContent = context;
+    if (this.contextName.textContent !== name) this.contextName.textContent = name;
+    if (this.contextIcon.dataset.kind !== kind) { this.contextIcon.innerHTML = icon; this.contextIcon.dataset.kind = kind; }
   }
 
   private commit = (): void => {
@@ -415,6 +536,7 @@ export class Inspector implements Panel {
     if (this.tab === "Selection") this.buildSelection();
     else if (this.tab === "World") this.buildWorld();
     else this.buildView();
+    this.refreshContext();
     this.group.refreshAll();
   }
 
@@ -460,6 +582,17 @@ export class Inspector implements Panel {
   private buildSelection(): void {
     const app = this.app;
     const sel = app.selection;
+    if (app.controller.tool === "eraser") {
+      this.sub("Delete tool");
+      const modes = ["Erase objects", "Circle zone", "Rectangle zone", "Capsule zone"];
+      const values = ["scrub", ...DELETE_ZONE_SHAPES] as const;
+      const mode = segmented(modes, () => modes[values.indexOf(app.controller.eraserShape)], value => {
+        app.controller.eraserShape = values[modes.indexOf(value)]; app.invalidateCanvas();
+      }, "Delete tool mode");
+      mode.root.classList.add("delete-zone-modes");
+      mode.root.setAttribute("data-inspector-navigation", ""); this.add(mode);
+      this.body.append(el("p", { class: "dim", text: "Erase objects now, or drag a persistent zone. Objects touching an enabled zone are removed during playback. Select a zone to edit its shape and dimensions." }));
+    }
     if (sel.length === 0) {
       const lines = isTouch()
         ? ["Nothing selected.", "",
@@ -478,7 +611,7 @@ export class Inspector implements Panel {
       const rows: Array<[keyof typeof flt, string]> = [
         ["bodies", "Bodies / particles"], ["anchors", "Anchors"],
         ["pulleys", "Pulleys"], ["walls", "Walls"],
-        ["springs", "Springs & strings"], ["rods", "Rods"],
+        ["springs", "Springs & strings"], ["rods", "Rods"], ["zones", "Delete zones"],
       ];
       for (const [key, label] of rows) {
         this.add(checkbox(label, () => flt[key], (v) => { flt[key] = v; },
@@ -490,6 +623,7 @@ export class Inspector implements Panel {
         [world.bodies.filter((b) => b.isAnchor && !b.isPulley), "anchor", "anchors"],
         [world.bodies.filter((b) => b.isPulley), "pulley", "pulleys"],
         [world.walls, "wall", "walls"],
+        [world.deleteZones, "delete zone", "delete zones"],
         [world.links.filter((l) => l instanceof SpringLink), "spring/string", "springs & strings"],
         [world.links.filter((l) => l instanceof DistanceLink), "rod", "rods"],
         [world.links.filter((l) => l instanceof PulleyLink), "pulley string", "pulley strings"],
@@ -523,6 +657,7 @@ export class Inspector implements Panel {
           selectedPulley = link;
         }
       }
+      for (const rod of this.selectedRods(selected)) this.buildRodAssembly(rod);
     }
     const objectStart = this.body.childElementCount;
     if (sel.length === 1 && sel[0] instanceof Body) {
@@ -530,38 +665,86 @@ export class Inspector implements Panel {
       else if (sel[0].isPivot) this.buildSinglePivot(sel[0]);
       else if (sel[0].isAnchor) this.buildSingleAnchor(sel[0]);
       else this.buildSingleBody(sel[0]);
-    } else if (sel.length === 1 && sel[0] instanceof Wall) this.buildWall(sel[0]);
+    } else if (sel.length === 1 && sel[0] instanceof DeleteZone) this.buildDeleteZone(sel[0]);
+    else if (sel.length === 1 && sel[0] instanceof Wall) this.buildWall(sel[0]);
     else if (sel.length === 1) {
       this.buildLink(sel[0] as DistanceLink | SpringLink | PulleyLink);
     }
     else this.buildMulti(sel);
     const particle = sel[0];
-    if (selectedPulley && sel.length === 1 && particle instanceof Body &&
-        (particle === selectedPulley.a || particle === selectedPulley.b)) {
-      const part = particle === selectedPulley.a ? "Particle A" : "Particle B";
-      const cue = el("span", { class: "inspector-particle-cue", "aria-hidden": "true" });
-      const head = el("div", { class: "inspector-object-head" }, cue, el("h3", { text: part }));
+    if (sel.length === 1) {
+      const part = particle instanceof Body ? particle.isPulley ? "Pulley wheel" : particle.isAnchor ? "Anchor" :
+        selectedPulley ? (particle === selectedPulley.a ? "Particle A" : "Particle B") : "Particle" :
+        particle instanceof DeleteZone ? "Delete zone" : particle instanceof Wall ? "Wall" : particle instanceof PulleyLink ? "Pulley string" :
+        particle instanceof SpringLink ? "Spring or string" : "Rod or string";
       const card = el("div", { class: "inspector-object-card", role: "group",
-        "aria-label": `${part} properties` }, head, ...[...this.body.children].slice(objectStart));
+        "aria-label": `${part} properties` }, ...[...this.body.children].slice(objectStart));
       this.body.append(card);
-      this.group.add({ root: head, refresh: () => {
-        const colour = `rgb(${particle.color.join(", ")})`;
-        if (cue.style.backgroundColor !== colour) cue.style.backgroundColor = colour;
-      } });
     }
   }
 
-  private nameEdit(obj: { name: string }): void {
-    this.add(textEdit(() => obj.name, (s) => {
-      obj.name = s.trim() || obj.name;
+  private buildDeleteZone(zone: DeleteZone): void {
+    this.objectHeader(zone); this.sub("Delete zone");
+    this.add(checkbox("Enabled", () => zone.enabled, value => { zone.enabled = value; this.commit(); }));
+    this.add(segmented([...DELETE_ZONE_SHAPES], () => zone.shape, value => {
+      zone.shape = value as typeof zone.shape; this.commit();
+    }, "Zone shape"));
+    this.addHalf(numEdit("x", () => zone.pos.x, value => { zone.pos.x = value; }, "m", this.commit),
+      numEdit("y", () => zone.pos.y, value => { zone.pos.y = value; }, "m", this.commit));
+    this.add(slider("Width", () => zone.width, value => { zone.width = value; }, .01, 100,
+      { unit: "m", log: true, onCommit: this.commit, tooltip: "Total width; for a circle this is its diameter." }));
+    this.add(slider("Height", () => zone.height, value => { zone.height = value; }, .01, 100,
+      { unit: "m", log: true, onCommit: this.commit, disabled: () => zone.shape === "circle" }));
+    this.add(slider("Angle", () => zone.angle * 180 / Math.PI, value => { zone.angle = value * Math.PI / 180; }, -180, 180,
+      { unit: "°", onCommit: this.commit, disabled: () => zone.shape === "circle" }));
+    this.body.append(el("p", { class: "dim", text: "Anything touching this zone is removed when the simulation advances. Connected objects are released or removed together. Zones remain until you delete them." }));
+    const actions = el("div", { class: "btn-grid-2" });
+    actions.append(button("Duplicate", () => this.app.controller.duplicateSelection()).root,
+      button("Delete", () => this.app.controller.deleteSelection(), { style: "danger" }).root);
+    this.body.append(section("Actions"), actions);
+  }
+
+  /** Every object uses one inline name editor with a compact identity cue. */
+  private objectHeader(b: Selectable, fallback = ""): void {
+    const particle = b instanceof Body && !b.isAnchor;
+    const cue = el("span", { class: particle ? "inspector-particle-cue" : "inspector-object-icon", "aria-hidden": "true" });
+    if (!particle) {
+      const icon = b instanceof DeleteZone ? "eraser" : b instanceof Wall ? "wall" : b instanceof Body ? b.isPulley ? "pulley" : "anchor" :
+        b instanceof PulleyLink ? "rope" : b instanceof SpringLink ? b.tensionOnly ? "rope" : "spring" : b.isRope ? "rope" : "rod";
+      cue.innerHTML = ICONS[icon];
+    }
+    const editor = textEdit(() => b.name || fallback, value => {
+      b.name = value.trim() || b.name;
       this.commit();
       return true;
-    }, "name", "Name", 200));
+    }, "Object name", "Name", 200);
+    const input = editor.root as HTMLInputElement;
+    input.classList.add("inspector-particle-name");
+    input.title = "Click to rename this object";
+    const editCue = el("span", { class: "inspector-name-edit-cue", "aria-hidden": "true", text: "✎" });
+    const name = el("div", { class: "inspector-name-editor" }, input, editCue);
+    const pulley = particle ? this.app.world.links.find(link => link instanceof PulleyLink && (link.a === b || link.b === b)) : undefined;
+    const badge = pulley instanceof PulleyLink ? el("span", {
+      class: "inspector-pulley-role", text: pulley.a === b ? "A" : "B",
+      "aria-label": `Pulley particle ${pulley.a === b ? "A" : "B"}`,
+      title: `Particle ${pulley.a === b ? "A" : "B"} in the pulley assembly`,
+    }) : null;
+    const head = el("div", { class: "inspector-object-head" }, cue, name, badge);
+    head.addEventListener("click", event => {
+      if (event.target !== input) { input.focus(); input.select(); }
+    });
+    this.add({ ...editor, root: head, refresh: () => {
+      editor.refresh?.();
+      if (particle && b instanceof Body) {
+        const colour = `rgb(${b.color.join(", ")})`;
+        if (cue.style.backgroundColor !== colour) cue.style.backgroundColor = colour;
+      }
+    } });
   }
 
   private buildSingleBody(b: Body): void {
     const app = this.app;
-    this.nameEdit(b);
+    this.objectHeader(b);
     this.add(slider("Mass", () => b.mass, (v) => { b.mass = v; },
       0.001, 10000.0, { unit: "kg", log: true, onCommit: this.commit,
         tooltip: "Mass of the body, both inertial and gravitational." }));
@@ -570,13 +753,19 @@ export class Inspector implements Panel {
         0.01, 10.0, { unit: "m", log: true, onCommit: this.commit,
           tooltip: "Size of the body. Mass is set separately." }));
     }
+    const onRod = () => b.rodAttachmentId !== null || app.world.links.some(link =>
+      link instanceof DistanceLink && !link.isRope && (link.a === b || link.b === b));
+    const positionOptions = { readOnly: onRod,
+      readOnlyHelp: "Detach from the rod to edit position freely.",
+      onReadOnlyAttempt: () => app.toast("Detach from the rod to edit position freely.") };
     this.addHalf(
-      numEdit("x", () => b.pos.x, (v) => { b.pos.x = v; }, "m", this.commit, fmt3dp),
-      numEdit("y", () => b.pos.y, (v) => { b.pos.y = v; }, "m", this.commit, fmt3dp));
+      numEdit("x", () => b.pos.x, (v) => { if (!onRod()) b.pos.x = v; }, "m", this.commit, fmt3dp, positionOptions),
+      numEdit("y", () => b.pos.y, (v) => { if (!onRod()) b.pos.y = v; }, "m", this.commit, fmt3dp, positionOptions));
+    this.buildRodAttachment(b);
     this.addHalf(
       numEdit("vx", () => b.vel.x, (v) => { b.vel.x = v; }, "", this.commit, fmt3dp),
       numEdit("vy", () => b.vel.y, (v) => { b.vel.y = v; }, "", this.commit, fmt3dp));
-    this.add(slider("Spin", () => b.omega, (v) => { b.omega = v; },
+    this.add(slider("Spin", () => b.omega, (v) => { b.omega = b.noRotation ? 0 : v; },
       -100.0, 100.0, { unit: "rad/s", fmt: (v) => v.toFixed(2), onCommit: this.commit,
         disabled: () => b.noRotation,
         tooltip: "Rate the body spins about its own centre. Unavailable " +
@@ -603,7 +792,6 @@ export class Inspector implements Panel {
       numEdit("Fy", () => b.constForce.y, (v) => { b.constForce.y = v; }, "N", this.commit));
 
     this.buildParticleAnalysis(b);
-    this.buildRodAttachment(b);
 
     const drv = this.app.world.drivers.find((d) => d.bodyId === b.id);
     this.sub("Driving force");
@@ -633,15 +821,56 @@ export class Inspector implements Panel {
     const app = this.app;
     this.sub("Forces on canvas");
     const parent = this.target;
-    const controls = el("div", { class: "force-controls" });
+    const controls = el("div", { class: "force-controls", "data-inspector-navigation": "" });
     parent.append(controls);
     this.target = controls;
     const diagram = checkbox("Free-body diagram", () => b.showForceComponents,
-      (value) => { b.showForceComponents = value; app.invalidateCanvas(); },
+      (value) => { b.showForceComponents = value; app.invalidateCanvas(); this.refresh(); },
       "Show labelled forces immediately. After a step, values are averages over the displayed interval.", () => app.perfMode);
     diagram.root.classList.add("force-toggle");
     diagram.root.querySelector("input")!.setAttribute("aria-label", "Free-body forces on canvas");
     this.add(diagram);
+    this.add(checkbox("Collision impulses", () => b.showCollisionImpulses,
+      value => { b.showCollisionImpulses = value; app.invalidateCanvas(); },
+      "Show measured collision impulse J in N·s on impact frames. Sustained reaction and friction stay in N. Pause or step back to inspect an impact.", () => app.perfMode));
+    const attachedRod = this.selectedRods(b)[0];
+    if (attachedRod !== undefined) this.add(checkbox("Rod moments", () => b.showRodMoments,
+      value => { b.showRodMoments = value; if (value) b.showForceComponents = true; app.invalidateCanvas(); },
+      "Show this particle's signed force moments about the rod pivot, or its centre of mass without a pivot. Positive means anticlockwise.", () => app.perfMode));
+    const impactReadout = el("div", { class: "force-impulses", "aria-label": "Collision impulses" });
+    const momentReadout = el("div", { class: "force-moments", "aria-label": "Rod moments" });
+    let impactKey = "", momentKey = "";
+    this.add({ root: el("div", {}, impactReadout, momentReadout), refresh: () => {
+      const enabled = b.showForceComponents && !app.perfMode;
+      const impulses = enabled && b.showCollisionImpulses ? app.world.collisionImpulses.filter(entry => entry.bodyId === b.id) : [];
+      impactReadout.hidden = impulses.length === 0;
+      const nextImpactKey = JSON.stringify(impulses);
+      if (nextImpactKey !== impactKey) {
+        impactReadout.replaceChildren(...impulses.map(entry => {
+          const source = entry.sourceId === null ? app.world.walls.find(wall => wall.id === entry.wallId)?.name :
+            app.world.bodies.find(body => body.id === entry.sourceId)?.name;
+          return el("div", {}, el("strong", { text: `J: Collision with ${source || "contact"}` }),
+            el("div", { class: "force-value-components" },
+              el("span", { text: `Jx ${analysisNumber(entry.jx)} N·s` }),
+              el("span", { text: `Jy ${analysisNumber(entry.jy)} N·s` })),
+            el("div", { class: "faint", text: `t = ${fmt3dp(entry.time)} s` }));
+        })); impactKey = nextImpactKey;
+      }
+      const moment = enabled && b.showRodMoments ? rodMomentAnalysis(app.world, b,
+        sustainedForceLedger(app.world, b, forceLedger(app.world, b))) : null;
+      momentReadout.hidden = moment === null;
+      const nextMomentKey = JSON.stringify(moment);
+      if (nextMomentKey !== momentKey) {
+        momentReadout.replaceChildren();
+        if (moment !== null) momentReadout.append(
+          el("strong", { text: `Moments about ${moment.reference}` }),
+          el("div", { class: "faint", text: "Anticlockwise + · Clockwise −" }),
+          ...moment.entries.map(entry => el("div", { class: "force-moment-row" },
+            el("span", { text: entry.label }), el("span", { text: `${analysisNumber(entry.moment)} N·m` }))),
+          el("div", { class: "force-resultant", text: `Στ ${analysisNumber(moment.moment)} N·m` }));
+        momentKey = nextMomentKey;
+      }
+    } });
 
     const readout = el("details", { class: "force-values" },
       el("summary", { text: "Values and sources", "aria-label": "Force values and sources" }));
@@ -661,7 +890,10 @@ export class Inspector implements Panel {
     // their combined box so visible scientific values never stop refreshing.
     const notation = el("div", { class: "force-notation", role: "group", "aria-label": "Force notation" });
     let notationKey = "";
-    const forceReadout = el("div", { class: "force-readout" }, forceNote, notation, readout);
+    const resultantComponents = el("span", { class: "force-value-components" });
+    const resultant = el("div", { class: "force-resultant", "aria-label": "Resultant force" },
+      el("span", { class: "force-value-name", text: "Resultant" }), resultantComponents);
+    const forceReadout = el("div", { class: "force-readout" }, forceNote, notation, readout, resultant);
     this.add({ root: forceReadout, refresh: () => {
       forceNote.hidden = !b.showForceComponents || app.perfMode;
       readout.hidden = forceNote.hidden;
@@ -669,9 +901,10 @@ export class Inspector implements Panel {
       if (forceNote.hidden) return;
       const wall = b.forceSlopeWallId === null ? null :
         app.world.walls.find(candidate => candidate.id === b.forceSlopeWallId) ?? null;
-      const ledger = forceLedger(app.world, b, wall);
+      const raw = forceLedger(app.world, b, wall);
+      const ledger = sustainedForceLedger(app.world, b, raw);
       const text = ledger.mode === "step-average" && ledger.interval !== null ?
-        `Average forces: ${fmt3dp(ledger.interval.start)}–${fmt3dp(ledger.interval.end)} s.` :
+        `${ledger === raw ? "Average" : "Sustained"} forces: ${fmt3dp(ledger.interval.start)}–${fmt3dp(ledger.interval.end)} s.` :
         ledger.mode === "resting" ? "Resting forces: weight and support balance." :
           "Current forces.";
       if (forceNote.textContent !== text) forceNote.textContent = text;
@@ -687,16 +920,25 @@ export class Inspector implements Panel {
         notationKey = nextNotationKey;
       }
       notation.hidden = present.length === 0;
+      const net = displayForceResultant(ledger);
+      const netText = [`Fx ${analysisNumber(net.fx)} N`, `Fy ${analysisNumber(net.fy)} N`];
+      for (let i = 0; i < netText.length; i++) {
+        let component = resultantComponents.children[i] as HTMLElement | undefined;
+        if (component === undefined) {
+          component = el("span", { class: "force-component" });
+          resultantComponents.append(component);
+        }
+        if (component.textContent !== netText[i]) component.textContent = netText[i];
+      }
       if (!readout.open) return;
-      const entries = [...present, { id: "resultant", label: "Resultant",
-        fx: ledger.resultant.fx, fy: ledger.resultant.fy }];
+      const entries = present;
       const key = entries.map(entry => entry.id).join(",");
       for (const entry of entries) {
         let row = rows.get(entry.id);
         if (row === undefined) {
           const name = el("span", { class: "force-value-name" });
           const components = el("span", { class: "force-value-components" });
-          const root = el("li", { class: entry.id === "resultant" ? "force-resultant" : "" }, name, components);
+          const root = el("li", {}, name, components);
           row = { root, name, components };
           rows.set(entry.id, row);
         }
@@ -762,52 +1004,46 @@ export class Inspector implements Panel {
     controls.append(slopeSection);
     this.target = slopeSection;
     this.add(resolve);
-    const explanation = el("p", { class: "weight-resolve-note", text: "W∥ and W⊥ replace W; other forces keep their own arrows." });
+    const explanation = el("p", { class: "weight-resolve-note", text: "W∥ and W⊥ replace W" });
     this.add({ root: explanation, refresh: () => {
       explanation.hidden = app.perfMode || !(b.resolveWeightOnSlope || b.forceSlopeWallId !== null) ||
         !app.world.walls.some(wall => touchingSlopeWall(b, wall));
-      const name = app.world.walls.find(wall => wall.id === b.forceSlopeWallId)?.name;
-      const text = name === undefined ? "Choose a contact slope. W∥ and W⊥ replace W." :
-        `${name}: W∥ and W⊥ replace W; other forces keep their own arrows.`;
+      const text = "W∥ and W⊥ replace W";
       if (explanation.textContent !== text) explanation.textContent = text;
     } });
-    const slope = el("select", { "aria-label": "Resolve forces relative to a slope" });
-    slope.addEventListener("change", () => {
-      const wall = app.world.walls.find(wall => String(wall.id) === slope.value && touchingSlopeWall(b, wall));
+    const slope = choiceSelect("Resolve forces relative to a slope", () => {
+      const walls = app.world.walls.filter(wall => touchingSlopeWall(b, wall));
+      return [{ value: "", label: walls.length === 0 ? "No slope in contact" : "No slope selected" },
+        ...walls.map(wall => ({ value: String(wall.id), label: wall.name }))];
+    }, () => b.forceSlopeWallId === null ? "" : String(b.forceSlopeWallId), value => {
+      const wall = app.world.walls.find(wall => String(wall.id) === value && touchingSlopeWall(b, wall));
       b.forceSlopeWallId = wall?.id ?? null;
       b.resolveWeightOnSlope = b.forceSlopeWallId !== null;
       if (b.forceSlopeWallId !== null) b.showForceComponents = true;
       app.invalidateCanvas();
-    });
+      this.refresh();
+    }, { tooltip: slopeHelp, disabled: () => app.perfMode || !app.world.walls.some(wall => touchingSlopeWall(b, wall)) });
+    const slopeTrigger = slope.root.querySelector<HTMLButtonElement>('[role="combobox"]')!;
     const slopeRow = el("div", { class: "row weight-slope-row", role: "group", "aria-label": "Slope reference" },
-      el("span", { class: "lbl", text: "Slope reference" }), slope);
-    let slopeOptionsKey = "";
-    this.add({ root: slopeRow, refresh: () => {
+      el("span", { class: "lbl", text: "Slope reference" }), slope.root);
+    const slopeControl = { root: slopeRow, dispose: slope.dispose, refresh: () => {
       const walls = app.world.walls.filter(wall => touchingSlopeWall(b, wall));
-      const key = JSON.stringify(walls.map(wall => [wall.id, wall.name]));
-      if (key !== slopeOptionsKey) {
-        slope.replaceChildren(el("option", { value: "",
-          text: walls.length === 0 ? "No slope in contact" : "No slope selected" }),
-          ...walls.map(wall => el("option", { value: String(wall.id), text: wall.name })));
-        slopeOptionsKey = key;
-      }
       if (b.forceSlopeWallId !== null && !walls.some(wall => wall.id === b.forceSlopeWallId)) {
         b.forceSlopeWallId = null;
         app.invalidateCanvas();
       }
       const disabled = app.perfMode || walls.length === 0;
       slopeRow.hidden = walls.length <= 1 || !(b.resolveWeightOnSlope || b.forceSlopeWallId !== null);
-      if (slope.disabled !== disabled) slope.disabled = disabled;
+      slope.refresh?.();
       slopeRow.classList.toggle("disabled", disabled);
       const disabledState = String(disabled);
       if (slopeRow.getAttribute("aria-disabled") !== disabledState) slopeRow.setAttribute("aria-disabled", disabledState);
       const help = app.perfMode ? "Weight components are available in Normal mode." : disabled ? "No slope in contact." : slopeHelp;
       if (slopeRow.title !== help) slopeRow.title = help;
-      if (slope.title !== help) slope.title = help;
-      if (slope.getAttribute("aria-description") !== help) slope.setAttribute("aria-description", help);
-      const value = b.forceSlopeWallId === null ? "" : String(b.forceSlopeWallId);
-      if (slope.value !== value) slope.value = value;
-    } });
+      if (slopeTrigger.title !== help) slopeTrigger.title = help;
+      if (slopeTrigger.getAttribute("aria-description") !== help) slopeTrigger.setAttribute("aria-description", help);
+    } };
+    this.add(slopeControl);
     const performanceNote = el("div", { class: "faint settings-note force-performance-note",
       text: "Free-body diagrams are available in Normal mode." });
     this.add({ root: performanceNote, refresh: () => {
@@ -818,43 +1054,137 @@ export class Inspector implements Panel {
     this.target = parent;
   }
 
+  /** A bulk display preference, with each particle retaining its own contact
+   * plane. A corner must never borrow another particle's slope reference. */
+  private buildGroupWeightResolution(particles: Body[]): void {
+    const app = this.app;
+    const enabled = (body: Body): boolean => body.resolveWeightOnSlope || body.forceSlopeWallId !== null;
+    const contacts = new Map<Body, Wall[]>();
+    const updateContacts = (): void => {
+      for (const body of particles) contacts.set(body, app.world.walls.filter(wall => touchingSlopeWall(body, wall)));
+    };
+    updateContacts();
+    const help = "Replace only each particle’s weight arrow with components parallel and perpendicular to its own contact plane. Other forces stay unchanged.";
+    const resolve = checkbox("Resolve weight on slope", () => particles.every(enabled), value => {
+      updateContacts();
+      for (const body of particles) {
+        const walls = contacts.get(body)!;
+        body.resolveWeightOnSlope = value;
+        body.forceSlopeWallId = !value ? null : walls.length === 1 ? walls[0].id
+          : walls.some(wall => wall.id === body.forceSlopeWallId) ? body.forceSlopeWallId : null;
+        if (value) body.showForceComponents = true;
+      }
+      app.invalidateCanvas(); this.refresh();
+    }, help, () => app.perfMode || !particles.some(body => contacts.get(body)!.length > 0));
+    resolve.root.classList.add("weight-resolve-toggle");
+    const input = resolve.root.querySelector<HTMLInputElement>("input")!;
+    input.setAttribute("aria-label", "Resolve weight on slope");
+    const note = el("p", { class: "weight-resolve-note group-weight-note" });
+    const references = el("div", { class: "group-weight-references" });
+    const section = el("div", { class: "weight-slope-controls" }, resolve.root, note, references);
+    const choices = new Map<Body, { row: HTMLElement; label: HTMLElement; choice: ReturnType<typeof choiceSelect> }>();
+    const refresh = (): void => {
+      updateContacts();
+      let changed = false, needsChoice = 0, airborne = 0;
+      for (const body of particles) {
+        const walls = contacts.get(body)!;
+        if (body.forceSlopeWallId !== null && !walls.some(wall => wall.id === body.forceSlopeWallId)) {
+          body.forceSlopeWallId = null; changed = true;
+        }
+        if (body.resolveWeightOnSlope && body.forceSlopeWallId === null && walls.length === 1) {
+          body.forceSlopeWallId = walls[0].id; changed = true;
+        }
+        if (enabled(body) && walls.length === 0) airborne++;
+        if (enabled(body) && walls.length > 1 && body.forceSlopeWallId === null) needsChoice++;
+        let item = choices.get(body);
+        // Most groups need no per-particle fields. Allocate only for a particle
+        // at a corner, then retain its control while contact geometry changes.
+        if (!item && enabled(body) && walls.length > 1) {
+          const label = el("span", { class: "lbl" });
+          const choice = choiceSelect(`Slope reference for ${body.name}`, () => [
+            { value: "", label: "Choose contact plane" },
+            ...contacts.get(body)!.map(wall => ({ value: String(wall.id), label: wall.name })),
+          ], () => body.forceSlopeWallId === null ? "" : String(body.forceSlopeWallId), value => {
+            const wall = app.world.walls.find(wall => String(wall.id) === value && touchingSlopeWall(body, wall));
+            body.forceSlopeWallId = wall?.id ?? null;
+            body.resolveWeightOnSlope = true;
+            body.showForceComponents = true;
+            app.invalidateCanvas(); this.refresh();
+          }, { tooltip: help, disabled: () => app.perfMode || !enabled(body) || contacts.get(body)!.length === 0 });
+          const row = el("div", { class: "row weight-slope-row group-weight-reference" }, label, choice.root);
+          references.append(row); item = { row, label, choice }; choices.set(body, item);
+        }
+        if (item) {
+          item.row.hidden = !enabled(body) || walls.length <= 1;
+          if (item.label.textContent !== body.name) item.label.textContent = body.name;
+          const name = `Slope reference for ${body.name}`;
+          for (const element of item.choice.root.querySelectorAll('[role="combobox"], [role="listbox"]')) {
+            if (element.getAttribute("aria-label") !== name) element.setAttribute("aria-label", name);
+          }
+          item.choice.refresh?.();
+        }
+      }
+      resolve.refresh?.();
+      input.indeterminate = particles.some(enabled) && !particles.every(enabled);
+      const description = app.perfMode ? "Weight components are available in Normal mode."
+        : input.disabled ? "No selected particle is in contact with a plane." : help;
+      if (resolve.root.title !== description) resolve.root.title = description;
+      if (input.getAttribute("aria-description") !== description) input.setAttribute("aria-description", description);
+      const text = app.perfMode ? "Free-body diagrams and weight components are available in Normal mode."
+        : "Only weight is split into W∥ and W⊥; other force arrows stay unchanged." +
+          (needsChoice ? ` Choose a contact plane for ${countNoun(needsChoice, "particle")}.` : "") +
+          (airborne ? ` ${countNoun(airborne, "particle")} will resolve on contact.` : "");
+      if (note.textContent !== text) note.textContent = text;
+      note.hidden = !app.perfMode && !particles.some(enabled);
+      if (changed) app.invalidateCanvas();
+    };
+    this.add({ root: section, refresh });
+    this.group.add({ root: section, dispose: () => { for (const { choice } of choices.values()) choice.dispose?.(); } });
+  }
+
   private buildRodAttachment(b: Body): void {
     if (b.rodAttachmentId === null) return;
     const rod = this.app.world.links.find((link) =>
       link instanceof DistanceLink && !link.isRope && link.id === b.rodAttachmentId);
     if (!(rod instanceof DistanceLink)) return;
-    this.sub("Rod attachment");
+    const parent = this.target;
+    const head = el("div", { class: "rod-attachment-heading" },
+      el("span", { text: "Rod attachment" }),
+      button(`Rod ${rod.id}`, () => this.app.setSelection([rod]),
+        { style: "ghost", tooltip: "Select this rod" }).root);
+    const section = el("div", { class: "rod-attachment-editor", role: "group", "aria-label": "Rod attachment" }, head);
+    (parent ?? this.body).append(section);
+    this.target = section;
     const distance = (): number => (rod.originAtA ? b.rodAttachmentT : 1 - b.rodAttachmentT) * rod.length;
-    const input = textEdit(() => distance().toFixed(3), (source) => {
-      const value = Number(source);
-      if (!Number.isFinite(value) || value < 0 || value > rod.length ||
-          rod.length <= 1e-12) {
+    const input = slider(`From ${rod.originAtA ? "A" : "B"}`, distance, value => {
+      if (!Number.isFinite(value) || value < 0 || value > rod.length || rod.length <= 1e-12) {
         this.app.toast(`Distance must be between 0 and ${rod.length.toFixed(3)} m`);
         return false;
       }
       b.rodAttachmentT = rod.originAtA ? value / rod.length : 1 - value / rod.length;
-      const x = rod.a.pos.x + b.rodAttachmentT * (rod.b.pos.x - rod.a.pos.x);
-      const y = rod.a.pos.y + b.rodAttachmentT * (rod.b.pos.y - rod.a.pos.y);
-      b.pos.set(x, y);
-      this.commit();
+      b.pos.set(rod.a.pos.x + b.rodAttachmentT * (rod.b.pos.x - rod.a.pos.x),
+        rod.a.pos.y + b.rodAttachmentT * (rod.b.pos.y - rod.a.pos.y));
       this.app.invalidateCanvas();
       return true;
-    }, "distance", "Position along rod");
-    this.add({ root: el("div", { class: "row" },
-      el("span", { class: "lbl", text: `From ${rod.originAtA ? "A" : "B"}` }),
-      input.root, el("span", { class: "unit", text: "m" })), refresh: input.refresh });
+    }, 0, rod.length, { unit: "m", onCommit: this.commit, fmt: fmt3dp, step: 0.001,
+      scrub: { sensitivity: 0.01, step: 0.001 }, disabled: () => rod.length <= 1e-12,
+      tooltip: "Distance along the rod from its selected origin." });
+    input.root.querySelector('input[type="text"]')!.setAttribute("aria-label", "Position along rod (m)");
+    input.root.querySelector('input[type="range"]')!.setAttribute("aria-label", "Position along rod");
+    this.add(input);
     if (!b.isPivot) {
       this.add(button("Detach from rod", () => {
         b.rodAttachmentId = null;
+        // The role key changes, so commit rebuilds immediately. Scheduling
+        // another rebuild would discard a draft started in the new x/y field.
         this.commit();
-        this.markDirty();
-      }, { tooltip: "Release this particle; its forces and links remain attached to the particle." }));
+      }, { class: "rod-detach", tooltip: "Release this particle; its forces and links remain attached to the particle." }));
     }
+    this.target = parent;
   }
 
   private buildSinglePivot(b: Body): void {
-    this.body.append(el("div", { text: "Rod anchor",
-      style: "font-weight:600;margin-bottom:6px" }));
+    this.objectHeader(b);
     this.body.append(el("div", { class: "dim", text:
       "An anchor attached to a point on the rod. It fixes that point, transmits a reaction force and lets the rod rotate around it." }));
     this.buildRodAttachment(b);
@@ -864,10 +1194,9 @@ export class Inspector implements Panel {
   }
 
   /** An anchor is a fixed attachment point: only its size, position, whether
-   * it collides, and its material matter. No mass, motion, name or forces. */
+   * it collides, its name and its material matter. No mass or motion controls. */
   private buildSingleAnchor(b: Body): void {
-    this.body.append(el("div", { text: "Anchor",
-      style: "font-weight:600;margin-bottom:6px" }));
+    this.objectHeader(b);
     this.add(slider("Radius", () => b.radius, (v) => { b.radius = v; },
       0.01, 10.0, { unit: "m", log: true, onCommit: this.commit,
         tooltip: "Size of the anchor." }));
@@ -927,7 +1256,7 @@ export class Inspector implements Panel {
   }
 
   private materialButtons(bodies: Body[]): void {
-    const grid = el("div", { class: "btn-grid" });
+    const grid = el("div", { class: "btn-grid material-presets" });
     for (const [name, [e, mu]] of Object.entries(MATERIALS)) {
       if (name === "Custom") continue;
       const b = button(name, () => {
@@ -1031,6 +1360,7 @@ export class Inspector implements Panel {
           if (input.indeterminate !== mixed) input.indeterminate = mixed;
         };
         this.add(diagrams);
+        this.buildGroupWeightResolution(particles);
       }
       this.buildMultiDrivers(bodies);
       if (bodies.length >= 2) {
@@ -1072,7 +1402,7 @@ export class Inspector implements Panel {
                "edit the total natural length." }));
       const links = this.app.world.links.filter((link): link is PulleyLink =>
         link instanceof PulleyLink && pulleys.includes(link.pulley));
-      if (links.length > 0) this.addTensionToggle(links);
+      if (links.length > 0) this.addPulleyResultantToggle(links);
     }
 
     if (walls.length > 0) {
@@ -1123,7 +1453,7 @@ export class Inspector implements Panel {
         { unit: "m", log: true, onCommit: this.commit,
           tooltip: "Total inextensible string length: both straight legs " +
                     "and the wrapped section around each wheel." }));
-      this.addTensionToggle(pulleyStrings);
+      this.addTensionToggle(pulleyStrings, "Show four tension arrows: one on each particle and one at each side of the pulley.");
     }
 
     this.endGroups();
@@ -1230,7 +1560,7 @@ export class Inspector implements Panel {
       // wall-plus-pulley edit.
       this.app.world.syncPulleyMounts();
     };
-    this.nameEdit(w);
+    this.objectHeader(w);
     this.addHalf(
       numEdit("x1", () => w.a.x, (v) => setEndpoint("a", "x", v),
               "m", this.commit, fmt3dp),
@@ -1285,6 +1615,7 @@ export class Inspector implements Panel {
     const world = this.app.world;
     const i = world.links.indexOf(oldLink);
     newLink.showTensionVectors = oldLink.showTensionVectors;
+    newLink.name = oldLink.name;
     if (i >= 0) world.links[i] = newLink;
     this.app.setSelection([newLink]);
     this.app.pushUndo();
@@ -1292,21 +1623,16 @@ export class Inspector implements Panel {
 
   private buildLink(link: SpringLink | DistanceLink | PulleyLink): void {
     const app = this.app;
+    const kind = link instanceof PulleyLink ? "Pulley string" : link instanceof SpringLink ?
+      link.tensionOnly ? "Elastic string" : "Spring" : link.isRope ? "Inelastic string" : "Rod";
+    this.objectHeader(link, `${kind} ${link.id}`);
     if (link instanceof PulleyLink) {
-      this.body.append(el("div", { text: "Pulley string (inelastic)",
-        style: "font-weight:600;margin-bottom:6px" }));
       this.add(slider("String length", () => link.length, (v) => { link.length = v; },
         0.01, 100.0, { unit: "m", log: true, onCommit: this.commit,
           tooltip: "Total length of both legs and the wrapped section. The " +
                    "string is rigid in tension and free when slack." }));
-      this.body.append(el("div", { class: "dim",
-        text: "The wheel is fixed and non-colliding. A mounted wheel follows " +
-              "its wall endpoint; both particles remain ordinary colliding " +
-              "bodies and may slide or swing freely." }));
     } else if (link instanceof SpringLink) {
       const isString = link.tensionOnly;
-      this.body.append(el("div", { text: isString ? "String (elastic)" : "Spring",
-        style: "font-weight:600;margin-bottom:6px" }));
       this.add(slider("Natural length", () => link.restLength, (v) => { link.restLength = v; },
         0.01, 50.0, { unit: "m", log: true, onCommit: this.commit,
           tooltip: "Length at which it exerts no force." }));
@@ -1326,8 +1652,6 @@ export class Inspector implements Panel {
           "taut, still slack when shorter."));
       }
     } else {
-      this.body.append(el("div", { text: link.isRope ? "String (inelastic)" : "Rod",
-        style: "font-weight:600;margin-bottom:6px" }));
       this.add(slider("Nat. len", () => link.length, (v) => { link.length = v; },
         0.01, 100.0, { unit: "m", log: true, onCommit: this.commit,
           tooltip: link.isRope
@@ -1349,12 +1673,12 @@ export class Inspector implements Panel {
             this.markDirty();
           },
           "Choose which endpoint is the zero used by attached-particle position fields."));
-        this.buildRodAttachmentsList(link);
       }
     }
     if (link instanceof PulleyLink || link instanceof SpringLink || link.isRope) {
       this.sub("Analysis");
-      this.addTensionToggle([link]);
+      this.addTensionToggle([link], link instanceof PulleyLink
+        ? "Show four tension arrows: one on each particle and one at each side of the pulley." : undefined);
     }
     this.sub("Actions");
     this.add(button("Delete", () => app.controller.deleteSelection(),
@@ -1401,11 +1725,6 @@ export class Inspector implements Panel {
       return output;
     });
     const state = el("span", { class: "elastic-state" });
-    const ideal = button("Set damping to zero", () => {
-      links.forEach(link => { link.damping = 0; });
-      this.commit();
-    }, { tooltip: "Remove axial damping from every selected spring and elastic string." });
-    const note = el("p", { class: "elastic-help" });
     const explanation = el("details", { class: "elastic-explanation" },
       el("summary", { text: "How these values work" }),
       el("p", { class: "elastic-help", text:
@@ -1418,9 +1737,8 @@ export class Inspector implements Panel {
     const card = el("div", { class: "elastic-model" },
       el("div", { class: "elastic-heading" }, el("strong", { text: "Hooke’s law" }), state),
       el("div", { class: "elastic-equations" },
-        el("p", { class: "elastic-equation", text: "F = k x = λx / l" }),
-        el("p", { class: "elastic-equation", text: "E = ½ k x² = λx² / (2l)" })),
-      modulus.root, help, error, values, note, ideal.root, explanation);
+        elasticEquation("force"), elasticEquation("energy")),
+      modulus.root, help, error, values, explanation);
     this.add({ root: card, refresh: () => {
       modulus.refresh?.();
       error.hidden = input.getAttribute("aria-invalid") !== "true";
@@ -1442,48 +1760,63 @@ export class Inspector implements Panel {
         });
         if (state.textContent !== analysis.state) state.textContent = analysis.state;
       } else if (state.textContent !== `${links.length} links`) state.textContent = `${links.length} links`;
-      const damped = links.some(link => link.damping > 0);
-      ideal.root.hidden = !damped;
-      const noteText = this.app.perfMode
-        ? "Performance mode approximates elastic motion. Use Normal mode for quantitative study."
-        : damped ? "Set damping to zero for an ideal elastic model."
-          : "Ideal values exclude damping and solver limits.";
-      if (note.textContent !== noteText) note.textContent = noteText;
     } });
+    upgradeMath(card);
   }
 
-  private buildRodAttachmentsList(rod: DistanceLink): void {
-    this.sub("Attached to rod");
-    const output = el("div", { class: "rod-attachment-list" });
-    let signature = "";
-    this.add({ root: output, refresh: () => {
-      const attached = this.app.world.bodies.filter((body) =>
-        body.rodAttachmentId === rod.id).sort((a, b) =>
-        a.rodAttachmentT - b.rodAttachmentT || a.id - b.id);
-      const next = JSON.stringify(attached.map((body) =>
-        [body.id, body.name, body.isPivot, body.rodAttachmentT * rod.length]));
-      if (signature === next) return;
-      signature = next;
-      if (attached.length === 0) {
-        output.replaceChildren(el("div", { class: "dim", text:
-          "Nothing attached. Place an anchor or particle close to the rod." }));
-        return;
-      }
-      output.replaceChildren(...attached.map((body) => {
-        const row = el("button", { type: "button", class: "rod-attachment-item",
-          title: `Select ${body.name}` },
-          el("span", { text: body.isPivot ? "Anchor" : body.name }),
-          el("span", { class: "dim", text:
-            `${(body.rodAttachmentT * rod.length).toFixed(3)} m from A` }));
-        row.addEventListener("click", () => this.app.setSelection([body]));
-        return row;
-      }));
-    } });
+  private selectedRods(selected: Selectable): DistanceLink[] {
+    return this.app.world.links.filter((link): link is DistanceLink => link instanceof DistanceLink &&
+      !link.isRope && (link === selected || selected instanceof Body &&
+        (selected.rodAttachmentId === link.id || link.a === selected || link.b === selected)));
+  }
+
+  private rodParts(rod: DistanceLink): Body[] {
+    return this.app.world.bodies.filter(body => !body.isRodEndpoint &&
+      (body.rodAttachmentId === rod.id || rod.a === body || rod.b === body));
+  }
+
+  /** Keep the rod and every visible particle/support reachable from any part. */
+  private buildRodAssembly(rod: DistanceLink): void {
+    this.sub("Rod assembly");
+    const group = el("div", { class: "rod-assembly pulley-assembly", role: "group",
+      "aria-label": `Rod assembly: ${rod.name || `Rod ${rod.id}`}`, "data-inspector-navigation": "" });
+    const fraction = (body: Body): number => body === rod.a ? 0 : body === rod.b ? 1 : body.rodAttachmentT;
+    const parts: Array<{ target: Selectable; label: () => string; detail: () => string; name: () => string }> = [
+      { target: rod, label: () => rod.name || `Rod ${rod.id}`, detail: () => `${fmt3g(rod.length)} m`,
+        name: () => `rod: ${rod.name || `Rod ${rod.id}`}` },
+      ...this.rodParts(rod).sort((a, b) => fraction(a) - fraction(b) || a.id - b.id).map(body => ({
+        target: body,
+        label: () => `${body.isAnchor || body.isPivot ? "Anchor" : "Particle"} · ${body.name}`,
+        detail: () => `${fmt3dp((rod.originAtA ? fraction(body) : 1 - fraction(body)) * rod.length)} m from ${rod.originAtA ? "A" : "B"}`,
+        name: () => `${body.isAnchor || body.isPivot ? "rod anchor" : "rod particle"}: ${body.name}`,
+      })),
+    ];
+    for (const part of parts) {
+      const title = el("span", { class: "pulley-part-label" }), detail = el("span", { class: "pulley-part-detail" });
+      const row = el("button", { type: "button", class: "rod-part pulley-part" }, title, detail);
+      const current = this.app.selection[0] === part.target;
+      row.disabled = current;
+      if (current) row.setAttribute("aria-current", "true");
+      row.addEventListener("click", () => {
+        this.app.setSelection([part.target]); this.refresh();
+        this.body.scrollTop = 0; this.body.focus({ preventScroll: true });
+      });
+      group.append(row);
+      this.group.add({ root: row, refresh: () => {
+        const label = part.label(), value = part.detail(), name = `Select ${part.name()}`;
+        if (part.target === rod) group.setAttribute("aria-label", `Rod assembly: ${label}`);
+        if (title.textContent !== label) title.textContent = label;
+        if (detail.textContent !== value) detail.textContent = value;
+        if (row.getAttribute("aria-label") !== name) row.setAttribute("aria-label", name);
+      } });
+    }
+    if (parts.length === 1) group.append(el("div", { class: "dim", text:
+      "Nothing attached. Place an anchor or particle close to the rod." }));
+    this.body.append(group);
   }
 
   private buildSinglePulley(): void {
-    this.body.append(el("div", { text: "Pulley wheel",
-      style: "font-weight:600;margin-bottom:6px" }));
+    this.objectHeader(this.app.selection[0] as Body);
     this.body.append(el("div", { class: "dim",
       text: "A fixed, non-colliding axle. It has no editable material or " +
             "motion properties. Drag the wheel to reposition it; release near " +
@@ -1493,43 +1826,7 @@ export class Inspector implements Panel {
       candidate instanceof PulleyLink && candidate.pulley === this.app.selection[0]);
     if (link instanceof PulleyLink) {
       this.sub("Analysis");
-      this.addTensionToggle([link], "Show four equal-tension force vectors: " +
-        "two on the particles and two on the pulley contacts.");
-      const readout = el("div", { class: "pulley-readout", role: "group",
-        "aria-label": "Pulley force and motion" });
-      const readings = [
-        ["Tension", "Shared string tension, in newtons."],
-        ["Path", "Current routed string length / natural string length, in metres."],
-        ["Leg rates", "Rates of change of legs A and B; positive means lengthening."],
-        ["Constraint rate", "Rate of change of the total string path; near zero when taut."],
-        ["Axle reaction", "Support balancing string and wheel-contact loads: rightward/upward components, in newtons."],
-      ].map(([name, help]) => {
-        const caption = el("span", { class: "pulley-reading-name", text: `${name}:`,
-          title: help, tabindex: "0", "aria-description": help });
-        const value = el("span", { class: "pulley-reading-value" });
-        readout.append(el("span", {}, caption, " ", value));
-        return { value, caption, help };
-      });
-      this.add({ root: readout, refresh: () => {
-        const p = analysePulley(link, this.app.world);
-        const values = [
-          `${p.tension.toFixed(3)} N`,
-          `${p.pathLength.toFixed(3)} / ${p.naturalLength.toFixed(3)} m`,
-          `${p.legRateA.toFixed(3)}, ${p.legRateB.toFixed(3)} m/s`,
-          `${p.constraintRate.toExponential(2)} m/s`,
-          `(${p.axleReactionX.toFixed(2)}, ${p.axleReactionY.toFixed(2)}) N`,
-        ];
-        readings.forEach(({ value, caption, help }, index) => {
-          if (value.textContent !== values[index]) value.textContent = values[index];
-          if (index !== 0 && index !== 4) return;
-          const period = p.forceInterval === null ? "Current forces." :
-            `Average forces: ${p.forceInterval.start.toPrecision(4)}–${p.forceInterval.end.toPrecision(4)} s.`;
-          const description = `${help} ${period}`;
-          if (caption.title !== description) {
-            caption.title = description; caption.setAttribute("aria-description", description);
-          }
-        });
-      } });
+      this.addPulleyResultantToggle([link]);
     }
     this.sub("Actions");
     this.add(button("Delete wheel", () => this.app.controller.deleteSelection(),
@@ -1578,15 +1875,37 @@ export class Inspector implements Panel {
     this.body.append(group);
   }
 
+  private addPulleyResultantToggle(links: PulleyLink[]): void {
+    const control = checkbox("Resultant tension vector",
+      () => links.every(link => link.showResultantTensionVector), value => {
+        for (const link of links) link.showResultantTensionVector = value;
+        this.app.invalidateCanvas();
+      }, "Show the resultant of both string tensions at each selected pulley wheel. " +
+        "Select the string to show the four individual tension arrows.");
+    const input = control.root.querySelector<HTMLInputElement>("input")!;
+    control.root.setAttribute("data-inspector-navigation", "");
+    input.setAttribute("aria-label", "Resultant tension vector");
+    const refresh = control.refresh;
+    control.refresh = () => {
+      refresh?.();
+      const mixed = links.some(link => link.showResultantTensionVector) &&
+        !links.every(link => link.showResultantTensionVector);
+      if (input.indeterminate !== mixed) input.indeterminate = mixed;
+    };
+    this.add(control);
+  }
+
   private addTensionToggle(links: Array<SpringLink | DistanceLink | PulleyLink>,
                            tooltip = "Show the axial force this link applies " +
                              "to each endpoint. Hover an arrow for its column vector."): void {
-    this.add(checkbox("Tension vectors",
+    const control = checkbox("Tension vectors",
       () => links.every((link) => link.showTensionVectors),
       (value) => {
         for (const link of links) link.showTensionVectors = value;
         this.app.invalidateCanvas();
-      }, tooltip));
+      }, tooltip);
+    control.root.setAttribute("data-inspector-navigation", "");
+    this.add(control);
   }
 
   private actionButtons(): void {
@@ -1844,33 +2163,22 @@ export class Inspector implements Panel {
       ["Pulley stop", "pulley-stop", "Pause when either pulley particle reaches the wheel's safety stop."],
     ];
     const helpId = "pause-event-description";
-    const select = el("select", { "aria-label": "Pause playback at event",
-      "aria-describedby": helpId });
-    for (const [label, value, description] of choices) {
-      select.append(el("option", { value: value ?? "", text: label,
-        title: description }));
-    }
     const description = el("div", { id: helpId,
       class: "dim event-option-description" });
     const syncDescription = (): void => {
-      const active = choices.find(([, value]) => (value ?? "") === select.value) ?? choices[0];
-      description.textContent = active[2];
-      // Native option tooltips are platform-dependent; the select title
-      // guarantees that hovering the closed control explains its current rule.
-      select.title = active[2];
+      const active = choices.find(([, value]) => value === app.pauseOnEvent) ?? choices[0];
+      if (description.textContent !== active[2]) description.textContent = active[2];
     };
-    select.addEventListener("change", () => {
-      app.pauseOnEvent = select.value === "" ? null : select.value as PlaybackEventKind;
-      syncDescription();
-    });
-    const selectControl = this.group.add({ root: el("label", { class: "event-rule-field" },
-      select), refresh: () => {
-      const value = app.pauseOnEvent ?? "";
-      if (select.value !== value) {
-        select.value = value;
+    const choice = choiceSelect("Pause playback at event",
+      choices.map(([label, value, description]) => ({ label, value: value ?? "", description })),
+      () => app.pauseOnEvent ?? "", value => {
+        app.pauseOnEvent = value === "" ? null : value as PlaybackEventKind;
         syncDescription();
-      }
-    } });
+      });
+    choice.root.querySelector("[role=combobox]")!.setAttribute("aria-describedby", helpId);
+    const selectControl = this.group.add({ ...choice,
+      root: el("div", { class: "event-rule-field" }, choice.root),
+      refresh: () => { choice.refresh?.(); syncDescription(); } });
     syncDescription();
     card.append(selectControl.root, description);
 
@@ -1897,21 +2205,27 @@ export class Inspector implements Panel {
     const toggleHistory = el("button", { class: "event-history-toggle",
       type: "button", text: this.eventHistoryOpen ? "Hide" : "Show",
       "aria-expanded": String(this.eventHistoryOpen) });
-    historyHeader.append(toggleHistory);
+    toggleHistory.setAttribute("aria-controls", "inspector-event-history");
+    const actions = el("div", { class: "event-history-actions" });
+    historyHeader.append(actions);
     this.body.append(historyHeader);
 
-    const history = el("div", { class: "event-history" });
+    const history = el("div", { class: "event-history", id: "inspector-event-history" });
     history.hidden = !this.eventHistoryOpen;
     toggleHistory.addEventListener("click", () => {
       this.eventHistoryOpen = !this.eventHistoryOpen;
       history.hidden = !this.eventHistoryOpen;
       toggleHistory.textContent = this.eventHistoryOpen ? "Hide" : "Show";
       toggleHistory.setAttribute("aria-expanded", String(this.eventHistoryOpen));
+      clear.root.hidden = !this.eventHistoryOpen;
     });
-    const clear = button("Clear history", () => app.playbackEvents.clear(app.world),
-      { icon: ICONS.trash, style: "ghost",
-        tooltip: "Discard recorded event rows without changing the scene." });
-    history.append(clear.root);
+    const clear = button("Clear", () => { app.playbackEvents.clear(app.world); this.refresh(); },
+      { icon: ICONS.trash, style: "ghost", class: "event-history-clear",
+        tooltip: "Discard recorded event rows without changing the scene.",
+        isEnabled: () => app.playbackEvents.events.length > 0 });
+    clear.root.setAttribute("aria-label", "Clear history");
+    clear.root.hidden = !this.eventHistoryOpen;
+    actions.append(clear.root, toggleHistory);
     this.group.add(clear);
     const table = el("div", { class: "inspector-event-table" });
     let signature = "";
@@ -1921,8 +2235,10 @@ export class Inspector implements Panel {
       if (next === signature) return;
       signature = next;
       if (events.length === 0) {
-        table.replaceChildren(el("div", { class: "dim", text:
-          "No events yet. Select a particle for its apex and line crossings, then play or step." }));
+        table.replaceChildren(el("div", { class: "event-history-empty" },
+          el("strong", { text: "No events yet" }),
+          el("p", { class: "dim", text: "Play or step to record contacts and string events. " +
+            "Select a particle to also record its apex and line crossings." })));
         return;
       }
       table.replaceChildren(...events.slice(-8).reverse().map((event) =>
@@ -1982,6 +2298,8 @@ export class Inspector implements Panel {
         "Align new and dragged objects to grid points (N).");
     chk("Body labels", () => view.labels, (v) => { view.labels = v; },
         "Show each body's name on the canvas.");
+    chk("Force diagram numbers", () => view.forceIds, (v) => { view.forceIds = v; },
+        "Match force captions to particles with small numbered badges.");
     chk("Follow selection", () => view.follow, (v) => { view.follow = v; },
         "Keep the camera centred on the selected body (C). Zoom-to-fit and " +
         "auto-fit are in the toolbar.");
@@ -2031,20 +2349,15 @@ export class Inspector implements Panel {
         "Show the cells collision detection uses to find candidate pairs (G).");
 
     this.body.append(section("Graph dock"));
-    const graph = el("select", { "aria-label": "Graph shown in the dock",
-      title: "Displacement, distance and velocity graphs follow the selected particle." });
-    for (const [label, value] of [
-      ["Off", "Off"], ["Energy", "Energy"], ["Momentum", "Mom."],
-      ["Phase space", "Phase"], ["Displacement–time", "Displacement"],
-      ["Distance–time", "Distance"],
-      ["Velocity–time", "Velocity"],
-    ] as Array<[string, GraphMode]>) {
-      graph.append(el("option", { text: label, value }));
-    }
-    graph.addEventListener("change", () => app.setGraphMode(graph.value as GraphMode));
-    this.add({ root: el("div", { class: "row" },
-      el("span", { class: "lbl", text: "Graph" }), graph), refresh: () => {
-      if (graph.value !== app.graphMode) graph.value = app.graphMode;
-    } });
+    const graph = choiceSelect("Graph shown in the dock", [
+      { label: "Off", value: "Off" }, { label: "Energy", value: "Energy" },
+      { label: "Momentum", value: "Mom." }, { label: "Phase space", value: "Phase" },
+      { label: "Displacement–time", value: "Displacement" },
+      { label: "Distance–time", value: "Distance" }, { label: "Velocity–time", value: "Velocity" },
+    ], () => app.graphMode, value => app.setGraphMode(value as GraphMode), {
+      tooltip: "Displacement, distance and velocity graphs follow the selected particle.",
+    });
+    this.add({ ...graph, root: el("div", { class: "row" },
+      el("span", { class: "lbl", text: "Graph" }), graph.root) });
   }
 }

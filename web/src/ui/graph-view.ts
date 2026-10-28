@@ -141,6 +141,7 @@ export class GraphSnapshotChart {
       this.zoomOut, this.zoomIn, this.resetZoom, this.zoomLevel);
     this.root = el("div", { class: "graph-chart" }, tools, this.host, this.legend, this.reading);
     this.host.addEventListener("pointerdown", event => this.startPan(event));
+    this.host.addEventListener("contextmenu", event => event.preventDefault());
     this.host.addEventListener("pointermove", event => {
       if (this.pan !== null) this.movePan(event); else this.inspect(event);
     });
@@ -150,7 +151,7 @@ export class GraphSnapshotChart {
     this.host.addEventListener("pointerleave", () => { if (this.pan === null) this.showPoint(null); });
     this.host.addEventListener("keydown", event => this.key(event));
     this.host.addEventListener("wheel", event => this.wheel(event), { passive: false });
-    this.host.addEventListener("blur", () => this.showPoint(null));
+    this.host.addEventListener("blur", () => { this.endPan(); this.showPoint(null); });
   }
 
   set(data: GraphDataSnapshot, variant: number): void {
@@ -299,8 +300,10 @@ export class GraphSnapshotChart {
     this.zoom(Math.exp(-Math.max(-500, Math.min(500, event.deltaY)) * 0.003), x, y);
   }
 
+  private readonly onPanBlur = (): void => this.endPan();
+
   private startPan(event: PointerEvent): void {
-    if (event.button !== 0 || this.pan !== null || !this.geometry || !this.svg ||
+    if ((event.button !== 0 && event.button !== 2) || event.isPrimary === false || this.pan !== null || !this.geometry || !this.svg ||
         !this.canExport || this.windows.x.max - this.windows.x.min >= 1) return;
     const rect = this.svg.getBoundingClientRect(), m = this.geometry;
     if (!rect.width || !rect.height) return;
@@ -313,12 +316,14 @@ export class GraphSnapshotChart {
       width: m.plotWidth * rect.width / m.width, height: m.plotHeight * rect.height / m.height,
       windows: { x: { ...this.windows.x }, y: { ...this.windows.y } } };
     this.host.setPointerCapture?.(event.pointerId);
+    window.addEventListener("blur", this.onPanBlur);
     this.host.classList.add("panning"); this.showPoint(null);
   }
 
   private movePan(event: PointerEvent): void {
     const pan = this.pan;
     if (pan === null || event.pointerId !== pan.pointer) return;
+    if (event.pointerType === "mouse" && event.buttons === 0) { this.endPan(); return; }
     event.preventDefault();
     this.windows = {
       x: panChartWindow(pan.windows.x, -(event.clientX - pan.x) / pan.width * (pan.windows.x.max - pan.windows.x.min)),
@@ -329,6 +334,7 @@ export class GraphSnapshotChart {
   }
 
   private endPan(): void {
+    window.removeEventListener("blur", this.onPanBlur);
     const pan = this.pan;
     this.pan = null;
     if (this.panFrame) { cancelAnimationFrame(this.panFrame); this.panFrame = 0; this.draw(); }

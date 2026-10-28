@@ -11,7 +11,7 @@ simulates locally in the visitor's browser.
 
 ## Run locally
 
-Use Node.js 22.23.1 (the repository's `.node-version`); `package.json` accepts
+Use Node.js 22.23.4 (the repository's `.node-version`); `package.json` accepts
 maintained Node 22 releases from 22.22.2 up to, but not including, Node 23.
 
 ```
@@ -51,7 +51,7 @@ The complete build, CI, Pages, and alternative-host instructions are in
   finite-wheel pulley strings,
   N-body gravity with softening, linear + quadratic drag, sinusoidal
   drivers and sandboxed user force fields.
-- **Library** — searchable, annotated simulations across eight
+- **Library** — searchable, annotated simulations across mechanics
   categories (press `L`), plus saved scenes with rename, description, export,
   and import. Study topics such as SHM, SUVAT and modulus λ lead to matching
   examples; Elastic string release illustrates equilibrium versus maximum stretch.
@@ -60,6 +60,7 @@ The complete build, CI, Pages, and alternative-host instructions are in
 - **Analysis** — live energy / momentum / phase-space plots and selected-particle
   displacement / distance / velocity against time, realised net-force
   vectors, per-link spring/string/pulley force vectors with hover readouts,
+  collision impulses in N·s with separate sustained forces and signed rod moments,
   motion trails, a centre-of-mass marker with numeric coordinates, contact normals, and an energy-drift readout
   in the status bar. Elastic links accept exam-style modulus in newtons and
   show extension, ideal elastic force and stored energy alongside Hooke's law.
@@ -67,7 +68,8 @@ The complete build, CI, Pages, and alternative-host instructions are in
   friction, with exact coefficient entry.
 - **Editing** — direct manipulation with undo/redo, renameable objects, a
   type-filtered box select with bulk editing, grid snapping, property
-  copy/paste, alignment tools, scene save/load (JSON).
+  copy/paste, alignment tools, scene save/load (JSON), and editable circular,
+  rectangular and capsule Delete zones. Billiard break includes six pool pockets.
 - **Recovery** — refresh restores the tab's last unsaved checkpoint, paused;
   named saves and JSON downloads keep scenes beyond the current tab.
 - **Touch** — one finger drives the active tool; two fingers pinch-zoom and pan.

@@ -32,14 +32,15 @@
 import { CompiledExpr, ExprError, compileExpr } from "../core/expr";
 import { arrayOr, boolOr, idOr, intIn, numIn, numOr, strOr } from "../core/guards";
 import { Vec2 } from "../core/vec";
-import { ForceRecorder, type ForceSnapshot, type ForceKind } from "./force-diagnostics";
+import { ForceRecorder, type ForceSnapshot, type ForceKind, type CollisionImpulse } from "./force-diagnostics";
 import {
   Body, BodyDict, SCENE_MAX_COORDINATE, SCENE_MAX_FORCE,
   SCENE_MAX_SURFACE_SPEED, SCENE_MAX_VELOCITY, Wall, WallDict,
   normalizeAngle,
 } from "./body";
-import { Contact, ContactCache, ContactStatic, ContactTransition, contactKey, solveContacts } from "./contacts";
+import { Contact, ContactCache, ContactStartMotion, ContactStatic, ContactTransition, contactKey, solveContacts } from "./contacts";
 import { ConstraintForceSolve } from "./constraint-forces";
+import { DeleteZone, type DeleteZoneDict } from "./delete-zone";
 import {
   DistanceLink, Link, LinkDict, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS,
   PulleyLink, SpringLink,
@@ -56,6 +57,7 @@ export const INTEGRATORS = ["Velocity Verlet", "Symplectic Euler", "RK4"] as con
 export type Integrator = (typeof INTEGRATORS)[number];
 
 interface RigidRodResponse {
+  rod: DistanceLink;
   members: readonly Body[];
   x: number;
   y: number;
@@ -112,7 +114,7 @@ export const SCENE_MAX_LINKS = 10_000;
 export const SCENE_MAX_FIELDS = 64;
 export const SCENE_MAX_DRIVERS = 2_000;
 
-export type SceneCollection = "bodies" | "walls" | "links" | "fields" | "drivers";
+export type SceneCollection = "bodies" | "walls" | "links" | "fields" | "drivers" | "delete_zones";
 
 /** A scene whose raw collection size would make loading it an unbounded
  * main-thread operation. Malformed entries below the limits are still handled
@@ -133,6 +135,7 @@ export function assertSceneCollectionLimits(data: Partial<Record<SceneCollection
   const limits: Record<SceneCollection, number> = {
     bodies: SCENE_MAX_BODIES, walls: SCENE_MAX_WALLS, links: SCENE_MAX_LINKS,
     fields: SCENE_MAX_FIELDS, drivers: SCENE_MAX_DRIVERS,
+    delete_zones: 128,
   };
   for (const collection of Object.keys(limits) as SceneCollection[]) {
     const value = data[collection];
@@ -374,6 +377,7 @@ export interface WorldDict {
   links: LinkDict[];
   fields: FieldDict[];
   drivers: DriverDict[];
+  delete_zones?: DeleteZoneDict[];
 }
 
 export class World {
@@ -382,6 +386,7 @@ export class World {
   links: Link[] = [];
   fields: ForceField[] = [];
   drivers: Driver[] = [];
+  deleteZones: DeleteZone[] = [];
 
   gravity = 9.81;          // m/s^2, downward (negative = upward)
   mutualGravity = false;   // pairwise Newtonian attraction
@@ -459,6 +464,8 @@ export class World {
   /** Optional observations of contacts inside a completed step. These never
    * enter the solver, and own primitive values rather than pooled contacts. */
   trackContactEvents = false;
+  /** Impacts from the completed step, including contacts gone by its end. */
+  readonly collisionImpulses: CollisionImpulse[] = [];
   readonly contactEvents: ContactTransition[] = [];
   contactEventsEndTime = -Infinity;
   contactEventsOverflow = false;
@@ -479,12 +486,14 @@ export class World {
   // scheduler subdivides a frame.
   clampDt = 1.0 / 120.0;
   private contactCache: ContactCache = new Map(); // warm-start impulses between substeps
+  private contactStartMotion = new WeakMap<Body, ContactStartMotion>();
   private rods: DistanceLink[] = [];  // per-step caches, see prepareStep()
   private rodAttachments: Array<{ body: Body; rod: DistanceLink; t: number }> = [];
   /** Complete point-mass assemblies, prepared once per step. Block projection
    * avoids conditioning the force solve on nearly massless rod coordinates. */
   private standaloneRodMembers = new Map<DistanceLink, Body[]>();
   private rigidRodResponses: RigidRodResponse[] = [];
+  private stageRigidRods = new Set<DistanceLink>();
   private rigidRodByBody = new Map<Body, RigidRodResponse>();
   private springs: SpringLink[] = [];
   private pulleys: PulleyLink[] = [];
@@ -531,6 +540,7 @@ export class World {
   /** Discard completed force intervals after an edit. Headless callers can
    * use this when changing authored forces without advancing the world. */
   clearForceDiagnostics(): void {
+    this.collisionImpulses.length = 0;
     this.diagnosticBodies.clear();
     this.forceRecorder.clear(this.bodies);
     this.clearCurrentForcePreviews();
@@ -799,6 +809,7 @@ export class World {
     rodAttachments.length = 0;
     this.standaloneRodMembers.clear();
     this.rigidRodResponses.length = 0;
+    this.stageRigidRods.clear();
     this.rigidRodByBody.clear();
     noCollide.clear();
     this.syncPulleyMounts();
@@ -852,8 +863,9 @@ export class World {
           const members = [rod.a, rod.b, ...group.map(item => item.body)];
           this.standaloneRodMembers.set(rod, members);
           if (needsResponse && rod.compliance === 0 && members.some(body => body.invMass !== 0 && !body.isRodEndpoint)) {
-            const response: RigidRodResponse = { members, x: 0, y: 0, vx: 0, vy: 0, inverseMass: 0, inverseInertia: 0 };
+            const response: RigidRodResponse = { rod, members, x: 0, y: 0, vx: 0, vy: 0, inverseMass: 0, inverseInertia: 0 };
             this.rigidRodResponses.push(response);
+            if (!members.some(body => body.held)) this.stageRigidRods.add(rod);
             for (const body of members) this.rigidRodByBody.set(body, response);
           }
         }
@@ -1528,12 +1540,18 @@ export class World {
     this.rigidStageTaut.clear();
     if (this.rigidRodResponses.length === 0) return;
     for (const link of this.rods) if (link.isRope) {
-      const gap = link.length - link.a.pos.distTo(link.b.pos);
-      if (gap <= 1e-9 || (link.mu > 0 && gap <= 1e-7)) this.rigidStageTaut.add(link);
+      const dx = link.b.pos.x - link.a.pos.x, dy = link.b.pos.y - link.a.pos.y;
+      const distance = Math.hypot(dx, dy), gap = link.length - distance;
+      const vx = link.b.vel.x - link.a.vel.x, vy = link.b.vel.y - link.a.vel.y;
+      const rate = distance > 1e-12 ? (dx * vx + dy * vy) / distance : 0;
+      const tolerance = 1e-9 * Math.max(1, Math.hypot(vx, vy));
+      if (rate >= -tolerance && (gap <= 1e-9 || (link.mu > 0 && gap <= 1e-7))) this.rigidStageTaut.add(link);
     }
     for (const link of this.pulleys) {
-      const gap = link.length - link.currentLength();
-      if (gap <= 1e-9 || (link.mu > 0 && gap <= 1e-7)) this.rigidStageTaut.add(link);
+      const g = link.geometry(), gap = link.length - g.totalLength;
+      const rate = g.nax * link.a.vel.x + g.nay * link.a.vel.y + g.nbx * link.b.vel.x + g.nby * link.b.vel.y;
+      const tolerance = 1e-9 * Math.max(1, link.a.vel.length(), link.b.vel.length());
+      if (rate >= -tolerance && (gap <= 1e-9 || (link.mu > 0 && gap <= 1e-7))) this.rigidStageTaut.add(link);
     }
   }
 
@@ -2396,7 +2414,7 @@ export class World {
           this.rodMobilityRate(b, g.nbx, g.nby, -nx, -ny, weight));
       }
     }
-    return rate > 0 ? Math.min(h, 0.0025 / rate) : h;
+    return rate > 0 ? Math.min(h, 0.01 / rate) : h;
   }
 
   /** Advance the world by dt seconds using the configured substeps. */
@@ -2417,6 +2435,11 @@ export class World {
     // substep). Treat the whole call as the documented strict no-op.
     const h2 = h * h;
     if (h === 0.0 || h2 === 0.0 || !Number.isFinite(1.0 / h2)) return;
+    this.applyDeleteZones();
+    const activeZones = this.deleteZones.length ? this.deleteZones.filter(zone => zone.enabled) : this.deleteZones;
+    const zoneHits = activeZones.length ? new Set<Body>() : null;
+    const zoneLinkHits = activeZones.length ? new Set<Link>() : null;
+    const zoneOrigins = activeZones.length ? new Map(this.bodies.map(body => [body, body.pos.copy()])) : null;
     this.clearCurrentForcePreviews();
     let invH = 1.0 / h;
     const bodyCount = this.bodies.length;
@@ -2431,13 +2454,15 @@ export class World {
     this.diagnosticBodies.clear();
     for (const link of this.links) {
       if (link instanceof PulleyLink &&
-          (link.showTensionVectors || (!this.performance && (link.a.showForceComponents || link.b.showForceComponents)))) {
+          (link.showTensionVectors || link.showResultantTensionVector ||
+            (!this.performance && (link.a.showForceComponents || link.b.showForceComponents)))) {
         this.diagnosticBodies.add(link.a); this.diagnosticBodies.add(link.b);
       }
     }
     this.forceRecorder.begin(this.bodies, this.time, this.walls, this.diagnosticBodies, !this.performance);
     const recorder = this.forceRecorder.active ? this.forceRecorder : null;
     this.prepareStep(h);
+    this.contactStatic.startMotion = this.performance ? undefined : this.contactStartMotion;
     recorder?.velocityChange("initial-constraint", "Initial constraint correction", "correction");
     this.contactEvents.length = 0;
     this.contactEventsEndTime = -Infinity;
@@ -2448,6 +2473,8 @@ export class World {
       else for (const contact of this.contacts) this.contactKeysBefore.add(contactKey(contact));
     }
     this.contacts = [];
+    this.collisionImpulses.length = 0;
+    const impacts = new Map<string, CollisionImpulse>();
     this.diverged = [];
     for (const b of this.bodies) {
       b.prev.x = b.pos.x;
@@ -2486,8 +2513,8 @@ export class World {
     const constraintCount = this.rods.length - this.standaloneRodMembers.size + this.pulleys.length;
     const coupledWork = this.bodies.length + constraintCount ** 3 +
       (this.mutualGravity ? this.bodies.length * (this.bodies.length - 1) / 2 : 0);
-    let coupledBudget = coupledAdaptive ? Math.min(n * ENCOUNTER_MAX_SLICES,
-      Math.floor(64_000 / (4 * Math.max(1, coupledWork)))) : 0;
+    let coupledBudget = coupledAdaptive ?
+      Math.floor(128_000 / (5 * Math.max(1, coupledWork))) : 0;
     for (let s = 0; s < n; s++) {
       let remaining = baseH;
       do {
@@ -2496,16 +2523,30 @@ export class World {
         let refined = false;
         if (coupledAdaptive && coupledBudget > 0) {
           this.accumulateForces(this.time, 0);
-          h = Math.min(remaining, Math.max(baseH / ENCOUNTER_MAX_SLICES, remaining / (coupledBudget + 1),
-            Math.sqrt(1 / Number.MAX_VALUE), this.coupledConstraintSlice(remaining)));
+          h = Math.min(remaining, Math.max(Math.sqrt(1 / Number.MAX_VALUE), this.coupledConstraintSlice(remaining)));
           refined = h < remaining;
           if (refined) coupledBudget--;
         }
+        // A rounded adaptive cut can leave only a few ulps of the original
+        // substep. Integrate that tail here: a separate almost-zero slice
+        // would amplify positional roundoff into velocity through 1/h.
+        // Retain the selected integrator and cover the full remaining time.
+        if (remaining - h <= 32 * Number.EPSILON * baseH) h = remaining;
         invH = 1 / h;
         // Continuous wheel stops need the beginning of this exact substep. A
         // final-position overlap test alone lets a fast particle tunnel through
         // the wheel and land outside it on the opposite string branch.
         for (const pulley of this.pulleys) pulley.captureSafePositions();
+        if (!this.performance) for (const body of this.bodies) {
+          if (!body.collides) continue;
+          let motion = this.contactStartMotion.get(body);
+          if (motion === undefined) {
+            motion = { x: 0, y: 0, vx: 0, vy: 0, omega: 0 };
+            this.contactStartMotion.set(body, motion);
+          }
+          motion.x = body.pos.x; motion.y = body.pos.y;
+          motion.vx = body.vel.x; motion.vy = body.vel.y; motion.omega = body.omega;
+        }
         // (spin integration happens inside the integrator body loops;
         // torque only arises from contacts, applied there)
         if (adaptive) this.integrateAdaptive(h, this.time);
@@ -2521,6 +2562,7 @@ export class World {
         }
         recorder?.velocityChange("projected-springs", "Performance spring force", "spring");
         recorder?.captureVelocity();
+        if (coupledAdaptive && this.stageRigidRods.size > 0) this.restoreRigidRodPositions(invH);
         if (this.pulleys.length > 0) {
           // A pulley row is cheap (two live tangent legs) but nonlinear.
           // Keep eight refinement passes even in the most aggressive tier so
@@ -2551,7 +2593,23 @@ export class World {
         // reported (and drew) every contact four times over.
         solveContacts(this.bodies, this.walls, this.contacts, iters,
                       this.contactStatic.simplified ? null : this.contactCache,
-                      this.contactStatic, recorder?.contactImpulse);
+                      this.contactStatic, (a, b, wallId, nx, ny, normal, tangent, invMa, invMb, impact) => {
+          recorder?.contactImpulse(a, b, wallId, nx, ny, normal, tangent, invMa, invMb);
+          if (!impact || this.performance || !(normal > 0)) return;
+          const record = (body: Body, source: Body | null, sign: number, invMass: number): void => {
+            if (body.isRodEndpoint || body.isAnchor || invMass === 0 || !Number.isFinite(body.mass)) return;
+            const key = `${body.id}:${source?.id ?? "w" + wallId}`;
+            if (impacts.size >= CONTACT_EVENT_LIMIT && !impacts.has(key)) return;
+            const previous = impacts.get(key), scale = sign * body.mass * invMass;
+            impacts.set(key, Object.freeze({ bodyId: body.id, sourceId: source?.id ?? null,
+              wallId: source === null ? wallId : null, time: previous?.time ?? this.time + h,
+              jx: (previous?.jx ?? 0) + (normal * nx - tangent * ny) * scale,
+              jy: (previous?.jy ?? 0) + (normal * ny + tangent * nx) * scale,
+              contactNx: -sign * nx, contactNy: -sign * ny }));
+          };
+          record(a, b, -1, invMa);
+          if (b !== null) record(b, a, 1, invMb);
+        });
         if (this.trackContactEvents && !this.contactEventsOverflow) {
           this.contactKeysAfter.clear();
           if (this.contacts.length > CONTACT_EVENT_LIMIT) this.contactEventsOverflow = true;
@@ -2625,6 +2683,24 @@ export class World {
         if (projected !== null) clampSpeeds(this.bodies, PERF_MAX_SPEED);
         recorder?.velocityChange("speed-limit", "Speed-limit correction", "correction");
 
+        if (zoneOrigins !== null) {
+          for (const link of this.links) {
+            if (zoneLinkHits!.has(link)) continue;
+            const fromA = zoneOrigins.get(link.a)!, fromB = zoneOrigins.get(link.b)!;
+            const hit = link instanceof PulleyLink ? activeZones.some(zone => zone.intersectsSweptPulley(
+              fromA, fromB, link.a.pos, link.b.pos, link.pulley.pos, PULLEY_RADIUS,
+              (a, b) => link.geometry(a, b))) :
+              activeZones.some(zone => zone.intersectsSweptSegment(fromA, fromB, link.a.pos, link.b.pos));
+            if (hit) zoneLinkHits!.add(link);
+          }
+          for (const body of this.bodies) {
+            const from = zoneOrigins.get(body)!;
+            if (!body.isRodEndpoint && activeZones.some(zone => zone.intersectsSegment(from, body.pos, body.radius))) {
+              zoneHits!.add(body);
+            }
+            from.set(body.pos.x, body.pos.y);
+          }
+        }
         this.time += h;
         remaining -= h;
       } while (remaining > 0);
@@ -2651,8 +2727,10 @@ export class World {
       }
     }
     this.stepCount++;
+    this.collisionImpulses.push(...impacts.values());
     if (this.trackContactEvents) this.contactEventsEndTime = this.time;
     recorder?.finish(dt, this.time, this.stepCount);
+    if (zoneHits !== null) this.applyDeleteZones(zoneHits, zoneLinkHits);
   }
 
   /** XPBD position solve for the residual link drift, with the
@@ -2713,7 +2791,12 @@ export class World {
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist < 1e-12) continue;
         const c = dist - ln.length;
-        if (ln.isRope && c <= 0.0) continue;
+        // A positively loaded string is an equality constraint until its
+        // force solve releases it. Correct shortening drift as well as stretch
+        // so accumulated roundoff cannot cross the taut-state skin and skip a
+        // whole tension-bearing slice. Genuine slack still has no position row.
+        const loaded = !this.performance && ln.compliance === 0 && this.rigidStageTaut.has(ln) && ln.mu > 0;
+        if (ln.isRope && c <= 0.0 && !loaded) continue;
         const nx = dx / dist;
         const ny = dy / dist;
         const response = generalized ? this.rigidRodByBody.get(a) : undefined;
@@ -2833,15 +2916,47 @@ export class World {
       }
     }
     this.projectStandaloneRodVelocities();
+    if (!this.performance && generalized) {
+      this.projectLoadedStringVelocities(rigid);
+      this.projectPulleyVelocities(this.pulleys, true);
+    }
+  }
+
+  /** Restore the velocity tangent space of strings carrying positive tension.
+   * This occurs before contact impulses. Actual inward motion at the next
+   * accepted boundary releases a string instead of being projected away. */
+  private projectLoadedStringVelocities(links: readonly DistanceLink[]): void {
+    for (let pass = 0; pass < 8; pass++) {
+      let worst = 0;
+      for (const link of links) {
+        if (!link.isRope || link.compliance !== 0 || link.mu <= 0 || !this.rigidStageTaut.has(link)) continue;
+        this.updateRigidRodResponses();
+        const a = link.a, b = link.b, dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance < 1e-12) continue;
+        const response = this.rigidRodByBody.get(a);
+        if (response !== undefined && response === this.rigidRodByBody.get(b)) continue;
+        const nx = dx / distance, ny = dy / distance;
+        const rate = (b.vel.x - a.vel.x) * nx + (b.vel.y - a.vel.y) * ny;
+        const weight = this.rodDirectionMass(a, nx, ny) + this.rodDirectionMass(b, nx, ny);
+        if (!(weight > 0) || Math.abs(rate) < 1e-12) continue;
+        const impulse = rate / weight;
+        this.applyRodVelocity(a, impulse * nx, impulse * ny);
+        this.applyRodVelocity(b, -impulse * nx, -impulse * ny);
+        worst = Math.max(worst, Math.abs(rate));
+      }
+      if (worst < 1e-10) break;
+    }
   }
 
   /** Mass-weighted closest rigid line, with fixed supports held exactly.
    * The small endpoint coordinates do not choose the line's orientation over
    * its actual loads. Free assemblies retain their centre of mass; supported
    * assemblies retain the declared pivot and minimise load displacement. */
-  private polishStandaloneRodPositions(): number {
+  private polishStandaloneRodPositions(only?: ReadonlySet<DistanceLink>): number {
     let worst = 0;
     for (const [rod, members] of this.standaloneRodMembers) {
+      if (only !== undefined && !only.has(rod)) continue;
       if (rod.compliance !== 0) {
         continue;
       }
@@ -2981,13 +3096,33 @@ export class World {
     return worst;
   }
 
+  /** Restore an integrated rigid frame before projecting its attached links. */
+  private restoreRigidRodPositions(invH: number): void {
+    // Integrators may leave their Cartesian trial beam slightly off its rigid
+    // manifold. Restore that shape before another link uses its directions;
+    // correcting the beam only afterwards would stretch a solved pulley again.
+    // Held assemblies retain their existing kinematic correction-rate path.
+    for (const response of this.rigidRodResponses) if (this.stageRigidRods.has(response.rod)) {
+      for (const body of response.members) body.corrX = body.corrY = 0;
+    }
+    this.polishStandaloneRodPositions(this.stageRigidRods);
+    for (const response of this.rigidRodResponses) if (this.stageRigidRods.has(response.rod)) {
+      for (const body of response.members) if (body.invMass !== 0) {
+        body.vel.x += body.corrX * invH; body.vel.y += body.corrY * invH;
+        body.corrX = body.corrY = 0;
+      }
+    }
+    this.projectStandaloneRodVelocities(this.stageRigidRods);
+  }
+
   /** Orthogonally project mounted-particle motion onto the valid rigid modes
    * of each standalone massless beam. This never adds kinetic energy: with one
    * support it keeps only rotation about that support; without a support it
    * keeps centre-of-mass translation and rotation. Calling it after contacts
    * transfers an impact through the whole assembly before the next substep. */
-  private projectStandaloneRodVelocities(): void {
+  private projectStandaloneRodVelocities(only?: ReadonlySet<DistanceLink>): void {
     for (const [rod, members] of this.standaloneRodMembers) {
+      if (only !== undefined && !only.has(rod)) continue;
       let support: Body | null = null;
       let supportCount = 0;
       let mass = 0.0;
@@ -3096,7 +3231,8 @@ export class World {
         const db = geom.db;
         if (da < 1e-12 || db < 1e-12) continue;
         const c = geom.totalLength - ln.length;
-        if (c <= 0.0) continue;
+        const loaded = !this.performance && ln.compliance === 0 && this.rigidStageTaut.has(ln) && ln.mu > 0;
+        if (c <= 0.0 && !loaded) continue;
         // At the wheel stop the endpoint is blocked completely: letting the
         // string correction retain a tangent component made a stopped body
         // skate around the axle and converted projection into kinetic energy.
@@ -3110,7 +3246,7 @@ export class World {
         const arx = a.pos.x - ln.pulley.pos.x;
         const ary = a.pos.y - ln.pulley.pos.y;
         const ad = Math.hypot(arx, ary);
-        if (ad <= PULLEY_RADIUS + a.radius + 1e-7 && ad >= 1e-12) {
+        if (c > 0 && ad <= PULLEY_RADIUS + a.radius + 1e-7 && ad >= 1e-12) {
           gax = 0.0;
           gay = 0.0;
         } else if (ln.branchDistance("a") <= 1e-7) {
@@ -3118,11 +3254,11 @@ export class World {
           const sigma = ln.wrapSweep < 0 ? -1 : 1;
           const bnx = ln.guideAOffset.y * sigma / fd;
           const bny = -ln.guideAOffset.x * sigma / fd;
-          // dlam is negative for an overlong string. A positive gradient
-          // component along the allowed normal would therefore cross out.
+          // Protect the allowed half-plane for either correction direction:
+          // shrink an overlong path or restore a positively loaded short path.
           const mass = this.rodDirectionMass(a, bnx, bny);
           const normal = mass > 1e-18 ? this.rodForceInfluence(a, a, bnx, bny, gax, gay) / mass : 0;
-          if (normal > 0.0) {
+          if (normal * c > 0.0) {
             gax -= normal * bnx;
             gay -= normal * bny;
           }
@@ -3132,7 +3268,7 @@ export class World {
         const brx = b.pos.x - ln.pulley.pos.x;
         const bry = b.pos.y - ln.pulley.pos.y;
         const bd = Math.hypot(brx, bry);
-        if (bd <= PULLEY_RADIUS + b.radius + 1e-7 && bd >= 1e-12) {
+        if (c > 0 && bd <= PULLEY_RADIUS + b.radius + 1e-7 && bd >= 1e-12) {
           gbx = 0.0;
           gby = 0.0;
         } else if (ln.branchDistance("b") <= 1e-7) {
@@ -3142,7 +3278,7 @@ export class World {
           const bny = ln.guideBOffset.x * sigma / fd;
           const mass = this.rodDirectionMass(b, bnx, bny);
           const normal = mass > 1e-18 ? this.rodForceInfluence(b, b, bnx, bny, gbx, gby) / mass : 0;
-          if (normal > 0.0) {
+          if (normal * c > 0.0) {
             gbx -= normal * bnx;
             gby -= normal * bny;
           }
@@ -3190,7 +3326,7 @@ export class World {
   /** Non-stretching velocity projection at a taut inextensible string.
    * The positive path derivative is removed in the mass metric. Stops take
    * the blocked part of the common tension impulse; slack strings never push. */
-  private projectPulleyVelocities(links: readonly PulleyLink[]): void {
+  private projectPulleyVelocities(links: readonly PulleyLink[], maintainLoaded = false): void {
     const recorder = this.forceRecorder.active ? this.forceRecorder : null;
     for (let pass = 0; pass < 8; pass++) {
       let worst = 0;
@@ -3201,7 +3337,8 @@ export class World {
         if (geometry.totalLength < ln.length - 1e-7 || geometry.da < 1e-12 || geometry.db < 1e-12) continue;
         const rate = a.vel.x * geometry.nax + a.vel.y * geometry.nay +
           b.vel.x * geometry.nbx + b.vel.y * geometry.nby;
-        if (rate <= 1e-10) continue;
+        const loaded = maintainLoaded && !this.performance && ln.mu > 0 && this.rigidStageTaut.has(ln);
+        if (loaded ? Math.abs(rate) <= 1e-12 : rate <= 1e-10) continue;
         const sigma = ln.wrapSweep < 0 ? -1 : 1;
         const ga = this.pulleyVelocityGA, gb = this.pulleyVelocityGB;
         this.pulleyVelocityGradient(a, ln.pulley, ln.guideAOffset, -sigma, geometry.nax, geometry.nay, ga);
@@ -3220,7 +3357,7 @@ export class World {
           this.recordPulleyVelocitySupport(a, ln.pulley, impulse * (geometry.nax - ga.x), impulse * (geometry.nay - ga.y));
           this.recordPulleyVelocitySupport(b, ln.pulley, impulse * (geometry.nbx - gb.x), impulse * (geometry.nby - gb.y));
         }
-        worst = Math.max(worst, rate);
+        worst = Math.max(worst, Math.abs(rate));
       }
       if (worst <= 1e-10) break;
       this.enforcePulleyStops(links, true);
@@ -3727,6 +3864,28 @@ export class World {
     }
   }
 
+  /** Commit zone removals at a completed-step boundary, retaining normal
+   * body/link/driver and mounted-pulley deletion rules. Sweeps are observed
+   * inside every substep so fast particles cannot jump over a small zone. */
+  applyDeleteZones(sweptBodies: ReadonlySet<Body> | null = null, sweptLinks: ReadonlySet<Link> | null = null): void {
+    if (this.deleteZones.length === 0) return;
+    const zones = this.deleteZones.filter(zone => zone.enabled);
+    if (zones.length === 0) return;
+    const bodies = new Set(sweptBodies ?? []), walls = new Set<Wall>(), links = new Set(sweptLinks ?? []);
+    for (const body of this.bodies) if (!body.isRodEndpoint && zones.some(zone => zone.contains(body.pos, body.radius))) bodies.add(body);
+    for (const wall of this.walls) if (zones.some(zone => zone.intersectsSegment(wall.a, wall.b, wall.thickness / 2))) walls.add(wall);
+    for (const link of this.links) {
+      if (link instanceof PulleyLink) {
+        const geometry = link.geometry();
+        if (zones.some(zone => geometry.wrapped ?
+          zone.intersectsSegment(link.a.pos, geometry.ga) || zone.intersectsSegment(link.b.pos, geometry.gb) ||
+          zone.intersectsArc(link.pulley.pos, geometry.ga.distTo(link.pulley.pos), Math.atan2(geometry.ga.y - link.pulley.pos.y,
+            geometry.ga.x - link.pulley.pos.x), geometry.sweep) : zone.intersectsSegment(link.a.pos, link.b.pos))) links.add(link);
+      } else if (zones.some(zone => zone.intersectsSegment(link.a.pos, link.b.pos))) links.add(link);
+    }
+    this.removeLinks(links); this.removeBodies(bodies); this.removeWalls(walls);
+  }
+
   removeBody(body: Body): void {
     this.removeBodies(new Set([body]));
   }
@@ -3863,6 +4022,7 @@ export class World {
       links: this.links.map((ln) => ln.toDict()),
       fields: this.fields.map((f) => f.toDict()),
       drivers: this.drivers.map((d) => d.toDict()),
+      ...(this.deleteZones.length ? { delete_zones: this.deleteZones.map(zone => zone.toDict()) } : {}),
     };
   }
 
@@ -3950,6 +4110,8 @@ export class World {
     uniqueIds(w.walls, () => Wall.nextId++, (wall, i) => {
       if (typeof wallDocs[i].name !== "string") wall.name = `Wall ${wall.id}`;
     });
+    w.deleteZones = arrayOr<DeleteZoneDict>(d.delete_zones).filter(entry).map(zone => DeleteZone.fromDict(zone));
+    uniqueIds(w.deleteZones, () => DeleteZone.nextId++);
 
     const byId = new Map<number, Body>();
     for (const b of w.bodies) byId.set(b.id, b);

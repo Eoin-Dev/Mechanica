@@ -1,5 +1,32 @@
 # Application and UI
 
+## Delete zones and pool pockets
+
+Choose **Eraser (X)** and open the Selection panel to switch between immediate
+**Erase objects** and **Circle zone**, **Rectangle zone** or **Capsule zone**.
+Drag across the canvas to create a persistent region; releasing selects the
+new zone and returns to Select. Escape or an interrupted gesture discards an
+unfinished region. Existing immediate eraser scrubbing remains available.
+The mode choices use two columns so every shape stays readable on a phone.
+
+Zones have editable names, centres, widths/diameters, heights, angles and an
+Enabled checkbox. Height and angle are disabled for circles. Select and drag
+to move a zone; duplication, deletion, undo, scene export/import, page recovery
+and rewind preserve their authored data. Box selection has a Delete zones
+filter. Fit-to-scene includes zone bounds. Disabled zones stay visible but inert.
+
+Enabled zones remove touching particles, Anchors, walls and links when physics
+advances; the zones themselves persist. Particle radii and wall thickness count
+as touching. Solver-slice sweeps catch particle crossings and crossings by rods,
+ropes, springs and elastic strings even if both endpoints remain clear.
+Pulley strings use their actual moving tangent legs, wrapped arc and straight
+release path, with coherent string/wheel removal and retained surviving particles.
+Rod, driver, mounted-wall and pulley deletion uses the same coherent release/removal rules as ordinary
+deletion. Selection, active gestures and trails are reconciled after playback
+removals. The Billiard break preset has six editable circular pockets and six
+separated cushions whose openings lead into those pockets; its cloth damping
+remains enabled.
+
 `App` is the browser-facing coordinator. It owns the live world and everything
 needed to play, edit, inspect, visualize, save, and replace it. DOM components
 are plain TypeScript classes/functions; the canvas is rendered through Canvas
@@ -40,6 +67,13 @@ resolved slow motion. At high speed it schedules more normal quanta until the
 per-frame step/time budgets are reached.
 
 ### Single-step and rewind
+
+Holding either step button repeats its existing step action after a short
+initial delay, increasing from a 220 ms interval toward 40 ms with hold time.
+Pointer release/cancel, lost capture, blur, hiding, disabling and Escape stop
+the repeat. Space/Enter hold also repeats; releasing does not add a second
+click step. Each action retains collision refinement and history behavior.
+
 
 `stepOnce()` pauses and advances at most two 1/120 s quanta (one nominal 60 Hz
 display frame). A new detected collision stops the step at its contact
@@ -143,7 +177,8 @@ paused; press Play separately to start again.
 - `newScene()` installs an empty world, applies the sanitized Settings default
   gravity (`9.8 m/s²` when unset), and pauses as one undoable transaction.
 - `loadPreset()` installs a newly built world, applies preset view hints,
-  frames the initial bounds, captures reset/energy baselines, and arms a
+  frames the initial bounds, selects the first movable physical particle for a
+  phase-plot demonstration, captures reset/energy baselines, and arms a
   one-time soft-body drag hint as one undoable scene replacement.
 - `loadWorld()` handles saved and imported worlds the same way, fits the new
   scene and pauses. Successful user scene loads announce only the scene name;
@@ -193,10 +228,17 @@ Duplication:
 - copies selected ordinary bodies/anchors with new IDs and a small positional
   offset; internal pulley wheels are not independently duplicated;
 - preserves anchor identity/name rules;
-- duplicates a link only when both endpoints were duplicated;
+- duplicates an ordinary distance/spring link when both endpoints were
+  duplicated, preserving its authored name;
+- copies a selected standalone rod with its hidden endpoints and mounted
+  bodies, remapping attachments to the copied rod; a mounted particle copied
+  by itself becomes a free particle;
+- preserves the internal names of copied hidden endpoints, keeping the copied
+  scene stable through undo/redo and reconstruction;
 - duplicates drivers that target duplicated bodies;
 - copies selected walls with new IDs and the same offset; and
-- selects the new objects and creates one undo entry.
+- selects the visible copied objects, including selected copied links, and
+  creates one undo entry; hidden rod endpoints never enter the selection.
 
 ## Canvas tools
 
@@ -304,8 +346,13 @@ Position dragging is therefore placement, not throwing. Intentional velocity
 changes use right-drag or the velocity handle.
 
 Pulley particles stop at the first wheel-frame contact and at the available
-string reach, including during a paused edit. Extra cursor travel leaves the
-particle at that boundary; moving back makes it follow again. Existing slack
+string reach, including during a paused edit. Beyond the reach of a single
+axle, a free particle is placed on the axle-to-current-pointer ray at the
+permitted boundary. Small angular changes move it along that edge immediately,
+including after an off-centre grab; additional distance on the same ray does
+not extend the string. Wheel/guide/wall stops, rod attachments and different
+axles retain their own conservative geometry. Moving back within reach makes
+the particle follow again. Existing slack
 is consumed first. If more string is needed, a free partner moves inward along
 its current string leg by only that amount, until a wall or the wheel stops it.
 Lifting a particle may create slack and never pushes its partner away. A locked,
@@ -407,6 +454,9 @@ The inspector has `Selection`, `World`, and `View` tabs. They use the
 Left/Right, Home, and End move focus and selection. The panel computes a
 structure key using object type and ID, not ID alone, so a body and wall with
 the same numeric ID remain different selections.
+Rod attachment ownership participates in that key. Detaching commits one
+immediate layout change; subsequent refreshes retain the newly editable
+position fields and any draft the user has started.
 
 Desktop/tablet collapsed state follows the persisted `inspector_visible`
 setting. The collapsed-edge and phone handles are real named buttons exposing
@@ -431,7 +481,7 @@ For a single object it exposes type-specific state:
   or B, and lists every attached anchor/particle as a selectable row with its
   distance from A;
 - pulley-string total natural length, including both straight legs and its
-  wrapped section, plus a transient four-arrow equal-tension overlay;
+  wrapped section, plus an independent two-leg tension overlay;
 - spring, elastic-string, and inelastic-string axial-force overlays with one
   arrow on each endpoint; and
 - a read-only pulley-wheel explanation with position dragging and deletion as
@@ -459,35 +509,36 @@ destination Inspector, scrolls it to the top and focuses its tab panel. The
 navigation handler does not create an edit boundary, clear recorded forces or
 add undo history; an outstanding field edit follows its normal commit/cancel
 lifecycle.
-An endpoint's own controls sit in a separate bordered card beneath navigation.
-Its Particle A/B header includes a selected disc in that particle's colour,
-so the properties remain visually associated with the selected endpoint.
+An endpoint's controls follow navigation without an additional enclosing border.
+Its editable name header includes a selected disc in the particle's colour and
+a compact A/B role badge.
 Pulley membership participates in the particle's structure key so dismantling
 an assembly removes its navigation and restores ordinary radius editing.
 Single- and multi-selected pulley strings label their slider String length;
 its tooltip explains that both straight legs and the wrapped arc are included.
-The wheel's analysis reads Tension, Path, Leg rates, Constraint rate and Axle
-reaction with a colon before each value. The retained labels offer brief native
-hover help and the same accessible descriptions when focused; unchanged
-refreshes perform no readout DOM writes. Path compares current and natural
-lengths, positive leg rates mean lengthening, and axle reaction lists right/up
-support components. Tension readings and separate pulley arrows use the same
-current or completed-interval measurements as the particle diagrams, including
-tightening impulses. Hover descriptions identify current forces or the
-averaging interval. The axle support balances string pulls and particle
-contact with the wheel/frame. For example, a stationary 2 kg
-free mass and 1 kg particle stopped at the wheel require 19.62 N tension and
-29.43 N upward axle support: the frame contact contributes to that support.
-During swinging, the readout reports mean scalar tension while an arrow shows
-its mean vector. Hidden diagram flags stay hidden when a readout requests an
-isolated current calculation, and enabled separate-vector measurements survive
-rewind without stepping again.
+The wheel offers Resultant tension vector, showing the sum of both string loads
+at its centre. The string's Tension vectors show four arrows: the two particle
+loads and their opposite loads at the wheel's two string-contact points. An
+unwrapped route has only the two particle loads because it misses the wheel. Their
+independent choices survive tab recovery, reset and rewind. Both use isolated
+current forces while paused and measured interval forces after stepping, without
+turning on hidden particle diagrams. Axle support, routing-guide and frame-contact
+reactions remain separate physical sources. They are included when balancing the
+axle, rather than being added to the string-load resultant.
 Live pulley particles stop at their assigned routing guide and at the finite
 wheel frame; they can retreat from either stop. The string still preserves
 its retained angular sheet for imported legacy routes, queries, save/load and
 rewind. Legacy vanishing wraps render as one straight string, without wheel
 tension arrows. Guide-stop support is reported as a reaction, separately from
 string tension and numerical correction.
+
+Every singly selected particle, anchor, pulley wheel, wall, rod, spring or
+string has one editable name in its upper identity header. Clicking the header
+focuses the editor; Enter commits and Escape cancels. Particle colour discs and
+compact pulley A/B badges distinguish identity from assembly role. Link names
+are persisted with the scene, including undo and rewind structure. Names remain
+plain text and are limited to 200 characters. The header does not add an outer
+border around all object controls.
 
 Ordinary name, mass, colour and other value commits keep the current controls
 when the structure key is unchanged. A subsequent focused edit therefore
@@ -510,15 +561,18 @@ Single-link readings show current length, signed extension, ideal axial force
 (tension or thrust) and ideal elastic energy, with slack elastic strings showing
 zero force and energy. These use authored stiffness, exclude damping, and
 explain solver limits rather than presenting old effective coefficients as
-current values. A visible Set damping to zero action removes axial damping in
-one reversible edit; Performance mode explicitly recommends Normal mode for
-quantitative study. The complete card owns its refresh observation so scrolling
+current values. Force and energy equations use native MathML with named,
+keyboard-focusable containers so overflowing equations can be scrolled. The
+collapsible explanation describes natural length, modulus and the ideal model;
+the card has no damping-reset action. The complete card owns its refresh observation so scrolling
 one explanation out of view cannot freeze another visible reading.
 
 An ordinary selected particle can enable a free-body diagram directly on the
 canvas, and a particle group can enable or disable all its diagrams together.
 Mixed groups expose the native checkbox's indeterminate state. These are view
 choices, so they do not change physics or create undo entries.
+The single-particle diagram switch settles dependent Inspector readout visibility
+within the same action, rather than letting a later panel poll move neighbouring controls.
 
 The compact force card provides a diagram switch, symbol keys and a
 keyboard-operable **Values and sources** disclosure. Weight, including mutual
@@ -530,6 +584,24 @@ reaction/friction entry and named source. The readout retains signed x/y
 components, the resultant and the measured interval. Completed-step values
 average the impulses over that interval; they are not estimates of a material's
 physical peak impact force.
+
+**Collision impulses** shows measured J arrows and separate signed Jx/Jy values
+in N·s on impact frames, including when diagrams are first enabled while paused.
+With that choice enabled, impact contributions are removed from the displayed
+reaction/friction forces over the same interval; the note reads **Sustained
+forces**. Disabling it restores the raw **Average forces** view. The next step
+replaces impulse measurements, and rewind restores the captured impact. Hiding
+or reopening the Inspector and changing particle, wheel or string diagram
+choices preserve completed measurements and do not create physics edits.
+
+Rod-associated particles expose optional **Rod moments**. The readout uses a
+fixed pivot/support as its reference, otherwise the physical rod centre of mass.
+Per-force and resultant moments use N·m, positive anticlockwise and negative
+clockwise. This is a moment readout rather than a curved canvas torque arrow.
+The rod assembly lists the rod, visible particles and Anchors above controls,
+ordered by attachment position, and remains available when navigating its parts.
+Renaming the rod refreshes its visible row and accessible assembly name without
+replacing the retained navigation group.
 
 **Resolve weight on slope** replaces each gravitational weight arrow with its
 signed parallel and perpendicular projections, labelled `W∥` and `W⊥`.
@@ -555,15 +627,42 @@ forces start at the centre; reaction/friction start at the rim in the recorded
 contact direction. For interval averages this is the last sampled direction
 even if contact ended before the displayed frame. Hovering an arrow or caption
 identifies its source. Placement protects shafts and tips, searches bounded
-candidate positions and keeps captions inside the viewport. Oversized arrows
+candidate positions and keeps captions inside the viewport. Captions and source
+hover cards reserve the scale marker's measured ink bounds, including its unit
+label, and the visible phone Inspector handle. Floating UI bounds are measured
+at layout changes; opening or closing the drawer refreshes paused annotations
+even when the canvas dimensions stay unchanged. HUD bounds participate in
+layout-cache validation; hovering cannot append
+to the retained caption list or change its source mapping. Oversized arrows
 retain their direction and value while clipping their tip inside the canvas;
 break marks and hover text identify this shortening.
 
+Number badges are hidden by default to keep diagrams uncluttered; force symbols
+and magnitudes remain visible. **View → Force diagram numbers** enables matching
+numbered badges between each caption and its particle when several particles
+show diagrams. The toggle repaints paused scenes, survives tab recovery, and
+changes presentation only. Hover disclosure still identifies forces with the
+numbers hidden. Body-side badges use their measured width and
+the same bounded collision search to avoid other badges, captions, reserved UI
+and vector ink. Displaced badges have a short neutral leader back to the body;
+all leaders paint below both body-force arrows and independently enabled
+string, spring and pulley tension arrows, including the wheel resultant.
+These arrows paint before the caption surfaces; their frame-local batches are
+flushed even when no body diagram is enabled. Clear placements retain their relative
+offset through small motion and source reordering. Finite canvas space can
+still limit separation in very dense diagrams.
+
 A renderer batch shares one physical-input validation scan across all enabled
-diagrams. Each canvas context retains only its latest caption layout; reuse
-requires identical geometry, viewport, text scale and measured widths. Text,
-colours and hover sources are painted from current data. Font metrics are
-measured even on a cache hit, and moved arrows use the same placement rules.
+diagrams. Each canvas context retains only its latest caption layout; direct
+reuse requires identical source identity, geometry, viewport, text scale and
+measured widths. Stable sources retain their offset from a moving arrow tip
+while clear of other captions, reserved UI and vector ink. New placement uses
+a 7-pixel vector gap and retention permits 2 pixels, scaled with text, to avoid
+flipping at one boundary. Caption widths use 8-pixel buckets and remain sticky
+by source identity through changing values and source order, until substantially
+oversized. Blocked captions relocate; viewport or text-scale changes re-place
+them. Text, colours and hover sources use current data, and font metrics are
+measured even on a cache hit.
 An exact bounding-box rejection avoids unnecessary segment clipping. Normal
 mode keeps all enabled visible diagrams; finite screen space may still crowd
 them, with the disclosure retaining every exact value.
@@ -696,10 +795,10 @@ Major behavior includes:
   zooms in instead of multiplying decorative segments per link;
 - distinct taut/slack string styling with a one-millimetre visual tolerance so
   microscopic projection residuals cannot make a pulley string flicker;
-- Normal-mode slack ropes, elastic strings and pulley legs use a stable cubic
-  sag. Nearly vertical segments develop an S fold as excess length increases;
-  horizontal segments sag downwards. The bow parameter is capped at 72 CSS
-  pixels and every control offset stays within 216 CSS pixels of its segment. Coincident ends draw a small bounded loop. Pulley
+- Normal-mode slack ropes, elastic strings and pulley legs use a single stable
+  quadratic sag. Horizontal segments bow downwards; near-vertical pulley legs
+  bow outward without an S reversal. The bow parameter is capped at 48 CSS
+  pixels; coincident ends use two bounded quadratic segments to form a loop. Pulley
   legs bow away from the wheel and divide the cue according to straight-leg
   length; a released route uses one curve. Endpoints and wrapped contact points
   remain fixed. This is a display cue rather than a simulated hanging-string
@@ -708,7 +807,9 @@ Major behavior includes:
   Viewport culling includes the curve's control extent and the full wheel arc.
   Every Performance tier keeps straight strings and bypasses the curve/picking
   workload;
-- routed pulley strings with two live tangent legs and a finite wrapped arc;
+- routed pulley strings with two live tangent legs and a finite wrapped arc.
+  The contact arc is painted after wheel fills, retaining the same full stroke
+  width as the legs instead of letting the disc obscure half of the rope;
 - standalone rods as two parallel rails, selected endpoint badges `A` and `B`
   centred on their actual tips and painted above attached particles,
   and rod supports whose triangular glyph dimensions scale with physical rod
@@ -722,7 +823,7 @@ Major behavior includes:
   construction. Net force is the realised step-average resultant
   `mass * deltaVelocity / dt`, so it includes contacts and constraint impulses
   rather than only the latest smooth-force sample;
-- opt-in link-force arrows, including four equal-tension arrows for a pulley
+- independently selectable pulley arrows: four string-tension arrows or one resultant string load at the wheel
   and two endpoint arrows for a spring or string. They use the same half-pixel
   Normal-mode and four-pixel Performance-mode visibility thresholds as body
   vectors. The extra geometry pass runs only when at least one link has enabled
@@ -746,7 +847,14 @@ while physics and input continue at display cadence.
 `ViewSettings` defaults to grid on and all analytical overlays off. View state
 is not serialized with the world; preset hints and user controls set it.
 The app compares direct camera and view values before each draw, so setters do
-not need to duplicate invalidation bookkeeping. Physics comparison uses
+not need to duplicate invalidation bookkeeping.
+`ForcePresentation` also compares enabled particles' immutable force samples
+against their last painted sample. A changed source, contact origin or caption,
+or at least 0.05 CSS pixels of vector movement, wakes the canvas even when the
+particle and total force stay unchanged. Smaller movements accumulate against
+that painted sample. Identical samples retain the canvas, and every Performance
+tier bypasses these diagnostic reads. Physical discontinuities are displayed
+without interpolation or modification of the solver's values. Physics comparison uses
 reusable typed scratch and omits inactive velocity/acceleration data. Pointer
 gestures invalidate explicitly so hover, rubber bands, pending links/walls and
 parked drags remain continuous.
@@ -863,7 +971,9 @@ current state, even while paused. Its timestamps let rewind truncate future
 phase points in the same way as the energy and momentum series.
 
 The graph dock supports live following, scroll-back, unmodified-wheel zoom,
-pan, reset, legend toggles, and a resizable splitter. Modified wheel events are
+left- or right-button pan, reset, legend toggles, and a resizable splitter.
+A detached time view offers **Return to live** as an action, rather than a badge
+suggesting that the historical view is already following the present. Modified wheel events are
 reserved for document-level page-zoom suppression. The dock avoids redrawing
 unchanged data unless autoscale easing
 is still active. Empty, undersized, or all-hidden plots cancel easing, and the
@@ -917,7 +1027,7 @@ The graph's name is the modal's main heading, with its position among the six
 families beneath it. **Zoom in**, **Zoom out** and **Fit** adjust both axes of
 the detached plot. The mouse wheel zooms around the pointer inside the plot;
 outside it, normal scrolling remains available. Focused charts also accept
-`+`/`-` for zoom and `0` for Fit. Once zoomed, dragging pans both axes within
+`+`/`-` for zoom and `0` for Fit. Once zoomed, left- or right-button dragging pans both axes within
 the recorded domain; pointer capture keeps the drag coherent outside the plot.
 Shift plus an arrow key pans by ten percent of the visible span. Rendering is
 coalesced to one animation frame; panning does not change measurements or CSV.
@@ -952,6 +1062,17 @@ focus, restores its Data opener and participates in global shortcut precedence;
 underlying scene edits and playback shortcuts cannot run through it.
 
 ## DOM control system
+
+Graph, pause-event and single/group contact-plane choices share a themed button/listbox control instead of
+browser-native option surfaces. The retained combobox supports Arrow keys,
+Home/End, Enter/Space, Escape, Tab and typeahead. Closing a popup clears its
+typeahead prefix so the next search starts independently. Popup placement measures
+the actual wrapped option heights and caps the chosen side to its available room.
+Popups close when their control scrolls beyond its clipping viewport; refreshing an open control
+also reconciles its placement. Dismissal, replacement and disposal release listeners and focus
+ownership. Pause rules remain Off, First collision, Apex, Line crossing, String
+taut and Pulley stop.
+
 
 `ui/dom.ts` supplies the common construction and behavior layer:
 
@@ -1012,19 +1133,36 @@ have separate accessible names, and unchanged colour refreshes avoid DOM writes.
 Tunable quantities opt into `numericScrub` through their existing slider or
 `tunableNumEdit`. The label is the pointer handle; a click focuses the numeric
 field, and a horizontal movement of three CSS pixels starts relative adjustment.
-Mouse, trackpad and pen use pointer capture with document fallback. Touch retains
+Mouse, trackpad and pen use pointer capture with document fallback. Continuous
+mouse scrubbing consumes relative pointer events once, including browsers that
+suppress compatibility mouse events after capture. A zero-motion lock recenter
+is ignored both while acquisition is pending and after the lock is granted;
+actual release or nonzero released-button motion ends the edit. Touch retains
 ordinary direct entry and scrolling. Live writes are coalesced to animation
 frames; release flushes the final value through the canonical setter and commits
 once. Shift scales subsequent motion by ten, Alt by one tenth. Clamping discards
 overshoot debt, and rejected dependent values rebase to the last accepted value.
 Integer steps remain integral. Exact fields keep decimal/scientific text entry
-and gain Arrow Up/Down adjustments. Read-only or disabled controls cannot scrub.
+and gain Arrow Up/Down adjustments. Keyboard modifiers respect the declared
+smallest step; Alt never rounds a whole key press back to the unchanged value.
+
+Hiding the Inspector, including an automatic switch to its collapsed phone
+layout, cancels active numeric edits before the controls become hidden. The
+pre-edit world is restored without adding an undo entry, pointer capture and
+the wrapping cursor are released, and the controls remain usable on reopening.
+
+Only the primary mouse/pen starts a gesture, and an unrelated pointer's
+cancellation cannot end it. Replacing a gesture restores its transaction before
+reading the new starting value. Read-only or disabled controls cannot scrub.
 The handle has a theme-native hover/active cue and an `ew-resize` cursor, while
 inputs retain their accessible labels, units and tab order.
 
-Escape, pointer cancellation, lost capture, window blur, disabling and panel
-rebuild cancel the gesture. The Inspector captures a transaction before the
-first accepted change; `rollbackEdit()` restores the complete original world,
+Escape, pointer cancellation, lost capture, window blur, hiding/leaving the page,
+disabling, an inert overlay and panel rebuild cancel the gesture. Released-button
+motion finishes an edit if its mouse-up event was lost. Enabling No rotation
+during a spin gesture releases the pointer and retains zero spin; cancellation
+cannot restore a nonzero value into a rotation-locked particle. The Inspector
+captures a transaction before the first accepted change; `rollbackEdit()` restores the complete original world,
 including unequal group values and dependent properties, while retaining the
 camera, plots and rewind/trail stores. Transient callbacks and cursor/selection
 styles are removed before commit/cancellation can rebuild the controls.
@@ -1041,7 +1179,8 @@ new-scene gravity preference persists at commit, rather than on raw moves.
 
 Colour rows place the label above a swatch and exact hex field, with palette
 chips aligned below; the layout keeps enlarged labels out of neighbouring
-controls. The swatch also receives its current colour as a guarded CSS property
+controls. Preset chips retain 24-pixel targets and wrap onto additional rows.
+The swatch also receives its current colour as a guarded CSS property
 so native controls that render a text value still show a colour surface. Select
 rows place their label above the full-width dropdown and use the same scalable
 font as the other fields.
@@ -1109,7 +1248,9 @@ height is unusually small.
   separate Load control. Pointer hover and keyboard focus apply the same
   selectable-card treatment. Its independently operable Show more/less control
   is pinned to the bottom-right, has a minimum 24 by 24 CSS px target, and
-  exposes `aria-expanded` and `aria-controls`.
+  exposes `aria-expanded` and `aria-controls`. Each card isolates its
+  stacking context so description controls cannot paint above the sticky
+  category strip while scrolling.
   Saved scenes retain explicit Load, rename, description, download, and delete
   buttons, with each action named for its scene. Save, rename, description and
   delete use themed forms within the Library. Name editing previews the actual
@@ -1131,7 +1272,20 @@ height is unusually small.
   title and Close action occupy the first row and the full-width tab switcher
   occupies the second, keeping all controls reachable without horizontal
   clipping. Category filters wrap within the dialog.
-- **Settings:** appearance, theme/accent/font, accessibility, interaction,
+- **Settings:** compact Appearance, Interaction and Simulation tabs group
+  related preferences. Text-size choices include 80%; adaptive scrub speed,
+  base sensitivity and continuous pointer-lock scrubbing are optional controls.
+  Slow label drags provide finer adjustments; Shift speeds up and Alt refines.
+  Continuous scrubbing wraps an in-app cursor while locked, cleans up on release
+  or cancellation, and falls back to ordinary dragging if the browser refuses.
+  Random starts are enabled by default, but a browser's first visit always
+  opens Pulley on an incline. Later fresh visits/title restarts choose valid
+  built-in or saved scenes unless the user turns random starts off. Ordinary
+  reload restores the tab's scene and view without constructing a random scene.
+  **Page refreshed** uses a short horizontal entrance cue; title-triggered
+  restarts also name the actual loaded example or saved scene in its message.
+  The notice has no counter or Start fresh action; reduced motion omits movement.
+  Settings also include appearance, theme/accent/font, accessibility, interaction,
   adaptive resolution, performance mode, culling, the gravity assigned by
   Clear, help, and tour access. The new-scene gravity defaults to `9.8 m/s²`,
   is clamped to `0..100`, and does not alter the current scene. Accent
@@ -1168,6 +1322,30 @@ play state. Step changes are announced through a polite live region. Introductor
 and progress counts are derived from the responsive set of steps whose targets
 are actually visible, rather than from a fixed total.
 
+Spotlight holes retain the true union of their targets. One rounded SVG contour
+outlines its exposed boundary, so neighbouring or overlapping targets have no
+crossing borders. The full stroke stays inside the viewport. Cards remain
+within the window and scroll when enlarged text exceeds the available height;
+an overflowing card starts focused at its heading rather than jumping to Next.
+
+Inspector stops open the appropriate tab and drawer and scroll the referenced
+particle, force controls, graph selector or force-field actions into view. The
+explanation is anchored to that control; phones highlight the drawer control
+rather than the canvas underneath. A particle-dependent stop requires a real
+eligible particle. Temporary selection, diagram visibility, tab, scroll and
+collapsed state are restored when the tour closes; revealing a drawer does not
+persist a new Inspector preference.
+
+The ten stops cover navigation, playback and accelerating held frame steps,
+particle dragging, standalone rods and attachments, particle editing, free-body
+diagrams, graphs and return-to-live scrolling, custom fields, and the Library.
+The energy readout is explained as energy change: friction and drag can remove
+energy physically, so numerical drift should be assessed in a conservative
+scene. The diagram stop identifies the force symbols and explains that resolving
+weight replaces only W with wall-parallel and wall-perpendicular components.
+Normal mode provides these diagrams; Performance mode omits them. Touch wording
+uses the drawer handle and gestures, and Help uses the same rod/pulley workflow.
+
 ## Shortcuts
 
 `handleShortcut()` is DOM-light and accepts a `ShortcutHost`, making precedence
@@ -1176,13 +1354,14 @@ testable without constructing the whole app. It:
 1. Lets focused text controls keep editing keys and lets range/checkbox/button
    controls keep keys they own.
 2. Handles escape in order: active tour, open overlays, pending canvas
-   gesture, then selection.
+   gesture, then selection. Focused modal checkboxes and ranges allow Escape
+   to close the dialog; text editors keep cancellation of their own draft.
 3. Gives modal overlays/tours ownership before modifier edit commands. Scene
    undo/redo, duplication, reset, paste, and save cannot act behind a dialog;
    their browser defaults are suppressed too. Native focused editing and copy
    remain available. Alt-modified and composing input do not select scene tools.
-4. Applies modifier edit commands (undo, redo, save, duplicate, copy/paste,
-   reset).
+4. Opens Settings with Ctrl/Cmd+comma and applies modifier edit commands
+   (undo, redo, save, duplicate, copy/paste, reset).
 5. Applies tool keys and view/playback commands.
 6. Prevents browser defaults only for a command the app actually consumed,
    except for the intentionally global page-zoom suppression in `main.ts`.
@@ -1191,11 +1370,17 @@ The toolbar clock and formula editors also stop key propagation while editing.
 Editable HTML regions keep their editing keys. Alt-modified and composing input
 is ignored before modal processing. Holding a key does not repeatedly toggle
 playback, tools, views, duplication, reset, or save; stepping, undo/redo, and
-continuous speed changes can still repeat.
+continuous speed changes can still repeat. Ctrl/Cmd+comma also runs only once
+per press, yields to focused editors, and cannot open Settings through another
+dialog or the tour. Help lists all six graph keys, both redo combinations, the
+current rod tool and the Return to live graph action.
 Browser page zoom is disabled by the viewport and by global modified-wheel,
 gesture, and Ctrl/Cmd zoom-key guards. Unmodified wheels over the simulation
 canvas or graph continue to zoom only those views; their custom touch gestures
 remain scoped to the canvases.
+
+Inspector tour cards adapt their scrollable height to the space beside the
+referenced control, keeping it visible and retaining the card's reading position.
 
 ## Themes and responsive behavior
 
@@ -1219,20 +1404,51 @@ remain readable with extreme custom accents.
 Canvas colour strings are memoized by packed colour/alpha value with a bounded
 cache.
 
-Studio mode is an independent presentation layer over the selected base
-palette. It adds gradients, layered surface treatments, rounded compact
-controls, stronger visible button/card boundaries, a rounded segmented Library
-switcher, elevated preset cards, and workspace spacing while leaving the
-background, panel, text, grid, semantic, and default accent colours owned by
-Void, Dark, or Light. Preset group names and selected Library controls use the
-contrast-safe selected accent. Changing the base theme while Studio mode is on
-therefore immediately restyles the same Studio layout with that palette.
-Accent-colour choices remain circular full-colour discs in every appearance;
-selection is shown with an exterior ring rather than reducing the colour fill.
-Physics-object colours remain scene controlled. Studio's shared button surface
-treatment has lower selector specificity than component variants, so primary,
-danger, ghost, swatch, card, and compact-action geometry and states remain
-intact.
+Studio mode is an independent workspace presentation over Dark, Void or Light.
+A single stylesheet section defines the shared spacing, neutral surfaces and
+rounded geometry. The simulation remains the main surface; the tool shelf and
+Inspector are inset in reserved layout space, with a separate grouped playback
+cluster in the top toolbar row whenever it fits, alongside scene/document
+controls. Narrow layouts wrap only as needed. Settings use a narrower panel
+and tighter card/header spacing while retaining scrolling and enlarged-text
+accessibility. The Inspector places its contextual heading
+above the section switcher and leaves the selected object's editable name in the
+content. Scientific colours, models, undo and persisted scene data do not change.
+
+On compact Studio layouts, Scene actions contains the original undo, redo,
+clear, fit and follow controls, plus the live display-performance readout. The
+same nodes move between inline and popup presentation. `CommandPopover` owns
+light dismissal, enabled-action keyboard navigation, Escape, focus restoration
+and viewport-bounded positioning with retained scrolling. Focus transitions use
+the actual destination so an internal pointer click survives the browser's
+transient focus gap. Popup keys cannot also step the simulation.
+Resizing retains keyboard context; a focused trigger becomes a focused inline
+group rather than activating an action. Library, Settings, playback, speed and
+the clock remain reachable as text enlarges. The clock reserves space for its
+actual digits, including collision precision. Coarse-pointer shell commands
+have larger targets; the speed track keeps a 64px minimum and moves below its
+label at the smallest widths. Compact particle-colour presets retain their single row.
+
+The phone Inspector remains a transient drawer. Its top follows the measured
+header height, including wrapping; resizing the desktop Inspector measures its
+actual right edge so inset margins do not bias pointer sizing. The analysis dock
+and reference sheets share the workspace's neutral hierarchy. Short phone
+windows omit the secondary Inspector heading, compact its tabs and use more
+of the drawer's lower space for editable content. Shared choice menus scale
+their preferred width with application text, capped to the viewport; clipping
+ownership follows the visible centre of their control. Shadows are
+restrained, precise content stays opaque, increased contrast restores stronger
+boundaries, and decorative feedback honours reduced motion. Studio uses the
+platform system font while retaining the OpenDyslexic and text-size options.
+Routine welcome greetings are omitted from Studio's stage; recovery, refresh,
+action feedback and first-run guidance remain available.
+
+The selected base palette owns all background, panel, text, grid, semantic and
+accent colours. Selected controls use contrast-safe foreground/background pairs.
+Accent-colour choices remain circular full-colour discs with an exterior
+selection ring. Physics-object colours stay scene controlled. The shared button
+rules have lower specificity than primary, danger, ghost, swatch, card and
+compact-action variants.
 Destructive buttons use white text on their fixed dark-red hover fill,
 including in the light theme; compact saved-scene actions retain their own
 neutral-background hover treatment.
@@ -1259,15 +1475,21 @@ The stylesheet owns:
 
 On phones, the inspector becomes a transiently closed drawer with a persistent
 handle; its open/closed state does not overwrite the desktop/tablet visibility
-preference. The toolbar brand becomes visually hidden but remains the level-one
-heading, toolbar content is trimmed/scrollable, and the graph/overlay layout
+preference. The toolbar brand remains a visible level-one heading and a reachable
+fresh-start button; toolbar content is trimmed/scrollable, and the graph/overlay layout
 adapts. The speed editor and readout grow with the text multiplier so the label
 cannot consume the slider track; range controls retain a 24-pixel hit height.
 Library and Help headers split across two rows, category controls wrap,
-Settings font-scale choices use a compact grid, and footer actions wrap rather
+Settings font-scale choices use a compact grid, navigation tabs wrap as whole
+buttons when enlarged text needs more space, and footer actions wrap rather
 than widening their dialogs. Splitter sizes are clamped both while dragging and
 while sanitizing stored preferences. Application and open-overlay content stay
 within a 320-CSS-pixel viewport at 200% application text scaling.
+
+Inspector colour presets remain in one inset row. Swatches keep their 24-pixel
+targets and share the available spacing. Exceptionally narrow panels scroll the
+row horizontally rather than wrapping or shrinking the targets; keyboard focus
+and ordinary scrolling keep the remaining swatches reachable.
 
 ## Accessibility
 
@@ -1280,8 +1502,8 @@ control and its 200% reflow coverage remain available, but they are not a full
 substitute for browser zoom.
 
 - the canvas has an explanatory label;
-- the toolbar brand provides the page's level-one heading, including while
-  visually hidden on phones;
+- the toolbar brand provides the page's level-one heading and remains visible
+  and interactive on phones;
 - icon-only controls receive explicit accessible labels/tooltips and shortcut
   badges are excluded from name computation;
 - play state has a state-specific label and `aria-pressed` value;
@@ -1300,6 +1522,9 @@ substitute for browser zoom.
   toast text wraps within the canvas, with scrollable overflow for a tall stack.
   Each notice has a named dismiss button. Longer notices get more reading time;
   hover or keyboard focus pauses expiry, and keyboard dismissal restores focus;
+  repeated plain-text feedback renews one existing notice without stacking or
+  disturbing focus. Special refresh cues and actionable notices remain separate.
+  Notices remain visible and dismissible above the phone inspector, below dialogs;
 - modal overlays are labelled dialogs with trapped and restored focus;
 - the guided tour additionally inerts the application shell, blocks underlying
   pointer input, announces step changes, and restores its opener;
@@ -1336,3 +1561,25 @@ alongside vector components where the solver measured both.
 
 Preset camera hints retain the full-fit 7.5 percent edge margins on each axis.
 An authored action centre cannot place a particle on the viewport boundary.
+
+
+### Force readout presentation
+
+The selected particle’s resultant is visible below the force-source disclosure even
+when Values and sources is closed. Source rows retain their own components and,
+where applicable, scalar tension. Scientific values use multiplication by ten and
+superscript powers, for example 8.20 × 10⁻¹¹ N. Only a resultant whose magnitude
+is below one part in ten billion of the summed force magnitudes is displayed as
+zero; physical samples, graphs and exports retain the measured numbers. A genuinely
+small isolated force remains nonzero. The free-body controls have no surrounding
+card border in either ordinary or Studio layouts. Hovering a source highlights the
+owning particle without an additional circle around the arrow origin.
+
+Ordinary notices use neutral borders and an information icon. Explicit error
+notices have error styling and an alert role; message wording alone never selects
+severity. Refresh notices retain their separate animated design.
+
+The pulley wheel’s Resultant tension vector toggle controls the sum of both string
+loads at the wheel, independently of the string’s two Tension vectors. This string
+load is distinct from axle support, guide and terminal-stop reactions. Both choices
+are available while paused and survive tab recovery, reset and rewind. The Inspector exposes the independent overlay controls without a diagnostic card.

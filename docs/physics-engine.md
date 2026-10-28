@@ -1,5 +1,42 @@
 # Physics engine
 
+## Delete-zone observations
+
+`DeleteZone` is headless scene geometry, separate from contact walls. Circle,
+rotated rectangle and capsule intersection includes a particle's radius or
+wall's half thickness. Segment tests protect near-corner misses rather than
+using an enlarged rectangular approximation. A scale-aware floating-point
+tolerance includes exact boundary contact. Bounding rejection avoids detailed
+geometry work for remote objects. Routed pulley strings test their two legs
+and actual wheel arc, including clockwise wraps, rather than a straight chord.
+
+Positive `World.step` calls remove initial overlaps before preparing solvers.
+Each solver slice observes swept particle paths and ordinary link segments.
+Link endpoint positions interpolate linearly over that numerical slice. Interior
+contacts use stationary times of a squared moving-line clearance polynomial;
+endpoint paths are checked separately. Rectangle vertices and capsule end caps
+cover the remaining boundary contacts. Actual finite-segment checks reject
+infinite-line hits and empty space inside folded swept regions; a convex hull
+would incorrectly delete some misses. The query is bounded to cubic root
+isolation, without sampling the trajectory or subdividing physical integration.
+Routed pulley sweeps retain the actual fixed-wheel tangent geometry. Candidate
+times come from common tangents to zone circles/capsule caps or rectangle vertices,
+wheel/zone-boundary intersections for arc endpoints, and straight-route stationary
+times. The actual finite legs, wrapped arc or released segment are evaluated at
+those events and inside their intervals. Interval checks protect brief overlaps
+from rounded boundary times without widening the zone. `PulleyLink.geometry`
+accepts optional trial endpoint positions, lifts them onto the accepted angular
+sheet and leaves bodies, route samples and forces unchanged. Guide-point chords
+are not substituted for curved tangent motion, and particle-to-particle chord
+crossings alone never delete a string that remains routed around a clear wheel.
+Collected hits and final wall/link intersections are committed at the completed-step boundary through existing
+batched body/link/wall deletion. The diagnostic recorder finishes before that
+structural mutation. Supported bodies, internal rod endpoints, pulley wheels,
+ordinary replacement strings, drivers and wall mounts retain their normal
+deletion invariants. Zero/underflow timestep calls remain strict no-ops.
+Disabled zones and scenes without zones do not remove objects. Zones never
+enter the force or contact solvers and do not delete one another.
+
 The engine under `web/src/engine/` advances circular rigid bodies, static
 capsule walls, distance constraints, springs, drivers, and user-defined force
 fields. It has no browser or third-party dependency and is exercised directly
@@ -279,6 +316,26 @@ Unassigned projection, guard and floating-point effects remain numerical
 corrections; closure noise is suppressed with an absolute and scale-relative
 tolerance.
 
+Normal mode also captures actual collision impulses in `World.collisionImpulses`
+in N·s, including impacts whose contacts end before the completed frame. Contact
+classification reads reusable motion samples from before smooth integration,
+initial separation and the preceding solve's residual normal velocity. This
+distinguishes a new or renewed approach from an unchanged support residual and
+the next gravity kick, including at one substep. A contact arriving from positive
+separation can impact even when it started that slice at rest. A diagnostic
+velocity tolerance of 1e-7 m/s excludes roundoff; the separate 0.10 m/s restitution
+cutoff still determines the physical bounce law. Impacts propagate through
+touching contacts during both normal-impulse passes; gravity-only support chains
+have no impact seed. These observations never change solver velocities or
+warm-start impulses. Performance mode omits this presentation data.
+
+Each impulse owns body/source identity, contact normal, impact time and signed
+Jx/Jy. With impulse display enabled, `sustainedForceLedger` subtracts the matching
+measured contact J divided by that same completed interval from copied reaction,
+friction and resultant rows. The raw force snapshot keeps its complete momentum
+accounting. Current previews and the impulse-disabled view retain their original
+force interpretation. A collision arrow is an impulse, not a peak contact force.
+
 `Body.forceSnapshot` is immutable, transient, and allocated for enabled
 particle diagrams and both endpoints of an observed pulley (either particle
 diagram or its separate tension vectors). Unobserved pulleys add no endpoint
@@ -473,6 +530,15 @@ shortening does not drop its force row. Its nonnegative multiplier can still
 release the string when the load reverses. Authored slack remains force-free.
 A previously tensioned string retains the active row through a `1e-7` m
 roundoff skin at the boundary; cold previews use the ordinary `1e-9` m skin.
+A genuinely shortening path releases the row even at exact initial contact:
+its inward rate is compared with a `1e-9` relative velocity tolerance. A loaded
+inelastic string's position pass corrects both shortening and stretch, preventing
+accumulated shortening from crossing the skin and skipping a tension-bearing
+slice. Before contact impulses, up to eight physical mass-metric velocity
+passes restore loaded strings' tangent velocities, including coupled pulley
+paths. Subsequent contact-induced inward motion remains free to create slack.
+These passes are confined to Normal-mode rigid beam assemblies; Performance
+mode retains its one-sided, bounded position and velocity route.
 
 Each mounted body adds two affine acceleration rows,
 `aBody = (1-t)*aA + t*aB`. Solving these alongside rod length transfers weight,
@@ -584,13 +650,30 @@ lever arm, scaled by the total directional inverse mass.
 
 Refined slices use RK4, and each slice runs the position, contact and velocity
 pipeline before proceeding. This prevents a whole coarse step's projection from
-compensating for a poorly resolved force. Refinement is deterministic, limited
-to a factor of 256 and a scene-size work budget of 64,000 units per displayed
-step, including a cubic estimate for the small matrix solve. Remaining allowance
-also bounds slice size so exhaustion cannot leave an arbitrarily abrupt final
-slice. Extremely stiff or large systems can still reach the work/resolution
-limits. All Performance tiers bypass this refinement and the dense force solve;
+compensating for a poorly resolved force. Refinement is deterministic and may
+concentrate nanosecond slices around a brief near-aligned transition. A 1%
+directional-mobility change estimate selects the slice; an estimated scene-size
+work budget of 128,000 units per step bounds total refinement, including the
+preflight plus four RK stages and a cubic estimate for the small matrix solve.
+A fixed per-substep floor or uniform remaining-time allocation would prevent
+this concentration even when the work allowance could resolve it. Extremely
+stiff or large systems can still exhaust the bounded work allowance.
+All Performance tiers bypass this refinement and the dense force solve;
 ordinary particles and isolated beams retain their direct route.
+
+A rounded adaptive cut that leaves at most 32 machine epsilons of the original
+substep is folded into that selected slice. Its integrator choice and full
+duration are retained. Running the roundoff tail separately would divide tiny
+position-correction noise by an almost-zero duration and create artificial
+velocities. Independent angle/point-coordinate reference trajectories and
+energy in both directions cover the heavy coupled transition; the work cap is
+still a numerical limit, rather than a guarantee for every possible scene.
+
+Before other coupled-link position rows use a beam's directions, unheld rigid
+beams restore their physical mass-weighted shape and tangent velocities. This
+prevents a later beam correction from stretching an already projected string.
+Held assemblies and compliant beams retain their existing kinematic/compliance
+paths. The correction remains part of the recorded constraint velocity change.
 
 ## Post-integration constraints
 
@@ -643,10 +726,11 @@ Nonzero-compliance beams retain their existing scalar force/XPBD route and
 supported-line/free-stretch finishing rule. A rod with attached point masses
 does not model a uniform solid rod's inertia.
 
-Pulley strings run an analogous one-sided XPBD pass on their summed live path.
-Feasible corrections are mass-weighted along the current tangent directions
+Pulley strings run an analogous XPBD pass on their summed live path. It is
+one-sided for slack/retension and Performance mode; a positively loaded
+inelastic beam-connected path also corrects shortening drift. Feasible corrections are mass-weighted along the current tangent directions
 and fed back into particle velocity. A particle at the terminal wheel stop has
-zero constraint gradient, so its partner absorbs any remaining string-length
+zero inward constraint gradient, so its partner absorbs any remaining stretch
 correction without projection pushing the stopped endpoint around the axle.
 Performance mode retains this same physical
 constraint at every quality level. Because one row is only two fixed-wheel
@@ -939,3 +1023,10 @@ the cached result, and unchanged frames retain it until the world mutates.
 
 These tradeoffs are explicit and covered by analytic, invariant, stress, and
 long-run tests. See [testing and operations](testing-and-operations.md).
+
+
+A contact changed to zero friction discards its cached tangential impulse before
+warm starting. Positive-friction contacts retain their existing accumulated-impulse
+solve and Coulomb clamping. This lets a stopped load accelerate again immediately
+when either contacting material is made smooth, without restarting playback or
+applying obsolete friction to a contact that has no tangent solve.

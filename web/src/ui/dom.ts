@@ -95,6 +95,7 @@ export const reducedMotion = media("(prefers-reduced-motion: reduce)");
 /** Collects controls so a panel can refresh them all each frame. */
 export class RefreshGroup {
   private disposers: Array<() => void> = [];
+  private cancellers: Array<() => void> = [];
   private items: Array<{ el: HTMLElement; fn: () => void; visible: boolean }> = [];
   private byEl = new Map<Element, { visible: boolean }>();
   private io: IntersectionObserver | null = null;
@@ -136,6 +137,7 @@ export class RefreshGroup {
 
   add<T extends Control>(c: T): T {
     if (c.dispose) this.disposers.push(c.dispose);
+    if (c.cancelInteraction) this.cancellers.push(c.cancelInteraction);
     if (c.refresh) {
       // visible until the observer reports otherwise, so nothing is
       // stale during the first frames after a rebuild
@@ -153,9 +155,17 @@ export class RefreshGroup {
     }
   }
 
+  /** End edits before their panel becomes unavailable, retaining the controls
+   * for reopening. A rollback may rebuild this group during cancellation. */
+  cancelInteractions(): void {
+    const cancellers = this.cancellers;
+    for (const cancel of cancellers) cancel();
+  }
+
   clear(): void {
     const disposers = this.disposers;
     this.disposers = [];
+    this.cancellers = [];
     for (const dispose of disposers) dispose();
     this.io?.disconnect();
     this.items = [];
@@ -684,6 +694,9 @@ export function slider(label: string, get: () => number,
 export interface NumEditOpts {
   scrub?: ScrubOptions;
   disabled?: () => boolean;
+  readOnly?: () => boolean;
+  readOnlyHelp?: string;
+  onReadOnlyAttempt?: () => void;
   tooltip?: string;
 }
 
@@ -710,9 +723,11 @@ export function numEdit(label: string, get: () => number,
     focused = true;
     cancelled = false;
     editText = input.value;
+    if (input.readOnly) opts.onReadOnlyAttempt?.();
     input.select();
   });
   const commit = () => {
+    if (input.readOnly || opts.readOnly?.()) { invalid = false; return; }
     const v = readNumber(input.value);
     invalid = !Number.isFinite(v) || set(v) === false;
     inputError(input, invalid);
@@ -724,7 +739,7 @@ export function numEdit(label: string, get: () => number,
       invalid = false;
       inputError(input, false);
     }
-    if (!cancelled && !input.disabled && input.value !== editText) commit();
+    if (!cancelled && !input.disabled && !input.readOnly && input.value !== editText) commit();
     refresh();
   });
   input.addEventListener("keydown", (e) => {
@@ -737,6 +752,14 @@ export function numEdit(label: string, get: () => number,
   });
   const refresh = () => {
     scrub?.cancelIfDisabled();
+    const readOnly = opts.readOnly?.() ?? false;
+    input.readOnly = readOnly;
+    wrap.classList.toggle("read-only", readOnly);
+    if (opts.scrub) wrap.querySelector(".lbl")!.classList.toggle("numeric-scrub-handle", !readOnly);
+    if (readOnly && opts.readOnlyHelp) {
+      input.setAttribute("aria-description", opts.readOnlyHelp);
+      wrap.title = opts.readOnlyHelp;
+    }
     const disabled = opts.disabled?.() ?? false;
     if (input.disabled !== disabled) {
       input.disabled = disabled;
@@ -747,12 +770,15 @@ export function numEdit(label: string, get: () => number,
         inputError(input, false);
       }
     }
-    if (focused || invalid) return;
+    if (!readOnly && (focused || invalid)) return;
     const s = fmt(get());
     if (input.value !== s) {
       input.value = s;
     }
   };
+  wrap.querySelector(".lbl")!.addEventListener("pointerdown", () => {
+    if (input.readOnly) opts.onReadOnlyAttempt?.();
+  });
   if (opts.scrub !== undefined) {
     scrub = numericScrub({ root: wrap, handle: wrap.querySelector<HTMLElement>(".lbl")!, input,
       get, set, commit: onCommit, disabled: () => (opts.disabled?.() ?? false) || input.disabled || input.readOnly,

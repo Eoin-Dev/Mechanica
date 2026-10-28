@@ -2,11 +2,14 @@
  * Canvas rendering uses requestAnimationFrame; panels use DOM refresh callbacks. */
 import { Body, Wall } from "./engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "./engine/links";
+import { DeleteZone } from "./engine/delete-zone";
 import { World, escapedBodies } from "./engine/world";
 import { Contact, RESTING_SPEED, closestOnSegment } from "./engine/contacts";
 import { contactKey, EventTracker, PlaybackEvent, PlaybackEventKind } from "./education/analysis";
 import { Camera, MAX_ZOOM, MIN_ZOOM } from "./render/camera";
-import { Selectable, ViewSettings, drawGrid, drawScaleBar, drawWorld } from "./render/draw";
+import { FORCE_ARROW_SCALE, Selectable, ViewSettings, drawGrid, drawScaleBar, drawWorld } from "./render/draw";
+import { ForcePresentation } from "./render/force-invalidation";
+import type { AnalysisBox } from "./render/analysis-overlays";
 import { Trail } from "./render/trail";
 import { TrailHistory } from "./render/trail-history";
 import * as snap from "./scene/snapshot";
@@ -64,6 +67,11 @@ export type GraphMode = "Off" | "Energy" | "Mom." | "Phase" | "Displacement" | "
 
 export interface Settings {
   adaptive_dt?: boolean;
+  random_start_scene?: boolean;
+  startup_seen?: boolean;
+  adaptive_scrub?: boolean;
+  continuous_scrub?: boolean;
+  scrub_speed?: 0.5 | 1 | 2;
   inspector_visible?: boolean;
   inspector_w?: number;
   dock_h?: number;
@@ -77,7 +85,7 @@ export interface Settings {
   drag_hits_walls?: boolean; // a dragged body is stopped by walls
   accent?: string;           // hex UI accent; unset = the theme's default
   custom_accents?: string[]; // user-picked accents shown as extra swatches
-  font_scale?: number;       // UI font-size multiplier (0.9 - 1.2)
+  font_scale?: number;       // UI font-size multiplier (0.8 - 1.2)
   new_scene_gravity?: number; // downward acceleration applied by Clear
 }
 
@@ -85,7 +93,7 @@ export interface Settings {
  * and a new one cannot be added to `Settings` and forgotten here. */
 const BOOL_SETTINGS = [
   "adaptive_dt", "inspector_visible", "tour_done", "dyslexic_font",
-  "cull", "perf_mode", "drag_hits_walls", "studio_mode", "scene_load_hint_seen",
+  "cull", "perf_mode", "drag_hits_walls", "studio_mode", "scene_load_hint_seen", "adaptive_scrub", "continuous_scrub", "random_start_scene", "startup_seen",
 ] as const satisfies ReadonlyArray<keyof Settings>;
 
 /** A "#rrggbb" colour, the only shape the accent settings may hold. Values
@@ -147,12 +155,13 @@ export function sanitizeSettings(raw: unknown): Settings {
   // out-of-range one is not a cosmetic problem: it makes the app unreadable
   // AND persists, so reloading cannot undo it.
   if (typeof r.font_scale === "number" && Number.isFinite(r.font_scale)) {
-    s.font_scale = Math.min(1.2, Math.max(0.9, r.font_scale));
+    s.font_scale = Math.min(1.2, Math.max(0.8, r.font_scale));
   }
   if (typeof r.new_scene_gravity === "number" &&
       Number.isFinite(r.new_scene_gravity)) {
     s.new_scene_gravity = Math.min(100, Math.max(0, r.new_scene_gravity));
   }
+  if (r.scrub_speed === 0.5 || r.scrub_speed === 1 || r.scrub_speed === 2) s.scrub_speed = r.scrub_speed;
   if (isHex(r.accent)) s.accent = r.accent;
   if (Array.isArray(r.custom_accents)) {
     s.custom_accents = r.custom_accents.filter(isHex).slice(0, 6);
@@ -184,7 +193,7 @@ export class App {
   view = new ViewSettings();
   selection: Selectable[] = [];
   boxFilter = { bodies: true, anchors: true, pulleys: true, walls: true,
-                springs: true, rods: true };
+                springs: true, rods: true, zones: true };
   controller: CanvasController;
 
   playing = false;
@@ -243,8 +252,11 @@ export class App {
   // raster work. Repeated invalidations coalesce while a draw is pending.
   private canvasGeneration = 1;
   private renderedCanvasGeneration = 0;
-  private renderedPresentation = new Float64Array(21).fill(Number.NaN);
-  private currentPresentation = new Float64Array(21);
+  private renderedPresentation = new Float64Array(22).fill(Number.NaN);
+  private currentPresentation = new Float64Array(22);
+  private forcePresentation = new ForcePresentation();
+  private canvasOverlays = new Set<HTMLElement>();
+  private canvasOverlayBounds: AnalysisBox[] = [];
 
   // Reusable exact snapshot around a displayed physics batch. Physics time
   // alone is not visual; body position/rotation/vector changes are. The
@@ -316,7 +328,7 @@ export class App {
   onSelectionChange: () => void = () => {};
   onWorldReplaced: () => void = () => {};
   onSceneCheckpoint: ((state: string) => void) | null = null;
-  toastFn: (msg: string) => void = () => {};
+  toastFn: (msg: string, severity?: "error") => void = () => {};
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -356,6 +368,9 @@ export class App {
 
   /** Apply the base palette and optional Studio presentation layer. */
   applyUiSettings(): void {
+    document.documentElement.dataset.adaptiveScrub = String(this.settings.adaptive_scrub ?? true);
+    document.documentElement.dataset.continuousScrub = String(this.settings.continuous_scrub ?? true);
+    document.documentElement.dataset.scrubSpeed = String(this.settings.scrub_speed ?? 1);
     setAccent(this.settings.accent ?? null); // re-applies the theme too
     setTheme(this.settings.theme ?? "dark");
     document.documentElement.dataset.studio =
@@ -529,6 +544,17 @@ export class App {
     return this.canvas.clientWidth;
   }
 
+  /** Reserve floating controls when placing canvas annotations. Layout changes
+   * refresh their bounds without measuring DOM geometry on every frame. */
+  registerCanvasOverlay(overlay: HTMLElement): () => void {
+    this.canvasOverlays.add(overlay);
+    this.resizeCanvas();
+    return () => {
+      this.canvasOverlays.delete(overlay);
+      this.resizeCanvas();
+    };
+  }
+
   resizeCanvas(): void {
     const dpr = this.renderPixelRatio;
     const w = this.canvas.clientWidth;
@@ -545,7 +571,29 @@ export class App {
     if (this.canvas.width !== backingW) this.canvas.width = backingW;
     if (this.canvas.height !== backingH) this.canvas.height = backingH;
     this.camera.resize(w, h);
-    if (changed) this.invalidateCanvas();
+    const bounds: AnalysisBox[] = [];
+    if (this.canvasOverlays.size) {
+      const canvas = this.canvas.getBoundingClientRect();
+      for (const overlay of this.canvasOverlays) {
+        if (!overlay.isConnected) continue;
+        const box = overlay.getBoundingClientRect();
+        const left = Math.max(0, box.left - canvas.left);
+        const top = Math.max(0, box.top - canvas.top);
+        const right = Math.min(w, box.right - canvas.left);
+        const bottom = Math.min(h, box.bottom - canvas.top);
+        if (right > left && bottom > top) {
+          bounds.push({ x: left, y: top, width: right - left, height: bottom - top });
+        }
+      }
+    }
+    const overlaysChanged = bounds.length !== this.canvasOverlayBounds.length ||
+      bounds.some((box, i) => {
+        const previous = this.canvasOverlayBounds[i];
+        return previous === undefined || box.x !== previous.x || box.y !== previous.y ||
+          box.width !== previous.width || box.height !== previous.height;
+      });
+    if (overlaysChanged) this.canvasOverlayBounds = bounds;
+    if (changed || overlaysChanged) this.invalidateCanvas();
   }
 
   /** Mark the retained canvas image stale. Public so the interaction layer
@@ -678,6 +726,20 @@ export class App {
                 undefined, keys, false, initialContacts);
               if (refined !== null) {
                 event.time = refined.time;
+                if (event.kind === "contact") {
+                  // Every contact actually reached at the refined stop belongs
+                  // to this frame. Correct all its rows before rewind pruning,
+                  // rather than retaining only the selected auto-pause row.
+                  const times = new Map<string, number>();
+                  for (const contact of refined.contactEvents) {
+                    if (contact.began && !times.has(contact.key)) times.set(contact.key, contact.time);
+                  }
+                  for (const candidate of events) {
+                    if (candidate.kind !== "contact" || candidate.key === undefined) continue;
+                    const time = times.get(candidate.key);
+                    if (time !== undefined) candidate.time = time;
+                  }
+                }
                 this.installPlaybackRefinement(refined);
               } else if (stopAtContact) {
                 // A contact already present at the starting position is not
@@ -771,6 +833,10 @@ export class App {
     this.transferAnalysisPresentation(this.world, refined);
     prepare(refined);
     refined.step(dt * fraction);
+    if (event.kind === "contact") {
+      const reached = new Set(refined.contactEvents.filter(contact => contact.began).map(contact => contact.key));
+      this.refinedCollisionKeys = this.refinedCollisionKeys.filter(key => reached.has(key));
+    }
     if (event.kind === "contact" && dt * fraction <= Math.min(1e-7, dt * 1e-4)) {
       // A newly observed resting overlap belongs to the starting frame. An
       // incoming impact at a quantum boundary still needs its collision frame.
@@ -847,6 +913,7 @@ export class App {
   }
 
   private selectableKey(item: Selectable): string {
+    if (item instanceof DeleteZone) return `z:${item.id}`;
     if (item instanceof Body) return `b:${item.id}`;
     if (item instanceof Wall) return `w:${item.id}`;
     if (item instanceof PulleyLink) return `p:${item.id}`;
@@ -857,6 +924,7 @@ export class App {
   private findSelectable(world: World, key: string): Selectable | null {
     const [kind, raw] = key.split(":");
     const id = Number(raw);
+    if (kind === "z") return world.deleteZones.find((zone) => zone.id === id) ?? null;
     if (kind === "b") return world.bodies.find((body) => body.id === id) ?? null;
     if (kind === "w") return world.walls.find((wall) => wall.id === id) ?? null;
     return world.links.find((link) => link.id === id &&
@@ -873,19 +941,26 @@ export class App {
       forces: body.showForceComponents,
       slope: body.forceSlopeWallId,
       resolveWeight: body.resolveWeightOnSlope,
+      impulses: body.showCollisionImpulses, moments: body.showRodMoments,
     }]));
     for (const body of to.bodies) {
       const view = bodyView.get(body.id);
       if (view === undefined) continue;
       body.showForceComponents = view.forces;
       body.resolveWeightOnSlope = view.resolveWeight;
+      body.showCollisionImpulses = view.impulses;
+      body.showRodMoments = view.moments;
       body.forceSlopeWallId = view.slope !== null &&
         to.walls.some((wall) => wall.id === view.slope) ? view.slope : null;
     }
     const linkView = new Map(from.links.map((link) =>
-      [this.selectableKey(link), link.showTensionVectors]));
+      [this.selectableKey(link), { legs: link.showTensionVectors,
+        resultant: link instanceof PulleyLink && link.showResultantTensionVector }]));
     for (const link of to.links) {
-      link.showTensionVectors = linkView.get(this.selectableKey(link)) ?? false;
+      const view = linkView.get(this.selectableKey(link));
+      if (view === undefined) continue;
+      link.showTensionVectors = view.legs;
+      if (link instanceof PulleyLink) link.showResultantTensionVector = view.resultant;
     }
   }
 
@@ -901,10 +976,10 @@ export class App {
       const shown = failure.names.slice(0, 3).join(", ");
       const rest = failure.names.length > 3 ? ` and ${failure.names.length - 3} more` : "";
       this.toast(`${prefix}: ${shown}${rest} hit a numerical limit - ` +
-                 "check extreme forces, fields, or object sizes");
+                 "check extreme forces, fields, or object sizes", "error");
     } else {
       this.toast(`${prefix} after an unexpected solver error - reset the scene ` +
-                 "or check extreme forces and fields");
+                 "or check extreme forces and fields", "error");
     }
   }
 
@@ -1361,8 +1436,9 @@ export class App {
       autoFitRatio: this.autofitRatio,
       selection: this.selection.map((item) => this.selectableKey(item)),
       bodies: this.world.bodies.map((body) => [body.id, body.showForceComponents,
-        body.resolveWeightOnSlope, body.forceSlopeWallId]),
-      links: this.world.links.map((link) => [this.selectableKey(link), link.showTensionVectors]),
+        body.resolveWeightOnSlope, body.forceSlopeWallId, body.showCollisionImpulses, body.showRodMoments]),
+      links: this.world.links.map((link) => [this.selectableKey(link), link.showTensionVectors,
+        link instanceof PulleyLink && link.showResultantTensionVector]),
       tool: this.controller.tool, boxFilter: { ...this.boxFilter },
     } };
   }
@@ -1383,7 +1459,7 @@ export class App {
       typeof value === "number" && Number.isFinite(value) && value >= lo && value <= hi;
     const view = record(data.view);
     for (const key of ["grid", "snap", "velVectors", "accVectors", "forceVectors",
-      "trails", "com", "contacts", "spatialGrid", "labels", "follow", "autoFit"] as const) {
+      "trails", "com", "contacts", "spatialGrid", "labels", "forceIds", "follow", "autoFit"] as const) {
       if (typeof view[key] === "boolean") this.view[key] = view[key];
     }
     if (bounded(view.vectorScale, 0.02, 20)) this.view.vectorScale = view.vectorScale;
@@ -1403,6 +1479,8 @@ export class App {
       const body = bodies.get(entry[0]); if (body === undefined) continue;
       if (typeof entry[1] === "boolean") body.showForceComponents = entry[1];
       if (typeof entry[2] === "boolean") body.resolveWeightOnSlope = entry[2];
+      if (typeof entry[4] === "boolean") body.showCollisionImpulses = entry[4];
+      if (typeof entry[5] === "boolean") body.showRodMoments = entry[5];
       body.forceSlopeWallId = walls.has(entry[3]) ? entry[3] : null;
     }
     const links = new Map(this.world.links.map((link) => [this.selectableKey(link), link]));
@@ -1410,13 +1488,16 @@ export class App {
       if (!Array.isArray(entry)) continue;
       const link = links.get(entry[0]);
       if (link !== undefined && typeof entry[1] === "boolean") link.showTensionVectors = entry[1];
+      if (link instanceof PulleyLink && typeof entry[2] === "boolean")
+        link.showResultantTensionVector = entry[2];
     }
     if (typeof data.tool === "string" && TOOLS.includes(data.tool as Tool))
       this.controller.setTool(data.tool as Tool);
     const filter = record(data.boxFilter);
     for (const key of Object.keys(this.boxFilter) as Array<keyof typeof this.boxFilter>)
       if (typeof filter[key] === "boolean") this.boxFilter[key] = filter[key];
-    const items = new Map([...this.world.bodies, ...this.world.walls, ...this.world.links]
+    const items = new Map([...this.world.bodies, ...this.world.walls, ...this.world.links,
+      ...this.world.deleteZones]
       .map((item) => [this.selectableKey(item), item]));
     if (Array.isArray(data.selection)) this.setSelection([...new Set(data.selection)]
       .map((key) => items.get(key)).filter((item): item is Selectable => item !== undefined));
@@ -1485,6 +1566,7 @@ export class App {
     this.replaceWorld(preset.build(), false, true);
     this.playing = false;
     const hints = preset.hints;
+    this.speed = hints.speed ?? 1;
     // view toggles follow the preset, so a scene always loads looking the
     // way it is meant to be read (vectors are symmetric with trails: a
     // preset that does not ask for them turns them off)
@@ -1495,6 +1577,13 @@ export class App {
       ? { energy: "Energy", momentum: "Mom.", phase: "Phase" }[hints.graph]
       : "Off";
     this.setGraphMode(graph as GraphMode);
+    if (hints.graph === "phase") {
+      // A particle-specific demonstration should open with actual data,
+      // rather than an empty plot asking the learner to select a mass.
+      const target = this.world.bodies.find(body => !body.locked && !body.isAnchor &&
+        !body.isRodEndpoint && !body.isPulley);
+      if (target) this.setSelection([target]);
+    }
     this.framePreset(hints.zoom, hints.centre);
     this.ensureInitial();
     // arm the one-time "right-drag a soft body" hint for soft-body scenes
@@ -1569,12 +1658,22 @@ export class App {
   }
 
   // ------------------------------------------------------------ view helpers
-  /** [min_x, max_x, min_y, max_y] enclosing every body and wall. */
+  /** [min_x, max_x, min_y, max_y] enclosing bodies, walls and delete zones. */
   private sceneBounds(): [number, number, number, number] | null {
     let minX = Infinity;
     let maxX = -Infinity;
     let minY = Infinity;
     let maxY = -Infinity;
+    for (const zone of this.world.deleteZones) {
+      const halfW = zone.width / 2;
+      const halfH = (zone.shape === "circle" ? zone.width : zone.height) / 2;
+      const dx = Math.abs(Math.cos(zone.angle)) * halfW + Math.abs(Math.sin(zone.angle)) * halfH;
+      const dy = Math.abs(Math.sin(zone.angle)) * halfW + Math.abs(Math.cos(zone.angle)) * halfH;
+      minX = Math.min(minX, zone.pos.x - dx);
+      maxX = Math.max(maxX, zone.pos.x + dx);
+      minY = Math.min(minY, zone.pos.y - dy);
+      maxY = Math.max(maxY, zone.pos.y + dy);
+    }
     for (const b of this.world.bodies) {
       if (Number.isFinite(b.pos.x) && Number.isFinite(b.pos.y)) {
         if (b.pos.x - b.radius < minX) minX = b.pos.x - b.radius;
@@ -1762,8 +1861,9 @@ export class App {
     this.saveSettings();
   }
 
-  toast(msg: string): void {
-    this.toastFn(msg);
+  toast(msg: string, severity?: "error"): void {
+    if (severity === undefined) this.toastFn(msg);
+    else this.toastFn(msg, severity);
   }
 
   /** Mark derived energy stale after a live-world mutation.
@@ -2434,6 +2534,7 @@ export class App {
   }
 
   private afterPhysics(forceRewind = false): void {
+    if (this.world.deleteZones.length) this.controller.pruneDeleted();
     this.sweepTrails();
     // Normal mode records every displayed state. Performance mode samples a
     // progressively coarser rewind timeline so a large world does not spend
@@ -2617,6 +2718,7 @@ export class App {
     p[18] = Number(view.follow);
     p[19] = Number(view.autoFit);
     p[20] = Number(this.perfMode);
+    p[21] = Number(view.forceIds);
     const old = this.renderedPresentation;
     for (let i = 0; i < p.length; i++) {
       if (p[i] !== old[i]) return true;
@@ -2679,6 +2781,8 @@ export class App {
 
   private render(): boolean {
     if (this.updatePresentationState()) this.invalidateCanvas();
+    if (this.forcePresentation.changed(this.world,
+        FORCE_ARROW_SCALE * this.view.vectorScale * this.camera.zoom, this.perfMode)) this.invalidateCanvas();
     if (this.canvasGeneration === this.renderedCanvasGeneration) {
       // A prior expensive frame must not keep the overload diagnosis latched
       // while the retained canvas costs nothing. Decay toward zero without
@@ -2714,13 +2818,14 @@ export class App {
     drawWorld(ctx, this.camera, this.world, this.view, this.selection,
               this.controller.hover, this.trails, w, h, this.trailQuality,
               this.perfMode, this.perfMode && this.performanceLevel >= 3,
-              this.controller.canvasPointer, this.settings.font_scale);
+              this.controller.canvasPointer, this.settings.font_scale, this.canvasOverlayBounds);
     this.controller.drawOverlays(ctx);
     drawScaleBar(ctx, this.camera, w, h);
     this.renderMs = 0.85 * this.renderMs + 0.15 * (performance.now() - t0);
     this.tuneTrailQuality();
     this.renderedCanvasGeneration = this.canvasGeneration;
     this.renderedPresentation.set(this.currentPresentation);
+    this.forcePresentation.mark(this.world, this.perfMode);
     return true;
   }
 }

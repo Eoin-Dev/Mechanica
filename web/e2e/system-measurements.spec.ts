@@ -1,6 +1,9 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+// Configure the setup size before creating the page; keep loaded-app resizes below.
+test.use({ viewport: { width: 1440, height: 900 } });
+
 test("centre-of-mass coordinates are accessible and follow scene evolution", async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -26,7 +29,7 @@ async function prepareCentre(page: Page) {
   await page.addInitScript(() => localStorage.setItem("mechanica.settings", JSON.stringify({
     tour_done: true, theme: "light", studio_mode: true, adaptive_dt: false,
   })));
-  await page.setViewportSize({ width: 1440, height: 900 });
+
   await page.goto("/");
   await page.getByRole("button", { name: "Library", exact: true }).click();
   const library = page.getByRole("dialog", { name: "Library", exact: true });

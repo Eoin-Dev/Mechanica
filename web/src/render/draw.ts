@@ -4,14 +4,16 @@ import { Vec2 } from "../core/vec";
 import { Body, Color, Wall } from "../engine/body";
 import { DistanceLink, Link, PulleyLink, SpringLink } from "../engine/links";
 import { World } from "../engine/world";
-import { analysePulley, forceLedger, projectForce } from "../education/analysis";
+import { DeleteZone } from "../engine/delete-zone";
+import { analysePulley, forceLedger, projectForce, sustainedForceLedger } from "../education/analysis";
 import { forceSymbols } from "../engine/force-diagnostics";
 import * as theme from "../ui/theme";
 import { css, lighten } from "../ui/theme";
 import { Camera, niceNumber } from "./camera";
 import { Trail } from "./trail";
 import { ParticleAtlas } from "./particle-atlas";
-import { AnalysisVector, AnalysisLabel, analysisNumber, analysisForceColour, drawAnalysisOverlays } from "./analysis-overlays";
+import { drawParticleHover, prepareParticleHover } from "./particle-hover";
+import { AnalysisBox, AnalysisVector, AnalysisLabel, analysisNumber, analysisForceColour, drawAnalysisOverlays } from "./analysis-overlays";
 
 // world metres of arrow length per unit of the quantity, at vector scale 1
 export const VEL_ARROW_SCALE = 0.15;
@@ -25,7 +27,21 @@ export const FORCE_ARROW_SCALE = 0.05;
 const NORMAL_VECTOR_MIN_PX = 0.5;
 const PERFORMANCE_VECTOR_MIN_PX = 4.0;
 
-export type Selectable = Body | Wall | Link;
+export type Selectable = Body | Wall | Link | DeleteZone;
+
+export function drawDeleteZone(ctx: CanvasRenderingContext2D, cam: Camera, zone: DeleteZone, selected = false): void {
+  const [x, y] = cam.toScreen(zone.pos), width = zone.width * cam.zoom;
+  const height = (zone.shape === "circle" ? zone.width : zone.height) * cam.zoom;
+  ctx.save(); ctx.translate(x, y); ctx.rotate(-zone.angle);
+  ctx.beginPath();
+  if (zone.shape === "circle") ctx.arc(0, 0, width / 2, 0, Math.PI * 2);
+  else if (zone.shape === "capsule") ctx.roundRect(-width / 2, -height / 2, width, height, Math.min(width, height) / 2);
+  else ctx.rect(-width / 2, -height / 2, width, height);
+  ctx.fillStyle = zone.enabled ? "rgba(30,34,40,0.92)" : "rgba(120,125,135,0.15)"; ctx.fill();
+  ctx.strokeStyle = css(selected ? theme.SELECTION : theme.TEXT_DIM); ctx.lineWidth = selected ? 2 : 1;
+  if (!zone.enabled || selected) ctx.setLineDash([5, 4]);
+  ctx.stroke(); ctx.restore();
+}
 
 export interface PivotGlyphMetrics {
   jointR: number;
@@ -72,6 +88,7 @@ export class ViewSettings {
   contacts = false;
   spatialGrid = false;
   labels = false;
+  forceIds = false; // optional numbered particle/force association badges
   vectorScale = 1.0;
   trailLen = 350;
   follow = false;
@@ -148,11 +165,11 @@ function addArrowXY(strokes: StyleBatch, fills: StyleBatch,
   const dy = ey - sy;
   const length2 = dx * dx + dy * dy;
   if (length2 < minLengthPx * minLengthPx) return;
-  addLine(strokes.path(color, width), sx, sy, ex, ey);
   const length = Math.sqrt(length2);
   const ux = dx / length;
   const uy = dy / length;
   const head = Math.min(9.0, length * 0.4);
+  addLine(strokes.path(color, width), sx, sy, ex - ux * head * 0.8, ey - uy * head * 0.8);
   const px = -uy;
   const py = ux;
   const p = fills.path(color);
@@ -261,23 +278,23 @@ function addTensionArrow(sx: number, sy: number, fx: number, fy: number,
   const dx = ex - sx;
   const dy = ey - sy;
   if (dx * dx + dy * dy < minLengthPx * minLengthPx) return Infinity;
-  addArrowXY(STROKES, FILLS, sx, sy, ex, ey, theme.WARN, 2, minLengthPx);
+  addArrowXY(LINK_FORCE_INK, LINK_FORCE_HEADS, sx, sy, ex, ey, theme.WARN, 2, minLengthPx);
   return pointer === null ? Infinity
     : screenSegmentDistance2(pointer[0], pointer[1], sx, sy, ex, ey);
 }
 
 function forceComponent(value: number): string {
-  if (Math.abs(value) < 0.005) return "0.00";
-  if (Math.abs(value) >= 10000 || Math.abs(value) < 0.01) {
-    return value.toExponential(2);
-  }
-  return value.toFixed(2);
+  return analysisNumber(value);
 }
 
 function drawForceTooltip(ctx: CanvasRenderingContext2D,
                           pointer: [number, number], fx: number, fy: number,
                           areaW: number, areaH: number): void {
-  const width = 154;
+  ctx.font = "12px ui-monospace, SFMono-Regular, Consolas, monospace";
+  const digits = Math.max(9, forceComponent(fx).length, forceComponent(fy).length);
+  const lines = [`F = ⎡ ${forceComponent(fx).padStart(digits)} ⎤ N`,
+    `    ⎣ ${forceComponent(fy).padStart(digits)} ⎦`];
+  const width = Math.min(areaW - 12, Math.max(...lines.map(line => ctx.measureText(line).width)) + 18);
   const height = 50;
   const x = Math.max(6, Math.min(areaW - width - 6, pointer[0] + 14));
   const y = Math.max(6, Math.min(areaH - height - 6, pointer[1] + 14));
@@ -289,8 +306,8 @@ function drawForceTooltip(ctx: CanvasRenderingContext2D,
   ctx.fillStyle = css(theme.TEXT);
   ctx.font = "12px ui-monospace, SFMono-Regular, Consolas, monospace";
   ctx.textAlign = "left";
-  ctx.fillText(`F = ⎡ ${forceComponent(fx).padStart(9)} ⎤ N`, x + 9, y + 20);
-  ctx.fillText(`    ⎣ ${forceComponent(fy).padStart(9)} ⎦`, x + 9, y + 38);
+  ctx.fillText(lines[0], x + 9, y + 20, width - 18);
+  ctx.fillText(lines[1], x + 9, y + 38, width - 18);
 }
 
 function lineXY(ctx: CanvasRenderingContext2D, ax: number, ay: number,
@@ -375,8 +392,18 @@ function addLine(path: Path2D, ax: number, ay: number,
 // cannot be emptied) but the maps and the batch objects are not reallocated.
 const FILLS = new StyleBatch();
 const STROKES = new StyleBatch();
+// The wheel disc must not cover the inner half of the rope's rim stroke.
+// Keep only the contact arcs above body fills; straight legs still pass
+// behind their attached particles and the scene's walls.
+const PULLEY_WRAPS = new StyleBatch();
 const ANALYSIS_CONTOURS = new StyleBatch();
 const ANALYSIS_BACKS = new StyleBatch();
+const ANALYSIS_INK = new StyleBatch();
+const ANALYSIS_HEADS = new StyleBatch();
+// Independent link arrows share the scientific overlay paint stage without
+// holding ordinary geometry/contact paths in the common stroke/fill batches.
+const LINK_FORCE_INK = new StyleBatch();
+const LINK_FORCE_HEADS = new StyleBatch();
 
 const STRING_TAUT: Color = [170, 150, 115];
 const STRING_SLACK: Color = [140, 125, 100];
@@ -716,7 +743,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
                           trailQuality = 1.0, simplify = false,
                           aggressive = false,
                           pointer: [number, number] | null = null,
-                          textScale = 1): void {
+                          textScale = 1, uiReserved?: readonly AnalysisBox[]): void {
   const halfW = (cam.screenW * 0.5) / cam.zoom;
   const halfH = (cam.screenH * 0.5) / cam.zoom;
   const minX = cam.centre.x - halfW;
@@ -735,6 +762,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
   const picked = PICKED;
   picked.clear();
   for (const item of selection) picked.add(item);
+  for (const zone of world.deleteZones) drawDeleteZone(ctx, cam, zone, picked.has(zone) || hover === zone);
 
   // --- trails ---------------------------------------------------------------
   if (view.trails && !simplify) {
@@ -764,7 +792,8 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
 
   // --- links -----------------------------------------------------------------
   for (const link of world.links) {
-    if (link.showTensionVectors) tensionVisible = true;
+    if (link.showTensionVectors ||
+        (link instanceof PulleyLink && link.showResultantTensionVector)) tensionVisible = true;
     const ax = link.a.pos.x, ay = link.a.pos.y;
     const bx = link.b.pos.x, by = link.b.pos.y;
     const px = link instanceof PulleyLink ? link.pulley.pos.x : ax;
@@ -815,8 +844,9 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
                                       ga.x - link.pulley.pos.x);
         const start = -guideAngle;
         const end = -(guideAngle + geom.sweep);
-        path.moveTo(pga[0], pga[1]);
-        path.arc(centre[0], centre[1], link.pulley.radius * zoom,
+        const wrap = PULLEY_WRAPS.path(color, slack ? 1 : 2);
+        wrap.moveTo(pga[0], pga[1]);
+        wrap.arc(centre[0], centre[1], link.pulley.radius * zoom,
                  start, end, geom.sweep > 0);
       }
       if (extra > 0) addSlackString(path, pgb[0], pgb[1], pbx, pby,
@@ -1031,6 +1061,7 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
       LABEL_Y.push(sy - pr - 6);
     }
   }
+  PULLEY_WRAPS.strokeAll(ctx);
   if (LABEL_NAMES.length > 0) {
     ctx.font = "11px system-ui, sans-serif";
     ctx.textAlign = "center";
@@ -1116,19 +1147,25 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
                         shortened: boolean): void => {
     const length = Math.hypot(ex - sx, ey - sy);
     if (length < vectorMinLengthPx) return;
-    addArrowXY(ANALYSIS_CONTOURS, ANALYSIS_BACKS, sx, sy, ex, ey, contour, 6, vectorMinLengthPx);
     const ux = (ex - sx) / length, uy = (ey - sy) / length, head = Math.min(9, length * 0.4);
-    const edge = ANALYSIS_CONTOURS.path(contour, 3);
-    edge.moveTo(ex, ey);
-    edge.lineTo(ex - ux * head - uy * head * 0.5, ey - uy * head + ux * head * 0.5);
-    edge.lineTo(ex - ux * head + uy * head * 0.5, ey - uy * head - ux * head * 0.5);
-    edge.closePath();
+    const rim = Math.min(1.5, length * 0.08);
+    addLine(ANALYSIS_CONTOURS.path(contour, 5.5), sx, sy,
+      ex - ux * head * 0.7, ey - uy * head * 0.7);
+    // A filled outer triangle keeps a sharp, symmetric contour. Stroking the
+    // triangle and a shaft all the way to its tip created protruding mitres.
+    const backHead = ANALYSIS_BACKS.path(contour);
+    backHead.moveTo(ex + ux * rim, ey + uy * rim);
+    backHead.lineTo(ex - ux * (head + rim) - uy * (head * 0.5 + rim),
+      ey - uy * (head + rim) + ux * (head * 0.5 + rim));
+    backHead.lineTo(ex - ux * (head + rim) + uy * (head * 0.5 + rim),
+      ey - uy * (head + rim) - ux * (head * 0.5 + rim));
+    backHead.closePath();
     addCircle(ANALYSIS_BACKS.path(contour), sx, sy, 4);
-    addCircle(FILLS.path(color), sx, sy, 2);
-    addArrowXY(STROKES, FILLS, sx, sy, ex, ey, color, 2.5, vectorMinLengthPx);
+    addCircle(ANALYSIS_HEADS.path(color), sx, sy, 2);
+    addArrowXY(ANALYSIS_INK, ANALYSIS_HEADS, sx, sy, ex, ey, color, 2.5, vectorMinLengthPx);
     if (shortened && length > 28) {
       const back = ANALYSIS_CONTOURS.path(contour, 6);
-      const front = STROKES.path(color, 2.5);
+      const front = ANALYSIS_INK.path(color, 2.5);
       for (const distance of [15, 21]) {
         const x = ex - ux * distance, y = ey - uy * distance;
         for (const path of [back, front]) {
@@ -1139,18 +1176,25 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     }
   };
   let fbdArrows = false;
+  let diagramCount = 0, ownerIndex = 0;
+  if (!simplify && !world.performance) for (const body of world.bodies) {
+    if (body.showForceComponents && !body.isRodEndpoint && (body.invMass > 0 || body.perfSleeping) && ++diagramCount === 2) break;
+  }
   world.withCurrentForceBatch(() => {
     for (const body of world.bodies) {
       if (simplify || world.performance) break;
       if (body.isRodEndpoint) continue;
       if (!body.showForceComponents || (body.invMass === 0 && !body.perfSleeping)) continue;
+      const tag = String(++ownerIndex);
       if (aggressive && !picked.has(body) && body !== hover) continue;
       const [sx, sy] = cam.toScreen(body.pos);
       const radius = body.radius * zoom;
+      const owner = view.forceIds && diagramCount > 1 ? { tag, x: sx, y: sy, radius, color: body.color } : undefined;
+      const ownerName = body.name || `Particle ${body.id}`;
       if (sx + radius < 0 || sx - radius > areaW || sy + radius < 0 || sy - radius > areaH) continue;
       const wall = body.forceSlopeWallId === null ? null :
         world.walls.find((candidate) => candidate.id === body.forceSlopeWallId) ?? null;
-      const ledger = forceLedger(world, body, wall);
+      const ledger = sustainedForceLedger(world, body, forceLedger(world, body, wall));
       const symbols = forceSymbols(ledger.entries);
       for (const entry of ledger.entries) {
         // Resolution replaces weight; the other physical forces keep their
@@ -1165,9 +1209,9 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
         diagramArrow(startX, startY, ex, ey, color, shortened);
         fbdArrows = true;
         if (Math.hypot(ex - startX, ey - startY) >= vectorMinLengthPx) {
-          fbdLabels.push({ text: `${symbols.get(entry.id)} ${analysisNumber(Math.hypot(entry.fx, entry.fy))} N`,
-            x: ex, y: ey, color, right: ex >= startX,
-            source: entry.label + (shortened ? " — arrow shortened to fit the canvas" : "") });
+          fbdLabels.push({ id: `${body.id}:${entry.id}`, text: `${symbols.get(entry.id)} ${analysisNumber(Math.hypot(entry.fx, entry.fy))} N`,
+            x: ex, y: ey, color, right: ex >= startX, owner,
+            source: `${entry.label} on ${ownerName}` + (shortened ? " — arrow shortened to fit the canvas" : "") });
           fbdVectors.push({ x1: startX, y1: startY, x2: ex, y2: ey });
         }
       }
@@ -1188,23 +1232,43 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
             diagramArrow(sx, sy, ex, ey, component.color, shortened);
             fbdArrows = true;
             if (Math.hypot(ex - sx, ey - sy) >= vectorMinLengthPx) {
-              fbdLabels.push({ text: `${component.text} ${analysisNumber(Math.abs(component.value))} N`,
-                x: ex, y: ey, color: component.color, right: ex >= sx,
-                source: `${weight.label} ${component.text.endsWith("∥") ? "along" : "normal to"} the slope` +
+              fbdLabels.push({ id: `${body.id}:${weight.id}:${component.text}`, text: `${component.text} ${analysisNumber(Math.abs(component.value))} N`,
+                x: ex, y: ey, color: component.color, right: ex >= sx, owner,
+                source: `${weight.label} ${component.text.endsWith("∥") ? "along" : "normal to"} the slope on ${ownerName}` +
                   (shortened ? " — arrow shortened to fit the canvas" : "") });
               fbdVectors.push({ x1: sx, y1: sy, x2: ex, y2: ey });
             }
           }
         }
       }
+      if (body.showCollisionImpulses) for (const impulse of world.collisionImpulses) {
+        if (impulse.bodyId !== body.id) continue;
+        const startX = sx + impulse.contactNx * radius, startY = sy - impulse.contactNy * radius;
+        // Impulse has its own dimensional scale: 0.5 world metres per N·s.
+        const [ex, ey, shortened] = diagramEnd(startX, startY,
+          impulse.jx * 0.5 * vScale * zoom, -impulse.jy * 0.5 * vScale * zoom);
+        const color = analysisForceColour("applied");
+        diagramArrow(startX, startY, ex, ey, color, shortened); fbdArrows = true;
+        if (Math.hypot(ex - startX, ey - startY) < vectorMinLengthPx) continue;
+        fbdLabels.push({ id: `${body.id}:J:${impulse.sourceId}:${impulse.wallId}`,
+          text: `J ${analysisNumber(Math.hypot(impulse.jx, impulse.jy))} N·s`,
+          x: ex, y: ey, color, right: ex >= startX, owner,
+          source: `Collision impulse on ${ownerName} at ${analysisNumber(impulse.time)} s` });
+        fbdVectors.push({ x1: startX, y1: startY, x2: ex, y2: ey });
+      }
     }
   });
-  if (fbdArrows) {
+  const paintForceArrows = (): void => {
+    if (tensionVisible) {
+      LINK_FORCE_INK.strokeAll(ctx);
+      LINK_FORCE_HEADS.fillAll(ctx);
+    }
+    if (!fbdArrows) return;
     ANALYSIS_CONTOURS.strokeAll(ctx);
     ANALYSIS_BACKS.fillAll(ctx);
-    STROKES.strokeAll(ctx);
-    FILLS.fillAll(ctx);
-  }
+    ANALYSIS_INK.strokeAll(ctx);
+    ANALYSIS_HEADS.fillAll(ctx);
+  };
 
   // --- per-link tension / axial force ---------------------------------------
   // This second pass exists only when a link explicitly opts in. Normal scenes
@@ -1224,26 +1288,35 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
       }
     };
     for (const link of world.links) {
-      if (!link.showTensionVectors) continue;
       if (link instanceof PulleyLink) {
+        if (!link.showTensionVectors && !link.showResultantTensionVector) continue;
         const reading = analysePulley(link, world);
-        const tension = reading.tension;
-        if (!(tension > 0.0)) continue;
-        const geom = link.geometry();
-        const a = cam.toScreen(link.a.pos);
-        const b = cam.toScreen(link.b.pos);
-        const ga = cam.toScreen(geom.ga);
-        const gb = cam.toScreen(geom.gb);
-        // Two forces act on the particles toward their tangent contacts; the
-        // equal-and-opposite pair acts on the pulley at those contacts.
-        consider(a[0], a[1], reading.forceAX, reading.forceAY);
-        consider(b[0], b[1], reading.forceBX, reading.forceBY);
-        if (geom.wrapped) {
-          consider(ga[0], ga[1], -reading.forceAX, -reading.forceAY);
-          consider(gb[0], gb[1], -reading.forceBX, -reading.forceBY);
+        if (!(reading.tension > 0.0)) continue;
+        if (link.showTensionVectors) {
+          const a = cam.toScreen(link.a.pos);
+          const b = cam.toScreen(link.b.pos);
+          consider(a[0], a[1], reading.forceAX, reading.forceAY);
+          consider(b[0], b[1], reading.forceBX, reading.forceBY);
+          const geometry = link.geometry();
+          if (geometry.wrapped) {
+            const ga = cam.toScreen(geometry.ga), gb = cam.toScreen(geometry.gb);
+            // The two wheel-side loads are the action/reaction partners of
+            // the particle loads. An unwrapped route has no wheel contact.
+            consider(ga[0], ga[1], -reading.forceAX, -reading.forceAY);
+            consider(gb[0], gb[1], -reading.forceBX, -reading.forceBY);
+          }
+        }
+        if (link.showResultantTensionVector) {
+          const wheel = cam.toScreen(link.pulley.pos);
+          // The string pulls the wheel with the opposite of its two endpoint
+          // forces. This is their resultant, not the axle support reaction,
+          // which may also balance particle/frame and routing-guide loads.
+          consider(wheel[0], wheel[1], -(reading.forceAX + reading.forceBX),
+            -(reading.forceAY + reading.forceBY));
         }
         continue;
       }
+      if (!link.showTensionVectors) continue;
       if (link instanceof SpringLink || link.isRope) {
         const force = link instanceof SpringLink ? link.axialForce : link.mu;
         if (Math.abs(force) < 1e-12) continue;
@@ -1259,8 +1332,6 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
         consider(b[0], b[1], -fx, -fy);
       }
     }
-    STROKES.strokeAll(ctx);
-    FILLS.fillAll(ctx);
   }
 
   // --- contact normals ------------------------------------------------------------------
@@ -1323,10 +1394,18 @@ export function drawWorld(ctx: CanvasRenderingContext2D, cam: Camera,
     }
   }
   // Draw readable analysis surfaces after scene geometry and force arrows.
-  drawAnalysisOverlays(ctx, fbdLabels, fbdVectors, areaW, areaH, textScale, pointer);
+  const particleHover = !view.labels && pointer !== null && hover instanceof Body
+    ? prepareParticleHover(ctx, cam, hover, areaW, areaH, textScale, pointer) : null;
+  const reserved: AnalysisBox[] | undefined = fbdLabels.length
+    ? [scaleBarBounds(ctx, cam, areaW, areaH)] : particleHover ? [particleHover] : undefined;
+  if (fbdLabels.length && particleHover) reserved!.push(particleHover);
+  if (fbdLabels.length && uiReserved) reserved!.push(...uiReserved);
+  drawAnalysisOverlays(ctx, fbdLabels, fbdVectors, areaW, areaH, textScale, pointer,
+    reserved, paintForceArrows);
   if (fbdLabels.length === 0 && pointer !== null && tensionHoverD2 < 49.0) {
     drawForceTooltip(ctx, pointer, tensionHoverFx, tensionHoverFy, areaW, areaH);
   }
+  if (particleHover) drawParticleHover(ctx, particleHover);
   // Endpoint letters are editing landmarks, so they appear only on the
   // selected rod. Draw them last: attached particles can occupy the actual
   // endpoint and would paint over a badge drawn in the link layer. Each badge
@@ -1381,6 +1460,22 @@ export function drawVelocityHandle(ctx: CanvasRenderingContext2D, cam: Camera,
   ctx.strokeStyle = css([20, 40, 20]);
   ctx.lineWidth = 1;
   ctx.stroke();
+}
+
+/** Exact scale-marker ink bounds, including the current canvas font metrics.
+ * Only opt-in diagrams request this obstacle; Performance mode creates none. */
+export function scaleBarBounds(ctx: CanvasRenderingContext2D, cam: Camera,
+                               areaW: number, areaH: number): { x: number; y: number; width: number; height: number } {
+  const [length, label] = cam.niceScaleLength();
+  const x1 = areaW - 24, x0 = x1 - length * cam.zoom, y = areaH - 20;
+  const font = ctx.font;
+  ctx.font = "11px system-ui, sans-serif";
+  const textWidth = ctx.measureText(label).width;
+  ctx.font = font;
+  const midpoint = (x0 + x1) / 2;
+  const left = Math.min(x0, midpoint - textWidth / 2) - 3;
+  const right = Math.max(x1, midpoint + textWidth / 2) + 3;
+  return { x: left, y: y - 22, width: right - left, height: 29 };
 }
 
 export function drawScaleBar(ctx: CanvasRenderingContext2D, cam: Camera,

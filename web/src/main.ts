@@ -6,6 +6,7 @@ import { Vec2 } from "./core/vec";
 import { Body } from "./engine/body";
 import { World } from "./engine/world";
 import { Preset, gasWorld } from "./scene/presets";
+import { consumeFreshStart, initializeStartingScene } from "./scene/startup";
 import { TabRecovery } from "./scene/recovery";
 import { snapshot } from "./scene/snapshot";
 import { Inspector } from "./ui/inspector";
@@ -14,6 +15,7 @@ import { GraphDataDialog } from "./ui/graph-data";
 import { Help, Library, SettingsPanel } from "./ui/overlays";
 import { GraphDock, HintBar, Palette, Toolbar, overlayToggles } from "./ui/panels";
 import { handleShortcut } from "./ui/shortcuts";
+import { ICONS } from "./ui/icons";
 import { Tour } from "./ui/tour";
 import { Toasts } from "./ui/toasts";
 import { OverloadNotice } from "./ui/overload";
@@ -28,7 +30,7 @@ if (import.meta.env.DEV) (window as unknown as { __mech: App }).__mech = app;
 
 // ------------------------------------------------------------------- toasts
 const toasts = new Toasts($("toasts"));
-app.toastFn = (message) => toasts.show(message);
+app.toastFn = (message, severity) => toasts.show(message, severity ? { severity } : undefined);
 
 // ------------------------------------------------------------------- panels
 const toolbar = new Toolbar(app, $("toolbar"));
@@ -37,7 +39,7 @@ const inspector = new Inspector(app, $("inspector"), $("inspector-splitter"));
 const dock = new GraphDock(app, $("dock"), $("dock-splitter"));
 const hintbar = new HintBar(app, $("hint-text"), $("status-text"));
 const library = new Library(app, $("library"));
-const tour = new Tour(app);
+const tour = new Tour(app, inspector);
 const help = new Help($("help"), () => tour.start());
 const settingsPanel = new SettingsPanel(app, $("settings"), () => help.open(),
                                         () => tour.start());
@@ -84,6 +86,7 @@ document.addEventListener("keydown", (e) => {
     overlays: [library, help, settingsPanel, formulaGuide, graphData],
     toggleLibrary: () => library.toggle(),
     toggleHelp: () => help.toggle(),
+    openSettings: () => settingsPanel.open(),
     toggleInspector: () => inspector.toggleCollapsed(),
   });
 });
@@ -100,21 +103,33 @@ document.addEventListener("gesturestart", suppressPageGesture, { passive: false 
 document.addEventListener("gesturechange", suppressPageGesture, { passive: false });
 
 // ---------------------------------------------------------------- resizing
-const resize = () => app.resizeCanvas();
+const resize = () => {
+  const height = `${$("toolbar").getBoundingClientRect().height}px`;
+  if (document.documentElement.style.getPropertyValue("--toolbar-height") !== height) {
+    document.documentElement.style.setProperty("--toolbar-height", height);
+  }
+  app.resizeCanvas();
+};
 new ResizeObserver(resize).observe($("canvas-wrap"));
 window.addEventListener("resize", resize);
 resize();
 
 // ------------------------------------------------------------------- start
-app.initializePreset(PRESETS.find((preset) => preset.name === "Earth & Moon") ?? PRESETS[0]);
+const freshStart = consumeFreshStart();
+let startingSceneName: string | null = null;
 const recovery = new TabRecovery(() => window.sessionStorage);
-const recovered = recovery.read();
+const recovered = freshStart ? { status: "missing" as const } : recovery.read();
 if (recovered.status === "loaded") {
   app.loadWorld(recovered.world, "previous tab", false);
   app.restoreTabPresentation(recovered.presentation, recovered.initial);
   inspector.restoreTabPresentation(recovered.presentation);
-} else if (recovered.status === "invalid" || recovered.status === "too-large") {
-  app.toast("Could not restore the previous tab. Saved scenes are available in Library.");
+  app.settings.startup_seen = true;
+  app.saveSettings();
+} else {
+  startingSceneName = initializeStartingScene(app);
+  if (recovered.status === "invalid" || recovered.status === "too-large") {
+    app.toast("Could not restore the previous tab. Saved scenes are available in Library.");
+  }
 }
 let recoveryWarning = false;
 const checkpoint = (state: string): void => {
@@ -140,11 +155,21 @@ document.addEventListener("visibilitychange", () => {
 });
 app.start();
 // First visit gets the guided tour instead of a toast that scrolls away
-// before it has been read; afterwards, the toast is the reminder.
+// before it has been read. Studio keeps later greetings out of the stage;
+// recovery, refresh and action feedback remain explicit.
+const reloaded = performance.getEntriesByType("navigation").some(entry =>
+  (entry as PerformanceNavigationTiming).type === "reload");
+if (reloaded || freshStart) {
+  toasts.show(freshStart && startingSceneName ? `Loaded “${startingSceneName}”` : "",
+    { title: "Page refreshed", icon: ICONS.reset, refresh: true });
+}
 if (app.settings.tour_done === true) {
-  app.toast(recovered.status === "loaded"
-    ? "Previous tab restored and paused. Press Space to run, L to save."
-    : "Welcome back! Press L for the library, F1 for help.");
+  if (!reloaded && !freshStart) {
+    if (recovered.status === "loaded") app.toast(app.settings.studio_mode
+      ? "Previous tab restored and paused. Use Play to continue, Library to save."
+      : "Previous tab restored and paused. Press Space to run, L to save.");
+    else if (!app.settings.studio_mode) app.toast("Welcome back! Press L for the library, F1 for help.");
+  }
 } else {
   tour.maybeAutoStart();
 }

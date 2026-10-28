@@ -565,6 +565,25 @@ export class SettingsPanel {
     header.append(button("", () => this.close(),
       { icon: ICONS.close, style: "ghost", tooltip: "Close (Esc)" }).root);
     const body = el("div", { class: "overlay-body settings-grid" });
+    const categories = ["Appearance", "Interaction", "Simulation"] as const;
+    type Category = typeof categories[number];
+    let activeCategory: Category = "Appearance";
+    const navigation = el("div", { class: "settings-navigation", role: "tablist", "aria-label": "Settings categories" });
+    const buttons = new Map<Category, HTMLButtonElement>();
+    const groups = new Map<HTMLElement, Category>();
+    const selectCategory = (category: Category): void => {
+      activeCategory = category;
+      for (const [card, owner] of groups) card.hidden = owner !== category;
+      refreshTabs(buttons, category);
+      body.scrollTop = 0;
+    };
+    for (const category of categories) {
+      const tab = el("button", { text: category, id: `settings-${category.toLowerCase()}`, role: "tab" });
+      tab.addEventListener("click", () => selectCategory(category));
+      buttons.set(category, tab); navigation.append(tab);
+    }
+    wireTabs(navigation, buttons, selectCategory);
+    refreshTabs(buttons, activeCategory);
     // Settings are grouped into cards laid out in columns rather than one
     // long narrow list.
     //
@@ -586,6 +605,12 @@ export class SettingsPanel {
     const group = (title: string): void => {
       current = el("div", { class: "settings-group" },
                     el("div", { class: "section", text: title }));
+      const owner: Category = title === "Appearance" ? "Appearance" :
+        title === "Interaction" || title === "Numeric controls" ? "Interaction" : "Simulation";
+      current.hidden = owner !== activeCategory;
+      current.setAttribute("role", "region");
+      current.setAttribute("aria-label", title);
+      groups.set(current, owner);
       body.append(current);
     };
     const add = (c: Control): void => {
@@ -613,7 +638,7 @@ export class SettingsPanel {
         app.settings.studio_mode = v;
         app.saveSettings();
         app.applyUiSettings();
-      }, "Add layered gradients, rounded workspace styling and stronger boundaries over the selected colour theme."));
+      }, "Use a focused workspace with an inset tool shelf, grouped playback controls and a contextual Inspector."));
 
     // accent colour: preset swatch circles + a custom picker. UI chrome
     // and highlights only - physics object colours are never touched.
@@ -740,7 +765,7 @@ export class SettingsPanel {
       }, "Use the OpenDyslexic typeface for interface text."));
 
     label("Font size");
-    const fontScale = segmented(["90%", "100%", "110%", "120%"],
+    const fontScale = segmented(["80%", "90%", "100%", "110%", "120%"],
       () => `${Math.round((app.settings.font_scale ?? 1) * 100)}%`,
       (v) => {
         app.settings.font_scale = parseInt(v, 10) / 100;
@@ -755,40 +780,45 @@ export class SettingsPanel {
       () => app.dragHitsWalls,
       (v) => app.setDragHitsWalls(v),
       "Stop a dragged body at walls instead of letting it pass through."));
-    note("Off: a dragged body passes through walls, the quickest way to " +
-         "place something on the far side of one. On: it is held outside " +
-         "walls and slides along them, so you can push a ball up a ramp by " +
-         "hand.");
+    note("On: stop at walls and slide along them. Off: place objects through walls.");
+    group("Numeric controls");
+    const preference = (label: string, key: "adaptive_scrub" | "continuous_scrub", help: string): void => {
+      add(checkbox(label, () => app.settings[key] ?? true, value => {
+        app.settings[key] = value; app.saveSettings(); app.applyUiSettings();
+      }, help));
+    };
+    preference("Adaptive scrubbing", "adaptive_scrub", "Slow label drags make finer adjustments; fast drags cover a wider range.");
+    preference("Continuous scrubbing", "continuous_scrub", "Wrap an in-app cursor during mouse scrubbing where pointer lock is supported. Release or Escape restores the normal pointer.");
+    label("Scrub speed");
+    add(segmented(["Fine", "Standard", "Fast"],
+      () => app.settings.scrub_speed === 0.5 ? "Fine" : app.settings.scrub_speed === 2 ? "Fast" : "Standard",
+      value => {
+        app.settings.scrub_speed = value === "Fine" ? 0.5 : value === "Fast" ? 2 : 1;
+        app.saveSettings(); app.applyUiSettings();
+      }, "Base sensitivity for label dragging. Shift speeds up; Alt makes finer adjustments."));
 
     group("New scene defaults");
+    add(checkbox("Random starting scene", () => app.settings.random_start_scene ?? true, value => {
+      app.settings.random_start_scene = value; app.saveSettings();
+    }, "Choose from built-in examples and saved scenes on a fresh visit or when restarting from the Mechanica title."));
+    note("First visit: Pulley on an incline. Later fresh starts are random when enabled; reload restores your tab.");
     add(numEdit("Gravity after Clear", () => app.newSceneGravity,
       (value) => app.setNewSceneGravity(value, false), "m/s²", () => app.saveSettings(), fmt3dp,
       { scrub: { sensitivity: 0.05, step: 0.001, min: 0, max: 100 } }));
-    note("Defaults to 9.8 m/s². This is applied only when the toolbar's Clear " +
-         "button creates an empty workspace; premades and imported scenes " +
-         "keep their own gravity.");
+    note("Clear uses this gravity; examples and imported scenes keep their own values.");
 
     group("Accuracy & performance");
     add(checkbox("Performance mode",
       () => app.perfMode,
       (v) => app.setPerfMode(v),
       "Trade physical accuracy for frame rate across the whole app."));
-    note("Off by default. Sacrifices physical accuracy heavily for speed, " +
-         "and overrides the scene's own solver settings. It automatically " +
-         "reduces canvas sharpness, physics frequency, collision/constraint " +
-         "work and gravity accuracy until the machine can keep up. Resting " +
-         "unlinked bodies may sleep. Don't use it to model anything " +
-         "accurately or to read numbers off.");
+    note("For large visual simulations. Reduces accuracy, solver work and canvas detail automatically; use Normal mode for modelling and measurements.");
 
     add(checkbox("Adaptive resolution",
       () => app.adaptiveDt,
       (v) => app.setAdaptiveDt(v),
       "Add extra, smaller physics steps through fast close encounters."));
-    note("Recommended: Enabled. Keeps trajectories accurate and trails " +
-         "smooth where a path curves sharply within one step, such as a " +
-         "gravity slingshot. Substeps and iterations are separate, " +
-         "per-scene settings in the Inspector's World tab. Performance mode " +
-         "overrides this while it is on.");
+    note("Extra small steps improve fast encounters. Substeps and iterations are per scene in World; Performance mode overrides them.");
 
     add(checkbox("Remove runaway objects",
       () => app.settings.cull ?? true,
@@ -796,10 +826,7 @@ export class SettingsPanel {
         app.settings.cull = v;
         app.saveSettings();
       }, "Delete bodies that have drifted far beyond any usable view."));
-    note("Recommended: Enabled. Debris that will never return still costs " +
-         "simulation time and pulls the auto-fit camera out. A body is " +
-         "removed only once it is outside the widest possible view and " +
-         "still receding, so bound orbits are never affected.");
+    note("Remove far-away, receding debris to limit simulation cost. Bound orbits remain.");
 
     const helpRow = el("div", { class: "settings-actions" });
     helpRow.append(button("Replay the tour", () => {
@@ -811,7 +838,7 @@ export class SettingsPanel {
       openHelp();
     }).root);
     const panel = el("div", { class: "overlay-panel settings-panel" },
-      header, body, helpRow);
+      header, navigation, body, helpRow);
     this.focus = new ModalFocus(panel, "Settings");
     root.append(panel);
   }
@@ -855,12 +882,12 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
     ["H", "Pan"],
     ["B / A", "Add body / anchor (anchors support nearby rods)"],
     ["W", "Draw wall (Shift snaps the angle)"],
-    ["R / E / S / P", "Connect rod / string / spring; add pulley"],
+    ["R / E / S / P", "Draw rod / connect string / spring; add pulley"],
     ["X", "Eraser"],
     ["Esc", "Cancel a time jump or pending link/wall; clear selection"],
   ], "pc"],
   ["Editing", [
-    ["Ctrl+Z / Ctrl+Y", "Undo / redo"],
+    ["Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z", "Undo / redo"],
     ["Ctrl+D", "Duplicate the selection"],
     ["Del", "Delete the selection"],
     ["Ctrl+C / Ctrl+V", "Copy / paste body properties"],
@@ -875,14 +902,20 @@ const SHORTCUT_SECTIONS: Array<[string, HelpRow[], "pc"?]> = [
     ["D", "Velocity vectors"],
     ["G", "Broadphase debug grid"],
     ["1 / 2 / 3", "Energy / momentum / phase graph"],
+    ["4 / 5 / 6", "Displacement / distance / velocity graph"],
+    ["Ctrl+R", "Reset to the start state"],
     ["Graph: Displacement", "Signed sx/sy from selection or Clear; gradients give vx/vy"],
     ["Graph: Distance", "Distance travelled by the selected particle over time"],
     ["Graph: Velocity", "Signed vx/vy: gradient gives acceleration, area gives displacement. Speed: area gives distance"],
-    ["Graph: Data", "Inspect a fixed sample table or export all retained channels as full-precision CSV with SI units"],
+    ["Graph: Data", "Open the full graph; switch to Numbers or export CSV / PNG"],
+    ["Full graph", "Scroll or + / − to zoom; left- or right-drag to pan when zoomed; Fit or 0 resets"],
+    ["Mini graph", "Drag to view earlier times; Return to live follows the present"],
+    ["Numeric labels", "Drag to adjust; slow motion is finer. Shift speeds up; Alt refines. Esc cancels"],
     ["Scroll / right-drag", "Zoom at cursor / pan"],
     ["\\", "Hide / show the inspector"],
     ["Tab", "Move between controls"],
     ["L", "Library"],
+    ["Ctrl+,", "Settings"],
     ["F1", "This help"],
   ], "pc"],
   ["Mouse & touch", [
@@ -908,9 +941,10 @@ const GETTING_STARTED: Array<[string, string, string]> = [
    "dragged body keeps the motion it had, so moving something never throws " +
    "it - the green arrow is there when you do want to set a velocity."],
   ["3", "Build something",
-   "Place two bodies and connect them. Clicking empty space with a rod, " +
-   "string or spring creates the anchor or body you need, so a pendulum " +
-   "is two clicks and a chain is a few more."],
+   "Draw a rod between two points, then slowly drag a particle onto it " +
+   "to attach; place an anchor near the rod to support it. Strings and " +
+   "springs connect two bodies. The pulley tool creates its wheel, two " +
+   "particles and their string."],
   ["4", "Change the physics",
    "Select anything and the Inspector edits it live - mass, restitution e, " +
    "friction. Hover the material labels or sliders for their definitions. " +

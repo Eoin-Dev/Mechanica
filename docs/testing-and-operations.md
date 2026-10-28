@@ -7,7 +7,7 @@ uses axe-core and real browser layout, focus, input, and Canvas behavior.
 TypeScript compilation and the Vite production build are separate required
 checks.
 
-Use Node.js 22.23.1 from [`.node-version`](../.node-version). The package engine
+Use Node.js 22.23.4 from [`.node-version`](../.node-version). The package engine
 accepts Node `>=22.22.2 <23`. Browser acceptance also requires the pinned
 Playwright Chromium, Firefox and WebKit binaries; install them after packages.
 
@@ -126,6 +126,20 @@ Most physics/core tests run directly in Node. DOM-oriented tests install the
 minimum jsdom or hand-written browser stubs they need. The suite does not need a
 running Vite server.
 
+Vitest uses two workers so extended physics contracts have predictable CPU
+access alongside DOM tests. The 30-second per-test deadline remains unchanged;
+limiting contention does not reduce simulation intervals or outcome assertions.
+
+Collision-impulse regressions compare signed J with independent momentum change,
+cover slow/new/persistent and touching-chain impacts, exclude gravity-supported
+contacts at one and multiple substeps, and check sustained-force separation and
+owned rewind data. Caption regressions oscillate tip position, text width and
+source order through retained placements, then verify relocation under a real
+obstruction and viewport/text-scale changes. Native assembly cases inspect
+painted impulse/reaction captions, Inspector close/reopen and rewind, rod
+navigation/moments and live beam/pulley attachment behavior. View-only wheel and
+string toggles must preserve a paused measured interval.
+
 `playwright.config.ts` runs Chromium, Firefox and WebKit serially, because every page owns a
 continuous animation loop. CI forbids exclusive tests and fails if any case
 passes only on retry. Its two retries still collect diagnostic evidence,
@@ -143,6 +157,18 @@ locator/assertion timeouts still apply.
 
 ## Test suite map
 
+Delete-zone tests cover exact edge contact, near-corner misses, fast crossings,
+rotations and actual pulley arcs, disabled/collision-independent behavior,
+continuous ordinary-link crossings with clear endpoints, folded swept-region
+misses, small targets at large coordinates and independent sampled-pose checks,
+coherent linked-object removal, guarded imports, structural rewind and shots
+into each pool pocket without deleting cushions. Native zone cases draw/edit/
+move the three shapes, undo and reload them, remove/rewind a pocket shot, and
+step/rewind fast rod, rope, spring and elastic-string crossings through the real UI.
+Routed cases also cover wrapped/released/transitioning pulley strings, arc-only
+contacts, clear particle-chord misses, brief long-path contacts, observational
+trial poses, endpoint motion in every Performance tier and coherent wheel removal.
+
 Every current test file is listed below. When adding a file, update this map
 with the behavior it protects rather than an exact assertion count.
 
@@ -150,6 +176,8 @@ with the behavior it protects rather than an exact assertion count.
 
 | Test file | Protected behavior |
 | --- | --- |
+| [`delete-zones.test.ts`](../web/tests/delete-zones.test.ts) | Shaped static and ordinary swept geometry, independent intermediate poses, folded-region misses, coherent removal/rewind, guarded scene data and all six pool pockets. |
+| [`delete-zone-pulley-sweeps.test.ts`](../web/tests/delete-zone-pulley-sweeps.test.ts) | Actual moving tangent legs, released/transitioning routes, arc-only contacts, chord-only misses, short contacts on long paths, pure trial poses and owned rewind/endpoint motion in all Performance tiers. |
 | [`analytic-physics.test.ts`](../web/tests/analytic-physics.test.ts) | Closed-form terminal velocity, orbital vis-viva/equal-area/angular-momentum/centre-of-mass behavior, inclined-plane friction, projectile motion, unequal-mass collision equations, and damped-oscillator response. |
 | [`physics.test.ts`](../web/tests/physics.test.ts) | Broad engine verification: projectiles, collisions, orbits, pendulums, springs/stacks, rolling/friction, soft bodies under varied drag abuse, horizontal/vertical independence, gravity slingshot, Cyclone fields, sandbox behavior, and scene round trips. |
 | [`gravity.test.ts`](../web/tests/gravity.test.ts) | Point versus solid-disc gravity, softening/interior force and energy agreement, anchor behavior, symmetry, and bit-identical packed attraction versus a reference implementation. |
@@ -172,7 +200,8 @@ with the behavior it protects rather than an exact assertion count.
 | [`pulley.test.ts`](../web/tests/pulley.test.ts) | Equal-tension Atwood acceleration, tension-only slack behavior, live finite-wheel tangency, terminal radial/tangent stops, unforced outside-disc reference-ray crossing, hostile mass-ratio energy bounds across all integrators and both solver modes, all four Performance profiles, fixed endpoint radius ownership/release, realised contact-force diagnostics, exact wall-surface placement with parallel routing, mount following, live snap/breakaway wheel dragging, paused and running taut axle edits, pulley-only box filtering, complete placement, three dismantling cascades, persistence/digest structure, and malformed axle ownership/reference rejection. |
 | [`pulley-analytic-forces.test.ts`](../web/tests/pulley-analytic-forces.test.ts) | Independent Newton-law incline tension, reaction and limiting-friction answers across integrators and timesteps; terminal and fixed-wall/body equilibrium across extreme mass ratios with matching leg tensions, owned rim reactions, unchanged immediate-query inputs, disabled partner diagrams and cache invalidation; stationary position/velocity in actual Normal/Performance profiles; and an analytic inelastic tension impulse with non-increasing kinetic energy. Force-ledger closure and motion accuracy are checked separately. |
 | [`pulley-diagnostics.test.ts`](../web/tests/pulley-diagnostics.test.ts) | Immediate Atwood acceleration/tension and whole-axle support, compatible force intervals and full tightening impulses, hidden endpoint/query ownership and caching, scalar/vector averaging, disabled-display work and rewind retention. |
-| [`pulley-drag.test.ts`](../web/tests/pulley-drag.test.ts) | Independent vertical-length answers across translated/rotated free, held and locked fixtures; all fixed search budgets, wheel first-hit and overlap escape, partner wall and incline contact, existing extension/slack, compound rigid ownership, shared selected endpoints, repeated parked targets, and pure planning without clock/velocity/multiplier/route mutation. |
+| [`pulley-drag.test.ts`](../web/tests/pulley-drag.test.ts) | Independent vertical-length answers across translated/rotated free, held and locked fixtures; all fixed search budgets, wheel first-hit and overlap escape, partner wall and incline contact, existing extension/slack, compound rigid ownership, shared selected endpoints, repeated parked targets, tiny cursor-ray changes and off-centre grabs, and pure planning without clock/velocity/multiplier/route mutation. |
+| [`pulley-drag.spec.ts`](../web/e2e/pulley-drag.spec.ts) | Production pointer gestures against independently calculated tangent-circle path length and actual native pointer coordinates: partner/wheel/wall stops, same-ray overshoot, immediate tiny direction changes, locked off-centre grabs, Performance bounds and paired undo/redo without advancing time or camera. |
 | [`pulley-routing.test.ts`](../web/tests/pulley-routing.test.ts) | Independent path continuity at vanishing and full-turn wraps in both orientations, release and opposite-side wheel-clearance/tangent oracles, relative-velocity straight-string tension, saved and legacy route ownership, query/rewind structural invalidation, guarded import defaults, seeded gradient/curvature checks over varied port spans, and seam energy bounds across actual Normal/Performance integrators and timesteps; assigned-guide stops with permitted tangent motion, independent support/tension force balance, retained angular-sheet with pure query/save/rewind ownership, jointly translated/rotated routes and zero-port arc coherence. |
 
 ### Presets, determinism, stress, and long runs
@@ -227,15 +256,25 @@ Scientific presentation is also covered by
 theme surfaces, complete edge-contained captions, coincident-force separation,
 large/tiny signed values, scientific palette/contour contrast, source identification
 from arrow shafts or captions, bounded long-source hover, arrow-tip and diagonal-shaft protection at multiple
-text scales, removal of redundant slope cards, and no overlay work when disabled. The Inspector suite checks every
+text scales, measured scale-marker separation for captions and hover sources,
+HUD cache invalidation, removal of redundant slope cards, and no overlay work
+when disabled. `trail-render.test.ts` also bounds metre/millimetre scale ink and
+checks that every Performance tier omits annotation/HUD text measurement. The Inspector suite checks every
 force source, retained disclosure focus and open/closed choice through tab
 changes and world reconstruction, detached toggle events, safe names, slope components and
 recorded interval averages in the text alternative.
+
+The native analysis-rendering checks compare complete painted caption surfaces
+against the visible phone Inspector handle, including paused drawer open/close
+with an unchanged portable world. App lifecycle checks cover overlay movement,
+visibility and removal with an unchanged canvas size, retained idle paints and
+layout-only DOM measurements.
 
 | Test file | Protected behavior |
 | --- | --- |
 | [`constraint-forces.test.ts`](../web/tests/constraint-forces.test.ts) | Independent linear systems, unilateral release and signed compression, seeded complementarity answers through the row limit, large mass ratios, storage reuse and non-finite/singular fallback. |
 | [`coupled-rod-maths.test.ts`](../web/tests/coupled-rod-maths.test.ts) | Newton/Euler string forces at loaded beams and massless tips, free/fixed supports, rotated and displaced models, coordinate-mass independence, multiple strings and pulley coupling, guide/frame reactions, actual integrators, work-energy, independent reduced-coordinate stress reference and real slack/release. All Performance tiers retain bounded geometry and skip adaptive force sampling. [`coupled-rod-forces.spec.ts`](../web/e2e/coupled-rod-forces.spec.ts) checks imported models, immediate force notation/readings, stepping and rewind on desktop and phone in production browsers. |
+| [`coupled-step-remainder.test.ts`](../web/tests/coupled-step-remainder.test.ts) | Feasible 1000 kg and 1,000,000 kg beam/pulley models across integrators, diagrams and authored coordinate rounding: independent energy, bounded loss, rigidity/string length, full elapsed time and converged angle/point-coordinate reference trajectories. Protects against almost-zero remainder amplification and unresolved near-alignment/coarse fallback. |
 | [`standalone-rod-maths.test.ts`](../web/tests/standalone-rod-maths.test.ts) | Independent closed-form free/supported beam force and torque cases across translations, rotations, hidden coordinate masses, all actual integrators, coincident/distinct supports, centre-of-mass momentum and mechanical energy. |
 | [`rod-pulley-presets.test.ts`](../web/tests/rod-pulley-presets.test.ts) | Shipped Atwood acceleration/tension, rough-table reaction/friction/tension and velocity, balanced moments in all profiles, physical-pendulum angular acceleration and energy, rotor centripetal acceleration/speed, swinging-string pre-impact energy, round-trip continuation and bounded ten-second Normal/all-tier motion. |
 | [`drag-velocity.test.ts`](../web/tests/drag-velocity.test.ts) | Primary drag preserves pre-grab velocity across paused/running/release/abort paths while temporary motion remains solver-visible; its progressively stronger speed-sensitive hand response and matching pointer-time rod correction avoid fast-drag and substep-amplified anchor lunges, while linked response is chase-capped only in Performance mode. |
@@ -270,15 +309,41 @@ recorded interval averages in the text alternative.
 | [`refresh-culling.test.ts`](../web/tests/refresh-culling.test.ts) | Scrolled controls skip refresh while hidden zero-rect controls remain eligible to reveal themselves. |
 | [`inspector-rebuild.test.ts`](../web/tests/inspector-rebuild.test.ts) | Inspector structure keys, retained View graph selector and focus across graph changes, attachment-button focus through unchanged refreshes, pulley-particle radius hiding and clipboard protection, navigation from every pulley part with retained names/masses/focus and force intervals, assembly removal under a selected particle, body counts independent from cascading link deletion, semantic tabs/reopen/splitter metadata, desktop visibility persistence, accessible driver removal, Performance-mode solver/trail disabled states and banner copy, and exact delayed-input transactions after intervening simulation. Rewind rebinds source/interval readouts and particle/World edits even when object IDs and control structure stay identical. |
 | [`tour.test.ts`](../web/tests/tour.test.ts) | Tour construction, first-visit behavior, progress/finish, settings persistence, and cleanup. |
-| [`tour-spotlight.test.ts`](../web/tests/tour-spotlight.test.ts) | Multi-target spotlight tiling, clipping, rings, viewport placement, and responsive target geometry. |
-| [`panel-accessibility.test.ts`](../web/tests/panel-accessibility.test.ts) | Toolbar/graph icon names, play/cancel-seek state labels, clock progress and aria-busy, retained seeking drafts, unchanged-clock write and seek suppression, Escape cancellation, detached graph zoom at the retained boundary, graph legend focus/node retention, accessible current values/units/timestamps, series-scoped visibility and contextual empty-canvas instructions, separated grammatical status counts with internal trail/subdivision indicators absent, revealed/dynamically bounded graph-splitter metadata, retained-graph palette invalidation, and shortcut badges excluded from name computation. |
+| [`tour-spotlight.test.ts`](../web/tests/tour-spotlight.test.ts) | Spotlight tiling, outline DOM lifecycle, replay, viewport placement and playback restoration. |
+| [`tour-outline.test.ts`](../web/tests/tour-outline.test.ts) | Actual union boundaries/area for the scene/footer, adjacent panels, separate buttons, nested/duplicate targets and corner contacts, plus rounded closed paths. |
+| [`command-popover.test.ts`](../web/tests/command-popover.test.ts) | Inline/popup node retention, original single command dispatch, enabled-action focus, isolated keys, Escape, outside dismissal, transient internal focus gaps and focus when a closed trigger becomes an inline group. |
+| [`panel-accessibility.test.ts`](../web/tests/panel-accessibility.test.ts) | Toolbar/graph icon names, play/cancel-seek state labels, clock progress, collision/long-readout sizing and aria-busy, retained seeking drafts, unchanged-clock write and seek suppression, Escape cancellation, detached graph zoom at the retained boundary, graph legend focus/node retention, accessible current values/units/timestamps, series-scoped visibility and contextual empty-canvas instructions, separated grammatical status counts with internal trail/subdivision indicators absent, revealed/dynamically bounded graph-splitter metadata, retained-graph palette invalidation, and shortcut badges excluded from name computation. |
 | [`settings-accessibility.test.ts`](../web/tests/settings-accessibility.test.ts) | Three base-theme choices followed by the independent Studio toggle; full-bleed circular accent-swatch geometry, selection/focus behavior, and 24 px custom-remove targets; fixed-width-free responsive Library header/tab hooks; built-in preset full-card activation, matched keyboard focus, and independent 24 px description expansion; persistent single-flight scene import across rerenders; compact checkbox sizing; and safe new-tab third-party notice behavior. |
 | [`library-scenes.test.ts`](../web/tests/library-scenes.test.ts) | Themed saved-scene forms, stored-name preview, explicit normalized-name replacement confirmation and its invalidation, retained invalid/colliding drafts, storage failure/retry, multiline descriptions, Escape and delete cancellation, focus restoration, section draft retention and close cleanup; closed-Library import cancellation, suppression of stale loads/errors/cleanup, new-request ownership and picker-failure retry; current-value submission without input events, changed-name confirmation invalidation, retained drafts on cross-tab conflicts, deleted-scene metadata protection, current stale-card descriptions and missing-card refresh. |
 | [`scene-upload.test.ts`](../web/tests/scene-upload.test.ts) | File-picker success, native cancellation, empty selection, abort before opening or during a slow read, discarded late text/read errors, single selection, handler/listener release and picker-opening failures. |
 | [`graph-data.test.ts`](../web/tests/graph-data.test.ts) | Every graph family's exact CSV columns/units, logical retention, snapshot isolation, hidden-channel inclusion, full precision, hostile-name exclusion and invalid rows; download cleanup, bounded table paging, reference context, focus restoration and empty/Off handling. Graph/Numbers switching, detached six-family navigation, momentum/phase dimensions, live-channel isolation, image deduplication, original export identity during navigation, dismissal epochs and retryable image errors. |
 | [`graph-chart.test.ts`](../web/tests/graph-chart.test.ts) | Physical dimensions and phase pairing, signed/constant/tiny/large domains, finite ticks and normalization, bounded endpoint/extrema retention, nearest stored time/phase coordinates, bounded pointer-anchored normalized zoom, domain-clamped pan and empty/hidden-channel cases. |
 | [`graph-view.test.ts`](../web/tests/graph-view.test.ts) | Labelled axes and distinct patterns, stored keyboard coordinates, marker clearing, resize/content cleanup, portable image dimensions/reference metadata, URL cleanup after rendering/context/encoding failures and unavailable export without visible channels, wheel/button/keyboard zoom, captured/coalesced drag pan and keyboard pan, clipped exported ranges, clear zoom names, live text scaling and appearance-observer cleanup. |
-| [`theme-contrast.test.ts`](../web/tests/theme-contrast.test.ts) | Complete Dark/Void/Light surface/text combinations, low-specificity Studio button treatment, safe accent-text wiring for active controls, Studio-layer border invariants, and black, white, and intermediate custom accents meeting text, neutral-focus, accent/accent-dark ink, and filled-control focus-cue thresholds. |
+| [`theme-contrast.test.ts`](../web/tests/theme-contrast.test.ts) | Complete Dark/Void/Light surface/text combinations, Studio independence from palette choice and the actual selected-control foreground/background contrast, and black, white, and intermediate custom accents meeting text, neutral-focus, accent/accent-dark ink, and filled-control focus-cue thresholds. |
+| [`force-invalidation.test.ts`](../web/tests/force-invalidation.test.ts) | Stationary-particle updates for every force kind, stable samples, accumulated subpixel changes, numeric captions, contact origins, appearance/disappearance, body replacement and zero diagnostic reads in all Performance tiers. App lifecycle tests verify retained-canvas wakeup with an unchanged resultant. [`force-diagrams.spec.ts`](../web/e2e/force-diagrams.spec.ts) measures successive decreasing static-friction captions while a settled particle remains stationary; [`force-controls.spec.ts`](../web/e2e/force-controls.spec.ts) checks compact header spacing and the short slope-weight note across themes, phones and enlarged text. |
+| [`choice-select.test.ts`](../web/tests/choice-select.test.ts) | Shared themed selector keyboard, selection, placement and lifecycle behavior. |
+| [`themed-menus.spec.ts`](../web/e2e/themed-menus.spec.ts) | Production graph/event choices, fresh typeahead sessions, focus and cancellation, themed viewport-bounded popovers, and dismissal when the owner scrolls out of view or the viewport shrinks. |
+| [`slope-menus.spec.ts`](../web/e2e/slope-menus.spec.ts) | Single/group contact-plane menus, pointer and keyboard choice, cancellation, disabling/reopening, tab ownership, theme/viewport bounds and preservation of physical scene data. |
+| [`repeat-button.test.ts`](../web/tests/repeat-button.test.ts) | Held pointer/keyboard repeats, acceleration, cancellation and delayed release-click suppression. |
+| [`held-frame-step.spec.ts`](../web/e2e/held-frame-step.spec.ts) | Production pointer/Space/Enter holds, native repeated-key suppression, forward/backward acceleration, uniform-motion state, release-click suppression and Escape cancellation under a controlled browser clock. |
+| [`rod-editing.spec.ts`](../web/e2e/rod-editing.spec.ts) | Native free mounted-particle copies versus remapped complete-beam copies and undo/redo, independently visible particle spin/lock without beam motion, and inset colour-preset geometry at desktop/phone/enlarged-text sizes. |
+| [`scrub-pointer.test.ts`](../web/tests/scrub-pointer.test.ts) | Continuous mouse scrub lifecycle, pointer-lock rejection, late grants and cleanup. |
+| [`startup.test.ts`](../web/tests/startup.test.ts) | Default/random scene selection, valid saved scenes, guarded input and one-use fresh-start versus ordinary recovery. |
+| [`startup-restart.spec.ts`](../web/e2e/startup-restart.spec.ts) | Native fresh incline defaults/category, Settings description, visible hit-tested title navigation versus ordinary reload, saved-model random startup, damaged-neighbor skipping and changing the random-start setting across desktop/phone layouts with real touch input. |
+| [`rod-spin.test.ts`](../web/tests/rod-spin.test.ts) | Particle spin preserved through actual integrators and scene/query reconstruction. |
+| [`studio-workspace.spec.ts`](../web/e2e/studio-workspace.spec.ts) | Theme/touch/window/text/accessibility preference matrix with reachable shell controls, no header collisions, popup isolation/diagnostics, responsive focus, inset Inspector drag sizing, mode-switch scene preservation, Settings accessibility and actual workspace/reference screenshots. |
+| [`studio-tour.spec.ts`](../web/e2e/studio-tour.spec.ts) | Enlarged-phone and short-landscape Inspector tour controls remain visibly separate from the card, and long explanations retain their scroll position. |
+
+Compact command interactions share [`scene-actions.ts`](../web/e2e/scene-actions.ts),
+which opens the visible Scene actions popup before clicking its original control.
+Force-readout assertions bring their target into view because offscreen Inspector
+controls deliberately defer refresh until visible.
+Resize assertions wait for actual popup overflow before scrolling; themed-menu
+ownership checks use the same visible-anchor rule as clipping. Menu fills follow
+the current opaque panel palette in Studio and ordinary presentation. Enlarged
+contact choices and short Inspector windows retain their complete model-state
+and keyboard assertions.
+| [`requested-ui-regressions.spec.ts`](../web/e2e/requested-ui-regressions.spec.ts) | Production browser checks for editable identity headers, safe names/history, responsive Studio palette width, Library tab stability and sticky-category ownership, and replayed horizontal refresh acknowledgement. |
 | [`tour-modal.test.ts`](../web/tests/tour-modal.test.ts) | App-shell inertness, pointer blocking, focus trapping/restoration, active-step progress, live announcements, and modal cleanup. |
 | [`zoom-accessibility.test.ts`](../web/tests/zoom-accessibility.test.ts) | Page-zoom-restricting viewport metadata, global modified wheel/keyboard/gesture suppression, canvas-only unmodified wheel/touch zoom, contrast-safe accented section/guide/preset/tour/Help headings, mobile heading presence, and selectable reference content. |
 
@@ -331,6 +396,10 @@ native hover-help attributes, matching inline tracks and narrow gaps,
 five themed/enlarged layouts with containment and axe scans, retained pair
 selection after time seeking and actual post-impact velocities read from
 particles selected through their painted canvas interiors.
+The material layout, Library search and formula recipes also run with the
+actual OpenDyslexic setting, including enlarged text. Preset columns adapt to
+the active font, the search field keeps its typing space, and recipe headings
+and actions wrap within the card while formulas retain local scrolling.
 [`e2e/library-study.spec.ts`](../web/e2e/library-study.spec.ts) verifies real
 study-term queries, query/focus-preserving cross-category recovery, themed and
 enlarged badge reflow/axe scans, category scrolling on narrow/short screens,
@@ -385,6 +454,7 @@ checks at 200% text. These cases also protect a usable speed-slider track and
 
 | Test file | Protected behavior |
 | --- | --- |
+| [`e2e/delete-zones.spec.ts`](../web/e2e/delete-zones.spec.ts) | Editable shaped zones on desktop/phone, saved recovery, pool-pocket/rewind, fast ordinary links with clear endpoints, and actual routed/released pulley crossings with coherent wheel ownership and retained chord-only misses. |
 | [`e2e/graph-viewer.spec.ts`](../web/e2e/graph-viewer.spec.ts) | Production graph coordinates, zoom, six-family navigation, physical dimensions, exact CSV and decoded PNG dimensions, divider-free controls, readable responsive themes and WCAG scans, with screenshots in every configured browser. |
 | [`e2e/trail-rewind.spec.ts`](../web/e2e/trail-rewind.spec.ts) | Production import, exact trail-length entry and keyboard stepping; painted-path recovery after visible overwrite in light/dark themes, unchanged camera, repeated rewind/forward branches, plus Performance-mode path removal and disabled recording controls. |
 | [`e2e/collision-frames.spec.ts`](../web/e2e/collision-frames.spec.ts) | Production collision-step controls in Light/Dark, retained particle selection and force disclosure through rewind, contact-position/restitution values, independently expected impulse-interval readouts, exact exported impact clock, another backward/forward branch, Inspector WCAG scans and rendered screenshots in every configured browser. |
@@ -396,6 +466,13 @@ checks at 200% text. These cases also protect a usable speed-slider track and
 | [`e2e/tab-presentation.spec.ts`](../web/e2e/tab-presentation.spec.ts) | Real reload with exact camera/presentation and original reset-baseline preservation, retained selected diagram/slope/disclosure controls through repeated Reset, rough-plane category order and explicit preset graph defaults in every configured browser. |
 | [`e2e/accessibility.spec.ts`](../web/e2e/accessibility.spec.ts) | Production boot without console/page errors; axe WCAG A/AA scans at boot and with Library open, with only the deliberate browser-page-zoom `meta-viewport` exception waived; keyboard play/tabs/splitters/full-card library activation; undo after scene replacement; rendered-canvas pointer alignment; paused Jelly zoom paint-FPS/idle reporting with stable Performance quality; incline-pulley preset/tool/status/Inspector editing and tension toggle; 390 x 844 transient inspector and Studio Library behavior; extreme-accent safe text/button states; full-disc swatch geometry; modal-tour focus/inertness/restoration; modal modifier-shortcut isolation, real MathLive Escape cancellation, light-theme destructive-hover contrast, and contained Library/Settings plus usable graph canvas at 320 CSS px with 200% application text. |
 
+[`e2e/arrow-tips.spec.ts`](../web/e2e/arrow-tips.spec.ts) checks painted free-body
+arrow bounds and force-scaled endpoints across eight directions, short and long
+vectors, light/dark themes and DPR 1/2. It imports through the Library, uses
+actual box selection and Inspector controls, mirrors native force-path paint,
+and verifies unchanged physical scene data. This guards against protruding
+arrow-tip contours without relying on a screenshot-only comparison.
+
 A DPR-2 scene-import case checks visible tiny-particle pixels and glyph-copy
 use in the production app, then zooms in and verifies the vector fallback.
 The corresponding unit suite checks exact geometry and resource bounds;
@@ -406,6 +483,13 @@ containment, and scans its final accessibility state. Shared colour/select
 checks edit a real colour and choose a graph in Light/Dark Studio and classic
 presentation, measuring label/control separation and scaled fonts at desktop,
 phone and 320-CSS-pixel/200%-text widths. Captures accompany those measurements.
+Browser cases that require a particular initial viewport configure it with
+scoped `test.use({ viewport })` before their page is created. This avoids an
+unnecessary blank-page resize, which can stall Firefox. Tests retain subsequent
+resizes of the loaded app to exercise responsive transitions. Formula-guide
+cases start at the measurement scene's 1440 x 900 setup size, then resize the
+open guide to each desktop, phone or enlarged-text layout before checking
+content and accessibility.
 Another production case holds real file reads, closes the Library, clears the
 scene and starts a new import. Releasing the old read must preserve the cleared
 scene and the new action's busy state; releasing the new read must load only
@@ -555,7 +639,8 @@ ignored by Git.
 ## Continuous integration and deployment
 
 `.github/workflows/ci.yml` validates every pull request with only
-`contents: read`: checkout, exact Node 22.23.1 setup, `npm ci`, Node tool tests,
+`contents: read`: checkout, Node 22.23.4 from the shared `.node-version` pin,
+`npm ci`, Node tool tests,
 Vitest plus the README-count check, documentation/security gates, production build,
 Chromium/Firefox/WebKit and system-dependency installation,
 and Playwright/axe acceptance. Every third-party action reference is an
@@ -564,11 +649,18 @@ Both workflows also run `check:docs` before building. `playwright-core` is pinne
 to the same version as `@playwright/test` to satisfy axe's direct peer dependency
 without a second browser-library version during clean installation.
 
+On validation failure, both workflows retain the unit JSON report, browser HTML
+report, screenshots and traces for 14 days. Artifacts include the job and run
+attempt in their name. Missing reports are ignored when an earlier step failed.
+Report upload errors do not block an otherwise successful build, and required
+validation failures still prevent publication.
+
 `.github/workflows/deploy.yml` runs on pushes to `main` and manual dispatch.
 The build job:
 
 1. checks out the repository;
-2. installs Node 22.23.1 with npm caching keyed by `web/package-lock.json`;
+2. reads Node 22.23.4 from `.node-version`, with npm caching keyed by
+   `web/package-lock.json`;
 3. runs `npm ci` in `web`;
 4. runs Node tool tests, then Vitest with human and JSON reporters;
 5. runs `scripts/check-test-count.mjs` against the generated result so the
@@ -648,7 +740,83 @@ previous UI refresh while an asynchronous seek is starting.
 
 `numeric-scrub.test.ts` exercises threshold/click handling, incremental modifiers,
 clamp reversal, canonical rejection, RAF batching, touch/pen input, precise text,
-keyboard access, disabling, cancellation and disposal. Inspector integration
+keyboard access, disabling, cancellation and disposal, replacement-gesture
+baselines, unrelated pointer cancellation, and nonzero Alt-key adjustment within
+the permitted quantum. Inspector integration
 checks heterogeneous group rollback and one-entry undo/redo. Production
 `numeric-scrub.spec.ts` covers themes, high-DPI rendering, actual pointer capture,
-modifiers, cancellation, concise scene feedback and centred rod-tip badges.
+modifiers, keyboard adjustment/undo, cancellation, concise scene feedback and
+centred rod-tip badges. `numeric-motion.spec.ts` checks trusted slow/fast drags,
+continuous pointer-lock cursor wrapping or unsupported-browser fallback,
+release/Escape cleanup, and enabling No rotation during a live spin gesture.
+It also hides the Inspector during an actual held drag through its shortcut
+and a phone-layout resize. Cancellation is checked before any recovery-save
+event can mask a live gesture, followed by exact rollback, pointer cleanup,
+unchanged hidden values, reopening, and ordinary undo/redo.
+`preset-phase.spec.ts` checks that phase demonstrations
+load with a real selected particle and immediately populate graph and numeric
+views across the configured browser engines.
+
+
+The loaded-beam maths regressions also challenge shortening drift, interval force
+averages against a separate reduced-coordinate Newton/Euler integration, inward
+velocity release, pulley path release, and shared-beam string work-energy. The
+heavy-load stress cases vary origin and outer step rate, bound actual numerical
+correction relative to the applied force, and retain independent trajectory and
+work-energy checks; diagnostics are not removed to satisfy those bounds.
+
+
+The requested force/premade regression batch includes:
+
+- `premade-force-defaults.test.ts`: explicit graph defaults, friction-ramp resolved
+  weight, incline-pulley masses/materials/tension and quarter-speed presentation.
+- `pulley-vector-presentation.test.ts`: independent string/wheel overlay persistence,
+  legacy data and current/completed force measurements in every profile.
+- `particle-hover.test.ts`: subtle name bounds, Unicode, viewport edges and exclusions.
+- `inspector-requested-controls.test.ts`: mixed group weight choices, current resultant
+  outside collapsed sources, independent wheel/leg controls, compact history and
+  typeset Hooke formulas without a damping-reset action.
+- `force-presentation.spec.ts`: native force-control appearance and accessibility,
+  live friction release, graph-free billiards, neutral notices and simultaneous contacts.
+
+The incline force equations include measured normal acceleration during motion,
+when finite capsule penetration slop tilts the string slightly. Initial force
+answers match the parallel-string model; moving tension is checked against that
+model within 0.005%, separately from force-ledger closure and trajectory bounds.
+
+The stationary-friction native check compares changing force captions with an
+independent animation-frame observer over an inner simulation-time interval,
+capped at a normal-refresh update requirement. Per-update force jumps of 0.3 N
+and latency of 200 ms remain failure thresholds whenever intervening browser
+frames were available. A recorded host/browser pause may explain a larger gap
+only when no presentation opportunity was skipped. Stationary-body assertions
+still hold. Raw caption/frame readings are attached before assertions so slow or
+suspended browser frames can be distinguished from captions that stop updating.
+
+`notifications.spec.ts` measures ordinary feedback and an actual apex-event
+pause through the real Library, Inspector and playback controls. It checks the
+message block and each wrapped line against the notice centre, balanced icon
+and dismiss controls, viewport bounds and unchanged paused physics. Coverage
+includes base themes, Studio, phone/landscape layouts, dyslexia-friendly text
+and doubled text. These are native geometry checks rather than screenshot
+colour baselines or frame-rate thresholds.
+The rapid-refresh regression also samples actual notification-host bounds
+during entry animation and after it settles, retaining the measurements for
+each reload. A transient scrollbar is a failure even if it disappears before
+the final screenshot.
+
+### Requested release polish
+
+`release-polish.spec.ts` checks first-browser incline startup with random starts
+on, deterministic returning saved-scene selection, reload recovery, explicit
+opt-out and named title-restart notices. It also measures the single top row
+at desktop/laptop sizes and compact Settings at narrow dyslexic/enlarged-text
+widths. `force-owners.spec.ts` now first proves badges absent by default, then
+opts in and checks both toggle states through recovery and unchanged physics.
+The Soft Bodies Library pass verifies every particle has No rotation on at
+load and after simulation; unit coverage additionally checks portable defaults.
+
+Jelly drag recovery retains the 10% strain and zero-inversion limits, requiring
+an uninterrupted half-second of recovery within a bounded post-drag window.
+This avoids sampling a fresh floor impact at exactly six seconds. A bend-free
+mesh is a rejecting control; no material parameters are tuned to a lucky frame.

@@ -34,6 +34,12 @@ modules. Browser APIs enter through `App`, scene storage, rendering,
 interaction, and UI code. Consequently, engine tests can instantiate and step
 a world without creating a document or canvas.
 
+Floating interface surfaces can reserve scientific-caption space through
+`App.registerCanvasOverlay`. The app measures their canvas-relative bounds on
+layout updates and passes plain boxes to the renderer. Showing or hiding a
+surface invalidates paused annotations even when the canvas dimensions stay
+fixed; physical framing, simulation state and history remain independent.
+
 There is one deliberate type-only cycle at the application edge:
 `CanvasController` needs the shape of `App`, while `App` constructs and owns a
 controller. `tools.ts` uses `import type { App }`, so this does not create a

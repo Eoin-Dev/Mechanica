@@ -2,6 +2,9 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
+// Configure the setup size before creating the page; keep loaded-app resizes below.
+test.use({ viewport: { width: 1440, height: 900 } });
+
 async function selectLink(page: Page): Promise<void> {
   const canvas = page.locator("#canvas");
   await canvas.focus();
@@ -49,9 +52,12 @@ test("elastic modulus supports exact edits, history and saved scenes", async ({ 
   await page.keyboard.press("Control+Shift+z");
   await selectLink(page);
   await expect(modulus).toHaveValue("60");
-  await card.getByRole("button", { name: "Set damping to zero", exact: true }).click();
-  await expect(page.getByRole("textbox", { name: "Damping (type an exact value)", exact: true })).toHaveValue("0.00 Ns/m");
-  await expect(card.getByRole("button", { name: "Set damping to zero", exact: true })).toBeHidden();
+  await expect(card.getByRole("button", { name: "Set damping to zero", exact: true })).toHaveCount(0);
+  await expect(card.locator('[role="math"]')).toHaveCount(2);
+  await expect(card.locator(".guide-math[data-latex]")).toHaveCount(0);
+  const damping = page.getByRole("textbox", { name: "Damping (type an exact value)", exact: true });
+  await expect(damping).toHaveValue("2.00 Ns/m");
+  await damping.fill("0"); await damping.press("Enter"); await expect(damping).toHaveValue("0.00 Ns/m");
 
 
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -77,7 +83,7 @@ async function loadElasticStudy(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem("mechanica.settings", JSON.stringify({ tour_done: true, theme: "light", studio_mode: true }));
   });
-  await page.setViewportSize({ width: 1440, height: 900 });
+
   await page.goto("/");
   await page.getByRole("button", { name: "Library", exact: true }).click();
   const library = page.getByRole("dialog", { name: "Library", exact: true });
@@ -109,7 +115,9 @@ for (const [layout, width, theme, studio, scale] of [
     const { card, modulus } = await loadElasticStudy(page);
     await modulus.fill("60"); await modulus.press("Enter");
     await expect(modulus).toHaveValue("60");
-    await card.getByRole("button", { name: "Set damping to zero", exact: true }).click();
+    await expect(card.getByRole("button", { name: "Set damping to zero", exact: true })).toHaveCount(0);
+    await expect(card.locator('[role="math"]')).toHaveCount(2);
+    await expect(card.locator(".guide-math[data-latex]")).toHaveCount(0);
     await page.locator("#btn-settings").click();
     const settings = page.getByRole("dialog", { name: "Settings", exact: true });
     await settings.getByRole("button", { name: theme, exact: true }).click();

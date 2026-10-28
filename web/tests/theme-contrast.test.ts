@@ -14,23 +14,30 @@ describe("theme contrast invariants", () => {
     expect(theme.THEME_NAMES).not.toContain("original");
     expect(css).toContain(':root[data-studio="true"]');
     expect(css).not.toContain(':root[data-theme="studio"]');
-    expect(css).toMatch(
-      /:where\(:root\[data-studio="true"\]\) button\s*\{[^}]*border-color:\s*var\(--outline\)/s);
-    expect(css).toMatch(/\[data-studio="true"\] \.tool-btn\.active[^}]*inset 3px 0 var\(--accent\)/s);
   });
 
-  it("uses contrast-safe text tokens for Studio active controls", () => {
-    for (const selector of [
-      "\\.tool-btn\\.active",
-      "\\.segmented button\\.active",
-      "\\.tabs button\\.active",
-    ]) {
-      expect(css).toMatch(new RegExp(
-        `\\[data-studio="true"\\] ${selector}\\s*\\{[^}]*color:\\s*var\\(--accent-text\\)`,
-        "s"));
+  it("keeps the actual Studio selected-control colours readable", () => {
+    const selectors = [".tool-btn.active", ".segmented button.active", ".tabs button.active"];
+    for (const name of theme.THEME_NAMES) for (const accent of [null, "#000000", "#ffffff", "#ff00ff"]) {
+      theme.setTheme(name); theme.setAccent(accent);
+      const values: Record<string, Color> = {
+        "accent-text": theme.ACCENT_TEXT, "accent-dark-ink": theme.ACCENT_DARK_INK,
+        "text": theme.TEXT, "panel": theme.PANEL, "panel-light": theme.PANEL_LIGHT,
+        "accent-dark": theme.ACCENT_DARK,
+      };
+      for (const selector of selectors) {
+        const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const block = new RegExp(`\\[data-studio="true"\\] ${escaped}\\s*\\{([^}]*)\\}`).exec(css)?.[1];
+        expect(block, selector).toBeDefined();
+        const foreground = /(?:^|;)\s*color:\s*var\(--([\w-]+)\)/.exec(block!)?.[1];
+        const background = /(?:^|;)\s*background:\s*var\(--([\w-]+)\)/.exec(block!)?.[1];
+        expect(values[foreground!], selector).toBeDefined();
+        expect(values[background!], selector).toBeDefined();
+        expect(theme.contrastRatio(values[foreground!], values[background!]), `${name} ${accent} ${selector}`).toBeGreaterThanOrEqual(4.5);
+      }
     }
-    expect(css).toMatch(/\[data-studio="true"\] \.segmented button\.active\s*\{[^}]*background:\s*var\(--panel-light\)/s);
   });
+
   it("keeps faint normal text readable on both panel surfaces", () => {
     for (const name of theme.THEME_NAMES) {
       theme.setAccent(null);
@@ -39,6 +46,25 @@ describe("theme contrast invariants", () => {
         .toBeGreaterThanOrEqual(4.5);
       expect(theme.contrastRatio(theme.TEXT_FAINT, theme.PANEL_LIGHT), name)
         .toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("makes Light controls, axes and motion vectors distinguishable from their surfaces", () => {
+    theme.setTheme("light");
+    for (const surface of [theme.PANEL, theme.PANEL_LIGHT, theme.PANEL_HOVER]) {
+      expect(theme.contrastRatio(theme.OUTLINE, surface)).toBeGreaterThanOrEqual(3);
+      for (const text of [theme.TEXT, theme.TEXT_DIM, theme.TEXT_FAINT])
+        expect(theme.contrastRatio(text, surface)).toBeGreaterThanOrEqual(4.5);
+    }
+    for (const ink of [theme.AXIS, theme.VEL_COLOR, theme.ACC_COLOR, theme.FORCE_COLOR])
+      expect(theme.contrastRatio(ink, theme.BG)).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps the selected-object cue visible with extreme custom accents", () => {
+    for (const name of theme.THEME_NAMES) for (const accent of ["#000000", "#ffffff"]) {
+      theme.setTheme(name); theme.setAccent(accent);
+      for (const surface of [theme.BG, theme.PANEL])
+        expect(theme.contrastRatio(theme.SELECTION, surface), `${name} ${accent}`).toBeGreaterThanOrEqual(3);
     }
   });
 

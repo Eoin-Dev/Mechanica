@@ -63,7 +63,7 @@ function makeEl(tag: string): StubEl {
     },
     focus() {},
     addEventListener() {},
-    setAttribute() {},
+    setAttribute(key, value) { if (key === "class") node.className = value; },
     getBoundingClientRect: () => ({ left: 40, top: 40, right: 240, bottom: 140,
                                     width: 200, height: 100 }),
     getClientRects: () => [{}],
@@ -89,6 +89,7 @@ beforeEach(() => {
   const doc = {
     body,
     createElement: (tag: string) => makeEl(tag),
+    createElementNS: (_namespace: string, tag: string) => makeEl(tag),
     addEventListener() {},
     removeEventListener() {},
     // every step target resolves to one visible element

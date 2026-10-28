@@ -1,4 +1,7 @@
 /** Toolbar, tool palette, hint bar and graph dock (DOM). */
+import { CommandPopover } from "./command-popover";
+import { restartApplication } from "../scene/startup";
+import { repeatButton } from "./repeat-button";
 import { App, GraphMode, Panel } from "../app";
 import { Body } from "../engine/body";
 import { SpringLink } from "../engine/links";
@@ -19,32 +22,44 @@ export class Toolbar implements Panel {
   private timeJumpCancel: HTMLButtonElement;
   private fps: HTMLElement;
   private app: App;
+  private commands: CommandPopover;
+  private commandGroup: HTMLElement;
+  private performance: HTMLElement;
+  private root: HTMLElement;
   private lastPlaying: boolean | null = null;
   private lastSeeking: boolean | null = null;
   private lastFps = "";
 
   constructor(app: App, root: HTMLElement) {
     this.app = app;
+    this.root = root;
     const g = this.group;
 
     // the app's title: a heading for assistive tech (the page had h2s but no
     // h1 at all), styled by .brand exactly as before
-    root.append(el("span", { class: "brand", text: "Mechanica",
-                             role: "heading", "aria-level": "1" }));
+    const brand = el("h1", { class: "brand-heading" },
+      button("Mechanica", restartApplication, { class: "brand", style: "ghost",
+        tooltip: "Restart Mechanica with a fresh starting scene" }).root);
+    brand.append(el("span", { class: "studio-label", text: "Studio", "aria-hidden": "true" }));
+    root.append(brand);
+    const transport = el("div", { class: "toolbar-transport", role: "group", "aria-label": "Simulation playback" });
+    root.append(transport);
 
     const play = g.add(button("", () => app.togglePlay(),
       { icon: ICONS.play, style: "primary",
         tooltip: "Start the simulation (Space).",
         isActive: () => app.playing }));
     this.playBtn = play.root as HTMLButtonElement;
-    root.append(play.root);
-    root.append(g.add(button("", () => app.stepBack(),
+    const transportButtons = el("div", { class: "transport-buttons", role: "group", "aria-label": "Playback controls" });
+    transport.append(transportButtons);
+    transportButtons.append(play.root);
+    transportButtons.append(g.add(repeatButton("", () => app.stepBack(),
       { icon: ICONS.step_back,
         tooltip: "Step one frame back (Left arrow or ,)." })).root);
-    root.append(g.add(button("", () => app.stepOnce(),
+    transportButtons.append(g.add(repeatButton("", () => app.stepOnce(),
       { icon: ICONS.step,
         tooltip: "Advance one frame (Right arrow or .)." })).root);
-    root.append(g.add(button("", () => app.resetSim(),
+    transportButtons.append(g.add(button("", () => app.resetSim(),
       { icon: ICONS.reset,
         tooltip: "Return the scene to its starting state (Ctrl+R)." })).root);
 
@@ -54,8 +69,10 @@ export class Toolbar implements Panel {
       { unit: "x", log: true, logBlend: 0.6, fmt: (v) => v.toFixed(2),
         tooltip: "How fast simulated time runs against real time. " +
                  "+ and - double or halve it, 0 resets." })).root);
-    root.append(speedWrap);
-    root.append(g.add(button("1x", () => app.resetSpeed(),
+    const speedControls = el("div", { class: "transport-speed", role: "group", "aria-label": "Playback speed" });
+    transport.append(speedControls);
+    speedControls.append(speedWrap);
+    speedControls.append(g.add(button("1x", () => app.resetSpeed(),
       { tooltip: "Reset the speed to real time (0)." })).root);
 
     // simulation clock: type a time to re-simulate to it
@@ -100,6 +117,8 @@ export class Toolbar implements Panel {
         if (this.timeInput.value !== value) this.timeInput.value = value;
         const width = `calc(${Math.max(8, value.length)}ch + 1rem)`;
         if (this.timeInput.style.width !== width) this.timeInput.style.width = width;
+        const digits = String(Math.max(6, value.length));
+        if (this.timeInput.style.getPropertyValue("--clock-ch") !== digits) this.timeInput.style.setProperty("--clock-ch", digits);
       }
     } });
     this.timeControls = el("div", { class: "time-ctrl", role: "group",
@@ -111,42 +130,58 @@ export class Toolbar implements Panel {
         tooltip: "Cancel time jump and keep the current scene." }).root as HTMLButtonElement;
     this.timeJumpCancel.hidden = true;
     this.timeControls.append(this.timeJumpCancel);
-    root.append(this.timeControls);
+    transport.append(this.timeControls);
 
     root.append(el("div", { class: "toolbar-spacer" }));
 
-    root.append(g.add(button("", () => app.undo(),
+    const commands = el("div", { id: "scene-commands", class: "toolbar-edit", role: "group", "aria-label": "Scene actions" });
+    const more = button("", () => {}, { icon: ICONS.more, style: "ghost", class: "toolbar-more", tooltip: "Scene actions" }).root as HTMLButtonElement;
+    root.append(commands, more);
+    commands.append(g.add(button("", () => app.undo(),
       { icon: ICONS.undo, tooltip: "Undo the last edit (Ctrl+Z).",
         isEnabled: () => app.undoStack.canUndo })).root);
-    root.append(g.add(button("", () => app.redo(),
+    commands.append(g.add(button("", () => app.redo(),
       { icon: ICONS.redo, tooltip: "Redo the last undone edit (Ctrl+Y).",
         isEnabled: () => app.undoStack.canRedo })).root);
-    root.append(g.add(button("", () => app.newScene(),
+    commands.append(g.add(button("", () => app.newScene(),
       { icon: ICONS.trash,
         tooltip: "Remove everything from the scene. Ctrl+Z restores it." })).root);
-    root.append(g.add(button("", () => app.zoomToFit(),
+    commands.append(g.add(button("", () => app.zoomToFit(),
       { icon: ICONS.fit, tooltip: "Frame the whole scene once (F)." })).root);
-    root.append(g.add(button("", () => app.toggleAutoFit(),
+    commands.append(g.add(button("", () => app.toggleAutoFit(),
       { icon: ICONS.autofit, isActive: () => app.view.autoFit,
         tooltip: "Keep the whole scene framed as it spreads out (Shift+F)." })).root);
+    [...commands.querySelectorAll("button")].forEach((command, index) => {
+      command.append(el("span", { class: "command-label", text: ["Undo", "Redo", "Clear scene", "Fit scene", "Follow scene"][index], "aria-hidden": "true" }));
+    });
+    this.commandGroup = commands;
+    this.commands = new CommandPopover(more, commands);
+    const documents = el("div", { class: "toolbar-documents", role: "group", "aria-label": "Library and settings" });
+    root.append(documents);
     // ids so the guided tour can spotlight these two specifically rather
     // than the whole toolbar strip
     const libraryBtn = g.add(button("Library", () => toggleOverlay("library"),
       { icon: ICONS.library,
         tooltip: "Example simulations and saved scenes (L)." }));
     libraryBtn.root.id = "btn-library";
-    root.append(libraryBtn.root);
+    documents.append(libraryBtn.root);
     const settingsBtn = g.add(button("", () => toggleOverlay("settings"),
       { icon: ICONS.gear,
         tooltip: "Settings: appearance, interaction, accuracy and help." }));
     settingsBtn.root.id = "btn-settings";
-    root.append(settingsBtn.root);
+    documents.append(settingsBtn.root);
 
     this.fps = el("span", { id: "fps" });
-    root.append(this.fps);
+    this.performance = el("div", { class: "toolbar-performance", role: "group", "aria-label": "Display performance" },
+      el("span", { class: "command-label", text: "Display" }), this.fps);
+    root.append(this.performance);
   }
 
   refresh(): void {
+    const compact = Boolean(this.app.settings?.studio_mode) && window.innerWidth <= 1100;
+    this.commands.setCompact(compact);
+    const performanceHost = compact ? this.commandGroup : this.root;
+    if (this.performance.parentElement !== performanceHost) performanceHost.append(this.performance);
     // only touch the DOM when state changes: replacing the icon while the
     // user's pointer is mid-click would destroy the element under the
     // cursor and make the browser swallow the click
@@ -205,6 +240,10 @@ export class Palette implements Panel {
     for (const [k, t] of Object.entries(TOOL_KEYS)) keyOf[t] = k.toUpperCase();
     TOOL_GROUPS.forEach((tools, gi) => {
       if (gi > 0) root.append(el("hr"));
+      const groupName = ["Navigate", "Create", "Connect", "Edit"][gi];
+      const group = el("div", { class: "tool-group", role: "group", "aria-label": groupName },
+        el("span", { class: "tool-group-title", text: groupName, "aria-hidden": "true" }));
+      root.append(group);
       for (const tool of tools) {
         const [name, desc] = TOOL_INFO[tool];
         const b = this.group.add(button("", () => app.controller.setTool(tool), {
@@ -212,9 +251,12 @@ export class Palette implements Panel {
           tooltip: `${name} - ${desc}`,
           isActive: () => app.controller.tool === tool,
         }));
+        const shortNames: Record<string, string> = { select: "Select", pan: "Pan", body: "Particle",
+          anchor: "Anchor", wall: "Wall", rod: "Rod", rope: "String", spring: "Spring", pulley: "Pulley", eraser: "Erase" };
+        b.root.append(el("span", { class: "tool-name", text: shortNames[tool] ?? name, "aria-hidden": "true" }));
         b.root.append(el("span", { class: "key-badge", text: keyOf[tool] ?? "",
                                    "aria-hidden": "true" }));
-        root.append(b.root);
+        group.append(b.root);
       }
     });
   }
@@ -336,14 +378,17 @@ export class GraphDock implements Panel {
       (v) => app.setGraphMode(v as GraphMode),
       "Which live graph to display. Displacement, distance and velocity follow the selected particle."));
     modes.root.classList.add("graph-modes");
+    header.append(el("span", { class: "studio-dock-title", text: "Analysis", "aria-hidden": "true" }));
+    modes.root.querySelectorAll("button").forEach((button, index) =>
+      button.append(el("span", { class: "graph-key", text: String(index + 1), "aria-hidden": "true" })));
     header.append(modes.root);
     this.hintEl = el("span", { class: "dock-hint" });
     header.append(this.hintEl);
-    this.liveBtn = el("button", { class: "primary", text: "Live" });
+    this.liveBtn = button("Return to live", () => { this.viewEnd = null; this.liveBtn.hidden = true; },
+      { class: "graph-live", icon: ICONS.reset, tooltip: "Return graph to live data and follow new samples" }).root as HTMLButtonElement;
     this.liveBtn.title = "Jump back to the present and follow new data";
     this.liveBtn.hidden = true;
-    this.liveBtn.addEventListener("click", () => { this.viewEnd = null; });
-    header.append(this.liveBtn);
+
     const data = this.group.add(button("Data", () => toggleOverlay("graph-data"),
       { icon: ICONS.table, tooltip: "Inspect recorded samples or export this graph as CSV.",
         isEnabled: () => app.graphMode === "Phase" ? app.phasePlot.points.length > 0
@@ -362,7 +407,7 @@ export class GraphDock implements Panel {
     this.canvas = el("canvas");
     this.legendControls = el("div", { class: "graph-legend-controls",
       role: "group", "aria-label": "Graph channels" });
-    this.canvasWrap = el("div", { class: "dock-canvas-wrap" }, this.canvas, this.legendControls);
+    this.canvasWrap = el("div", { class: "dock-canvas-wrap" }, this.canvas, this.legendControls, this.liveBtn);
     this.ctx = this.canvas.getContext("2d")!;
     root.append(header, this.canvasWrap);
 
@@ -426,10 +471,22 @@ export class GraphDock implements Panel {
     }, { passive: false });
 
     let dragId: number | null = null;
+    let dragButton = 0;
     let lastX = 0;
     let moved = false;
+    const cancelDrag = (): void => {
+      const id = dragId;
+      dragId = null;
+      if (id !== null) {
+        try { this.canvas.releasePointerCapture(id); } catch { /* capture may already be gone */ }
+      }
+    };
+    this.canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     this.canvas.addEventListener("pointerdown", (e) => {
+      if ((e.button !== 0 && e.button !== 2) || e.isPrimary === false || dragId !== null) return;
+      e.preventDefault();
       dragId = e.pointerId;
+      dragButton = e.button;
       lastX = e.clientX;
       moved = false;
       try {
@@ -440,6 +497,7 @@ export class GraphDock implements Panel {
     });
     this.canvas.addEventListener("pointermove", (e) => {
       if (dragId !== e.pointerId) return;
+      if (e.pointerType === "mouse" && e.buttons === 0) { cancelDrag(); return; }
       const dx = e.clientX - lastX;
       if (!moved && Math.abs(dx) < 4) return; // not a drag yet
       const series = this.activeSeries();
@@ -450,15 +508,17 @@ export class GraphDock implements Panel {
     });
     const endDrag = (e: PointerEvent) => {
       if (dragId !== e.pointerId) return;
-      dragId = null;
-      if (!moved) {
-        // a plain click: toggle legend channels
+      cancelDrag();
+      if (!moved && dragButton === 0) {
+        // a plain left click: toggle legend channels
         const r = this.canvas.getBoundingClientRect();
         this.activeSeries()?.legendClick(e.clientX - r.left, e.clientY - r.top);
       }
     };
     this.canvas.addEventListener("pointerup", endDrag);
-    this.canvas.addEventListener("pointercancel", () => { dragId = null; });
+    this.canvas.addEventListener("pointercancel", cancelDrag);
+    this.canvas.addEventListener("lostpointercapture", cancelDrag);
+    window.addEventListener("blur", cancelDrag);
   }
 
   /** Clamp a requested right-edge time to the retained history and snap
@@ -468,6 +528,7 @@ export class GraphDock implements Panel {
     const minEnd = Math.min(latest, series.firstT + this.viewSpan);
     end = Math.max(minEnd, Math.min(latest, end));
     this.viewEnd = end >= latest - 1e-9 ? null : end;
+    this.liveBtn.hidden = this.viewEnd === null;
   }
 
   private clearData(): void {
@@ -485,6 +546,7 @@ export class GraphDock implements Panel {
     }
     this.legendControls.hidden = series === undefined;
     const legendBottom = Math.max(0, ...series?.legendEntries.map(hit => hit.y + hit.h) ?? []);
+    this.liveBtn.style.top = `${legendBottom + 8}px`;
     const minimumHeight = `${Math.max(100, legendBottom + 70)}px`;
     if (this.canvasWrap.style.minHeight !== minimumHeight) {
       this.canvasWrap.style.minHeight = minimumHeight;
@@ -631,6 +693,10 @@ export class GraphDock implements Panel {
       this.viewEnd = null;
       app.toast("That part of the graph history has expired - back to live");
     }
+    // Reset, scene replacement or rewind can put the newest sample before
+    // a retained historical window. That window cannot remain in the future.
+    if (this.viewEnd !== null && series !== undefined &&
+        (series.count === 0 || this.viewEnd >= series.lastT - 1e-9)) this.viewEnd = null;
     this.liveBtn.hidden = this.viewEnd === null || series === undefined;
 
     // redraw only when something it depends on changed - between throttled

@@ -1,6 +1,6 @@
 /** Keyboard shortcuts and focused-control/modal precedence.
  * ShortcutHost supplies the app and overlay operations needed by the handler. */
-import type { App, GraphMode } from "../app";
+import type { App } from "../app";
 import { TOOL_KEYS } from "../interact/tools";
 
 /** An overlay the keyboard has to yield to while it is open. */
@@ -18,6 +18,7 @@ export interface ShortcutHost {
   overlays: Dismissable[];
   toggleLibrary(): void;
   toggleHelp(): void;
+  openSettings(): void;
   toggleInspector(): void;
 }
 
@@ -51,7 +52,7 @@ function ownsKey(target: EventTarget | null | undefined, key: string): boolean {
   const tag = el.tagName;
   // text entry of every kind keeps all of its keys
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "MATH-FIELD" ||
-      tag === "SELECT") {
+      tag === "SELECT" || el.getAttribute?.("role") === "combobox") {
     return true;
   }
   // A focused button owns Space and Enter: they are how the browser activates
@@ -73,20 +74,26 @@ function ownsKey(target: EventTarget | null | undefined, key: string): boolean {
 export function handleShortcut(e: KeyboardEvent, host: ShortcutHost): boolean {
   const { app } = host;
   if (e.altKey || e.isComposing) return false;
-  if (ownsKey(e.target, e.key)) return false;
+  // Checkboxes and range controls do not edit text with Escape. Let an
+  // open overlay close from them while text editors cancel their own draft.
+  // Outside a modal their existing Inspector key ownership stays unchanged.
+  const input = e.target as { tagName?: string; type?: string } | null;
+  const dismissingControl = e.key === "Escape" && input?.tagName === "INPUT" &&
+    ["checkbox", "range"].includes(input.type ?? "") && host.overlays.some(o => o.visible);
+  if (ownsKey(e.target, e.key) && !dismissingControl) return false;
 
   const key = e.key.toLowerCase();
   // Toggle and scene-wide commands run once per physical key press.
   if (e.repeat && ((e.ctrlKey || e.metaKey)
-    ? ["d", "r", "s", "v"].includes(key)
-    : [" ", "n", "t", "g", "f", "d", "k", "c", "l", "1", "2", "3", "f1", "\\"].includes(key))) {
+    ? ["d", "r", "s", "v", ","].includes(key)
+    : [" ", "n", "t", "g", "f", "d", "k", "c", "l", "1", "2", "3", "4", "5", "6", "f1", "\\"].includes(key))) {
     e.preventDefault();
     return true;
   }
   // Modal ownership includes modifier edits: the scene behind a dialog must
   // not be reset, duplicated or replaced by undo while the user reads it.
   if (host.tour.visible || host.overlays.some((o) => o.visible)) {
-    if ((e.ctrlKey || e.metaKey) && ["z", "y", "d", "r", "v", "s"].includes(key)) {
+    if ((e.ctrlKey || e.metaKey) && ["z", "y", "d", "r", "v", "s", ","].includes(key)) {
       // Suppress the corresponding browser actions as well (reload/save/
       // bookmark), while native copying and focused text edits remain usable.
       e.preventDefault();
@@ -102,7 +109,9 @@ export function handleShortcut(e: KeyboardEvent, host: ShortcutHost): boolean {
     return false;
   }
   if (e.ctrlKey || e.metaKey) {
-    if (key === "z") {
+    if (key === ",") {
+      host.openSettings();
+    } else if (key === "z") {
       if (e.shiftKey) app.redo();
       else app.undo();
     } else if (key === "y") {
@@ -176,12 +185,8 @@ export function handleShortcut(e: KeyboardEvent, host: ShortcutHost): boolean {
         app.toast(`Velocity vectors ${app.view.velVectors ? "on" : "off"}`);
       } else if (key === "k") {
         app.toggleLockSelection();
-      } else if (key === "1") {
-        app.toggleGraph("Energy" as GraphMode);
-      } else if (key === "2") {
-        app.toggleGraph("Mom." as GraphMode);
-      } else if (key === "3") {
-        app.toggleGraph("Phase" as GraphMode);
+      } else if (/^[1-6]$/.test(key)) {
+        app.toggleGraph((["Energy", "Mom.", "Phase", "Displacement", "Distance", "Velocity"] as const)[Number(key) - 1]);
       } else if (key === "-") {
         app.bumpSpeed(0.5);
       } else if (key === "=" || key === "+") {

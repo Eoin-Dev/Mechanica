@@ -44,54 +44,68 @@ for (const [name, theme, studio, width, scale] of [
   ["void", "void", false, 1440, 1], ["phone", "dark", true, 390, 1.2],
   ["large-text", "light", false, 320, 2],
 ] as const) {
-  test(`force controls and colour fields fit in ${name}`, async ({ page }, testInfo) => {
-    const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
-    await page.addInitScript(({ theme, studio }) => localStorage.setItem("mechanica.settings",
-      JSON.stringify({ theme, studio_mode: studio, tour_done: true })), { theme, studio });
-    await page.setViewportSize({ width, height: 900 }); await page.goto("/");
-    await openParticle(page);
-    await page.evaluate(scale => document.documentElement.style.setProperty("--fs", String(scale)), scale);
-    const controls = page.locator(".force-controls");
-    await page.getByRole("checkbox", { name: "Free-body forces on canvas", exact: true }).check();
-    const weight = page.getByRole("checkbox", { name: "Resolve weight on slope", exact: true });
-    await weight.check();
-    await expect(page.locator(".weight-resolve-note")).toContainText("25° plane: W∥ and W⊥ replace W");
-    await expect(page.locator(".weight-slope-row")).toBeHidden();
-    await controls.locator("summary").click();
-    await expect(controls.locator(".force-value-list")).toContainText("∥ 4.15 N");
-    await expect(controls.locator(".force-value-list")).toContainText("⊥ -8.89 N");
-    expect(await controls.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-    const colours = await page.locator(".colour-row").evaluate(row => {
-      const well = row.querySelector(".colour-well")!.getBoundingClientRect();
-      const hex = row.querySelector(".colour-hex")!.getBoundingClientRect();
-      return { top: Math.abs(well.top - hex.top), height: Math.abs(well.height - hex.height),
-        fits: row.scrollWidth <= row.clientWidth };
+  test.describe(() => {
+    test.use({ viewport: { width, height: 900 } });
+
+    test(`force controls and colour fields fit in ${name}`, async ({ page }, testInfo) => {
+      const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+      await page.addInitScript(({ theme, studio }) => localStorage.setItem("mechanica.settings",
+        JSON.stringify({ theme, studio_mode: studio, tour_done: true })), { theme, studio });
+      await page.goto("/");
+      await openParticle(page);
+      const topSpacing = await page.locator("#inspector-panel").evaluate(panel => {
+        const head = panel.querySelector(".inspector-object-head")!;
+        return { actual: head.getBoundingClientRect().top - panel.getBoundingClientRect().top + panel.scrollTop,
+          padding: Number.parseFloat(getComputedStyle(panel).paddingTop) };
+      });
+      expect(topSpacing.actual).toBeLessThanOrEqual(topSpacing.padding + 1);
+      await page.evaluate(scale => document.documentElement.style.setProperty("--fs", String(scale)), scale);
+      const controls = page.locator(".force-controls");
+      await page.getByRole("checkbox", { name: "Free-body forces on canvas", exact: true }).check();
+      const weight = page.getByRole("checkbox", { name: "Resolve weight on slope", exact: true });
+      await weight.check();
+      await expect(page.locator(".weight-resolve-note")).toHaveText("W∥ and W⊥ replace W");
+      await expect(page.locator(".weight-slope-row")).toBeHidden();
+      await controls.locator("summary").click();
+      await expect(controls.locator(".force-value-list")).toContainText("∥ 4.15 N");
+      await expect(controls.locator(".force-value-list")).toContainText("⊥ -8.89 N");
+      expect(await controls.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      const colours = await page.locator(".colour-row").evaluate(row => {
+        const well = row.querySelector(".colour-well")!.getBoundingClientRect();
+        const hex = row.querySelector(".colour-hex")!.getBoundingClientRect();
+        return { top: Math.abs(well.top - hex.top), height: Math.abs(well.height - hex.height),
+          fits: row.scrollWidth <= row.clientWidth };
+      });
+      expect(colours.top).toBeLessThan(0.5); expect(colours.height).toBeLessThan(0.5); expect(colours.fits).toBe(true);
+      await controls.screenshot({ path: testInfo.outputPath(`force-controls-${name}.png`) });
+      await page.locator(".colour-edit").screenshot({ path: testInfo.outputPath(`colour-controls-${name}.png`) });
+      expect((await new AxeBuilder({ page }).include("#inspector").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
+        .analyze()).violations).toEqual([]);
+      await weight.uncheck(); await expect(page.locator(".weight-resolve-note")).toBeHidden();
+      expect(errors).toEqual([]);
     });
-    expect(colours.top).toBeLessThan(0.5); expect(colours.height).toBeLessThan(0.5); expect(colours.fits).toBe(true);
-    await controls.screenshot({ path: testInfo.outputPath(`force-controls-${name}.png`) });
-    await page.locator(".colour-edit").screenshot({ path: testInfo.outputPath(`colour-controls-${name}.png`) });
-    expect((await new AxeBuilder({ page }).include("#inspector").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
-      .analyze()).violations).toEqual([]);
-    await weight.uncheck(); await expect(page.locator(".weight-resolve-note")).toBeHidden();
-    expect(errors).toEqual([]);
   });
 }
 
 for (const width of [1440, 390, 320]) {
-  test(`library header stays anchored across tabs and filtering at ${width}px`, async ({ page }, testInfo) => {
-    await page.addInitScript(() => localStorage.setItem("mechanica.settings", JSON.stringify({ tour_done: true, theme: "void" })));
-    await page.setViewportSize({ width, height: 800 }); await page.goto("/");
-    await page.getByRole("button", { name: "Library", exact: true }).click();
-    const library = page.getByRole("dialog", { name: "Library", exact: true });
-    const top = async () => (await library.locator(".overlay-header").boundingBox())!.y;
-    const initial = await top();
-    await library.getByRole("tab", { name: "My scenes", exact: true }).click();
-    expect(await top()).toBeCloseTo(initial, 5);
-    await page.screenshot({ path: testInfo.outputPath(`library-my-scenes-${width}.png`) });
-    await library.getByRole("tab", { name: "Examples", exact: true }).click();
-    expect(await top()).toBeCloseTo(initial, 5);
-    await library.getByRole("searchbox").fill("no such example 12345");
-    expect(await top()).toBeCloseTo(initial, 5);
-    await page.screenshot({ path: testInfo.outputPath(`library-empty-filter-${width}.png`) });
+  test.describe(() => {
+    test.use({ viewport: { width, height: 800 } });
+
+    test(`library header stays anchored across tabs and filtering at ${width}px`, async ({ page }, testInfo) => {
+      await page.addInitScript(() => localStorage.setItem("mechanica.settings", JSON.stringify({ tour_done: true, theme: "void" })));
+      await page.goto("/");
+      await page.getByRole("button", { name: "Library", exact: true }).click();
+      const library = page.getByRole("dialog", { name: "Library", exact: true });
+      const top = async () => (await library.locator(".overlay-header").boundingBox())!.y;
+      const initial = await top();
+      await library.getByRole("tab", { name: "My scenes", exact: true }).click();
+      expect(await top()).toBeCloseTo(initial, 5);
+      await page.screenshot({ path: testInfo.outputPath(`library-my-scenes-${width}.png`) });
+      await library.getByRole("tab", { name: "Examples", exact: true }).click();
+      expect(await top()).toBeCloseTo(initial, 5);
+      await library.getByRole("searchbox").fill("no such example 12345");
+      expect(await top()).toBeCloseTo(initial, 5);
+      await page.screenshot({ path: testInfo.outputPath(`library-empty-filter-${width}.png`) });
+    });
   });
 }

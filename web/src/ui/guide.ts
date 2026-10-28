@@ -53,7 +53,7 @@ function formula(source: string): HTMLElement {
 }
 
 /** Upgrade every pending .guide-math in `root` to typeset markup. */
-function upgradeMath(root: HTMLElement): void {
+export function upgradeMath(root: HTMLElement): void {
   loadTypeset().then((render) => {
     if (!root.isConnected) return;
     for (const n of root.querySelectorAll<HTMLElement>(".guide-math[data-latex]")) {

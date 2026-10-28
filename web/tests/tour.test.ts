@@ -31,7 +31,7 @@ describe("guided tour", () => {
 
   it("opens with an unanchored welcome and stays a short read", () => {
     expect(STEPS[0].target).toBeUndefined(); // centred, nothing to point at
-    expect(STEPS.length).toBeLessThanOrEqual(8); // a tour, not a manual
+    expect(STEPS.length).toBeLessThanOrEqual(10); // a tour, not a manual
     for (const s of STEPS) {
       expect(s.title.length).toBeGreaterThan(0);
       // one idea per step: long enough to be useful, short enough to read

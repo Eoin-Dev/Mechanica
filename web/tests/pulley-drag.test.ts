@@ -15,9 +15,9 @@ function setup(slack = 0) {
   return { world, a, b, wheel, string };
 }
 
-function apply(world: World, body: Body, target: Vec2, walls: Wall[] = [], iterations = 40) {
+function apply(world: World, body: Body, target: Vec2, walls: Wall[] = [], iterations = 40, pointer: Vec2 | null = null) {
   const before = snapshot(world), clock = world.time;
-  const plan = pulleyParticleDragPlan(world.links, body, target, walls, iterations)!;
+  const plan = pulleyParticleDragPlan(world.links, body, target, walls, iterations, pointer)!;
   expect(snapshot(world)).toBe(before); expect(world.time).toBe(clock);
   for (const partner of plan.partners) partner.body.pos.setVec(partner.target);
   body.pos.setVec(plan.target);
@@ -169,5 +169,39 @@ describe("pulley edit boundaries and assembly ownership", () => {
     expect({ json: snapshot(world), safe: [string.safeAX, string.safeAY, string.safeBX,
       string.safeBY, string.safePX, string.safePY], turns: string.wrapTurns,
       lambda: string.lambda, mu: string.mu, wheel: wheel.pos.copy() }).toEqual(before);
+  });
+});
+
+
+describe("pointer-directed pulley boundary", () => {
+  for (const state of ["free", "locked", "held"] as const) for (const iterations of [40, 24, 22, 20, 18]) {
+    it(`tracks tiny direction changes on the axle-to-pointer ray (${state}, iterations=${iterations})`, () => {
+      const { world, a, b, wheel, string } = setup(0.4);
+      b.locked = state === "locked"; b.held = state === "held";
+      let previous: Vec2 | null = null;
+      for (const x of [-0.22, -0.23, -0.24, -0.22, -1, -0.22]) {
+        const pointer = new Vec2(x, -20);
+        apply(world, a, pointer, [], iterations, pointer);
+        const radial = a.pos.sub(wheel.pos), cursor = pointer.sub(wheel.pos);
+        expect(Math.abs(radial.x * cursor.y - radial.y * cursor.x) / cursor.length()).toBeLessThan(1e-10);
+        expect(radial.dot(cursor)).toBeGreaterThan(0);
+        expect(radial.length()).toBeGreaterThanOrEqual(PULLEY_RADIUS + a.radius - 1e-10);
+        expect(string.currentLength()).toBeLessThanOrEqual(string.length + 2e-9);
+        expect(string.length - string.currentLength()).toBeLessThan(10 / 2 ** iterations + 2e-9);
+        if (previous) expect(a.pos.distTo(previous)).toBeGreaterThan(0.0001);
+        previous = a.pos.copy();
+      }
+    });
+  }
+
+  it("uses the actual pointer ray when the particle was grabbed off centre", () => {
+    const { world, a, b, wheel } = setup(0.4); b.locked = true;
+    const pointer = new Vec2(-3, -10), offset = new Vec2(0.08, -0.06);
+    apply(world, a, pointer.add(offset), [], 40, pointer);
+    const radial = a.pos.sub(wheel.pos), cursor = pointer.sub(wheel.pos);
+    expect(Math.abs(radial.x * cursor.y - radial.y * cursor.x)).toBeLessThan(1e-10);
+    const inside = new Vec2(-0.22, -0.4);
+    apply(world, a, inside.add(offset), [], 40, inside);
+    expect(a.pos).toEqual(inside.add(offset));
   });
 });

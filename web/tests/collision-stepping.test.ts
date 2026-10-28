@@ -35,6 +35,25 @@ function scene(integrator: "Symplectic Euler" | "Velocity Verlet" | "RK4", subst
 beforeEach(() => localStorage.clear());
 
 describe("collision-time frame stepping", () => {
+  it.each([false, true])("keeps both equal-time contact rows through refinement and rewind (auto-pause %s)", autoPause => {
+    const app = scene("Velocity Verlet", 8, -1);
+    const first = app.world.bodies[0]; first.name = "Dropped";
+    const second = new Body(new Vec2(1, 0.23), 0.2, 1);
+    second.name = "Launched"; second.vel.set(1, -3); second.restitution = 1; second.friction = 0;
+    app.world.bodies.push(second);
+    if (autoPause) {
+      app.ensureInitial(); app.playing = true; app.pauseOnEvent = "contact";
+      (app as unknown as { update(dt: number): void }).update(1 / 60);
+    } else app.stepOnce();
+    const contacts = app.playbackEvents.events.filter(event => event.kind === "contact");
+    expect(contacts).toHaveLength(2);
+    expect(new Set(contacts.map(event => event.bodyIds[0]))).toEqual(new Set([first.id, second.id]));
+    expect(new Set(contacts.map(event => event.id)).size).toBe(2);
+    for (const contact of contacts) expect(contact.time).toBeCloseTo(app.world.time, 9);
+    app.stepBack(); expect(app.world.time).toBe(0); expect(app.playbackEvents.events).toHaveLength(0);
+    app.stepOnce(); expect(app.playbackEvents.events.filter(event => event.kind === "contact")).toHaveLength(2);
+  });
+
   it("refines an impact sampled at the end of the displayed interval", () => {
     const app = scene("Velocity Verlet", 1, -1);
     app.ensureInitial(); app.playing = true;

@@ -5,6 +5,7 @@ function svg(inner: string, viewBox = "0 0 24 24"): string {
 }
 
 export const ICONS: Record<string, string> = {
+  more: svg('<circle class="fill" cx="5" cy="12" r="1.6"/><circle class="fill" cx="12" cy="12" r="1.6"/><circle class="fill" cx="19" cy="12" r="1.6"/>'),
   search: svg('<circle cx="10.5" cy="10.5" r="6.5" fill="none"/><path d="M15.5 15.5 L21 21" fill="none"/>'),
   table: svg('<rect x="3.5" y="4.5" width="17" height="15" rx="2" fill="none"/>' +
              '<path d="M3.5 9.5 H20.5 M3.5 14.5 H20.5 M9 9.5 V19.5 M14.5 9.5 V19.5" fill="none"/>'),
@@ -54,6 +55,7 @@ export const ICONS: Record<string, string> = {
                '<circle class="fill" cx="12" cy="12" r="2.4"/>'),
   chev_left: svg('<path d="M14.5 6 L9 12 L14.5 18" fill="none"/>'),
   chev_right: svg('<path d="M9.5 6 L15 12 L9.5 18" fill="none"/>'),
+  chev_down: svg('<path d="M6 9 L12 15 L18 9" fill="none"/>'),
   save: svg('<path d="M5 5.5 A1.5 1.5 0 0 1 6.5 4 H16 L20 8 V18.5 A1.5 1.5 0 0 1 18.5 20 H6.5 ' +
             'A1.5 1.5 0 0 1 5 18.5 Z M8 4 V9 H15.5 V4 M8 20 V14 H16 V20" fill="none"/>'),
   download: svg('<path d="M12 4 V15 M7.5 11 L12 15.5 L16.5 11 M5 19.5 H19" fill="none"/>'),

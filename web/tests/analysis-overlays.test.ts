@@ -32,6 +32,82 @@ function recorder(): { ctx: CanvasRenderingContext2D; text: Text[]; surfaces: Bo
 }
 afterEach(() => { theme.setTheme("dark"); });
 
+describe("force-owner identity markers", () => {
+  const colours: [number, number, number][] = [[86, 172, 230], [245, 145, 70]];
+  const intersects = (a: Box, b: { x: number; y: number; width: number; height: number }): boolean =>
+    a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+  function nearbyLabels(): AnalysisLabel[] {
+    return colours.map((color, i) => ({ id: `body-${i}:friction`, text: "F 4.00 N",
+      source: `Friction on particle ${i + 1}`, x: 420, y: 220 + i * 70, color: theme.WARN, right: false,
+      owner: { tag: String(i + 1), x: 80 + i * 8, y: 100, radius: 3, color } }));
+  }
+  // The final copy of each identity badge is the one beside its body;
+  // preceding copies belong to force-caption cards.
+  const markers = (capture: ReturnType<typeof recorder>): Box[] => colours.map(color =>
+    capture.surfaces.filter(box => box.colour === theme.css(color)).at(-1)!);
+
+  it.each([1, 1.2, 2])("separates nearby body identities from each other, captions and HUD at scale %s", scale => {
+    const capture = recorder(), hud = { x: 70, y: 65, width: 90, height: 32 };
+    drawAnalysisOverlays(capture.ctx, nearbyLabels(), [], 600, 360, scale, null, [hud]);
+    const badges = markers(capture), captions = capture.surfaces.filter(box => box.colour === theme.css(theme.PANEL));
+    expect(badges).toHaveLength(2);
+    expect(intersects(badges[0], badges[1])).toBe(false);
+    for (const badge of badges) {
+      expect(intersects(badge, hud)).toBe(false);
+      expect(captions.some(caption => intersects(badge, caption))).toBe(false);
+      expect(badge.x).toBeGreaterThanOrEqual(0); expect(badge.y).toBeGreaterThanOrEqual(0);
+      expect(badge.x + badge.width).toBeLessThanOrEqual(600);
+      expect(badge.y + badge.height).toBeLessThanOrEqual(360);
+    }
+  });
+
+  it.each([1, 2])("keeps the full width of a long owner index inside the canvas at scale %s", scale => {
+    const capture = recorder(), owner = { tag: "1234", x: 599, y: 100, radius: 3, color: colours[0] };
+    drawAnalysisOverlays(capture.ctx, [{ id: "edge:weight", text: "W 9.81 N", x: 250, y: 260,
+      color: theme.WARN, right: false, owner }], [], 600, 360, scale);
+    const badge = markers(capture)[0];
+    expect(badge.x + badge.width).toBeLessThanOrEqual(600);
+    const glyph = capture.text.filter(row => row.text === "1234").at(-1)!;
+    expect(glyph.x + glyph.width).toBeLessThanOrEqual(badge.x + badge.width);
+  });
+
+  it("retains unblocked body-marker positions through source reordering and small motion", () => {
+    const capture = recorder(), labels = nearbyLabels();
+    drawAnalysisOverlays(capture.ctx, labels, [], 600, 360);
+    const first = markers(capture).map(box => ({ ...box }));
+    capture.text.length = 0; capture.surfaces.length = 0;
+    const shifted = [...labels].reverse().map(label => ({ ...label, x: label.x + 0.1,
+      owner: { ...label.owner!, x: label.owner!.x + 0.1 } }));
+    drawAnalysisOverlays(capture.ctx, shifted, [], 600, 360);
+    const second = markers(capture);
+    for (let i = 0; i < second.length; i++) {
+      expect(second[i].x - first[i].x).toBeCloseTo(0.1, 7);
+      expect(second[i].y).toBeCloseTo(first[i].y, 7);
+    }
+  });
+
+  it("connects displaced identity markers before painting arrow ink", () => {
+    const capture = recorder(), order: string[] = [];
+    capture.ctx.stroke = () => order.push(capture.ctx.strokeStyle === theme.css(theme.TEXT_DIM) ? "owner-leader" : "caption-leader");
+    drawAnalysisOverlays(capture.ctx, nearbyLabels(), [], 600, 360, 1, null,
+      [{ x: 70, y: 65, width: 90, height: 32 }], () => order.push("vectors"));
+    expect(order).toContain("owner-leader");
+    expect(order.lastIndexOf("owner-leader")).toBeLessThan(order.indexOf("vectors"));
+  });
+
+  it("removes old identity placements and follows a reused tag to its current owner", () => {
+    const capture = recorder();
+    drawAnalysisOverlays(capture.ctx, nearbyLabels(), [], 600, 360);
+    capture.text.length = 0; capture.surfaces.length = 0;
+    const label = { ...nearbyLabels()[0], x: 100, y: 160,
+      owner: { tag: "1", x: 480, y: 220, radius: 3, color: colours[0] } };
+    drawAnalysisOverlays(capture.ctx, [label], [], 600, 360);
+    const badge = markers(capture)[0];
+    expect(Math.hypot(badge.x - label.owner.x, badge.y - label.owner.y)).toBeLessThan(100);
+    expect(capture.text.filter(row => row.text === "2")).toHaveLength(0);
+  });
+});
+
 describe("scientific canvas annotations", () => {
   it.each(theme.THEME_NAMES)("keeps force ink distinct and visible over its %s contour", name => {
     theme.setTheme(name);
@@ -173,14 +249,71 @@ describe("scientific canvas annotations", () => {
 
   it.each([0.0004, -0.0004, 1.23e8, -1.23e8, 3, -19.6, 0])(
     "formats %s without erasing its sign or small magnitude", value => {
-      const displayed = Number(analysisNumber(value));
+      const powers: Record<string, string> = { "⁻": "-", "⁰": "0", "¹": "1", "²": "2", "³": "3", "⁴": "4", "⁵": "5", "⁶": "6", "⁷": "7", "⁸": "8", "⁹": "9" };
+      const displayed = Number(analysisNumber(value).replace(" × 10", "e")
+        .replace(/[⁻⁰¹²³⁴⁵⁶⁷⁸⁹]/g, digit => powers[digit]));
       expect(Math.abs(displayed - value)).toBeLessThanOrEqual(Math.max(0.005, Math.abs(value) * 0.005));
       expect(Math.sign(displayed)).toBe(Math.sign(value));
       expect(analysisNumber(value)).not.toBe("-0.00");
     });
+
+  it("uses multiplication and superscript powers in scientific notation", () => {
+    expect(analysisNumber(8.2e-11)).toBe("8.20 × 10⁻¹¹");
+    expect(analysisNumber(-1.23e8)).toBe("-1.23 × 10⁸");
+  });
 });
 
 describe("annotation layout reuse", () => {
+  it("retains source placement and width through tip jitter, padding changes and source reorder", () => {
+    const capture = recorder();
+    const a: AnalysisLabel = { id: "body-1:friction", source: "Friction from Floor",
+      text: "F 1.00 N", x: 200, y: 200, color: theme.WARN, right: true };
+    const b: AnalysisLabel = { id: "body-2:reaction", source: "Reaction from Floor",
+      text: "R 9.81 N", x: 440, y: 100, color: theme.GOOD, right: true };
+    let wide = true;
+    capture.ctx.measureText = value => ({ width: value === a.text ? (wide ? 62.5 : 60.5) : 40 }) as TextMetrics;
+    const render = (labels: AnalysisLabel[], vectors: { x1: number; y1: number; x2: number; y2: number }[]) => {
+      capture.text.length = 0; capture.surfaces.length = 0;
+      drawAnalysisOverlays(capture.ctx, labels, vectors, 700, 400);
+      return capture.surfaces.filter(box => box.colour === theme.css(theme.PANEL));
+    };
+    const first = render([a, b], [{ x1: 215, y1: 180, x2: 400, y2: 180 }]);
+    const offset = { x: first[0].x - a.x, y: first[0].y - a.y };
+    expect(offset.y).toBeGreaterThan(0);
+    for (let frame = 0; frame < 40; frame++) {
+      const reversed = frame % 2 === 0; wide = !reversed;
+      a.x = 200 + (frame % 3 - 1) * .2; a.y = 200 + (frame % 3 - 1) * .2;
+      const boxes = render(reversed ? [b, a] : [a, b],
+        [{ x1: 215, y1: 196 + (frame % 2 ? .5 : -.5), x2: 400, y2: 196 + (frame % 2 ? .5 : -.5) }]);
+      const box = boxes[reversed ? 1 : 0];
+      expect(box.width).toBe(first[0].width);
+      expect(box.x - a.x).toBeCloseTo(offset.x, 9);
+      expect(box.y - a.y).toBeCloseTo(offset.y, 9);
+      expect(capture.text[reversed ? 1 : 0].text).toBe(a.text);
+    }
+  });
+
+  it("moves a retained source when its caption is blocked and resets for a new viewport or scale", () => {
+    const capture = recorder();
+    const label: AnalysisLabel = { id: "weight", text: "W 9.81 N", x: 220, y: 130,
+      color: theme.BAD, right: true };
+    const render = (width: number, height: number, scale = 1, reserved: Box[] = []) => {
+      capture.text.length = 0; capture.surfaces.length = 0;
+      drawAnalysisOverlays(capture.ctx, [label], [], width, height, scale, null, reserved);
+      return capture.surfaces.find(box => box.colour === theme.css(theme.PANEL))!;
+    };
+    const first = render(600, 400), blocked = render(600, 400, 1, [first]);
+    expect(blocked.y + blocked.height <= first.y || blocked.y >= first.y + first.height ||
+      blocked.x + blocked.width <= first.x || blocked.x >= first.x + first.width).toBe(true);
+    theme.setTheme("light");
+    const resized = render(260, 160, 1.2);
+    expect(resized.x).toBeGreaterThanOrEqual(0); expect(resized.y).toBeGreaterThanOrEqual(0);
+    expect(resized.x + resized.width).toBeLessThanOrEqual(260);
+    expect(resized.y + resized.height).toBeLessThanOrEqual(160);
+    expect(capture.text[0].text).toBe(label.text);
+    expect(capture.text[0].fontSize).toBeCloseTo(14.4, 10);
+  });
+
   it("matches a fresh layout after viewport, font, text, arrow and preference changes", () => {
     const pooled = recorder();
     const labels: AnalysisLabel[] = [
@@ -208,4 +341,56 @@ describe("annotation layout reuse", () => {
     labels.push({ ...labels[0], text: "T 2.00 N" }); compare();
     vectors.push({ x1: 1, y1: 1, x2: 270, y2: 180 }); compare();
   });
+});
+
+
+describe("canvas HUD separation", () => {
+  const hud = { x: 460, y: 258, width: 116, height: 30 };
+  const label: AnalysisLabel = { text: "f 1000.00 N", source: "Applied force",
+    x: 480, y: 290, color: theme.WARN, right: true };
+  const intersects = (a: Box, b: typeof hud) => a.x < b.x + b.width && a.x + a.width > b.x &&
+    a.y < b.y + b.height && a.y + a.height > b.y;
+
+  it.each([1, 1.2, 2])("keeps force captions and hover sources off the scale marker at text scale %s", scale => {
+    const capture = recorder();
+    drawAnalysisOverlays(capture.ctx, [label], [], 600, 300, scale, [482, 289], [hud]);
+    const panels = capture.surfaces.filter(box => box.colour === theme.css(theme.PANEL));
+    expect(panels.length).toBeGreaterThanOrEqual(1);
+    expect(panels.every(box => !intersects(box, hud))).toBe(true);
+    // Hovering the relocated caption still resolves the correct source.
+    const caption = panels[0];
+    const source = recorder();
+    drawAnalysisOverlays(source.ctx, [label], [], 600, 300, scale,
+      [caption.x + 3, caption.y + 3], [hud]);
+    expect(source.text.some(row => row.text === "Applied force")).toBe(true);
+    expect(source.surfaces.filter(box => box.colour === theme.css(theme.PANEL))
+      .every(box => !intersects(box, hud))).toBe(true);
+  });
+
+  it("invalidates a retained layout when HUD geometry changes without scene changes", () => {
+    const pooled = recorder();
+    const shifted = { x: 350, y: 200, width: 226, height: 88 };
+    for (const obstacles of [[hud], [shifted], []]) {
+      pooled.text.length = 0; pooled.surfaces.length = 0;
+      const fresh = recorder();
+      drawAnalysisOverlays(pooled.ctx, [label], [], 600, 300, 1, null, obstacles);
+      drawAnalysisOverlays(fresh.ctx, [label], [], 600, 300, 1, null, obstacles);
+      expect(pooled.surfaces).toEqual(fresh.surfaces);
+      expect(pooled.text).toEqual(fresh.text);
+      const panels = pooled.surfaces.filter(box => box.colour === theme.css(theme.PANEL));
+      expect(panels.every(box => obstacles.every(obstacle => !intersects(box, obstacle)))).toBe(true);
+    }
+  });
+});
+
+it("removes owner badges and shrinks their caption space when numbering is turned off", () => {
+  const capture = recorder();
+  const label: AnalysisLabel = { id: "weight", text: "W 9.81 N", x: 200, y: 100, color: theme.ACCENT,
+    right: true, owner: { tag: "1", x: 100, y: 100, radius: 10, color: [86, 172, 230] } };
+  drawAnalysisOverlays(capture.ctx, [label], [], 600, 300);
+  const previous = capture.surfaces.find(box => box.colour === theme.css(theme.PANEL))!.width;
+  capture.surfaces.length = 0; capture.text.length = 0;
+  drawAnalysisOverlays(capture.ctx, [{ ...label, owner: undefined }], [], 600, 300);
+  expect(capture.text.map(text => text.text)).toEqual(["W 9.81 N"]);
+  expect(capture.surfaces.find(box => box.colour === theme.css(theme.PANEL))!.width).toBeLessThan(previous);
 });

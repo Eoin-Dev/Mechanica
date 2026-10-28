@@ -132,8 +132,8 @@ describe("pulley forces against independent mathematical answers", () => {
       const ramp = world.walls[0];
       const direction = ramp.b.sub(ramp.a); const distance = direction.length();
       const sin = direction.y / distance, cos = direction.x / distance;
-      expect(link.a.mass).toBe(2); expect(link.b.mass).toBe(1.1);
-      expect(link.a.friction).toBe(0.05); expect(ramp.friction).toBe(0.05);
+      expect(link.a.mass).toBe(2); expect(link.b.mass).toBe(2);
+      expect(link.a.friction).toBe(0.25); expect(ramp.friction).toBe(0.25);
       // T - m_A*g*sin(theta) - mu*m_A*g*cos(theta) = m_A*a
       // m_B*g - T = m_B*a, with the hanging mass moving downward.
       const reaction = link.a.mass * world.gravity * cos;
@@ -145,15 +145,22 @@ describe("pulley forces against independent mathematical answers", () => {
       expect(magnitude(initial, "pulley")).toBeCloseTo(tension, 5);
       expect(magnitude(initial, "reaction")).toBeCloseTo(reaction, 5);
       expect(magnitude(initial, "friction")).toBeCloseTo(friction, 6);
-      for (let frame = 0; frame < Math.round(0.5 / dt); frame++) world.step(dt);
+      let priorVelocity = link.a.vel.copy();
+      for (let frame = 0; frame < Math.round(0.5 / dt); frame++) {
+        priorVelocity = link.a.vel.copy(); world.step(dt);
+      }
       const a = link.a.forceSnapshot!, b = link.b.forceSnapshot!;
-      expect(magnitude(a, "pulley")).toBeCloseTo(tension, 3);
-      expect(magnitude(b, "pulley")).toBeCloseTo(tension, 3);
+      // The finite capsule's penetration slop slightly tilts the moving leg;
+      // textbook parallel-string tension remains within 0.005% of that load.
+      expect(Math.abs(magnitude(a, "pulley") - tension)).toBeLessThan(tension * 5e-5);
+      expect(Math.abs(magnitude(b, "pulley") - tension)).toBeLessThan(tension * 5e-5);
       // Capsule penetration slop slightly tilts the string during motion.
       // Check the perpendicular Newton equation with that measured direction,
       // alongside the independent tension answer above.
       const pull = a.entries.find(entry => entry.kind === "pulley")!;
-      const supportedLoad = reaction - (-sin * pull.fx + cos * pull.fy);
+      const normalAcceleration = (-sin * (link.a.vel.x - priorVelocity.x) +
+        cos * (link.a.vel.y - priorVelocity.y)) / dt;
+      const supportedLoad = reaction - (-sin * pull.fx + cos * pull.fy) + link.a.mass * normalAcceleration;
       expect(magnitude(a, "reaction")).toBeCloseTo(supportedLoad, 7);
       expect(magnitude(a, "friction")).toBeCloseTo(link.a.friction * supportedLoad, 7);
       expect(magnitude(a, "correction") + magnitude(b, "correction")).toBeLessThan(1e-6);

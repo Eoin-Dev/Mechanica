@@ -567,17 +567,23 @@ describe("pulley particle drag limits", () => {
   }
 
   it.each([false, true])("consumes only available slack and stops at the string limit (playing=%s)", playing => {
-    const { app, a, b, string, pointer } = setup(playing, 0.4);
+    const { app, a, b, wheel, string, pointer } = setup(playing, 0.4);
     const target = a.pos.add(new Vec2(0, -2));
     const terminalY = 1 - Math.sqrt((PULLEY_RADIUS + b.radius) ** 2 - PULLEY_RADIUS ** 2);
-    const lowerY = -0.65 - (terminalY + 0.25);
     pointer("pointermove", target); app.controller.updateDrag();
-    expect(a.pos.x).toBe(-PULLEY_RADIUS);
-    expect(a.pos.y).toBeCloseTo(lowerY, 8);
+    const radial = a.pos.sub(wheel.pos), ray = target.sub(wheel.pos);
+    expect(radial.x * ray.y - radial.y * ray.x).toBeCloseTo(0, 10);
+    expect(string.currentLength()).toBeCloseTo(string.length, 8);
     expect(string.currentLength()).toBeLessThanOrEqual(string.length + 1e-8);
     expect(b.pos.y).toBeCloseTo(terminalY, 8);
-    pointer("pointermove", target.add(new Vec2(0, -1))); app.controller.updateDrag();
-    expect(a.pos.y).toBeCloseTo(lowerY, 8); expect(a.vel.length()).toBeLessThan(1e-7);
+    const before = a.pos.copy(), outside = target.add(new Vec2(-0.01, -1));
+    pointer("pointermove", outside); app.controller.updateDrag();
+    const next = a.pos.sub(wheel.pos), nextRay = outside.sub(wheel.pos);
+    expect(next.x * nextRay.y - next.y * nextRay.x).toBeCloseTo(0, 10);
+    expect(a.pos.distTo(before)).toBeGreaterThan(1e-4);
+    expect(string.currentLength()).toBeCloseTo(string.length, 8);
+    pointer("pointermove", outside); app.controller.updateDrag();
+    expect(a.vel.length()).toBeLessThan(1e-7);
     pointer("pointermove", new Vec2(-PULLEY_RADIUS, -0.4)); app.controller.updateDrag();
     expect(a.pos.y).toBeCloseTo(-0.4, 9);
     pointer("pointerup", a.pos.copy());
@@ -611,10 +617,10 @@ describe("pulley drag transaction and mode boundaries", () => {
     send(canvas, "pointermove", ...app.camera.toScreen(a.pos.add(new Vec2(0, -2))));
     app.controller.updateDrag();
     expect(link.currentLength()).toBeLessThanOrEqual(link.length + 2e-9);
-    const stop = -0.65 - (1.25 - Math.sqrt((PULLEY_RADIUS + b.radius) ** 2 - PULLEY_RADIUS ** 2));
     const iterations = tier === null ? 40 : 24 - 2 * tier;
-    expect(a.pos.y).toBeGreaterThanOrEqual(stop - 1e-9);
-    expect(a.pos.y - stop).toBeLessThan(2 / 2 ** iterations + 2e-9);
+    expect(link.length - link.currentLength()).toBeLessThan(10 / 2 ** iterations + 2e-9);
+    const ray = new Vec2(-PULLEY_RADIUS, -3.25), radial = a.pos.sub(wheel.pos);
+    expect(radial.x * ray.y - radial.y * ray.x).toBeCloseTo(0, 10);
     send(canvas, "pointerup", ...app.camera.toScreen(a.pos));
     expect(a.held).toBe(false); expect(b.speedCap).toBe(Infinity);
   });
@@ -651,7 +657,9 @@ describe("visible slack-string picking", () => {
       const a = new Body(new Vec2(-1, 0)), b = new Body(new Vec2(1, 0));
       const link = elastic ? new SpringLink(a, b, 3, 20, 0, true) : new DistanceLink(a, b, 3, true);
       app.world.bodies.push(a, b); app.world.links.push(link);
-      const mid = app.camera.toScreen(new Vec2(0, -108 / app.camera.zoom));
+      const z = app.camera.zoom;
+      const bow = 48 * (1 - Math.exp(-Math.sqrt(z * (4 * z + z)) / 96));
+      const mid = app.camera.toScreen(new Vec2(0, -bow / z));
       expect(app.controller.pick(mid)).toBe(performance ? null : link);
       const straight = app.camera.toScreen(new Vec2());
       expect(app.controller.pick(straight)).toBe(performance ? link : null);
@@ -667,10 +675,47 @@ describe("pulley bowed-leg hit geometry", () => {
       wheel = new Body(new Vec2(0, 1)), link = new PulleyLink(a, b, wheel);
     link.length += 0.4; app.world.bodies.push(a, b, wheel); app.world.links.push(link);
     const extra = 0.399 * app.camera.zoom / 2, length = 1.25 * app.camera.zoom;
-    const bow = Math.min(48, Math.sqrt(extra * (2 * length + extra)) / 2);
+    const bow = 48 * (1 - Math.exp(-Math.sqrt(extra * (2 * length + extra)) / 96));
     const curved = app.camera.toScreen(new Vec2(-PULLEY_RADIUS - bow / app.camera.zoom, 0.375));
     expect(app.controller.pick(curved)).toBe(performance ? null : link);
     const straight = app.camera.toScreen(new Vec2(-PULLEY_RADIUS, 0.375));
     expect(app.controller.pick(straight)).toBe(performance ? link : null);
+  });
+});
+
+
+describe("rod duplication attachment ownership", () => {
+  it("selects the copied visible rod assembly without exposing hidden solver endpoints", () => {
+    const { app } = makeApp(); app.newScene();
+    const a = new Body(new Vec2(0, 0)), b = new Body(new Vec2(2, 0));
+    a.isRodEndpoint = b.isRodEndpoint = true;
+    const rod = new DistanceLink(a, b, 2), mass = new Body(new Vec2(1, 0));
+    mass.rodAttachmentId = rod.id; mass.rodAttachmentT = 0.5;
+    app.edit(() => { app.world.bodies.push(a, b, mass); app.world.links.push(rod); });
+    app.setSelection([rod]); app.controller.duplicateSelection();
+    const copiedRod = app.world.links.find(link => link !== rod)!;
+    expect(app.selection).toContain(copiedRod);
+    expect(app.selection.some(object => object instanceof Body && object.isRodEndpoint)).toBe(false);
+  });
+  it.each([false, true])("duplicates mounted masses with valid ownership (whole rod=%s)", whole => {
+    const { app } = makeApp(); app.newScene(); app.world.gravity = 0;
+    const a = new Body(new Vec2(0, 0)), b = new Body(new Vec2(2, 0));
+    a.isRodEndpoint = b.isRodEndpoint = true;
+    const rod = new DistanceLink(a, b, 2), mass = new Body(new Vec2(1, 0)); rod.name = "Balance beam";
+    mass.rodAttachmentId = rod.id; mass.rodAttachmentT = 0.5;
+    app.edit(() => { app.world.bodies.push(a, b, mass); app.world.links.push(rod); });
+    app.setSelection(whole ? [rod] : [mass]); app.controller.duplicateSelection();
+    const copy = app.world.bodies.find(body => body !== mass && !body.isRodEndpoint)!;
+    expect(copy).toBeDefined(); expect(copy.pos.x).toBeCloseTo(1.3, 10); expect(copy.pos.y).toBeCloseTo(-0.3, 10);
+    if (whole) {
+      const copiedRod = app.world.links.find(link => link !== rod) as DistanceLink;
+      expect(copy.rodAttachmentId).toBe(copiedRod.id); expect(copiedRod.a).not.toBe(a);
+      expect(copiedRod.name).toBe("Balance beam");
+      expect(app.selection).toContain(copiedRod);
+      expect(app.selection.some(object => object instanceof Body && object.isRodEndpoint)).toBe(false);
+    } else expect(copy.rodAttachmentId).toBeNull();
+    expect(mass.rodAttachmentId).toBe(rod.id); app.world.step(1 / 120);
+    expect(copy.pos.x).toBeCloseTo(1.3, 10); expect(copy.pos.y).toBeCloseTo(-0.3, 10);
+    app.undo(); expect(app.world.bodies).toHaveLength(3); expect(app.world.links).toHaveLength(1);
   });
 });

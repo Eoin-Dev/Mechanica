@@ -28,6 +28,70 @@ export interface ForceLedger {
   interval: { start: number; end: number } | null;
 }
 
+/** Presentation-only cancellation tolerance, relative to the forces being
+ * balanced. A lone genuinely tiny force retains its full magnitude. Never
+ * alter solver samples, acceleration, graphs or exported physical values. */
+export function displayForceResultant(ledger: ForceLedger): { fx: number; fy: number } {
+  const scale = ledger.entries.reduce((sum, entry) => sum + Math.hypot(entry.fx, entry.fy), 0);
+  return scale > 0 && Number.isFinite(scale) &&
+    Math.hypot(ledger.resultant.fx, ledger.resultant.fy) <= scale * 1e-10
+    ? { fx: 0, fy: 0 } : ledger.resultant;
+}
+
+/** Separate measured impact momentum from the sustained interval-average
+ * forces. The raw step ledger remains untouched for momentum accounting. */
+export function sustainedForceLedger(world: World, body: Body, ledger: ForceLedger): ForceLedger {
+  if (!body.showCollisionImpulses || ledger.mode !== "step-average" || ledger.interval === null) return ledger;
+  const dt = ledger.interval.end - ledger.interval.start;
+  const impacts = world.collisionImpulses.filter(entry => entry.bodyId === body.id);
+  if (!(dt > 0) || impacts.length === 0) return ledger;
+  const removed = new Map<string, { fx: number; fy: number }>();
+  let jx = 0, jy = 0;
+  for (const impulse of impacts) {
+    const id = impulse.sourceId === null ? `wall-${impulse.wallId}` : `body-${impulse.sourceId}`;
+    const nx = -impulse.contactNx, ny = -impulse.contactNy;
+    const normal = impulse.jx * nx + impulse.jy * ny;
+    for (const [key, x, y] of [
+      [`reaction-${id}`, normal * nx, normal * ny],
+      [`friction-${id}`, impulse.jx - normal * nx, impulse.jy - normal * ny],
+    ] as const) {
+      const previous = removed.get(key);
+      removed.set(key, { fx: (previous?.fx ?? 0) + x / dt, fy: (previous?.fy ?? 0) + y / dt });
+    }
+    jx += impulse.jx; jy += impulse.jy;
+  }
+  const entries = ledger.entries.map(entry => {
+    const part = removed.get(entry.id);
+    return part === undefined ? entry : { ...entry, fx: entry.fx - part.fx, fy: entry.fy - part.fy };
+  }).filter(entry => finiteForce(entry.fx, entry.fy));
+  return { ...ledger, entries, resultant: { fx: ledger.resultant.fx - jx / dt, fy: ledger.resultant.fy - jy / dt } };
+}
+
+/** Signed force moments for one load about its rod's fixed pivot, or the
+ * rod assembly's centre of mass when no pivot is present. Positive is CCW. */
+export function rodMomentAnalysis(world: World, body: Body, ledger: ForceLedger) {
+  const rod = world.links.find((link): link is DistanceLink => link instanceof DistanceLink && !link.isRope &&
+    (link.id === body.rodAttachmentId || link.a === body || link.b === body));
+  if (rod === undefined) return null;
+  const members = world.bodies.filter(member => !member.isRodEndpoint &&
+    (member.rodAttachmentId === rod.id || member === rod.a || member === rod.b));
+  const pivot = members.find(member => member.locked || member.isAnchor || member.isPivot);
+  let x = pivot?.pos.x ?? 0, y = pivot?.pos.y ?? 0;
+  if (pivot === undefined) {
+    let mass = 0;
+    for (const member of members) if (Number.isFinite(member.mass) && member.mass > 0) {
+      mass += member.mass; x += member.pos.x * member.mass; y += member.pos.y * member.mass;
+    }
+    if (mass > 0) { x /= mass; y /= mass; }
+    else { x = (rod.a.pos.x + rod.b.pos.x) / 2; y = (rod.a.pos.y + rod.b.pos.y) / 2; }
+  }
+  const entries = ledger.entries.map(entry => ({ id: entry.id, label: entry.label,
+    moment: (body.pos.x + (entry.contactNx ?? 0) * body.radius - x) * entry.fy -
+      (body.pos.y + (entry.contactNy ?? 0) * body.radius - y) * entry.fx }));
+  return { x, y, reference: pivot?.name || (pivot ? "Rod pivot" : "Rod centre of mass"), entries,
+    moment: entries.reduce((sum, entry) => sum + entry.moment, 0) };
+}
+
 function finiteForce(fx: number, fy: number): boolean {
   return Number.isFinite(fx) && Number.isFinite(fy) &&
     Math.abs(fx) + Math.abs(fy) > 1e-10;
@@ -97,8 +161,18 @@ function completedForceSnapshot(world: World, body: Body): ForceSnapshot | null 
  * Never infer contact forces by balancing an old resultant. */
 export function forceLedger(world: World, body: Body,
                             referenceWall: Wall | null = null): ForceLedger {
-  const basis = referenceWall !== null && world.walls.includes(referenceWall) &&
-    touchingSlopeWall(body, referenceWall) ? slopeBasis(referenceWall, body) : null;
+  let wall = referenceWall !== null && world.walls.includes(referenceWall) &&
+    touchingSlopeWall(body, referenceWall) ? referenceWall : null;
+  if (wall === null && body.resolveWeightOnSlope) {
+    // Automatic resolution must also work when the Inspector is hidden.
+    // Preserve ambiguity when more than one wall currently touches the body.
+    for (const candidate of world.walls) {
+      if (!touchingSlopeWall(body, candidate)) continue;
+      if (wall !== null) { wall = null; break; }
+      wall = candidate;
+    }
+  }
+  const basis = wall === null ? null : slopeBasis(wall, body);
   const sample = completedForceSnapshot(world, body);
   if (body.showForceComponents && sample !== null) {
     return { entries: sample.entries, resultant: { fx: sample.fx, fy: sample.fy },

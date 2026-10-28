@@ -9,6 +9,7 @@ import { Body, Color, Wall } from "../engine/body";
 import { DistanceLink, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS, PulleyLink,
          SpringLink } from "../engine/links";
 import { Driver, ForceField, World } from "../engine/world";
+import { DeleteZone } from "../engine/delete-zone";
 
 export interface PresetHints {
   zoom?: number;
@@ -17,6 +18,7 @@ export interface PresetHints {
   vectors?: boolean;
   autoFit?: boolean; // keep the whole scene framed as it spreads out
   graph?: "energy" | "momentum" | "phase";
+  speed?: number; // playback multiplier; the physical model is unchanged
 }
 
 export class Preset {
@@ -31,7 +33,14 @@ export class Preset {
     public hints: PresetHints = {},
     public readonly topics: readonly string[] = [],
   ) {
-    this.build = () => capSolverCost(builder());
+    this.build = () => {
+      const world = builder();
+      if (category === "Soft Bodies") for (const body of world.bodies) {
+        body.noRotation = true;
+        body.omega = 0;
+      }
+      return capSolverCost(world);
+    };
   }
 }
 
@@ -632,8 +641,20 @@ function buildBilliards(): World {
   const w = new World();
   w.gravity = 0.0;
   solver(w, 4);
-  addBox(w, 3.4, 1.8, 0.9, 0.1);
-  w.globalDamping = 0.25; // cloth friction
+  const rail = (ax: number, ay: number, bx: number, by: number): void => {
+    const wall = new Wall(new Vec2(ax, ay), new Vec2(bx, by), .1);
+    wall.name = "Cushion"; wall.restitution = .9; wall.friction = .1;
+    wall.color = [110, 85, 60]; w.walls.push(wall);
+  };
+  for (const y of [-1.8, 1.8]) {
+    rail(-3.08, y, -.32, y); rail(.32, y, 3.08, y);
+    for (const x of [-3.4, 0, 3.4]) {
+      const pocket = new DeleteZone(new Vec2(x, y), "circle", .44, .44);
+      pocket.name = `Pocket ${w.deleteZones.length + 1}`; w.deleteZones.push(pocket);
+    }
+  }
+  rail(-3.4, -1.48, -3.4, 1.48); rail(3.4, -1.48, 3.4, 1.48);
+  w.globalDamping = 0.28; // gentle cloth drag
   const r = 0.11;
   const rng = new Random(4);
   const rows = 5;
@@ -772,31 +793,37 @@ function buildFrictionRamp(): World {
                                          color: col, name: label });
     b.noRotation = true;
     b.collides = true;
+    b.showForceComponents = b.resolveWeightOnSlope = true;
+    b.forceSlopeWallId = ramp.id;
   }
   return w;
 }
 
 function buildInclinePulley(): World {
   const w = new World();
-  solver(w, 8, 10);
+  solver(w, 12, 10);
   const ramp = new Wall(new Vec2(-3.2, -1.45), new Vec2(0.6, 0.75), 0.12);
-  ramp.friction = 0.05;
+  ramp.friction = 0.25;
   ramp.restitution = 0.05;
   w.walls.push(ramp);
 
   const wheel = new Body(ramp.b.copy(), PULLEY_RADIUS);
   const onRamp = new Body(ramp.b.copy(), PULLEY_PARTICLE_RADIUS, 2.0,
     [86, 156, 214]);
-  const hanging = new Body(ramp.b.copy(), PULLEY_PARTICLE_RADIUS, 1.1,
+  const hanging = new Body(ramp.b.copy(), PULLEY_PARTICLE_RADIUS, 2.0,
     [220, 130, 90]);
   onRamp.name = "2.0 kg on slope";
-  hanging.name = "1.1 kg hanging";
+  hanging.name = "2.0 kg hanging";
   for (const body of [onRamp, hanging]) {
     body.noRotation = true;
-    body.friction = 0.05;
+    body.friction = 0.25;
     body.restitution = 0.05;
+    body.showForceComponents = true;
   }
+  onRamp.resolveWeightOnSlope = true;
+  onRamp.forceSlopeWallId = ramp.id;
   const string = new PulleyLink(onRamp, hanging, wheel);
+  string.showTensionVectors = true;
   w.bodies.push(wheel, onRamp, hanging);
   w.links.push(string);
   w.mountPulley(string, ramp, 1);
@@ -1572,15 +1599,15 @@ export const PRESETS: Preset[] = [
   new Preset("Simple pendulum", "Pendulums",
     "A small-angle pendulum. Its period is 2*pi*sqrt(L/g), roughly 2.46 s " +
     "for this 1.5 m rod - time it with the clock in the toolbar!",
-    buildSimplePendulum, { zoom: 130, graph: "energy" }, ["SHM", "Pendulums"]),
+    buildSimplePendulum, { zoom: 130 }, ["SHM", "Pendulums"]),
   new Preset("Double pendulum", "Pendulums",
     "Two links released from high up: the classic chaotic system. " +
     "Energy stays constant while the motion never repeats.",
     buildDoublePendulum, { zoom: 130, trails: true }),
   new Preset("Triple pendulum", "Pendulums",
     "Three rigid links - even wilder than the double pendulum. Watch " +
-    "the energy graph remain nearly constant while the tip whips around.",
-    buildTriplePendulum, { zoom: 110, trails: true, graph: "energy" }),
+    "energy stay nearly constant while the tip whips around.",
+    buildTriplePendulum, { zoom: 110, trails: true }),
   new Preset("Swinging rope", "Pendulums",
     "Twenty-four elastic string segments approximate a flexible rope: " +
     "taut ones stretch a hair and pull, slack ones carry nothing, " +
@@ -1589,7 +1616,7 @@ export const PRESETS: Preset[] = [
   new Preset("Newton's cradle", "Pendulums",
     "Five balls on strings. Elastic collisions hand momentum down the " +
     "line so one ball in means one ball out.",
-    buildNewtonsCradle, { zoom: 170, graph: "momentum" }, ["Momentum", "Restitution"]),
+    buildNewtonsCradle, { zoom: 170 }, ["Momentum", "Restitution"]),
   new Preset("Coupled pendulums", "Pendulums",
     "Two pendulums joined by a weak spring trade energy back and " +
     "forth - the swinging slowly migrates from one to the other.",
@@ -1636,11 +1663,11 @@ export const PRESETS: Preset[] = [
     "counterweight motion interact. Follow the trails to explore this " +
     "coupled system beyond the straight-line exam model.",
     () => buildAtwood(true), { zoom: 110, centre: [0, 0], trails: true },
-    ["Pulleys", "Coupled motion", "Beyond the specification"]),
+    ["Pulleys", "Coupled motion"]),
 
   new Preset("Mass on a spring", "Oscillators",
-    "Simple harmonic motion: period 2*pi*sqrt(m/k) = 1.26 s here. Open " +
-    "the phase plot and select the mass to see the ellipse of y against vy.",
+    "Simple harmonic motion: period 2*pi*sqrt(m/k) = 1.26 s here. The mass " +
+    "is selected so the phase plot traces the ellipse of y against vy.",
     buildShm, { zoom: 130, graph: "phase" }, ["SHM", "Modulus λ"]),
   new Preset("Elastic string release", "Oscillators",
     "A 2 kg load starts at the natural length of a light elastic string: " +
@@ -1652,15 +1679,15 @@ export const PRESETS: Preset[] = [
   new Preset("Damping regimes", "Oscillators",
     "Identical oscillators with light, critical and heavy damping. " +
     "Critical damping settles fastest without overshooting.",
-    buildDampingRegimes, { zoom: 120, graph: "energy" }, ["SHM", "Damping"]),
+    buildDampingRegimes, { zoom: 120 }, ["SHM", "Damping"]),
   new Preset("Driven resonance", "Oscillators",
     "A sinusoidal driver tuned to the natural frequency pumps the " +
     "amplitude up until damping balances the input - resonance.",
-    buildResonance, { zoom: 110, graph: "energy" }, ["SHM", "Resonance"]),
+    buildResonance, { zoom: 110 }, ["SHM", "Resonance"]),
   new Preset("Coupled oscillators", "Oscillators",
     "Three masses and four springs between two anchors. The motion is " +
     "a mixture of the system's normal modes.",
-    buildCoupledOscillators, { zoom: 110, graph: "phase" }, ["SHM", "Normal modes"]),
+    buildCoupledOscillators, { zoom: 110 }, ["SHM", "Normal modes"]),
   new Preset("Spring pendulum", "Oscillators",
     "A bob on a spring that can also swing: energy sloshes between " +
     "stretching and swinging, and the path becomes chaotic.",
@@ -1668,8 +1695,9 @@ export const PRESETS: Preset[] = [
 
   new Preset("Billiard break", "Collisions & Gas",
     "A cue ball smashes a five-row rack. Watch momentum spread " +
-    "through near-elastic collisions; cloth drag slows everything.",
-    buildBilliards, { zoom: 110, graph: "momentum" }),
+    "through near-elastic collisions; cloth drag slows everything. " +
+    "Six editable pockets remove balls from the pool table.",
+    buildBilliards, { zoom: 110 }),
   new Preset("Restitution ladder", "Collisions & Gas",
     "Six balls with restitution 0.5 to 1.0 dropped together. Each " +
     "bounce returns to e² of the previous height, so the e = 1 ball " +
@@ -1720,13 +1748,15 @@ export const PRESETS: Preset[] = [
     "coefficients μ = 0, 0.25 and 0.8, the " +
     "frictionless ball slides fastest, moderate friction slows the next, " +
     "and high static friction holds the last in place. Separate tracks keep " +
-    "collisions from changing the comparison; run-outs catch the sliding balls.",
+    "collisions from changing the comparison; run-outs catch the sliding balls. " +
+    "Free-body diagrams resolve each particle’s weight along its own ramp.",
     buildFrictionRamp, { zoom: 70 }, ["Friction", "Inclined planes"]),
-  new Preset("Pulley on an incline", "Projectiles & Friction",
+  new Preset("Pulley on an incline", "Rods & Pulleys",
     "Two particles share one light inextensible string over a smooth fixed " +
     "pulley. The slope-side string begins parallel to the ramp, while both " +
-    "particles remain free to slide, collide or swing. Select the string to " +
-    "edit its total natural length.",
+    "particles remain free to slide, collide or swing. Both free-body diagrams " +
+    "and string tension vectors are shown; the slope particle’s weight is resolved " +
+    "along the ramp. Select the string to edit its total natural length.",
     buildInclinePulley, { zoom: 115, centre: [-0.9, -0.2] }, ["Connected particles", "Pulleys"]),
   new Preset("Galileo's drop", "Projectiles & Friction",
     "A 10 kg ball and a 0.5 kg ball fall the same distance and land " +
@@ -1742,7 +1772,7 @@ export const PRESETS: Preset[] = [
     "down just as hard whether or not you are moving sideways, so " +
     "horizontal motion cannot change the time to fall.",
     buildIndependenceOfMotion,
-    { zoom: 95, centre: [1.2, 1.6], trails: true, vectors: true }, ["SUVAT", "Projectiles"]),
+    { zoom: 95, centre: [1.2, 1.6], trails: true, vectors: true, speed: 0.25 }, ["SUVAT", "Projectiles"]),
   new Preset("Projectile angles", "Projectiles & Friction",
     "Four launches at 10 m/s. For ideal equal-height launches, range " +
     "goes as sin(2*theta): 45 degrees flies farthest and 30/60 match. " +
@@ -1781,7 +1811,7 @@ export const PRESETS: Preset[] = [
     "with damped side springs lifting its shoulders. The " +
     "ball's energy trades between gravity and spring tension every " +
     "bounce. Try changing the ball's mass!",
-    buildTrampoline, { zoom: 110, centre: [0, 1.0], graph: "energy" }),
+    buildTrampoline, { zoom: 110, centre: [0, 1.0] }),
   new Preset("Soft wheel", "Soft Bodies",
     "A deformable tyre: a sprung tread ring with spokes to a hub. It " +
     "flattens against the ramp as it rolls, just like a real tyre at " +
@@ -1806,7 +1836,7 @@ export const PRESETS: Preset[] = [
     "scatterer. Nearby trajectories can diverge after repeated impacts, " +
     "while elastic contacts preserve kinetic energy. The ideal Sinai " +
     "billiard is a classic example of chaotic motion.",
-    buildSinaiBilliard, { zoom: 125, trails: true, graph: "energy" }),
+    buildSinaiBilliard, { zoom: 125, trails: true }),
   new Preset("Cyclone", "Chaos",
     "Sixty particles caught in a storm written entirely as two force-field " +
     "formulas: a swirling wind that fades with distance, an inward pull, a " +

@@ -33,13 +33,14 @@
  * projects springs as position constraints instead, which has no stability
  * limit to respect (see engine/perf.ts).
  */
-import { boolOr, idOr, intIn, numIn } from "../core/guards";
+import { boolOr, idOr, intIn, numIn, strOr } from "../core/guards";
 import { Vec2 } from "../core/vec";
 import { Body, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS } from "./body";
 export { PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS } from "./body";
 
 export interface RodDict {
   type: "rod";
+  name?: string;
   id: number;
   a: number;
   b: number;
@@ -51,6 +52,7 @@ export interface RodDict {
 
 export interface SpringDict {
   type: "spring";
+  name?: string;
   id: number;
   a: number;
   b: number;
@@ -62,6 +64,7 @@ export interface SpringDict {
 
 export interface PulleyDict {
   type: "pulley";
+  name?: string;
   id: number;
   a: number;
   b: number;
@@ -75,6 +78,8 @@ export interface PulleyDict {
   wall_id?: number | null;
   wall_end?: number;
   wall_normal_sign?: number;
+  show_tension_vectors?: boolean;
+  show_resultant_tension_vector?: boolean;
 }
 
 export type LinkDict = RodDict | SpringDict | PulleyDict;
@@ -82,6 +87,7 @@ export type LinkDict = RodDict | SpringDict | PulleyDict;
 /** Rigid rod (or, with isRope, an inelastic string) between two bodies. */
 export class DistanceLink {
   static nextId = 1;
+  name = "";
 
   id: number;
   a: Body;
@@ -109,6 +115,7 @@ export class DistanceLink {
   toDict(): RodDict {
     return {
       type: "rod", id: this.id, a: this.a.id, b: this.b.id,
+      ...(this.name ? { name: this.name } : {}),
       length: this.length, is_rope: this.isRope, compliance: this.compliance,
       origin_at_a: this.originAtA,
     };
@@ -124,6 +131,7 @@ export class DistanceLink {
  */
 export class SpringLink {
   static nextId = 1;
+  name = "";
 
   id: number;
   a: Body;
@@ -206,6 +214,7 @@ export class SpringLink {
   toDict(): SpringDict {
     return {
       type: "spring", id: this.id, a: this.a.id, b: this.b.id,
+      ...(this.name ? { name: this.name } : {}),
       rest_length: this.restLength, stiffness: this.stiffness,
       damping: this.damping, tension_only: this.tensionOnly,
     };
@@ -221,6 +230,7 @@ export class SpringLink {
  * tension on both particles when taut and cannot push when slack.
  */
 export class PulleyLink {
+  name = "";
   static nextId = 1;
 
   id: number;
@@ -239,8 +249,10 @@ export class PulleyLink {
   mountNormalSign: -1 | 1;
   lambda = 0.0;
   mu = 0.0;
-  /** Transient per-link analysis overlay; display state is not serialized. */
+  /** String-side display choice: both particle loads and both wheel-side loads. */
   showTensionVectors = false;
+  /** Wheel-side display choice: one resultant of the string loads on the wheel. */
+  showResultantTensionVector = false;
   // Start of the current solver substep for continuous particle/wheel impact
   // detection. One sample per endpoint avoids any hot-loop allocation.
   safeAX = 0.0;
@@ -254,7 +266,7 @@ export class PulleyLink {
               compliance = 0.0,
               guideAOffset = new Vec2(-PULLEY_RADIUS, 0),
               guideBOffset = new Vec2(PULLEY_RADIUS, 0),
-              wrapSweep = -Math.PI, wrapTurns: number | null = null) {
+              wrapSweep = -Math.PI, wrapTurns: number | null = null, initializeRotation = true) {
     this.id = PulleyLink.nextId++;
     this.a = a;
     this.b = b;
@@ -262,6 +274,10 @@ export class PulleyLink {
     // These two bodies are point particles for as long as the routed pulley
     // exists. A fixed size keeps the wheel stop and tangent geometry stable;
     // dismantling the pulley turns them back into ordinary editable bodies.
+    if (initializeRotation) {
+      a.noRotation = b.noRotation = true;
+      a.omega = b.omega = 0;
+    }
     this.normalizeParticles();
     pulley.isPulley = true;
     pulley.isAnchor = true;
@@ -269,7 +285,7 @@ export class PulleyLink {
     pulley.collides = false;
     pulley.noRotation = true;
     pulley.radius = PULLEY_RADIUS;
-    pulley.name = "Pulley";
+    if (pulley.name === `Body ${pulley.id}`) pulley.name = "Pulley";
     pulley.color = [65, 72, 88];
     pulley.vel.set(0, 0);
     pulley.omega = 0.0;
@@ -304,10 +320,10 @@ export class PulleyLink {
   }
 
   /** Resolve the current angular sheet without changing the accepted sweep sample. */
-  currentWrapTurns(): number {
+  currentWrapTurns(aPos = this.a.pos, bPos = this.b.pos): number {
     const tau = 2 * Math.PI, sigma = this.wrapSweep < 0 ? -1 : 1;
-    const a = this.portAngle(this.a.pos.x - this.pulley.pos.x, this.a.pos.y - this.pulley.pos.y, this.guideAOffset);
-    const b = this.portAngle(this.b.pos.x - this.pulley.pos.x, this.b.pos.y - this.pulley.pos.y, this.guideBOffset);
+    const a = this.portAngle(aPos.x - this.pulley.pos.x, aPos.y - this.pulley.pos.y, this.guideAOffset);
+    const b = this.portAngle(bPos.x - this.pulley.pos.x, bPos.y - this.pulley.pos.y, this.guideBOffset);
     const sa = this.portAngle(this.safeAX - this.safePX, this.safeAY - this.safePY, this.guideAOffset);
     const sb = this.portAngle(this.safeBX - this.safePX, this.safeBY - this.safePY, this.guideBOffset);
     return (this.wrapTurns + sigma * (Math.round((sb - b) / tau) - Math.round((sa - a) / tau))) || 0;
@@ -328,11 +344,9 @@ export class PulleyLink {
    * an endpoint becomes part of a newly loaded pulley. */
   normalizeParticles(): void {
     this.a.radius = PULLEY_PARTICLE_RADIUS;
-    this.a.noRotation = true;
-    this.a.omega = 0.0;
+    if (this.a.noRotation) this.a.omega = 0;
     this.b.radius = PULLEY_PARTICLE_RADIUS;
-    this.b.noRotation = true;
-    this.b.omega = 0.0;
+    if (this.b.noRotation) this.b.omega = 0;
   }
 
   /** Current tangent geometry around the finite wheel.
@@ -341,8 +355,10 @@ export class PulleyLink {
    * the path length includes the changing wrapped arc, and each gradient is
    * the straight rope direction at its tangent. The stored guide offsets are
    * only topology/fallback hints (and define the initial wall-aligned layout).
+   * Optional endpoint positions are observational queries on the accepted route;
+   * they never move live bodies or commit a new angular sheet.
    */
-  geometry(): {
+  geometry(aPos = this.a.pos, bPos = this.b.pos): {
     ga: Vec2; gb: Vec2; da: number; db: number;
     nax: number; nay: number; nbx: number; nby: number;
     aRadialX: number; aRadialY: number;
@@ -351,16 +367,16 @@ export class PulleyLink {
     sweep: number; routeSweep: number; wrapped: boolean; wrapLength: number; totalLength: number;
   } {
     const sigma = this.wrapSweep < 0 ? -1 : 1;
-    const leg = (body: Body, branch: number, fallback: Vec2) => {
-      const qx = body.pos.x - this.pulley.pos.x;
-      const qy = body.pos.y - this.pulley.pos.y;
+    const leg = (position: Vec2, branch: number, fallback: Vec2) => {
+      const qx = position.x - this.pulley.pos.x;
+      const qy = position.y - this.pulley.pos.y;
       const d = Math.hypot(qx, qy);
       if (d <= PULLEY_RADIUS + 1e-9) {
         const fd = Math.max(1e-9, fallback.length());
         const gx = this.pulley.pos.x + fallback.x * PULLEY_RADIUS / fd;
         const gy = this.pulley.pos.y + fallback.y * PULLEY_RADIUS / fd;
-        const sx = body.pos.x - gx;
-        const sy = body.pos.y - gy;
+        const sx = position.x - gx;
+        const sy = position.y - gy;
         const straight = Math.max(1e-9, Math.hypot(sx, sy));
         return {
           guide: new Vec2(gx, gy), straight,
@@ -381,8 +397,8 @@ export class PulleyLink {
       const straight = Math.sqrt(d * d - PULLEY_RADIUS * PULLEY_RADIUS);
       return {
         guide: new Vec2(gx, gy), straight,
-        nx: (body.pos.x - gx) / straight,
-        ny: (body.pos.y - gy) / straight,
+        nx: (position.x - gx) / straight,
+        ny: (position.y - gy) / straight,
         radialX, radialY,
         // B in gradient = A*e_r + B*e_phi. The a and b arc
         // derivatives have opposite signs.
@@ -391,14 +407,14 @@ export class PulleyLink {
         offset: this.portAngle(qx, qy, fallback) + branch * alpha,
       };
     };
-    let la = leg(this.a, sigma, this.guideAOffset);
-    let lb = leg(this.b, -sigma, this.guideBOffset);
+    let la = leg(aPos, sigma, this.guideAOffset);
+    let lb = leg(bPos, -sigma, this.guideBOffset);
     const tau = 2 * Math.PI;
     const positive = (angle: number): number => ((angle % tau) + tau) % tau;
     const aa = Math.atan2(this.guideAOffset.y, this.guideAOffset.x);
     const ab = Math.atan2(this.guideBOffset.y, this.guideBOffset.x);
     const reference = sigma > 0 ? positive(ab - aa) : -positive(aa - ab);
-    const routeSweep = reference + lb.offset - la.offset + sigma * tau * this.currentWrapTurns();
+    const routeSweep = reference + lb.offset - la.offset + sigma * tau * this.currentWrapTurns(aPos, bPos);
     const routedArc = sigma * routeSweep;
     // Trial positions lift their angles to the closest accepted sweep sample.
     // Only step/edit boundaries commit that sheet; reads remain observational.
@@ -408,10 +424,9 @@ export class PulleyLink {
     // turn would replace a continuous route by a different physical path.
     const reverseArc = -routedArc - 2 * (la.alpha + lb.alpha);
     if (routedArc <= 0 && reverseArc <= 0) {
-      const x = this.a.pos.x - this.b.pos.x, y = this.a.pos.y - this.b.pos.y;
+      const x = aPos.x - bPos.x, y = aPos.y - bPos.y;
       const length = Math.hypot(x, y), inv = length > 1e-12 ? 1 / length : 0;
-      const midpoint = new Vec2((this.a.pos.x + this.b.pos.x) * 0.5,
-        (this.a.pos.y + this.b.pos.y) * 0.5);
+      const midpoint = new Vec2((aPos.x + bPos.x) * 0.5, (aPos.y + bPos.y) * 0.5);
       return { ga: midpoint, gb: midpoint.copy(), da: length / 2, db: length / 2,
         nax: x * inv, nay: y * inv, nbx: -x * inv, nby: -y * inv,
         aRadialX: la.radialX, aRadialY: la.radialY,
@@ -420,8 +435,8 @@ export class PulleyLink {
         sweep: 0, routeSweep, wrapped: false, wrapLength: 0, totalLength: length };
     }
     if (routedArc < 0) {
-      la = leg(this.a, -sigma, this.guideAOffset);
-      lb = leg(this.b, sigma, this.guideBOffset);
+      la = leg(aPos, -sigma, this.guideAOffset);
+      lb = leg(bPos, sigma, this.guideBOffset);
     }
     const sweep = routedArc >= 0 ? routeSweep : -sigma * reverseArc;
     const wrapLength = Math.abs(sweep) * PULLEY_RADIUS;
@@ -459,6 +474,7 @@ export class PulleyLink {
   toDict(): PulleyDict {
     return {
       type: "pulley", id: this.id, a: this.a.id, b: this.b.id,
+      ...(this.name ? { name: this.name } : {}),
       pulley: this.pulley.id, length: this.length,
       compliance: this.compliance,
       guide_a: [this.guideAOffset.x, this.guideAOffset.y],
@@ -468,6 +484,8 @@ export class PulleyLink {
       wall_id: this.mountWallId,
       wall_end: this.mountWallEnd,
       wall_normal_sign: this.mountNormalSign,
+      ...(this.showTensionVectors ? { show_tension_vectors: true } : {}),
+      ...(this.showResultantTensionVector ? { show_resultant_tension_vector: true } : {}),
     };
   }
 }
@@ -503,13 +521,15 @@ export function linkFromDict(d: LinkDict, bodiesById: Map<number, Body>): Link {
     );
     link = new PulleyLink(a, b, pulley, null,
       numIn(d.compliance, 0.0, 0.0, 1e9), ga, gb,
-      numIn(d.wrap_sweep, -Math.PI, -2 * Math.PI, 2 * Math.PI));
+      numIn(d.wrap_sweep, -Math.PI, -2 * Math.PI, 2 * Math.PI), null, false);
     link.wrapTurns = intIn(d.wrap_turns, link.wrapTurns, -1e6, 1e6) || 0;
     link.length = numIn(d.length, link.currentLength(), 0.0, 1e6);
     link.mountWallId = d.wall_id === null || d.wall_id === undefined
       ? null : idOr(d.wall_id, -1) >= 0 ? idOr(d.wall_id, -1) : null;
     link.mountWallEnd = intIn(d.wall_end, 0, 0, 1) as 0 | 1;
     link.mountNormalSign = numIn(d.wall_normal_sign, 1, -1, 1) < 0 ? -1 : 1;
+    link.showTensionVectors = boolOr(d.show_tension_vectors, false);
+    link.showResultantTensionVector = boolOr(d.show_resultant_tension_vector, false);
     link.id = idOr(d.id, link.id);
     PulleyLink.nextId = Math.max(PulleyLink.nextId, link.id + 1);
   } else if (d.type === "spring") {
@@ -529,5 +549,6 @@ export function linkFromDict(d: LinkDict, bodiesById: Map<number, Body>): Link {
     link.id = idOr(d.id, link.id);
     DistanceLink.nextId = Math.max(DistanceLink.nextId, link.id + 1);
   }
+  link.name = strOr(d.name, "");
   return link;
 }

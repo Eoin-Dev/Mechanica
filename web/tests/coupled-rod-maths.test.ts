@@ -53,8 +53,8 @@ function pulleyAssembly(mass: number) {
 /** Independent six-coordinate Newton/Euler reference for the stress case.
  * theta keeps the beam rigid by construction; no particle projection, hidden
  * endpoint mass, engine force method, or shared linear solver is used here. */
-function reducedReference(steps: number): number[] {
-  const mass = 1000, arm = 1.5, inertia = 9, ax = Math.sin(0.6), ay = -Math.cos(0.6), dt = 1 / steps;
+function reducedReference(steps: number, duration = 1): number[] {
+  const mass = 1000, arm = 1.5, inertia = 9, ax = Math.sin(0.6), ay = -Math.cos(0.6), dt = duration / steps;
   let state = [0, 0, arm + 2 * ax, 2 * ay, 0, 0];
   const derivative = (q: number[]): number[] => {
     const [theta, omega, x, y, vx, vy] = q, rx = arm * Math.cos(theta), ry = arm * Math.sin(theta);
@@ -288,6 +288,82 @@ describe("loaded rod and external string equations of motion", () => {
     expect(end.vel.x).toBeCloseTo(reference[3], 4); expect(end.vel.y).toBeCloseTo(reference[4], 4);
     const work = end.constForce.dot(end.pos.sub(start));
     expect(Math.abs(world.energy().total - energy - work) / work).toBeLessThan(1e-5);
+  });
+
+  for (const origin of [0, 13]) for (const fps of [120, 480, 960]) {
+    it(`keeps a positively loaded string taut without a spurious correction spike (origin=${origin}, Hz=${fps})`, () => {
+      const { world, end, loads, rope } = assembly(true, false, 1000, 0, 0.6);
+      if (origin === 0) for (const body of world.bodies) { body.pos.x -= 13; body.pos.y += 7; }
+      let maximumCorrection = 0, maximumGap = 0;
+      for (let i = 0; i < fps; i++) {
+        world.step(1 / fps);
+        maximumGap = Math.max(maximumGap, Math.abs(rope.length - loads[1].pos.distTo(end.pos)));
+        maximumCorrection = Math.max(maximumCorrection, ...end.forceSnapshot!.entries
+          .filter(force => force.kind === "correction").map(force => Math.hypot(force.fx, force.fy)));
+      }
+      expect(maximumGap).toBeLessThan(1e-8);
+      // Residual numerical impulses stay below 0.005% of the 1000 N applied
+      // load. A finite-step integrator is not expected to be exactly impulse-free.
+      expect(maximumCorrection / end.constForce.length()).toBeLessThan(5e-5);
+      const before = reducedReference(Math.round(60_000 * (1 - 1 / fps)), 1 - 1 / fps);
+      const after = reducedReference(60_000);
+      const force = end.forceSnapshot!;
+      expect(Math.hypot(force.fx - 1000 * (after[4] - before[4]) * fps,
+        force.fy - 1000 * (after[5] - before[5]) * fps)).toBeLessThan(0.2);
+    });
+  }
+
+  it("does not accumulate shortening drift in a loaded rod-connected pulley", () => {
+    const { world, pulley, end } = pulleyAssembly(1000);
+    let gap = 0;
+    for (let i = 0; i < 120; i++) {
+      world.step(1 / 120);
+      if (pulley.mu > 0) gap = Math.max(gap, Math.abs(pulley.length - pulley.currentLength()));
+    }
+    expect(gap).toBeLessThan(1e-8);
+    expect(end.forceSnapshot!.entries.every(force => Number.isFinite(force.fx) && Number.isFinite(force.fy))).toBe(true);
+  });
+
+  it.each(INTEGRATORS)("allows an initially taut string to slacken when its particle moves inward (%s)", integrator => {
+    const { world, end, rope, loads, n } = assembly(true, false, 1000);
+    world.integrator = integrator; end.vel.set(-n.x, -n.y);
+    world.step(1 / 120);
+    expect(rope.mu).toBe(0); expect(stringForce(end)).toBe(0);
+    expect(loads[1].vel.length()).toBeCloseTo(0, 10);
+    expect(end.pos.distTo(loads[1].pos)).toBeLessThan(rope.length - 0.008);
+    expect(end.vel.y).toBeCloseTo(1 - world.time, 10);
+  });
+
+  it.each(INTEGRATORS)("releases a rod-connected pulley when the path starts shortening (%s)", integrator => {
+    const { world, end, pulley, loads } = pulleyAssembly(1000);
+    world.integrator = integrator;
+    const g = pulley.geometry(); end.vel.set(-g.nbx, -g.nby);
+    expect(world.currentForceSnapshot(end)!.entries.filter(force => force.kind === "pulley")).toEqual([]);
+    world.step(1 / 120);
+    expect(pulley.mu).toBe(0);
+    expect(pulley.currentLength()).toBeLessThan(pulley.length - 0.008);
+    expect(loads[1].vel.length()).toBeCloseTo(0, 10);
+  });
+
+  it.each([1, 1000])("keeps work-energy coherent for two strings sharing one beam (m=%s)", mass => {
+    const { world, end, rope, loads } = assembly(true, false, mass, 0, 0.3);
+    const normal = new Vec2(Math.sin(-0.2), -Math.cos(-0.2));
+    const other = new Body(loads[0].pos.add(normal.mul(2)), 0.15, mass);
+    other.collides = false; other.showForceComponents = true;
+    other.constForce.set(normal.x * mass, normal.y * mass);
+    const second = new DistanceLink(loads[0], other, 2, true);
+    world.bodies.push(other); world.links.push(second);
+    const startA = end.pos.copy(), startB = other.pos.copy(), energy = world.energy().total;
+    let error = 0;
+    for (let i = 0; i < 120; i++) {
+      world.step(1 / 120);
+      for (const link of [rope, second]) if (link.mu > 0) {
+        error = Math.max(error, Math.abs(link.length - link.a.pos.distTo(link.b.pos)));
+      }
+    }
+    const work = end.constForce.dot(end.pos.sub(startA)) + other.constForce.dot(other.pos.sub(startB));
+    expect(error).toBeLessThan(1e-8);
+    expect(Math.abs(world.energy().total - energy - work) / Math.max(1, Math.abs(work))).toBeLessThan(1e-5);
   });
 
   it.each(INTEGRATORS)("keeps actual slack strings force-free through %s trial stages", integrator => {

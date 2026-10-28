@@ -63,6 +63,24 @@ Performance mode, its transient adaptive level/sleep state, adaptive
 resolution, camera/view settings, contacts, caches, and diagnostics are not
 scene settings.
 
+## Delete-zone documents
+
+The optional `delete_zones` array maps to `World.deleteZones`; it is omitted
+from exports when empty. Old scenes without it have no zones. Each entry owns
+`id`, `name`, `shape` (`circle`, `rectangle`, `capsule`), `pos: [x,y]`, `width`,
+`height`, `angle` in radians, and Boolean `enabled` (default true). Width is
+the diameter of a circle; capsule radius is half its smaller dimension.
+Coordinates are finite and clamped to ±1e6, dimensions to 1e-4..1e6 and names
+to 200 characters. Invalid shapes become circles, angles normalize on loading,
+and duplicate zone IDs are remapped independently of body/wall/link IDs.
+Untrusted imports and portable saves allow at most 128 zones.
+
+Every zone field participates in structural rewind comparison; zones and
+deletions therefore require owned structural keyframes. Zone selection uses
+the `z:<id>` namespace in restored view state. Tool mode remains transient,
+while the regions themselves survive undo/reset, named saves, file round trips
+and tab recovery.
+
 ## Body documents
 
 Each `bodies` entry maps to `BodyDict`:
@@ -83,8 +101,8 @@ Each `bodies` entry maps to `BodyDict`:
 | `locked` | Boolean, default `false`; locked bodies have zero inverse mass/inertia. Other runtime types use the default. |
 | `collides` | Boolean, default `true`; other runtime types use the default. |
 | `no_rotation` | Optional boolean, default `false`; other runtime types use the default. |
-| `is_anchor` | Optional boolean, default `false`; other runtime types use the default. A true value forces `locked` true and the name `Anchor`. |
-| `is_pulley` | Optional boolean, default `false`. A true value identifies an internal pulley axle and forces `is_anchor`, `locked`, and `no_rotation` true; `collides` false; radius `0.22`; zero velocity, spin, and constant force; and the name `Pulley`. An axle without a valid `PulleyLink` is pruned after link loading. |
+| `is_anchor` | Optional boolean, default `false`; other runtime types use the default. A true value forces `locked` true; its authored name is preserved, with `Anchor` as the missing-name default. |
+| `is_pulley` | Optional boolean, default `false`. A true value identifies an internal pulley axle and forces `is_anchor`, `locked`, and `no_rotation` true; `collides` false; radius `0.22`; zero velocity, spin, and constant force; and a missing-name default of `Pulley`. Authored wheel names are preserved. An axle without a valid `PulleyLink` is pruned after link loading. |
 | `is_pivot` | Optional internal compatibility flag, default `false`. A true non-pulley value represents an Anchor attached as a fixed rod support: it forces anchor/locked/non-colliding identity, clears motion and constant force, and is presented to the user as `Anchor`. |
 | `is_rod_endpoint` | Optional internal flag, default `false`. It marks the two hidden, non-colliding, non-rotating solver coordinates owned by a standalone rod. It is ignored on pulley axles and rod anchors; orphaned endpoints are pruned after link reconstruction. |
 | `rod_id` | Optional non-negative `DistanceLink` ID or `null`, default `null`. After all links load, only a reference to a live bilateral rod survives; invalid/orphaned/self-endpoint references are released. |
@@ -147,6 +165,12 @@ Links use a tagged union and refer to bodies by ID.
 | `compliance` | XPBD compliance, finite and clamped to `0..1e9`, default zero. |
 | `origin_at_a` | Boolean, default true. It chooses whether the Inspector's editable attachment distance is measured from A or B; the physical affine `rod_position` remains measured from A. |
 | `id` | Guarded ID; advances the `DistanceLink` counter. The first rod/rope with an imported ID keeps it and later duplicates in this link class receive fresh IDs. |
+
+All distance, spring and pulley links accept an optional `name`: a plain-text
+string guarded to 200 characters. Missing or malformed values become an empty
+name, displayed with a type/ID fallback. Empty names are omitted on export,
+preserving the earlier unnamed scene shape. Link names participate in rewind
+structure and survive link-type conversion.
 
 Per-substep position `lambda` and warm-start force multiplier `mu` are not
 serialized.
@@ -291,6 +315,7 @@ when a collection exceeds its resource cap:
 | Links | 10,000 |
 | Force fields | 64 |
 | Drivers | 2,000 |
+| Delete zones | 128 |
 
 The loader checks all five array lengths before constructing objects or
 advancing identity counters, so a resource-limit failure is atomic. For an
@@ -326,7 +351,7 @@ input within those limits:
 
 `restore(text)` begins with `JSON.parse` and requires a non-array object with at
 least one scene member (`settings`, `bodies`, `walls`, `links`, `fields`, or
-`drivers`), then uses the untrusted import path. Syntactically damaged or
+`drivers`, or `delete_zones`), then uses the untrusted import path. Syntactically damaged or
 unrelated JSON throws; recognized scene shapes within the budgets still produce
 a usable world. Imported coordinates, velocities,
 sizes, nonzero mass, friction, force, angular surface speed, and angles use the
@@ -395,6 +420,12 @@ source strings and a conservative object allowance count against the same
 byte budget; frames without recorded forces or contacts allocate no analysis
 arrays. Saved scene JSON remains unchanged.
 
+Frame analysis also owns frozen collision-impulse entries with body/source IDs,
+contact normals, time and signed Jx/Jy. Rewind restores copies into the World,
+and subsequent steps replace them. Budget accounting includes a 64-byte array
+allowance plus 192 bytes per impulse. These measurements and the pre-integration
+contact-classification scratch/cache are absent from portable scene JSON.
+
 `structuralDigest()` folds every other serialized world value into a fast
 32-bit digest: world settings except time, body identity/properties, walls,
 link topology and properties, fields, and drivers. A differing digest requires
@@ -443,7 +474,12 @@ prevent startup.
 | `new_scene_gravity` | Finite number clamped to `0..100`, default `9.8` when absent. Clear applies it to the newly created world; it does not override gravity in presets, imports, saved scenes, reset, or the current world. |
 | `accent` | `#rrggbb` string. Absent uses the theme default. |
 | `custom_accents` | Up to six valid `#rrggbb` strings. |
-| `font_scale` | Finite number clamped to `0.9..1.2`. |
+| `font_scale` | Finite number clamped to `0.8..1.2`. |
+| `adaptive_scrub` | Boolean, defaults true when applied. Pointer speed changes numeric label-drag sensitivity. |
+| `continuous_scrub` | Boolean, defaults true when applied. Supported mouse scrubs use pointer lock and a wrapping in-app cursor. |
+| `scrub_speed` | One of `0.5`, `1`, `2`; default `1` when applied. |
+| `random_start_scene` | Boolean, default true. After the first browser visit, fresh startup/title restart chooses among valid built-in and browser-saved scenes; explicit false keeps the incline example. Ordinary reload restores tab recovery. |
+| `startup_seen` | Internal Boolean recording successful startup/recovery in this browser. Until true, the first fresh scene is always Pulley on an incline, including when random starts are enabled. |
 
 Settings writes are best-effort; failure leaves the current in-memory
 preference active for the session. View overlays such as grid, trails, labels,
@@ -548,6 +584,12 @@ tab and force/event disclosure choices. Only known keys, booleans, finite
 bounded values and object references present in the recovered scene are applied.
 Theme, Performance preference, adaptive resolution and panel sizes retain
 their existing independent preference storage.
+
+Particle presentation tuples contain `[id, showForceComponents,
+resolveWeightOnSlope, forceSlopeWallId, showCollisionImpulses, showRodMoments]`.
+The two optional final booleans are validated independently; older four-field
+tuples remain readable. Collision/moment choices survive world reconstruction
+as view state, while completed measurements belong to rewind analysis.
 
 Undo/rewind history, historical graph samples, motion-trail points, pointer
 gestures and open modal viewers are not stored. Reload does not resume playing
@@ -785,7 +827,10 @@ optional view hints:
 Preset loading sets the graph to its explicit hint or Off; an unrelated graph
 from the preceding scene never carries over. Energy, momentum and phase graphs
 open for demonstrations where that measurement is part of the comparison;
-other examples start with the canvas available in full.
+other examples start with the canvas available in full. A phase-plot preset
+selects its first unlocked, non-anchor physical particle, excluding pulley wheels
+and rod endpoint coordinates, and seeds the trace immediately. Selecting another
+particle retains the ordinary trace-reset behaviour.
 
 The first Projectiles & Friction example, **Rough inclined plane**, has one
 non-rotating 1 kg particle on a 30° slope with effective contact friction 0.25,
@@ -814,10 +859,10 @@ The registry is ordered for the library and currently contains these groups:
 | Gravity & Orbits | Earth & Moon; Kepler ellipse; Inner planets; Binary stars; Gravity slingshot; Newton's cannon; Trojan asteroids |
 | Three-Body Problem | Sun, Earth & Moon; Three-body figure-8; Lagrange's triangle; Choreography: moth; Choreography: butterfly; Pythagorean three-body |
 | Pendulums | Simple pendulum; Double pendulum; Triple pendulum; Swinging rope; Newton's cradle; Coupled pendulums |
-| Rods & Pulleys | Atwood machine; Rough table and pulley; Balanced beam; Loaded rod pendulum; Rod rotor; Swinging Atwood machine |
+| Rods & Pulleys | Atwood machine; Rough table and pulley; Balanced beam; Loaded rod pendulum; Rod rotor; Swinging Atwood machine; Pulley on an incline |
 | Oscillators | Mass on a spring; Elastic string release; Damping regimes; Driven resonance; Coupled oscillators; Spring pendulum |
 | Collisions & Gas | Billiard break; Restitution ladder; Elastic vs inelastic; Direct collision; Gas in a box (50); Gas in a box (200); Brownian motion |
-| Projectiles & Friction | Rough inclined plane; Projectile drag race; Friction ramp; Pulley on an incline; Galileo's drop; Which lands first?; Projectile angles; Terminal velocity; Wrecking ball; Chain bridge |
+| Projectiles & Friction | Rough inclined plane; Projectile drag race; Friction ramp; Galileo's drop; Which lands first?; Projectile angles; Terminal velocity; Wrecking ball; Chain bridge |
 | Soft Bodies | Jelly block; Squishy ball; Trampoline; Soft wheel; Jelly smash |
 | Chaos | Butterfly effect; Orbit dance; Sinai billiard; Cyclone |
 
@@ -832,6 +877,9 @@ The Friction ramp places three non-rotating balls on separate parallel
 coefficients, so the engine's geometric mean gives the advertised contact μ
 of 0, 0.25 or 0.8. Independent tracks prevent collisions from disturbing the
 comparison. Each track has a horizontal run-out and an inelastic end stop.
+Each particle starts with its free-body diagram enabled and its weight resolved
+against its own ramp. The static high-friction particle uses only the friction
+required for equilibrium, not the limiting friction value.
 
 Earth & Moon distributes the circular relative velocity between both bodies
 in proportion to the opposite mass, using the authored softened gravity law.
@@ -873,9 +921,18 @@ are tested. Selecting its string opens the modulus/Hooke card.
 Brownian motion starts with its motion-trail hint disabled so the dense gas is
 clear and inexpensive on first load. Pulley on an incline mounts a fixed axle
 at the upper endpoint of a sloped wall, places a `2 kg` non-rotating particle
-on the slope and a `1.1 kg` hanging particle on the other leg, and joins them
+on the slope and a `2 kg` hanging particle on the other leg, and joins them
 with one inextensible `PulleyLink`; both particles retain ordinary friction and
-restitution behavior.
+restitution behavior. Both particles start with free-body diagrams enabled;
+only the contacting slope particle resolves its weight against the ramp.
+The string tension vectors also start enabled. This scene belongs to Rods &
+Pulleys and is the default for fresh visits and the Mechanica title restart;
+ordinary reload still restores the current tab. The random-start preference
+continues to include both built-in and saved scenes.
+
+**Which lands first?** opens at 0.25x playback so simultaneous landing is easier
+to inspect; its gravity, launch speeds and physical time are unchanged. Other
+examples use normal 1x playback unless their hints specify a multiplier.
 
 Rods & Pulleys separates connected-particle study from point-mass rod
 investigations and motion showcases. Every example in that section starts with
@@ -924,3 +981,27 @@ study labels and search terms; it does not alter scene physics or JSON. The
 Library prepares a headless text index including SHM/SUVAT expansions, keeps
 registry order and applies the selected category after query normalization.
 The tour derives its example count from the registry instead of a stored total.
+
+
+### Premade graph and force defaults
+
+The first browser visit starts with Pulley on an incline, listed in Rods &
+Pulleys. Random starts are on by default for subsequent fresh visits and the
+Mechanica title action; disabling them keeps this incline example. The
+title-triggered refresh notice names the actual selected scene. Both 2 kg particles show free-body diagrams; the slope
+particle resolves its weight against the ramp and the string shows its four tension
+vectors. Both contacting materials have friction 0.25. The hanging load pulls the
+slope particle uphill, with approximately 4.24 N friction and 1.39 m/s² initial
+acceleration. The preset uses twelve substeps for this contact/constraint example.
+
+Only Mass on a spring, Elastic string release, Elastic vs inelastic, and Direct
+collision open a graph by default. Other premades start with the graph closed;
+any graph remains available through View or the number shortcuts. Which lands first?
+uses a 0.25x playback hint without changing its physical launch. Billiard break uses
+0.28 s⁻¹ cloth damping and starts with its graph closed.
+
+All particles in every Soft Bodies preset start with No rotation enabled and
+zero spin, including anchors and rigid loads. This is a preset default; it
+does not restrict imported scenes or prevent the user from changing a particle.
+Force diagram number badges are a tab-local View option, off by default; they
+are independent of body names, force magnitudes and portable scene JSON.

@@ -6,8 +6,45 @@ import { describe, expect, it } from "vitest";
 import { Vec2 } from "../src/core/vec";
 import { Body, Wall } from "../src/engine/body";
 import { World } from "../src/engine/world";
+import { PRESETS } from "../src/scene/presets";
+import { PulleyLink } from "../src/engine/links";
 
 const DT = 1.0 / 120.0;
+
+describe("live friction changes release resting contacts", () => {
+  it.each(["body", "wall"] as const)("restarts an incline pulley after lowering %s friction to zero", material => {
+    const world = PRESETS.find(preset => preset.name === "Pulley on an incline")!.build();
+    const link = world.links[0] as PulleyLink;
+    const ramp = world.walls[0], offset = ramp.b.sub(ramp.a), direction = offset.div(offset.length());
+    const along = () => link.a.pos.dot(direction);
+    for (let i = 0; i < 24; i++) world.step(DT);
+    link.a.friction = ramp.friction = 10;
+    for (let i = 0; i < 90; i++) world.step(DT);
+    expect(link.a.vel.length()).toBeLessThan(0.001);
+    const start = along();
+    if (material === "body") link.a.friction = 0;
+    else ramp.friction = 0;
+    for (let i = 0; i < 36; i++) world.step(DT);
+    expect(link.a.vel.dot(direction)).toBeGreaterThan(0.05);
+    expect(along() - start).toBeGreaterThan(0.005);
+    expect(link.a.forceSnapshot?.entries.filter(entry => entry.kind === "friction")
+      .reduce((sum, entry) => sum + Math.hypot(entry.fx, entry.fy), 0) ?? 0).toBe(0);
+  });
+
+  it("does not keep a cached friction impulse on a newly smooth table", () => {
+    const world = new World();
+    const floor = new Wall(new Vec2(-5, 0), new Vec2(5, 0), 0.1);
+    const load = new Body(new Vec2(0, 0.25), 0.2, 1);
+    load.noRotation = true; load.showForceComponents = true;
+    floor.friction = load.friction = 1; load.constForce.x = 1;
+    world.bodies.push(load); world.walls.push(floor);
+    for (let i = 0; i < 120; i++) world.step(DT);
+    expect(load.vel.length()).toBeLessThan(0.001);
+    load.friction = 0;
+    for (let i = 0; i < 24; i++) world.step(DT);
+    expect(load.vel.x).toBeCloseTo(0.2, 4);
+  });
+});
 
 function slope(thetaDeg: number, mu: number, noRotation: boolean, seconds = 5) {
   const th = (thetaDeg * Math.PI) / 180;

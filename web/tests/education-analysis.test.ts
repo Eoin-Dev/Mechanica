@@ -3,7 +3,7 @@ import { Vec2 } from "../src/core/vec";
 import { Body, Wall } from "../src/engine/body";
 import { PULLEY_RADIUS, PulleyLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
-import { analysePulley, EventTracker, forceLedger, projectForce, slopeBasis, touchingSlopeWall } from "../src/education/analysis";
+import { analysePulley, displayForceResultant, EventTracker, forceLedger, projectForce, slopeBasis, touchingSlopeWall } from "../src/education/analysis";
 import { Contact } from "../src/engine/contacts";
 
 describe("playback event identity and chronology", () => {
@@ -60,6 +60,31 @@ describe("playback event identity and chronology", () => {
 });
 
 describe("education analysis", () => {
+  it("zeros relative cancellation noise for display without changing the physical resultant", () => {
+    const world = new World(), body = new Body(new Vec2(), 0.2, 1);
+    world.gravity = 10; body.constForce.y = 10 + 8.2e-11; world.bodies.push(body);
+    const ledger = forceLedger(world, body);
+    expect(ledger.resultant.fy).not.toBe(0);
+    expect(displayForceResultant(ledger)).toEqual({ fx: 0, fy: 0 });
+    expect(ledger.resultant.fy).not.toBe(0);
+    const tiny = { ...ledger, entries: [{ id: "tiny", label: "Tiny force", kind: "applied" as const,
+      fx: 0, fy: 8.2e-11 }], resultant: { fx: 0, fy: 8.2e-11 } };
+    expect(displayForceResultant(tiny).fy).toBeCloseTo(8.2e-11, 20);
+    world.gravity = 10; body.constForce.y = 10.000001;
+    expect(displayForceResultant(forceLedger(world, body)).fy).toBeGreaterThan(9e-7);
+  });
+
+  it("resolves sole wall contact without an Inspector and preserves corner ambiguity", () => {
+    const world = new World(), floor = new Wall(new Vec2(-2, 0), new Vec2(2, 0), 0.1);
+    const side = new Wall(new Vec2(0, -2), new Vec2(0, 2), 0.1);
+    const body = new Body(new Vec2(1, 0.25), 0.2); body.resolveWeightOnSlope = true;
+    world.bodies.push(body); world.walls.push(floor, side);
+    expect(forceLedger(world, body).basis?.wallId).toBe(floor.id);
+    expect(body.forceSlopeWallId).toBeNull();
+    body.pos.x = 0.25;
+    expect(forceLedger(world, body).basis).toBeNull();
+    expect(forceLedger(world, body, side).basis?.wallId).toBe(side.id);
+  });
   it("recognises current wall contact on either face and at a rounded endpoint without stepping", () => {
     const wall = new Wall(new Vec2(-2, 0), new Vec2(2, 0));
     wall.thickness = 0.1;

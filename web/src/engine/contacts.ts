@@ -28,6 +28,12 @@ const PENETRATION_SLOP = 0.0005; // m of overlap tolerated before projection
 const PROJECTION_PERCENT = 0.8;  // fraction of the remaining overlap removed per pass
 const POSITION_ITERATIONS = 3;   // projection passes per substep (stacks settle)
 const IMPULSE_EPSILON = 1e-9;    // convergence threshold for early exit
+const IMPACT_DIAGNOSTIC_EPSILON = 1e-7; // separates motion from contact-solve roundoff
+
+/** Motion before smooth integration; used only to classify displayed impulses. */
+export interface ContactStartMotion {
+  x: number; y: number; vx: number; vy: number; omega: number;
+}
 
 /** A resolved contact, kept for visualization/diagnostics. */
 export class Contact {
@@ -84,6 +90,7 @@ export interface ContactStatic {
   impulseTolerance?: number;
   relativeImpulseTolerance?: number;
   contactPool?: Contact[];
+  startMotion?: WeakMap<Body, ContactStartMotion>;
   wallSweep?: boolean;
   /** Maximum approximation: keep separating/bounce impulses but omit
    * friction, support anchoring, and persistent impulse bookkeeping. */
@@ -96,6 +103,7 @@ export type ContactImpulseObserver = (
   a: Body, b: Body | null, wallId: number | null,
   nx: number, ny: number, normal: number, tangent: number,
   invMa: number, invMb: number,
+  impact: boolean,
 ) => void;
 
 /** Closest point to `p` on the segment a-b.
@@ -223,6 +231,8 @@ export interface ContactCacheEntry {
   anchorY: number;
   anchored: boolean;
   fixedSupport: boolean;
+  /** Residual closing speed after the solve, never used for warm starting. */
+  normalVelocity?: number;
 }
 export type ContactCache = Map<string, ContactCacheEntry>;
 
@@ -276,6 +286,8 @@ class Manifold {
   rbx: number;
   rby: number;
   targetVn: number;
+  impact: boolean;
+  readonly preSolveVn: number;
   e: number;
   pn = 0.0;
   pt = 0.0;
@@ -381,6 +393,8 @@ class Manifold {
     // solveVelocity)
     this.e = e;
     const vn0 = this.normalVelocity();
+    this.preSolveVn = vn0;
+    this.impact = vn0 < -RESTING_SPEED;
     this.targetVn = vn0 < -RESTING_SPEED ? -e * vn0 : 0.0;
     // wall manifolds overwrite this with the wall's own key (see wallManifold)
     this.key = makeKey && b !== null ? pairKey(a.id, b.id) : "";
@@ -407,6 +421,35 @@ class Manifold {
     }
     return (vbx - vax) * this.nx + (vby - vay) * this.ny;
   }
+
+  classifyImpact(startMotion: WeakMap<Body, ContactStartMotion>, cached?: ContactCacheEntry): void {
+    const a = startMotion.get(this.a), b = this.b === null ? null : startMotion.get(this.b);
+    if (a === undefined || (this.b !== null && b === undefined)) return;
+    const startVn = ((b?.vx ?? 0) - (b?.omega ?? 0) * this.rby - a.vx + a.omega * this.ray) * this.nx +
+      ((b?.vy ?? 0) + (b?.omega ?? 0) * this.rbx - a.vy - a.omega * this.rax) * this.ny;
+    const startPen = this.pen + (a.x - this.a.pos.x) * this.nx + (a.y - this.a.pos.y) * this.ny -
+      (b === null || b === undefined || this.b === null ? 0 :
+        (b.x - this.b.pos.x) * this.nx + (b.y - this.b.pos.y) * this.ny);
+    // An unchanged residual from the preceding solve is supported contact,
+    // rather than a fresh impact on every gravity kick. A body arriving from
+    // positive separation can impact even if it started the slice at rest.
+    const previousVn = cached?.normalVelocity ?? 0;
+    this.impact = (startVn < -IMPACT_DIAGNOSTIC_EPSILON &&
+      (cached === undefined || startVn < previousVn - IMPACT_DIAGNOSTIC_EPSILON)) ||
+      (startPen < -IMPACT_DIAGNOSTIC_EPSILON && this.preSolveVn < -IMPACT_DIAGNOSTIC_EPSILON);
+  }
+}
+
+/** Propagate an observed impact through touching contacts, independently of
+ * their restitution cutoff. Gravity-only impulse chains have no impact seed. */
+function propagateImpact(m: Manifold, vn: number, impacted: Set<Body> | undefined): void {
+  if (impacted === undefined) return;
+  if (!m.impact && vn < Math.min(0, m.preSolveVn) - IMPACT_DIAGNOSTIC_EPSILON &&
+      (impacted.has(m.a) || (m.b !== null && impacted.has(m.b)))) m.impact = true;
+  if (m.impact) {
+    impacted.add(m.a);
+    if (m.b !== null) impacted.add(m.b);
+  }
 }
 
 /** Iterated sequential impulses with accumulated clamping.
@@ -432,13 +475,14 @@ class Manifold {
  * two-body collision, so energy is conserved (e=1) or dissipated (e<1),
  * never created. The contact's persistent bias is then zeroed: its bounce
  * has happened, and the clamped sweeps treat it as a resting contact. */
-function solveImpacts(manifolds: Manifold[], passLimit = 32): void {
+function solveImpacts(manifolds: Manifold[], passLimit = 32, impacted?: Set<Body>): void {
   const passes = Math.min(passLimit, manifolds.length + 4);
   for (let pass = 0; pass < passes; pass++) {
     let any = false;
     for (const m of manifolds) {
       const vn = m.normalVelocity();
       if (vn >= -RESTING_SPEED) continue;
+      propagateImpact(m, vn, impacted);
       const dpn = (-(1.0 + m.e) * vn) / m.kN;
       m.pnBounce += dpn;
       m.targetVn = 0.0; // its bounce is spent; no persistent separation bias
@@ -460,7 +504,7 @@ function solveImpacts(manifolds: Manifold[], passLimit = 32): void {
 
 function solveVelocity(manifolds: Manifold[], iterations: number,
                        friction = true, absoluteTolerance = IMPULSE_EPSILON,
-                       relativeTolerance = 1e-3): void {
+                       relativeTolerance = 1e-3, impacted?: Set<Body>): void {
   let worst0 = 0.0;
   for (let sweep = 0; sweep < iterations; sweep++) {
     let worst = 0.0;
@@ -493,6 +537,7 @@ function solveVelocity(manifolds: Manifold[], iterations: number,
       if (newPn < 0.0) newPn = 0.0;
       dpn = newPn - m.pn;
       m.pn = newPn;
+      if (dpn > 0) propagateImpact(m, vn, impacted);
       if (dpn !== 0.0) {
         a.vel.x -= dpn * nx * invMa;
         a.vel.y -= dpn * ny * invMa;
@@ -1130,7 +1175,10 @@ function warmStart(manifolds: Manifold[], cache: ContactCache): void {
     const cached = cache.get(m.key);
     if (cached === undefined) continue;
     const pn = cached.normalImpulse;
-    const pt = cached.tangentImpulse;
+    // Positive-friction rows clamp the warm start to the current Coulomb cone
+    // during the solve. At mu=0 there is no tangent row to undo yesterday's
+    // resistance, so a newly frictionless contact must start without it.
+    const pt = m.mu === 0 ? 0 : cached.tangentImpulse;
     m.pn = pn;
     m.pt = pt;
     m.cachedFixedSupport = cached.fixedSupport;
@@ -1172,6 +1220,12 @@ export function solveContacts(bodies: Body[], walls: Wall[],
   const manifolds: Manifold[] = [];
   detectBodies(bodies, manifolds, staticState);
   detectWalls(bodies, walls, manifolds, staticState);
+  const startMotion = observe === undefined ? undefined : staticState.startMotion;
+  const impacted = startMotion !== undefined && manifolds.length > 0 ? new Set<Body>() : undefined;
+  if (startMotion !== undefined) for (const m of manifolds) {
+    m.classifyImpact(startMotion, cache?.get(m.key));
+    propagateImpact(m, m.preSolveVn, impacted);
+  }
   // refresh the persistent-contact flags the adaptive-timestep heuristics
   // read: a body held by contacts is not in a gravitational close encounter
   for (const b of bodies) b.touching = false;
@@ -1197,10 +1251,10 @@ export function solveContacts(bodies: Body[], walls: Wall[],
       ? Math.max(4, capped)
       : Math.min(iterations, capped);
   }
-  solveImpacts(manifolds, staticState.impactIterations ?? 32);
+  solveImpacts(manifolds, staticState.impactIterations ?? 32, impacted);
   const simplified = staticState.simplified === true;
   solveVelocity(manifolds, iterations, !simplified,
-    staticState.impulseTolerance, staticState.relativeImpulseTolerance);
+    staticState.impulseTolerance, staticState.relativeImpulseTolerance, impacted);
   solvePosition(manifolds, staticState.positionIterations ?? POSITION_ITERATIONS);
   if (!simplified) {
     markFixedSupport(manifolds);
@@ -1210,7 +1264,7 @@ export function solveContacts(bodies: Body[], walls: Wall[],
   let contactCount = 0;
   for (const m of manifolds) {
     observe?.(m.a, m.b, m.wallId, m.nx, m.ny, m.pn + m.pnBounce,
-      m.pt, m.invMa, m.invMb);
+      m.pt, m.invMa, m.invMb, m.impact || (startMotion === undefined && m.pnBounce > 0));
     let contact = contactPool[contactCount];
     if (contact === undefined) {
       contact = new Contact(m.px, m.py, m.nx, m.ny, m.pn + m.pnBounce,
@@ -1241,6 +1295,7 @@ export function solveContacts(bodies: Body[], walls: Wall[],
       anchorY: m.py,
       anchored: false,
       fixedSupport: false,
+      normalVelocity: m.normalVelocity(),
     } satisfies ContactCacheEntry;
     if (!aFix && !bFix) {
       cache.set(m.key, base); // no anchor needed (rotating/immovable)

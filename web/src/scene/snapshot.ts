@@ -8,7 +8,7 @@
 import { assertSceneCollectionLimits, SceneLimitError, World, WorldDict } from "../engine/world";
 import { PulleyLink } from "../engine/links";
 import { Contact } from "../engine/contacts";
-import type { ForceSnapshot } from "../engine/force-diagnostics";
+import type { ForceSnapshot, CollisionImpulse } from "../engine/force-diagnostics";
 
 const SCENE_PREFIX = "mechanica.scene.";
 // per-scene user metadata (description, ...) lives under a separate key so
@@ -22,7 +22,7 @@ export function snapshot(world: World): string {
 export function restore(snap: string): World {
   const data: unknown = JSON.parse(snap);
   if (typeof data !== "object" || data === null || Array.isArray(data) ||
-      !["settings", "bodies", "walls", "links", "fields", "drivers"]
+      !["settings", "bodies", "walls", "links", "fields", "drivers", "delete_zones"]
         .some(key => Object.hasOwn(data, key))) {
     throw new Error("File does not contain a Mechanica scene");
   }
@@ -119,9 +119,15 @@ function visitStructuralValues(world: World,
     if (!visit(w.color[1])) return false;
     if (!visit(w.color[2])) return false;
   }
+  if (!visit(world.deleteZones.length)) return false;
+  for (const zone of world.deleteZones) {
+    for (const value of [zone.id, zone.name, zone.shape, zone.pos.x, zone.pos.y,
+      zone.width, zone.height, zone.angle, zone.enabled ? 1 : 0]) if (!visit(value)) return false;
+  }
   if (!visit(world.links.length)) return false;
   for (const ln of world.links) {
     if (!visit(ln.id)) return false;
+    if (!visit(ln.name)) return false;
     if (!visit(ln.a.id)) return false;
     if (!visit(ln.b.id)) return false;
     if (ln instanceof PulleyLink) {
@@ -138,6 +144,8 @@ function visitStructuralValues(world: World,
       if (!visit(ln.mountWallId ?? -1)) return false;
       if (!visit(ln.mountWallEnd)) return false;
       if (!visit(ln.mountNormalSign)) return false;
+      if (!visit(ln.showTensionVectors ? 1 : 0)) return false;
+      if (!visit(ln.showResultantTensionVector ? 1 : 0)) return false;
     } else if ("stiffness" in ln) {
       if (!visit(1)) return false;
       if (!visit(ln.restLength)) return false;
@@ -202,10 +210,11 @@ function structureMatches(world: World, expected: readonly StructuralValue[]): b
 interface FrameAnalysis {
   forces: Array<{ bodyId: number; sample: ForceSnapshot }> | null;
   contacts: Float64Array | null;
+  impulses: readonly CollisionImpulse[] | null;
   analysisBytes: number;
 }
 
-const EMPTY_FRAME_ANALYSIS: FrameAnalysis = { forces: null, contacts: null, analysisBytes: 0 };
+const EMPTY_FRAME_ANALYSIS: FrameAnalysis = { forces: null, contacts: null, impulses: null, analysisBytes: 0 };
 
 /** Own only primitive diagnostic values, never pooled contacts or live bodies. */
 function captureAnalysis(world: World): FrameAnalysis {
@@ -245,8 +254,10 @@ function captureAnalysis(world: World): FrameAnalysis {
     }
     analysisBytes += contacts.byteLength + 64;
   }
-  return forces === null && contacts === null ? EMPTY_FRAME_ANALYSIS :
-    { forces, contacts, analysisBytes };
+  const impulses = world.collisionImpulses.length ? Object.freeze(world.collisionImpulses.map(entry => Object.freeze({ ...entry }))) : null;
+  if (impulses !== null) analysisBytes += 64 + impulses.length * 192;
+  return forces === null && contacts === null && impulses === null ? EMPTY_FRAME_ANALYSIS :
+    { forces, contacts, impulses, analysisBytes };
 }
 
 export interface ReplayStep {
@@ -473,6 +484,7 @@ export class RewindBuffer {
           values[k + 7] < 0 ? null : values[k + 7], values[k + 8]));
       }
     }
+    if (frame.impulses !== null) world.collisionImpulses.push(...frame.impulses);
     return world;
   }
 

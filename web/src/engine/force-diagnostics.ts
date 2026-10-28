@@ -35,6 +35,19 @@ export interface ForceSnapshot {
   readonly fy: number;
 }
 
+/** Measured contact momentum transfer, kept separately from forces in N.
+ * Captured even with diagrams off so a paused impact can be inspected later. */
+export interface CollisionImpulse {
+  readonly bodyId: number;
+  readonly sourceId: number | null;
+  readonly wallId: number | null;
+  readonly time: number;
+  readonly jx: number;
+  readonly jy: number;
+  readonly contactNx: number;
+  readonly contactNy: number;
+}
+
 /** Use the same unambiguous arrow symbols in canvas captions and source rows. */
 export function forceSymbols(entries: readonly ForceEntry[]): Map<string, string> {
   const base = (entry: ForceEntry): string => {

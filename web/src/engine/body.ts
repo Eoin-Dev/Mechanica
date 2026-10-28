@@ -191,6 +191,9 @@ export class Body {
   /** Optional named forces averaged over the same interval as netForce.
    * Transient, immutable analysis state; never included in a scene snapshot. */
   forceSnapshot: ForceSnapshot | null = null;
+  /** Presentation only; portable physics scenes do not include these flags. */
+  showCollisionImpulses = true;
+  showRodMoments = false;
   prev = new Vec2();
   corrX = 0.0;
   corrY = 0.0;
@@ -325,7 +328,7 @@ export class Body {
     b.rodAttachmentT = numIn(d.rod_position, 0.5, 0, 1);
     if (b.isAnchor) {
       b.locked = true;
-      b.name = b.isPulley ? "Pulley" : "Anchor";
+      b.name = strOr(d.name, b.isPulley ? "Pulley" : "Anchor");
     }
     if (b.isPivot) {
       b.collides = false;

@@ -2,11 +2,14 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 
+// Configure the setup size before creating the page; keep loaded-app resizes below.
+test.use({ viewport: { width: 1440, height: 900 } });
+
 async function measurements(page: Page, theme = "light", studio = true) {
   await page.addInitScript(({ theme, studio }) => {
     localStorage.setItem("mechanica.settings", JSON.stringify({ tour_done: true, theme, studio_mode: studio }));
   }, { theme, studio });
-  await page.setViewportSize({ width: 1440, height: 900 }); await page.goto("/");
+  await page.goto("/");
   await page.getByRole("button", { name: "Library", exact: true }).click();
   const library = page.getByRole("dialog", { name: "Library", exact: true });
   await library.getByRole("tab", { name: "My scenes", exact: true }).click();
@@ -18,7 +21,8 @@ async function measurements(page: Page, theme = "light", studio = true) {
     }] })) });
   await expect(library).toBeHidden();
   await page.getByRole("tab", { name: "View", exact: true }).click();
-  await page.getByRole("combobox", { name: "Graph shown in the dock", exact: true }).selectOption("Displacement");
+  await page.getByRole("combobox", { name: "Graph shown in the dock", exact: true }).click();
+  await page.getByRole("option", { name: "Displacement–time", exact: true }).click();
   const canvas = page.locator("#canvas"); await canvas.focus(); await page.keyboard.press("f");
   const box = (await canvas.boundingBox())!;
   await canvas.click({ position: { x: box.width / 2, y: box.height / 2 } });
@@ -55,6 +59,12 @@ test("graph inspection, zoom, navigation and both exports retain exact measureme
   await page.mouse.down(); await page.mouse.move(box.x + box.width * 0.8, box.y + box.height * 0.7, { steps: 6 });
   await page.mouse.up();
   await expect(chart.locator('[data-channel="sx_m"]')).not.toHaveAttribute("d", beforePan!);
+  await expect(chart).not.toHaveClass(/panning/);
+  const beforeRightPan = await chart.locator('[data-channel="sx_m"]').getAttribute("d");
+  await page.mouse.down({ button: "right" });
+  await page.mouse.move(box.x + box.width * 0.45, box.y + box.height * 0.45, { steps: 6 });
+  await page.mouse.up({ button: "right" });
+  await expect(chart.locator('[data-channel="sx_m"]')).not.toHaveAttribute("d", beforeRightPan!);
   await expect(chart).not.toHaveClass(/panning/);
   await chart.focus(); await chart.press("Shift+ArrowLeft");
   await expect(chart.locator("g[clip-path] path[data-channel]")).toHaveCount(2);

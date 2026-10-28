@@ -51,6 +51,7 @@ beforeEach(() => {
     overlays,
     toggleLibrary: () => log.calls.push("toggleLibrary"),
     toggleHelp: () => log.calls.push("toggleHelp"),
+    openSettings: () => log.calls.push("openSettings"),
     toggleInspector: () => log.calls.push("toggleInspector"),
   };
 });
@@ -58,11 +59,12 @@ beforeEach(() => {
 /** A keydown that records whether the map claimed its default. */
 function press(key: string, opts: {
   ctrl?: boolean; meta?: boolean; shift?: boolean; alt?: boolean;
-  composing?: boolean; tag?: string; role?: string; repeat?: boolean; editable?: boolean;
+  composing?: boolean; tag?: string; inputType?: string; role?: string; repeat?: boolean; editable?: boolean;
 } = {}): { consumed: boolean; prevented: boolean } {
   let prevented = false;
   const target = {
     tagName: opts.tag ?? "BODY",
+    type: opts.inputType,
     isContentEditable: opts.editable ?? false,
     getAttribute: (n: string) => (n === "role" ? opts.role ?? null : null),
   };
@@ -176,6 +178,45 @@ describe("edit shortcuts", () => {
   });
 });
 
+describe("non-text modal Escape", () => {
+  it.each(["checkbox", "range"])("closes an overlay from a focused %s", inputType => {
+    overlays[0].visible = true;
+    expect(press("Escape", { tag: "INPUT", inputType })).toEqual({ consumed: true, prevented: true });
+    expect(overlays[0].visible).toBe(false); expect(log.calls).toEqual([]);
+  });
+  it.each(["checkbox", "range"])("does not clear scene selection from an inspector %s", inputType => {
+    expect(press("Escape", { tag: "INPUT", inputType })).toEqual({ consumed: false, prevented: false });
+    expect(log.calls).toEqual([]);
+  });
+  it("retains text-field cancellation before modal closing", () => {
+    overlays[0].visible = true;
+    expect(press("Escape", { tag: "INPUT", inputType: "text" })).toEqual({ consumed: false, prevented: false });
+    expect(overlays[0].visible).toBe(true); expect(log.calls).toEqual([]);
+  });
+});
+
+describe("Settings shortcut", () => {
+  it.each([{ ctrl: true }, { meta: true }])("opens with Ctrl/Cmd+comma: %j", modifier => {
+    const result = press(",", modifier);
+    expect(result).toEqual({ consumed: true, prevented: true });
+    expect(log.calls).toEqual(["openSettings"]);
+  });
+  it("does not repeat while held", () => {
+    expect(press(",", { ctrl: true, repeat: true })).toEqual({ consumed: true, prevented: true });
+    expect(log.calls).toEqual([]);
+  });
+  it.each(["dialog", "tour"])("does not open through a %s", owner => {
+    if (owner === "tour") host.tour.visible = true;
+    else overlays[0].visible = true;
+    expect(press(",", { ctrl: true })).toEqual({ consumed: true, prevented: true });
+    expect(log.calls).toEqual([]);
+  });
+  it("retains focused text-control ownership", () => {
+    expect(press(",", { ctrl: true, tag: "INPUT" })).toEqual({ consumed: false, prevented: false });
+    expect(log.calls).toEqual([]);
+  });
+});
+
 describe("tool keys", () => {
   it.each([
     ["v", "select"], ["h", "pan"], ["b", "body"], ["a", "anchor"],
@@ -234,8 +275,8 @@ describe("view and playback keys", () => {
     expect(log.calls).toEqual(["toggleAutoFit"]);
   });
 
-  it("maps the three graph keys", () => {
-    for (const [key, mode] of [["1", "Energy"], ["2", "Mom."], ["3", "Phase"]]) {
+  it("maps all six graph keys", () => {
+    for (const [key, mode] of [["1", "Energy"], ["2", "Mom."], ["3", "Phase"], ["4", "Displacement"], ["5", "Distance"], ["6", "Velocity"]]) {
       log.calls.length = 0;
       press(key);
       expect(log.calls).toEqual([`toggleGraph(${mode})`]);
@@ -257,7 +298,7 @@ describe("view and playback keys", () => {
   });
 
   it("ignores keys it does not claim", () => {
-    for (const key of ["q", "z", "j", "5", "]", "Home", "PageUp"]) {
+    for (const key of ["q", "z", "j", "7", "]", "Home", "PageUp"]) {
       const r = press(key);
       expect(r.consumed, key).toBe(false);
       expect(r.prevented, key).toBe(false);

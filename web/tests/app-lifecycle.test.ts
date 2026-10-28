@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App, PHYSICS_DT } from "../src/app";
 import { Body, Wall } from "../src/engine/body";
+import type { ForceEntry, ForceSnapshot } from "../src/engine/force-diagnostics";
 import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
 import { INTEGRATORS, World } from "../src/engine/world";
 import { forceLedger } from "../src/education/analysis";
@@ -46,6 +47,56 @@ afterEach(() => {
 });
 
 describe("App construction", () => {
+  it("repaints paused annotations when floating UI moves or hides without resizing the canvas", () => {
+    const app = makeApp(); app.newScene(); app.view.grid = false;
+    const body = new Body(new Vec2(1, 2)); body.vel.set(3, 4); app.world.bodies.push(body);
+    const before = app.world.toDict(), renderer = app as unknown as { render(): boolean };
+    const canvas = document.querySelector("canvas")!;
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue(new DOMRect(50, 40, 800, 600));
+    const overlay = document.createElement("button"); document.body.append(overlay);
+    let bounds = new DOMRect(824, 270, 26, 76);
+    const measure = vi.spyOn(overlay, "getBoundingClientRect").mockImplementation(() => bounds);
+    const unregister = app.registerCanvasOverlay(overlay);
+    expect(renderer.render()).toBe(true); expect(renderer.render()).toBe(false);
+    const layoutReads = measure.mock.calls.length;
+    expect(renderer.render()).toBe(false); expect(measure).toHaveBeenCalledTimes(layoutReads);
+    app.resizeCanvas(); expect(renderer.render()).toBe(false);
+    bounds = new DOMRect(824, 320, 26, 76);
+    app.resizeCanvas(); expect(renderer.render()).toBe(true); expect(renderer.render()).toBe(false);
+    bounds = new DOMRect();
+    app.resizeCanvas(); expect(renderer.render()).toBe(true); expect(renderer.render()).toBe(false);
+    app.resizeCanvas(); expect(renderer.render()).toBe(false);
+    bounds = new DOMRect(824, 270, 26, 76);
+    app.resizeCanvas(); expect(renderer.render()).toBe(true);
+    unregister(); expect(renderer.render()).toBe(true); expect(renderer.render()).toBe(false);
+    expect(app.world.toDict()).toEqual(before);
+  });
+
+  it("repaints changed individual force arrows while retaining an otherwise stationary canvas", () => {
+    const app = makeApp(); app.newScene(); app.world.gravity = 0;
+    app.world.time = PHYSICS_DT;
+    app.view.grid = false;
+    const body = new Body(new Vec2()); body.showForceComponents = true;
+    app.world.bodies.push(body);
+    const sample = (force: number): ForceSnapshot => {
+      const entries: ForceEntry[] = [
+        { id: "left", kind: "applied", label: "Left", fx: -force, fy: 0 },
+        { id: "right", kind: "applied", label: "Right", fx: force, fy: 0 },
+      ];
+      return { entries, startTime: 0, endTime: PHYSICS_DT, stepCount: 1,
+        x: 0, y: 0, vx: 0, vy: 0, mass: 1, fx: 0, fy: 0 };
+    };
+    const renderer = app as unknown as { render(): boolean };
+    body.forceSnapshot = sample(1);
+    expect(renderer.render()).toBe(true);
+    expect(renderer.render()).toBe(false);
+    body.forceSnapshot = sample(2);
+    expect(renderer.render()).toBe(true);
+    expect(renderer.render()).toBe(false);
+    body.forceSnapshot = sample(0);
+    expect(renderer.render()).toBe(true);
+    expect(renderer.render()).toBe(false);
+  });
   it.each([320, 390, 768, 1440])("preserves preset framing margins at %s px, including hinted centres", width => {
     const app = makeApp(); app.camera.resize(width, 900);
     for (const preset of PRESETS) {
@@ -327,7 +378,7 @@ describe("time jump", () => {
     let elapsed = 0;
     vi.stubGlobal("performance", { now: () => elapsed });
     const step = World.prototype.step;
-    vi.spyOn(World.prototype, "step").mockImplementation(function (this: World, dt: number) {
+    const stepSpy = vi.spyOn(World.prototype, "step").mockImplementation(function (this: World, dt: number) {
       step.call(this, dt);
       elapsed += 3001;
     });
@@ -337,6 +388,13 @@ describe("time jump", () => {
     expect(app.world.time).toBeCloseTo(PHYSICS_DT, 9);
     expect(messages[0]).toContain("enter that time again");
     expect(app.seeking).toBe(false);
+    stepSpy.mockRestore();
+    const resume = app.requestTimeJump("10");
+    await vi.runAllTimersAsync();
+    await expect(resume).resolves.toBe(true);
+    expect(app.world.time).toBeCloseTo(10, 8);
+    expect(app.seeking).toBe(false);
+    expect(messages).toHaveLength(1);
   });
 
   it("shares strict validation and backward baseline planning with cooperative seeking", async () => {
@@ -640,6 +698,25 @@ describe("playback and history", () => {
       expect(app.world.bodies.length).toBeGreaterThanOrEqual(0);
     }
   });
+
+  it.each(PRESETS.filter(preset => preset.hints.graph === "phase"))(
+    "opens %s with a real moving particle already selected for the phase plot", preset => {
+      const app = makeApp(); app.loadPreset(preset, false);
+      const selected = app.selection[0];
+      expect(selected).toBeInstanceOf(Body);
+      const body = selected as Body;
+      expect(body.locked || body.isAnchor || body.isRodEndpoint || body.isPulley).toBe(false);
+      expect(app.graphMode).toBe("Phase");
+      const data = captureGraphData(app, "Phase")!;
+      expect(data.body?.id).toBe(body.id);
+      expect(data.rows).toHaveLength(1);
+      app.stepOnce();
+      expect(captureGraphData(app, "Phase")!.rows.length).toBeGreaterThan(1);
+      const after = captureGraphData(app, "Phase")!.rows.at(-1)!;
+      expect(Math.abs(Number(after[1]) - Number(data.rows[0][1])) +
+        Math.abs(Number(after[2])) + Math.abs(Number(after[3]) - Number(data.rows[0][3])) +
+        Math.abs(Number(after[4]))).toBeGreaterThan(0);
+    });
 
   it("makes a preset replacement undoable", () => {
     const app = makeApp();

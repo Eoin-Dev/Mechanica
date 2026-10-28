@@ -4,6 +4,15 @@
 import type { App } from "../app";
 import { PRESETS } from "../scene/presets";
 import { ModalFocus, countNoun, el, isTouch } from "./dom";
+import { spotlightOutline } from "./tour-spotlight";
+
+export type TourInspectorSection = "particle" | "forces" | "graphs" | "fields";
+export interface TourInspectorSession {
+  canShow(section: TourInspectorSection): boolean;
+  reveal(section: TourInspectorSection): HTMLElement | null;
+  restore(): void;
+}
+export interface TourInspectorHost { beginTour(): TourInspectorSession; }
 
 /** One stop on the tour.
  *
@@ -21,6 +30,7 @@ export interface Step {
   body: string;
   touchBody?: string; // replaces `body` on touch devices
   enter?: (app: App) => void;
+  inspector?: TourInspectorSection;
 }
 
 export const STEPS: Step[] = [
@@ -29,32 +39,20 @@ export const STEPS: Step[] = [
     body: "A physics sandbox: build mechanical systems, run them, and " +
           "measure what they do. Everything is real SI units - metres, " +
           "kilograms, seconds, newtons - and everything runs in this " +
-          "browser.",
+          "browser. New sessions start with Pulley on an incline: inspect weight components, reaction, friction and tension before pressing Play.",
   },
   {
     // the bar below the canvas is half of what this step describes
     target: "#canvas-wrap, #hintbar",
     title: "The scene",
-    body: "This is the world. Scroll to zoom at the cursor, right-drag or " +
-          "middle-drag to pan. The bar at the bottom always shows where " +
-          "your cursor is in metres, how many objects exist, and how far " +
-          "the total energy has drifted - a running check on the solver.",
-    touchBody: "This is the world. Pinch with two fingers to zoom and pan. " +
-               "The bar at the bottom shows how many objects exist and how " +
-               "far the total energy has drifted - a running check on the " +
-               "solver.",
+    body: "Scroll to zoom at the cursor; right- or middle-drag to pan. The bottom bar shows coordinates, object counts and energy change. Friction and drag can physically remove energy, so a decrease alone is not a solver error. To check numerical drift, use a conservative scene without those losses.",
+    touchBody: "Pinch with two fingers to zoom and pan. The bottom bar shows object counts and energy change. Friction and drag can physically remove energy, so a decrease alone is not a solver error. To check numerical drift, use a conservative scene without those losses.",
   },
   {
     target: "#toolbar",
     title: "Run it",
-    body: "Press play - or the spacebar - and the simulation starts. The " +
-          "arrows step one frame at a time, forwards or back, which is how " +
-          "you catch what happens during a collision. The clock is " +
-          "editable: type a time and the scene is re-simulated to it.",
-    touchBody: "Press play and the simulation starts. The arrows step one " +
-               "frame at a time, forwards or back, which is how you catch " +
-               "what happens during a collision. The clock is editable: " +
-               "type a time and the scene is re-simulated to it.",
+    body: "Press play or the spacebar to run. The arrows step forwards or back; hold one to repeat, faster the longer you hold. Steps stop at collisions so you can inspect them. Edit the clock to re-simulate to a time. Reset returns to this scene’s start.",
+    touchBody: "Press play to run. The arrows step forwards or back; hold one to repeat, faster the longer you hold. Steps stop at collisions so you can inspect them. Edit the clock to re-simulate to a time. Reset returns to this scene’s start.",
     enter: (app) => { app.playing = true; },
   },
   {
@@ -72,15 +70,8 @@ export const STEPS: Step[] = [
   {
     target: "#palette",
     title: "Build your own",
-    body: "Bodies, anchors, walls and pulleys, plus three ways to connect things: a " +
-          "rigid rod, a string, a spring. Click two bodies to link them - " +
-          "or click empty space and the anchor or body you need is created " +
-          "for you, so a pendulum takes two clicks. Place an anchor near a rod " +
-          "to support it there.",
-    touchBody: "Bodies, anchors, walls and pulleys, and three ways to connect " +
-                "things: a rigid rod, a string, a spring. Tap two bodies to " +
-                "link them - or tap empty space and the anchor or body you " +
-                "need is created for you. An anchor placed near a rod supports it.",
+    body: "Place particles, walls and anchors. Click two points to draw a rod, then slowly drag a particle onto it to attach; an anchor near the rod supports it. Strings and springs join two bodies. The pulley tool creates a wheel, two particles and their string. Select an object to adjust it in the Inspector.",
+    touchBody: "Place particles, walls and anchors. Tap two points to draw a rod, then slowly drag a particle onto it to attach; an anchor near the rod supports it. Strings and springs join two bodies. The pulley tool creates a wheel, two particles and their string. Select an object to adjust it in the panel.",
     enter: (app) => { app.playing = false; },
   },
   {
@@ -89,22 +80,30 @@ export const STEPS: Step[] = [
     // exactly what a phone user needs to be shown. Whichever of the two is
     // visible gets the ring; the other is skipped as hidden.
     target: "#inspector, #inspector-handle",
-    title: "Change and analyse anything",
-    body: "Select a particle for on-canvas free-body forces, or select a rod " +
-          "for endpoint labels, coordinates and its attachment list. The World " +
-          "tab holds gravity, event-aware playback, air drag and the solver; " +
-          "View controls global overlays and the Graph dock plots live " +
-          "distance–time and velocity–time data for the selected particle.",
-    touchBody: "Tap the tab on the right edge to slide the panel open. " +
-               "Select a particle for on-canvas free-body forces, " +
-                "or a rod for endpoint labels, coordinates and attachments. The World tab holds " +
-               "gravity and event-aware playback; View and Graphs provide " +
-               "the other analysis tools.",
+    title: "Edit particles and rods",
+    inspector: "particle",
+    body: "Select a particle to change its mass, material and forces. Drag a numeric label to adjust; moving slowly is finer. Rod-attached positions are read-only: use the distance along the rod beneath x/y, or detach the particle to position it freely. Select the rod to edit its geometry and attachments.",
+    touchBody: "The panel shows a particle’s mass, material and forces. Rod-attached positions are read-only: use the distance along the rod beneath x/y, or detach the particle. Select the rod to edit its geometry and attachments.",
+  },
+  {
+    target: "#canvas-wrap, #inspector, #inspector-handle",
+    title: "Read a free-body diagram",
+    inspector: "forces",
+    body: "Enable Free-body diagram in the particle’s panel (Normal mode). W is weight, R reaction, F friction, T tension and f applied force. Resolve weight on slope replaces W with parallel W∥ and perpendicular W⊥ components; other arrows stay unchanged. Use Values and sources for origins and interval-averaged readings.",
+    touchBody: "Free-body diagram shows the particle’s forces (Normal mode). W is weight, R reaction, F friction, T tension and f applied force. Resolve weight on slope replaces W with parallel W∥ and perpendicular W⊥ components; other arrows stay unchanged. Use Values and sources for origins and interval-averaged readings.",
+  },
+  {
+    target: "#inspector, #inspector-handle",
+    title: "Measure the motion",
+    inspector: "graphs",
+    body: "Choose a graph in View, or use keys 1–6. Select a particle for displacement, distance, velocity or phase space. Data opens a larger graph with labelled axes and coordinate inspection. Zoom, then left- or right-drag to pan. Numbers and CSV retain the recorded values; PNG exports the graph. Return to live resumes scrolling after panning history.",
+    touchBody: "Choose a graph in View. Select a particle for displacement, distance, velocity or phase space. Data opens a larger graph with labelled axes and coordinate inspection. Zoom, then drag to pan. Numbers and CSV retain the recorded values; PNG exports the graph. Return to live resumes scrolling after panning history.",
   },
   {
     // Introduce force fields and their guide without changing the scene.
     target: "#inspector, #inspector-handle",
     title: "Write your own physics",
+    inspector: "fields",
     body: "The World tab ends with custom force fields: type a formula for " +
           "Fx and Fy and it is applied to every body. Write -y*5 for a " +
           "spring toward the axis, or -0.5*vx for drag. They render as " +
@@ -121,7 +120,7 @@ export const STEPS: Step[] = [
     target: "#btn-library, #btn-settings",
     title: "Start from a worked example",
     body: `The Library has ${PRESETS.length} ready-made simulations - orbits, pendulums, ` +
-          "collisions, gases, chaos, soft bodies - each with a note on what " +
+          "rods, pulleys, inclined planes, collisions and more - each with a note on what " +
           "it demonstrates. It is the fastest way in: load one, run it, " +
           "then take it apart. The gear beside it holds settings, and help " +
           "with every shortcut.",
@@ -153,12 +152,15 @@ export class Tour {
   private root: HTMLElement | null = null;
   private scrim!: HTMLElement;
   private cells: HTMLElement[] = []; // pooled dark tiles
-  private rings: HTMLElement[] = []; // pooled outlines, one per hole
+  private outline!: SVGSVGElement;
+  private outlinePath!: SVGPathElement;
   private card!: HTMLElement;
   private focus!: ModalFocus;
   private shell: HTMLElement | null = null;
   private index = 0;
   private wasPlaying = false;
+  private inspectorSession: TourInspectorSession | null = null;
+  private inspectorTarget: HTMLElement | null = null;
   private steps: Step[] = [];
   private onKey = (e: KeyboardEvent): void => {
     if (e.key === "Escape") this.finish();
@@ -168,9 +170,9 @@ export class Tour {
     e.preventDefault();
     e.stopPropagation();
   };
-  private reflow = (): void => this.place();
+  private reflow = (): void => { this.revealInspector(); this.place(); };
 
-  constructor(app: App) {
+  constructor(app: App, private inspector?: TourInspectorHost) {
     this.app = app;
   }
 
@@ -184,6 +186,7 @@ export class Tour {
 
   start(): void {
     if (this.root !== null) return;
+    this.inspectorSession = this.inspector?.beginTour() ?? null;
     // steps whose target is missing (a panel hidden on this viewport) are
     // dropped rather than shown pointing at nothing
     // Same visibility test place() uses, so the two can never disagree:
@@ -192,7 +195,8 @@ export class Tour {
     // with no visible target would otherwise show as an unanchored card
     // describing something the reader cannot see.
     this.steps = STEPS.filter(
-      (s) => s.target === undefined || visibleTargets(s.target).length > 0);
+      (s) => (s.target === undefined || visibleTargets(s.target).length > 0) &&
+        (s.inspector === undefined || this.inspectorSession?.canShow(s.inspector) !== false));
     if (this.steps.length === 0) return;
     this.wasPlaying = this.app.playing;
     this.index = 0;
@@ -201,20 +205,20 @@ export class Tour {
   }
 
   private build(): void {
-    // The pools belong to the scrim and root built below, so they start
-    // empty for every run. Carrying them across meant a replay - from
-    // Settings or from Help, the only ways to see the tour twice - reused
-    // tiles and rings that were still parented to the PREVIOUS root, which
-    // finish() had already removed from the document. Nothing was appended
-    // to the new scrim, so the second showing had no dimming and no
-    // highlight ring at all: just a card floating over an undimmed page.
+    // Each replay owns new dimming tiles and its own union outline. Removed
+    // nodes from the previous run must never be reused by the new root.
     this.cells.length = 0;
-    this.rings.length = 0;
     this.scrim = el("div", { class: "tour-scrim" });
+    this.outline = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    this.outline.setAttribute("class", "tour-ring");
+    this.outline.setAttribute("aria-hidden", "true");
+    this.outlinePath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    this.outline.append(this.outlinePath);
     this.card = el("div", { class: "tour-card", "aria-live": "polite",
                             "aria-atomic": "true" });
+    this.card.tabIndex = -1;
     this.focus = new ModalFocus(this.card, "Guided tour");
-    this.root = el("div", { class: "tour-root" }, this.scrim, this.card);
+    this.root = el("div", { class: "tour-root" }, this.scrim, this.outline, this.card);
     document.body.append(this.root);
     const doc = document as Document & {
       getElementById?: (id: string) => HTMLElement | null;
@@ -243,12 +247,14 @@ export class Tour {
   private show(): void {
     const step = this.steps[this.index];
     step.enter?.(this.app);
+    this.revealInspector();
     const last = this.index === this.steps.length - 1;
     let text = (isTouch() && step.touchBody) || step.body;
     if (this.index === 0) {
       text += ` ${countNoun(this.steps.length, "quick stop")} and you are done.`;
     }
 
+    this.card.style.maxHeight = "";
     this.card.replaceChildren();
     this.card.append(
       el("div", { class: "tour-step", text: `${this.index + 1} of ${this.steps.length}` }),
@@ -272,10 +278,19 @@ export class Tour {
     row.append(next);
     this.card.append(row);
     this.place();
-    next.focus();
+    this.card.scrollTop = 0;
+    // Long cards start at their heading rather than scrolling immediately
+    // to an off-screen Next button. Tab still reaches every action.
+    if (this.card.scrollHeight > this.card.clientHeight + 1) this.card.focus({ preventScroll: true });
+    else next.focus({ preventScroll: true });
   }
 
-  /** Dim everything except `holes`, and ring each one.
+  private revealInspector(): void {
+    const section = this.steps[this.index]?.inspector;
+    this.inspectorTarget = section ? this.inspectorSession?.reveal(section) ?? null : null;
+  }
+
+  /** Dim everything except `holes`, and outline their actual union.
    *
    * The obvious trick - one element with a huge spread box-shadow - can
    * only ever punch a single hole, and a bounding box around several
@@ -333,22 +348,8 @@ export class Tour {
     }
     for (let i = used; i < this.cells.length; i++) this.cells[i].hidden = true;
 
-    for (let i = 0; i < Math.max(holes.length, this.rings.length); i++) {
-      let ring = this.rings[i];
-      if (ring === undefined) {
-        ring = el("div", { class: "tour-ring" });
-        this.rings.push(ring);
-        this.root!.insertBefore(ring, this.card);
-      }
-      const r = holes[i];
-      if (r === undefined) {
-        ring.hidden = true;
-        continue;
-      }
-      ring.hidden = false;
-      ring.style.cssText =
-        `left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`;
-    }
+    this.outline.setAttribute("viewBox", `0 0 ${vw} ${vh}`);
+    this.outlinePath.setAttribute("d", spotlightOutline(holes));
   }
 
   /** Put the spotlight over the current target and the card beside it.
@@ -360,7 +361,16 @@ export class Tour {
   private place(): void {
     if (this.root === null) return;
     const step = this.steps[this.index];
-    const targets = step.target ? visibleTargets(step.target) : [];
+    let targets = step.target ? visibleTargets(step.target) : [];
+    if (this.inspectorTarget?.isConnected) {
+      targets = targets.filter(target => target.id !== "inspector" && target.id !== "inspector-handle");
+      if (this.inspectorTarget.closest("#inspector")?.classList.contains("mobile-open")) {
+        // A phone drawer overlays the scene; spotlight its control rather
+        // than swallowing it into the entire canvas behind the drawer.
+        targets = targets.filter(target => target.id !== "canvas-wrap");
+      }
+      targets.push(this.inspectorTarget);
+    }
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     const M = 12; // gap between spotlight and card
@@ -374,11 +384,11 @@ export class Tour {
     for (const n of targets) {
       const b = n.getBoundingClientRect();
       if (b.width === 0 || b.height === 0) continue;
-      const hx = Math.max(0, b.left - pad);
-      const hy = Math.max(0, b.top - pad);
-      holes.push({ x: hx, y: hy,
-                   w: Math.min(vw, b.right + pad) - hx,
-                   h: Math.min(vh, b.bottom + pad) - hy });
+      // Keep the complete stroke inside the window, including edge controls.
+      const hx = Math.max(2, b.left - pad);
+      const hy = Math.max(2, b.top - pad);
+      const right = Math.min(vw - 2, b.right + pad), bottom = Math.min(vh - 2, b.bottom + pad);
+      if (right > hx && bottom > hy) holes.push({ x: hx, y: hy, w: right - hx, h: bottom - hy });
     }
     this.paintHoles(holes);
     if (holes.length === 0) {
@@ -386,12 +396,13 @@ export class Tour {
       this.card.style.top = `${Math.round((vh - this.card.offsetHeight) / 2)}px`;
       return;
     }
-    // the card is placed against the union, so it clears every hole
+    // Inspector steps anchor the explanation to the revealed control, so
+    // a second large scene spotlight cannot push the card over that control.
     let x = Infinity;
     let y = Infinity;
     let rgt = -Infinity;
     let bot = -Infinity;
-    for (const r of holes) {
+    for (const r of this.inspectorTarget ? holes.slice(-1) : holes) {
       if (r.x < x) x = r.x;
       if (r.y < y) y = r.y;
       if (r.x + r.w > rgt) rgt = r.x + r.w;
@@ -401,6 +412,17 @@ export class Tour {
     const h = bot - y;
 
     const cw = this.card.offsetWidth;
+    // On narrow/short windows a long explanation must scroll beside the
+    // revealed control, rather than covering the very thing it explains.
+    // Keep the cap stable during card scrolling so its scroll position is
+    // never reset by temporarily expanding it to the full viewport.
+    let cap = "";
+    if (this.inspectorTarget) {
+      const horizontalRoom = x >= cw + M || vw - rgt >= cw + M;
+      const available = horizontalRoom ? vh - 2 * M : Math.max(y - 2 * M, vh - bot - 2 * M);
+      cap = `${Math.max(80, Math.floor(Math.min(vh - 2 * M, available)))}px`;
+    }
+    if (this.card.style.maxHeight !== cap) this.card.style.maxHeight = cap;
     const ch = this.card.offsetHeight;
     const below = vh - (y + h);
     let cx: number;
@@ -429,15 +451,15 @@ export class Tour {
     window.removeEventListener("resize", this.reflow);
     window.removeEventListener("scroll", this.reflow, true);
     if (this.shell !== null) this.shell.inert = false;
+    this.inspectorSession?.restore();
+    this.inspectorSession = null;
+    this.inspectorTarget = null;
     this.focus.exit();
     this.root.remove();
     this.root = null;
     this.shell = null;
-    // drop the pooled tiles/rings with the root that owned them, so they
-    // cannot outlive it (build() clears these too - this keeps the removed
-    // subtree collectable in the meantime)
+    // Release the pooled tiles with their removed root.
     this.cells.length = 0;
-    this.rings.length = 0;
     this.app.playing = this.wasPlaying; // leave playback as we found it
     this.app.settings[TOUR_KEY] = true;
     this.app.saveSettings();

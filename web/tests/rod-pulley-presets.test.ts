@@ -13,7 +13,8 @@ const loadBodies = (bodies: Body[]) => bodies.filter(b => !b.isAnchor && !b.isRo
 
 describe("rod and pulley investigations", () => {
   it("offers a dedicated section with unobstructed graph-free starting views", () => {
-    expect(PRESETS.filter(p => p.category === "Rods & Pulleys").map(p => p.name)).toEqual(names);
+    expect(PRESETS.filter(p => p.category === "Rods & Pulleys").map(p => p.name))
+      .toEqual([...names, "Pulley on an incline"]);
     for (const name of names) expect(preset(name).hints.graph).toBeUndefined();
   });
 

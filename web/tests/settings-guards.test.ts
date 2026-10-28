@@ -79,9 +79,10 @@ describe("sanitizeSettings", () => {
   });
 
   it("clamps the font scale to the range the panel offers", () => {
+    expect(sanitizeSettings({ font_scale: 0.8 }).font_scale).toBe(0.8);
     expect(sanitizeSettings({ font_scale: 1.1 }).font_scale).toBe(1.1);
     expect(sanitizeSettings({ font_scale: 40 }).font_scale).toBe(1.2);
-    expect(sanitizeSettings({ font_scale: 0 }).font_scale).toBe(0.9);
+    expect(sanitizeSettings({ font_scale: 0 }).font_scale).toBe(0.8);
     expect(sanitizeSettings({ font_scale: NaN }).font_scale).toBeUndefined();
     expect(sanitizeSettings({ font_scale: "big" }).font_scale).toBeUndefined();
   });
@@ -132,4 +133,10 @@ describe("sanitizeSettings", () => {
     };
     expect(sanitizeSettings(JSON.parse(JSON.stringify(full)))).toEqual(full);
   });
+});
+
+it("validates numeric gesture and random-start preferences", () => {
+  expect(sanitizeSettings({ adaptive_scrub: false, continuous_scrub: true, scrub_speed: 0.5, random_start_scene: true }))
+    .toEqual({ adaptive_scrub: false, continuous_scrub: true, scrub_speed: 0.5, random_start_scene: true });
+  expect(sanitizeSettings({ adaptive_scrub: "true", continuous_scrub: 1, scrub_speed: Infinity, random_start_scene: [] })).toEqual({});
 });

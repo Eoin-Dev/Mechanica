@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   // Site is served from a sub-path on GitHub Pages; "./" keeps asset URLs
@@ -11,8 +11,13 @@ export default defineConfig({
     // Browser acceptance tests use Playwright's runner and live under e2e/;
     // keep Vitest focused on the headless/unit verification tree.
     include: ["tests/**/*.test.ts"],
+    // Retain the private profiling snippet without collecting it as a test.
+    exclude: [...configDefaults.exclude, "tests/.coupled-profile.test.ts"],
     // Keep CSS text available to stylesheet and focus-ring tests.
     css: true,
+    // Long physics contracts need predictable CPU access. Unbounded workers
+    // can exceed a test's deadline even when the same trajectory passes alone.
+    maxWorkers: 2,
     // Preset and soak tests integrate extended simulation runs.
     testTimeout: 30_000,
   },

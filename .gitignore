@@ -3,3 +3,7 @@ web/dist/
 web/test-results.json
 web/test-results/
 web/playwright-report/
+
+# Private local diagnostics, retained outside release commits.
+/web/debug.log
+/web/tests/.coupled-profile.test.ts

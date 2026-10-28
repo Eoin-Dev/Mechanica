@@ -40,75 +40,84 @@ async function paintedPath(page: Page) {
 }
 
 for (const theme of ["dark", "light"]) {
-  test(`rewind repaints an overwritten trail and preserves its camera (${theme})`, async ({ page }, testInfo) => {
-    const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
-    await page.addInitScript(theme => localStorage.setItem("mechanica.settings",
-      JSON.stringify({ tour_done: true, theme, adaptive_dt: false })), theme);
-    await page.setViewportSize({ width: 1440, height: 900 }); await page.goto("/");
-    await loadFlight(page);
-    const canvas = page.locator("#canvas"), clock = page.getByRole("textbox", { name: "Simulation time in seconds", exact: true });
-    await expect.poll(async () => (await paintedPath(page)).length).toBeGreaterThan(50);
-    const initialMask = await paintedPath(page), nativeWidth = await canvas.evaluate(element => (element as HTMLCanvasElement).width);
-    const inkWidth = (mask: number[]) => {
-      const xs = mask.map(pixel => pixel % nativeWidth);
-      return Math.max(...xs) - Math.min(...xs);
-    };
-    const forward = page.getByRole("button", { name: "Advance one frame (Right arrow or .).", exact: true });
-    for (let k = 0; k < 6; k++) await forward.click();
-    await expect(clock).toHaveValue("0.10");
-    const camera = await page.evaluate(() => {
-      window.dispatchEvent(new Event("pagehide"));
-      return JSON.parse(sessionStorage.getItem("mechanica.tab-recovery")!).presentation.camera;
+  test.describe(() => {
+    test.use({ viewport: { width: 1440, height: 900 } });
+
+    test(`rewind repaints an overwritten trail and preserves its camera (${theme})`, async ({ page }, testInfo) => {
+      const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+      await page.addInitScript(theme => localStorage.setItem("mechanica.settings",
+        JSON.stringify({ tour_done: true, theme, adaptive_dt: false })), theme);
+      await page.goto("/");
+      await loadFlight(page);
+      const canvas = page.locator("#canvas"), clock = page.getByRole("textbox", { name: "Simulation time in seconds", exact: true });
+      await expect.poll(async () => (await paintedPath(page)).length).toBeGreaterThan(50);
+      const initialMask = await paintedPath(page), nativeWidth = await canvas.evaluate(element => (element as HTMLCanvasElement).width);
+      const inkWidth = (mask: number[]) => {
+        const xs = mask.map(pixel => pixel % nativeWidth);
+        return Math.max(...xs) - Math.min(...xs);
+      };
+      const forward = page.getByRole("button", { name: "Advance one frame (Right arrow or .).", exact: true });
+      for (let k = 0; k < 6; k++) await forward.click();
+      await expect(clock).toHaveValue("0.10");
+      const camera = await page.evaluate(() => {
+        window.dispatchEvent(new Event("pagehide"));
+        return JSON.parse(sessionStorage.getItem("mechanica.tab-recovery")!).presentation.camera;
+      });
+      let before: number[] = [];
+      await expect.poll(async () => { before = await paintedPath(page); return before.length; }).toBeGreaterThan(50);
+      // A painted tail extends beyond the disc; pixel counts alone vary as
+      // the circular edge crosses subpixels, especially in the light theme.
+      expect(inkWidth(before)).toBeGreaterThan(inkWidth(initialMask) + 2);
+      await page.screenshot({ path: testInfo.outputPath(`trail-before-${theme}.png`) });
+      for (let k = 0; k < 40; k++) await page.keyboard.press(".");
+      await expect(clock).toHaveValue("0.77");
+      const oldMask = new Set(before), currentMask = await paintedPath(page);
+      const shared = currentMask.filter(pixel => oldMask.has(pixel));
+      const diagnostics = await canvas.evaluate((element, indices) => {
+        const c = element as HTMLCanvasElement, data = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+        return { width: c.width, height: c.height, shared: indices.map(k =>
+          ({ x: k % c.width, y: Math.floor(k / c.width), rgb: Array.from(data.slice(k * 4, k * 4 + 3)) })) };
+      }, shared.slice(0, 100));
+      await writeFile(testInfo.outputPath("trail-pixel-diagnostics.json"), JSON.stringify(diagnostics, null, 2));
+      await expect.poll(async () => (await paintedPath(page)).some(pixel => before.includes(pixel))).toBe(false);
+      await page.screenshot({ path: testInfo.outputPath(`trail-overwritten-${theme}.png`) });
+      for (let k = 0; k < 40; k++) await page.keyboard.press(",");
+      await expect(clock).toHaveValue("0.10");
+      await expect.poll(() => paintedPath(page)).toEqual(before);
+      const restoredCamera = await page.evaluate(() => {
+        window.dispatchEvent(new Event("pagehide"));
+        return JSON.parse(sessionStorage.getItem("mechanica.tab-recovery")!).presentation.camera;
+      });
+      expect(restoredCamera).toEqual(camera);
+      await page.screenshot({ path: testInfo.outputPath(`trail-restored-${theme}.png`) });
+      for (let k = 0; k < 6; k++) await page.keyboard.press(",");
+      await expect(clock).toHaveValue("0.00");
+      for (let k = 0; k < 6; k++) await page.keyboard.press(".");
+      await expect.poll(() => paintedPath(page)).toEqual(before);
+      expect(errors).toEqual([]);
     });
-    let before: number[] = [];
-    await expect.poll(async () => { before = await paintedPath(page); return before.length; }).toBeGreaterThan(50);
-    // A painted tail extends beyond the disc; pixel counts alone vary as
-    // the circular edge crosses subpixels, especially in the light theme.
-    expect(inkWidth(before)).toBeGreaterThan(inkWidth(initialMask) + 2);
-    await page.screenshot({ path: testInfo.outputPath(`trail-before-${theme}.png`) });
-    for (let k = 0; k < 40; k++) await page.keyboard.press(".");
-    await expect(clock).toHaveValue("0.77");
-    const oldMask = new Set(before), currentMask = await paintedPath(page);
-    const shared = currentMask.filter(pixel => oldMask.has(pixel));
-    const diagnostics = await canvas.evaluate((element, indices) => {
-      const c = element as HTMLCanvasElement, data = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
-      return { width: c.width, height: c.height, shared: indices.map(k =>
-        ({ x: k % c.width, y: Math.floor(k / c.width), rgb: Array.from(data.slice(k * 4, k * 4 + 3)) })) };
-    }, shared.slice(0, 100));
-    await writeFile(testInfo.outputPath("trail-pixel-diagnostics.json"), JSON.stringify(diagnostics, null, 2));
-    await expect.poll(async () => (await paintedPath(page)).some(pixel => before.includes(pixel))).toBe(false);
-    await page.screenshot({ path: testInfo.outputPath(`trail-overwritten-${theme}.png`) });
-    for (let k = 0; k < 40; k++) await page.keyboard.press(",");
-    await expect(clock).toHaveValue("0.10");
-    await expect.poll(() => paintedPath(page)).toEqual(before);
-    const restoredCamera = await page.evaluate(() => {
-      window.dispatchEvent(new Event("pagehide"));
-      return JSON.parse(sessionStorage.getItem("mechanica.tab-recovery")!).presentation.camera;
-    });
-    expect(restoredCamera).toEqual(camera);
-    await page.screenshot({ path: testInfo.outputPath(`trail-restored-${theme}.png`) });
-    for (let k = 0; k < 6; k++) await page.keyboard.press(",");
-    await expect(clock).toHaveValue("0.00");
-    for (let k = 0; k < 6; k++) await page.keyboard.press(".");
-    await expect.poll(() => paintedPath(page)).toEqual(before);
-    expect(errors).toEqual([]);
   });
 }
 
-test("Performance mode clears visible trails and disables recording controls", async ({ page }, testInfo) => {
-  await page.addInitScript(() => localStorage.setItem("mechanica.settings",
-    JSON.stringify({ tour_done: true, theme: "dark", adaptive_dt: false })));
-  await page.setViewportSize({ width: 1440, height: 900 }); await page.goto("/");
-  await loadFlight(page);
-  const forward = page.getByRole("button", { name: "Advance one frame (Right arrow or .).", exact: true });
-  for (let k = 0; k < 6; k++) await forward.click();
-  const before = await paintedPath(page);
-  await page.locator("#btn-settings").click();
-  const settings = page.getByRole("dialog", { name: "Settings", exact: true });
-  await settings.getByRole("checkbox", { name: "Performance mode", exact: true }).check();
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("checkbox", { name: "Motion trails", exact: true })).toBeDisabled();
-  await expect(page.getByRole("slider", { name: "Trail length", exact: true })).toBeDisabled();
-  await expect.poll(async () => (await paintedPath(page)).length).toBeLessThan(before.length);
-  await page.screenshot({ path: testInfo.outputPath("trail-performance.png") });
+test.describe(() => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test("Performance mode clears visible trails and disables recording controls", async ({ page }, testInfo) => {
+    await page.addInitScript(() => localStorage.setItem("mechanica.settings",
+      JSON.stringify({ tour_done: true, theme: "dark", adaptive_dt: false })));
+    await page.goto("/");
+    await loadFlight(page);
+    const forward = page.getByRole("button", { name: "Advance one frame (Right arrow or .).", exact: true });
+    for (let k = 0; k < 6; k++) await forward.click();
+    const before = await paintedPath(page);
+    await page.locator("#btn-settings").click();
+    const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+    await settings.getByRole("tab", { name: "Simulation", exact: true }).click();
+    await settings.getByRole("checkbox", { name: "Performance mode", exact: true }).check();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("checkbox", { name: "Motion trails", exact: true })).toBeDisabled();
+    await expect(page.getByRole("slider", { name: "Trail length", exact: true })).toBeDisabled();
+    await expect.poll(async () => (await paintedPath(page)).length).toBeLessThan(before.length);
+    await page.screenshot({ path: testInfo.outputPath("trail-performance.png") });
+  });
 });

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/app";
 import { Body, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS, SCENE_MAX_COORDINATE, Wall } from "../src/engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
-import { Driver, ForceField } from "../src/engine/world";
+import { Driver, ForceField, World } from "../src/engine/world";
 import { Vec2 } from "../src/core/vec";
 import { Inspector } from "../src/ui/inspector";
 
@@ -29,6 +29,7 @@ function makeInspector(): { app: App; panel: HTMLElement; inspector: Inspector }
   const splitter = document.createElement("div");
   document.body.append(canvas, panel, splitter);
   const app = new App(canvas);
+  app.settings.adaptive_scrub = false; app.applyUiSettings();
   return { app, panel, inspector: new Inspector(app, panel, splitter) };
 }
 
@@ -37,8 +38,147 @@ function rendered(panel: HTMLElement): string {
   return panel.textContent ?? "";
 }
 
+describe("editable object identity headers", () => {
+  it.each(["particle", "anchor", "wheel", "wall", "rod", "rope", "spring", "elastic", "pulley"])(
+    "renames a %s through its single upper editor and retains the name through history and scene reload", kind => {
+      const { app, panel, inspector } = makeInspector();
+      app.newScene();
+      const a = new Body(new Vec2(-1, 0)), b = new Body(new Vec2(1, 0));
+      app.world.bodies.push(a, b);
+      const wheel = new Body(new Vec2(0, 2));
+      let selected: Body | Wall | DistanceLink | SpringLink | PulleyLink = a;
+      if (kind === "anchor") a.isAnchor = a.locked = true;
+      if (kind === "wall") { selected = new Wall(new Vec2(-2, -1), new Vec2(2, -1)); app.world.walls.push(selected); }
+      if (kind === "rod" || kind === "rope") {
+        selected = new DistanceLink(a, b, 2, kind === "rope"); app.world.links.push(selected);
+      }
+      if (kind === "spring" || kind === "elastic") {
+        selected = new SpringLink(a, b, 2, 20, 0, kind === "elastic"); app.world.links.push(selected);
+      }
+      if (kind === "wheel" || kind === "pulley") {
+        const link = new PulleyLink(a, b, wheel); app.world.bodies.push(wheel); app.world.links.push(link);
+        selected = kind === "wheel" ? wheel : link;
+      }
+      selected.name = "Original"; app.undoStack.reset(app.world);
+      app.setSelection([selected]); inspector.refresh();
+      const header = panel.querySelector<HTMLElement>(".inspector-object-head")!;
+      const editor = header.querySelector<HTMLInputElement>('input[aria-label="Name"]')!;
+      expect(panel.querySelectorAll('input[aria-label="Name"]')).toHaveLength(1);
+      header.click(); expect(document.activeElement).toBe(editor);
+      editor.value = "  Mass <α> 📐  ";
+      editor.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(selected.name).toBe("Mass <α> 📐");
+      expect(header.querySelector("α")).toBeNull();
+      const saved = app.world.toDict();
+      const restored = World.fromDict(JSON.parse(JSON.stringify(saved)));
+      const objects = [...restored.bodies, ...restored.walls, ...restored.links];
+      expect(objects.find(object => object.id === selected.id && object.constructor === selected.constructor)?.name)
+        .toBe("Mass <α> 📐");
+      const reselect = (): void => {
+        const current = [...app.world.bodies, ...app.world.walls, ...app.world.links]
+          .find(object => object.id === selected.id && object.constructor === selected.constructor)!;
+        expect(current).toBeDefined(); app.setSelection([current]); inspector.refresh();
+      };
+      app.undo(); reselect();
+      expect(panel.querySelector<HTMLInputElement>('input[aria-label="Name"]')!.value).toBe("Original");
+      app.redo(); reselect();
+      expect(panel.querySelector<HTMLInputElement>('input[aria-label="Name"]')!.value).toBe("Mass <α> 📐");
+    });
+
+  it("cancels a header draft with Escape without creating an undo operation", () => {
+    const { app, panel, inspector } = makeInspector();
+    const body = new Body(new Vec2()); body.name = "Runner";
+    app.world.bodies.push(body); app.undoStack.reset(app.world);
+    app.setSelection([body]); inspector.refresh();
+    const input = panel.querySelector<HTMLInputElement>('input[aria-label="Name"]')!;
+    input.focus(); input.value = "Draft";
+    inspector.refresh(); expect(input.value).toBe("Draft");
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(input.value).toBe("Runner"); expect(body.name).toBe("Runner");
+    expect(app.undoStack.canUndo).toBe(false);
+  });
+});
+
+describe("hiding an Inspector during a numeric edit", () => {
+  it.each(["particle", "mixed group", "World gravity"])("cancels the %s transaction and retains reusable controls", kind => {
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+    const cancelRaf = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    try {
+      const { app, panel, inspector } = makeInspector();
+      app.newScene();
+      const a = new Body(new Vec2(-1, 0), .15, 2), b = new Body(new Vec2(1, 0), .15, 5);
+      app.world.bodies.push(a, b); app.undoStack.reset(app.world);
+      app.setSelection(kind === "mixed group" ? [a, b] : [a]); inspector.refresh();
+      if (kind === "World gravity") [...panel.querySelectorAll<HTMLButtonElement>(".tab-list button")]
+        .find(button => button.textContent === "World")!.click();
+      const label = () => [...panel.querySelectorAll<HTMLElement>(".numeric-scrub-handle")]
+        .find(node => node.textContent === (kind === "World gravity" ? "g" : "Mass"))!;
+      const send = (target: EventTarget, type: string, x: number) => {
+        const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x,
+          button: 0, buttons: type === "pointerup" ? 0 : 1 });
+        Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: "mouse" } });
+        target.dispatchEvent(event);
+      };
+      const initial = JSON.stringify(app.world.toDict());
+      send(label(), "pointerdown", 100); send(document, "pointermove", 116);
+      raf.mock.calls.at(-1)![0](0);
+      expect(JSON.stringify(app.world.toDict())).not.toBe(initial);
+      expect(document.documentElement.classList.contains("numeric-scrubbing")).toBe(true);
+      app.world.step(1 / 120); // Cancellation also restores the transaction's physical baseline.
+      inspector.toggleCollapsed();
+      expect((panel.querySelector(".inspector-body") as HTMLElement).hidden).toBe(true);
+      expect(document.documentElement.classList.contains("numeric-scrubbing")).toBe(false);
+      expect(JSON.stringify(app.world.toDict())).toBe(initial);
+      expect(app.undoStack.canUndo).toBe(false);
+      send(document, "pointermove", 150); send(document, "pointerup", 150);
+      expect(JSON.stringify(app.world.toDict())).toBe(initial);
+      inspector.toggleCollapsed(); inspector.refresh();
+      send(label(), "pointerdown", 100); send(document, "pointermove", 112);
+      raf.mock.calls.at(-1)![0](0); send(document, "pointerup", 112);
+      const committed = JSON.stringify(app.world.toDict());
+      expect(committed).not.toBe(initial);
+      app.undo(); expect(JSON.stringify(app.world.toDict())).toBe(initial);
+      app.redo(); expect(JSON.stringify(app.world.toDict())).toBe(committed);
+    } finally {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      raf.mockRestore(); cancelRaf.mockRestore();
+    }
+  });
+});
+
 beforeEach(() => {
   localStorage.clear();
+});
+
+describe("Spin locking during numeric gestures", () => {
+  it("does not restore nonzero spin when No rotation disables a live scrub", () => {
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(1);
+    const cancelRaf = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    try {
+      const { app, panel, inspector } = makeInspector();
+      const body = new Body(new Vec2(0, 0), 0.15, 1); body.omega = 5;
+      app.edit(() => app.world.bodies.push(body)); app.setSelection([body]); inspector.refresh();
+      const label = [...panel.querySelectorAll<HTMLElement>(".numeric-scrub-handle")].find(el => el.textContent === "Spin")!;
+      const send = (target: EventTarget, type: string, x: number) => {
+        const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, button: 0, buttons: 1 });
+        Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: "mouse" } });
+        target.dispatchEvent(event);
+      };
+      send(label, "pointerdown", 100); send(document, "pointermove", 116);
+      raf.mock.calls.at(-1)![0](0); expect(body.omega).toBeGreaterThan(5);
+      const lock = [...panel.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+        .find(input => input.closest("label")?.textContent?.includes("No rotation"))!;
+      lock.click(); inspector.refresh();
+      expect(body.noRotation).toBe(true); expect(body.omega).toBe(0);
+      expect(document.documentElement.classList.contains("numeric-scrubbing")).toBe(false);
+      app.undo();
+      expect(app.world.bodies.find(copy => copy.id === body.id)?.noRotation).toBe(false);
+      expect(app.world.bodies.find(copy => copy.id === body.id)?.omega).toBe(5);
+      app.redo();
+      expect(app.world.bodies.find(copy => copy.id === body.id)?.noRotation).toBe(true);
+      expect(app.world.bodies.find(copy => copy.id === body.id)?.omega).toBe(0);
+    } finally { raf.mockRestore(); cancelRaf.mockRestore(); }
+  });
 });
 
 describe("Centre-of-mass coordinates", () => {
@@ -51,7 +191,8 @@ describe("Centre-of-mass coordinates", () => {
       app.edit(() => app.world.bodies.push(a, b)); app.setSelection([a, b]); inspector.refresh();
       const label = [...panel.querySelectorAll<HTMLElement>(".numeric-scrub-handle")].find(item => item.textContent === "Mass")!;
       const send = (target: EventTarget, type: string, x: number): void => {
-        const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, button: 0 });
+        const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, button: 0,
+          buttons: type === "pointerup" ? 0 : 1 });
         Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: "mouse" } });
         target.dispatchEvent(event);
       };
@@ -524,20 +665,17 @@ describe("Elastic-link modulus", () => {
     expect((app.world.links[0] as SpringLink).stiffness).toBe(30);
   });
 
-  it("removes damping as one reversible bulk edit and explains Performance approximations", () => {
+  it("retains the canonical reversible bulk damping edit without a separate ideal-model action", () => {
     const { app, panel, inspector, links } = selectedLinks();
-    const button = [...panel.querySelectorAll("button")].find(button => button.textContent === "Set damping to zero")!;
-    expect(button.hidden).toBe(false);
-    button.click();
-    inspector.refresh();
+    expect([...panel.querySelectorAll("button")].some(button => button.textContent === "Set damping to zero")).toBe(false);
+    expect(links.map(link => link.damping)).toEqual([2, 2]);
+    const damping = panel.querySelector<HTMLInputElement>('[aria-label="Damping (type an exact value)"]')!;
+    damping.focus(); damping.value = "0"; damping.blur(); inspector.refresh();
     expect(links.map(link => link.damping)).toEqual([0, 0]);
-    expect(button.hidden).toBe(true);
     app.undo();
     expect(app.world.links.map(link => (link as SpringLink).damping)).toEqual([2, 2]);
-    app.setSelection(app.world.links);
-    app.settings.perf_mode = true;
-    inspector.refresh();
-    expect(panel.querySelector(".elastic-model")!.textContent).toContain("Use Normal mode for quantitative study");
+    app.setSelection(app.world.links); inspector.refresh();
+    expect(panel.querySelector(".elastic-explanation")!.textContent).toContain("Damping and solver limits");
   });
 });
 
@@ -557,7 +695,7 @@ describe("Force values and sources", () => {
     expect(current).not.toBe(previous);
     expect(app.world.bodies[0]).not.toBe(body);
     expect(current.open).toBe(open);
-    expect(current.querySelectorAll("li")).toHaveLength(open ? 2 : 0);
+    expect(current.querySelectorAll("li")).toHaveLength(open ? 1 : 0);
     if (open) {
       expect(current.textContent).toContain("Fy 0.50 N");
       app.world.bodies[0].constForce.y = 0.75;
@@ -608,19 +746,20 @@ describe("Force values and sources", () => {
     details.open = true;
     inspector.refresh();
     const rows = [...details.querySelectorAll("li")];
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(5);
     expect(rows[1].textContent).toContain("Applied force");
-    expect(rows[1].textContent).toContain("Fy -4.00e-4 N");
+    expect(rows[1].textContent).toContain("Fy -4.00 × 10⁻⁴ N");
     expect(rows[0].textContent).toContain("∥ 0.00 N⊥ -19.60 N");
     expect(rows[1].textContent).not.toContain("∥");
-    expect(rows[5].textContent).not.toContain("∥");
+    const resultant = panel.querySelector(".force-resultant")!;
+    expect(resultant.textContent).not.toContain("∥");
     expect(rows[2].textContent).toContain("<img src=x onerror=alert(1)>");
     expect(details.querySelector("img")).toBeNull();
     expect(rows[3].textContent).toContain(`R: Reaction from ${wall.name}`);
     expect(rows[4].textContent).toContain(`F: Friction from ${wall.name}`);
     expect(rows[4].textContent).toContain("Fx -6.00 N");
-    expect(rows[5].textContent).toContain("Resultant");
-    expect(rows[5].textContent).toContain("Fx 0.00 NFy 0.00 N");
+    expect(resultant.textContent).toContain("Resultant");
+    expect(resultant.textContent).toContain("Fx 0.00 NFy 0.00 N");
     details.querySelector("summary")!.focus();
     body.constForce.x = -10;
     inspector.refresh();
@@ -644,9 +783,9 @@ describe("Force values and sources", () => {
     expect(details.querySelectorAll("li")).toHaveLength(0);
     details.open = true;
     inspector.refresh();
-    expect(details.querySelectorAll("li")).toHaveLength(65);
+    expect(details.querySelectorAll("li")).toHaveLength(64);
     expect(details.textContent).toContain("Source 64");
-    expect(details.textContent).toContain("Fx 192.00 NFy 256.00 N");
+    expect(panel.querySelector(".force-resultant")!.textContent).toContain("Fx 192.00 NFy 256.00 N");
     body.showForceComponents = false;
     inspector.refresh();
     expect(details.hidden).toBe(true);
@@ -671,9 +810,9 @@ describe("Force values and sources", () => {
     const details = panel.querySelector<HTMLDetailsElement>(".force-values")!;
     details.open = true;
     inspector.refresh();
-    expect(details.querySelectorAll("li")).toHaveLength(2);
+    expect(details.querySelectorAll("li")).toHaveLength(1);
     expect(details.textContent).toContain("Changing forceFx 1.00 N");
-    expect(details.textContent).toContain("ResultantFx 1.00 N");
+    expect(panel.querySelector(".force-resultant")!.textContent).toContain("ResultantFx 1.00 N");
     expect(details.textContent).not.toContain("Fx 2.00 N");
     expect(body.forceSnapshot).not.toBeNull();
   });
@@ -746,30 +885,16 @@ describe("Pulley assembly navigation", () => {
     expect(panel.querySelector('[aria-label="Particle B properties"]')).not.toBeNull();
   });
 
-  it("explains colon-separated pulley values without replacing a focused label", () => {
-    const { app, panel, inspector, wheel, a } = assembly();
+  it("omits the removed pulley diagnostics while retaining a focused resultant control", () => {
+    const { app, panel, inspector, wheel, a, link } = assembly();
     app.setSelection([wheel]); inspector.refresh();
-    const readout = panel.querySelector('[aria-label="Pulley force and motion"]')!;
-    const names = [...readout.querySelectorAll<HTMLElement>(".pulley-reading-name")];
-    expect(names.map(name => name.textContent)).toEqual([
-      "Tension:", "Path:", "Leg rates:", "Constraint rate:", "Axle reaction:",
-    ]);
-    for (const name of names) {
-      expect(name.title.length).toBeGreaterThan(15);
-      expect(name.getAttribute("aria-description")).toBe(name.title);
-    }
-    names[2].focus();
-    const before = readout.textContent;
-    a.vel.y = 1;
-    inspector.refresh();
-    expect(readout.textContent).not.toBe(before);
-    expect(readout.querySelectorAll(".pulley-reading-name")[2]).toBe(names[2]);
-    expect(document.activeElement).toBe(names[2]);
-    const mutation = new MutationObserver(() => {});
-    mutation.observe(readout, { subtree: true, childList: true, attributes: true, characterData: true });
-    inspector.refresh(); inspector.refresh();
-    expect(mutation.takeRecords()).toEqual([]);
-    mutation.disconnect();
+    expect(panel.querySelector('[aria-label="Pulley force and motion"]')).toBeNull();
+    expect(panel.querySelector(".pulley-readout")).toBeNull();
+    const input = panel.querySelector<HTMLInputElement>('[aria-label="Resultant tension vector"]')!;
+    input.focus(); input.click(); expect(link.showResultantTensionVector).toBe(true);
+    a.vel.y = 1; inspector.refresh();
+    expect(panel.querySelector('[aria-label="Resultant tension vector"]')).toBe(input);
+    expect(document.activeElement).toBe(input);
     expect(app.undoStack.canUndo).toBe(false);
   });
 
@@ -812,7 +937,7 @@ describe("Inspector structure key", () => {
     expect(body.forceSlopeWallId).toBe(floor.id); expect(body.showForceComponents).toBe(true);
     expect(toggle.checked).toBe(true);
     expect(panel.querySelector<HTMLElement>(".weight-slope-row")!.hidden).toBe(true);
-    expect(panel.querySelector(".weight-resolve-note")!.textContent).toContain(`${floor.name}: W∥ and W⊥ replace W`);
+    expect(panel.querySelector(".weight-resolve-note")!.textContent).toBe("W∥ and W⊥ replace W");
     expect(app.world.toDict()).toEqual(before); expect(app.undoStack.canUndo).toBe(false);
     toggle.click(); inspector.refresh(); expect(body.forceSlopeWallId).toBeNull();
     expect(body.resolveWeightOnSlope).toBe(false); expect(body.showForceComponents).toBe(true);
@@ -826,10 +951,11 @@ describe("Inspector structure key", () => {
     app.world.bodies.push(body); app.world.walls.push(floor, side); app.setSelection([body]); inspector.refresh();
     panel.querySelector<HTMLInputElement>('[aria-label="Resolve weight on slope"]')!.click(); inspector.refresh();
     expect(body.resolveWeightOnSlope).toBe(true); expect(body.forceSlopeWallId).toBeNull();
-    const slope = panel.querySelector<HTMLSelectElement>('[aria-label="Resolve forces relative to a slope"]')!;
-    expect(slope.parentElement!.hidden).toBe(false);
-    expect([...slope.options].map(option => option.value)).toEqual(["", String(floor.id), String(side.id)]);
-    slope.value = String(side.id); slope.dispatchEvent(new Event("change")); inspector.refresh();
+    const slope = panel.querySelector<HTMLButtonElement>('[aria-label="Resolve forces relative to a slope"]')!;
+    expect(slope.closest<HTMLElement>(".weight-slope-row")!.hidden).toBe(false);
+    expect([...slope.parentElement!.querySelectorAll<HTMLElement>('[role="option"]')].map(option => option.dataset.value))
+      .toEqual(["", String(floor.id), String(side.id)]);
+    slope.click(); slope.parentElement!.querySelector<HTMLElement>(`[data-value="${side.id}"]`)!.click(); inspector.refresh();
     expect(body.forceSlopeWallId).toBe(side.id);
     body.pos.x = 1; inspector.refresh();
     expect(body.forceSlopeWallId).toBe(floor.id);
@@ -879,34 +1005,37 @@ describe("Inspector structure key", () => {
     app.world.bodies.push(body); app.world.walls.push(floor, far);
     app.undoStack.reset(app.world);
     app.setSelection([body]); inspector.refresh();
-    const slope = panel.querySelector<HTMLSelectElement>('[aria-label="Resolve forces relative to a slope"]')!;
-    expect([...slope.options].map(option => option.value)).toEqual(["", String(floor.id)]);
+    const slope = panel.querySelector<HTMLButtonElement>('[aria-label="Resolve forces relative to a slope"]')!;
+    const row = slope.closest<HTMLElement>(".weight-slope-row")!;
+    const options = () => [...slope.parentElement!.querySelectorAll<HTMLElement>('[role="option"]')];
+    expect(options().map(option => option.dataset.value)).toEqual(["", String(floor.id)]);
     expect(slope.disabled).toBe(false);
-    slope.value = String(floor.id);
-    slope.dispatchEvent(new Event("change"));
+    panel.querySelector<HTMLInputElement>('[aria-label="Resolve weight on slope"]')!.click();
     expect(body.forceSlopeWallId).toBe(floor.id);
     slope.focus(); floor.name = "Contact plane";
     inspector.refresh();
-    expect(slope.options[1].text).toBe("Contact plane");
+    expect(options()[1].textContent).toBe("Contact plane");
     expect(document.activeElement).toBe(slope);
     body.pos.y = 1;
     inspector.refresh();
     expect(panel.querySelector('[aria-label="Resolve forces relative to a slope"]')).toBe(slope);
     expect(slope.disabled).toBe(true);
-    expect(slope.parentElement?.classList.contains("disabled")).toBe(true);
+    expect(row.classList.contains("disabled")).toBe(true);
     expect(slope.title).toBe("No slope in contact.");
-    expect(slope.parentElement?.title).toBe(slope.title);
+    expect(row.title).toBe(slope.title);
     expect(slope.getAttribute("aria-description")).toBe(slope.title);
     expect(body.forceSlopeWallId).toBeNull();
-    expect(slope.parentElement?.hidden).toBe(true);
+    expect(row.hidden).toBe(true);
     expect(panel.querySelector<HTMLElement>(".weight-resolve-note")!.hidden).toBe(true);
-    expect([...slope.options].map(option => option.value)).toEqual([""]);
+    expect(options().map(option => option.dataset.value)).toEqual([""]);
     expect(app.world.time).toBe(0);
     expect(app.undoStack.canUndo).toBe(false);
     body.pos.y = 0.25;
     inspector.refresh();
     expect(slope.disabled).toBe(false);
-    slope.value = String(far.id); slope.dispatchEvent(new Event("change"));
+    expect(options().some(option => option.dataset.value === String(far.id))).toBe(false);
+    // A retained row from the previous contact must revalidate before applying.
+    const oldOption = options()[1]; body.pos.y = 1; oldOption.click();
     expect(body.forceSlopeWallId).toBeNull();
   });
 
@@ -947,18 +1076,16 @@ describe("Inspector structure key", () => {
     [...panel.querySelectorAll<HTMLButtonElement>("[role=tab]")]
       .find(button => button.textContent === "View")!.click();
     inspector.refresh();
-    const select = panel.querySelector<HTMLSelectElement>('[aria-label="Graph shown in the dock"]')!;
-    expect([...select.options].find(option => option.value === "Displacement")?.text)
-      .toBe("Displacement–time");
-    select.focus();
-    select.value = "Displacement";
-    select.dispatchEvent(new Event("change"));
+    const select = panel.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="Graph shown in the dock"]')!;
+    select.focus(); select.click();
+    panel.querySelector<HTMLElement>('[role="option"][data-value="Displacement"]')!.click();
     expect(app.graphMode).toBe("Displacement");
     app.setGraphMode("Velocity");
     inspector.refresh();
     expect(panel.querySelector('[aria-label="Graph shown in the dock"]')).toBe(select);
     expect(document.activeElement).toBe(select);
-    expect(select.value).toBe("Velocity");
+    expect(select.dataset.value).toBe("Velocity");
+    expect(select.textContent).toBe("Velocity–time");
   });
 
   it("keeps an attachment button focused through unchanged panel refreshes", () => {
@@ -973,7 +1100,7 @@ describe("Inspector structure key", () => {
     app.world.links.push(rod);
     app.setSelection([rod]);
     inspector.refresh();
-    const button = panel.querySelector<HTMLButtonElement>(".rod-attachment-item")!;
+    const button = panel.querySelector<HTMLButtonElement>(`[aria-label="Select rod particle: ${attached.name}"]`)!;
     button.focus();
     for (let i = 0; i < 5; i++) inspector.refresh();
     expect(document.activeElement).toBe(button);
@@ -1127,6 +1254,7 @@ describe("Inspector accessibility and persisted visibility", () => {
     const splitter = document.createElement("div");
     document.body.append(canvas, panel, splitter);
     const app = new App(canvas);
+  app.settings.adaptive_scrub = false; app.applyUiSettings();
     app.settings.inspector_visible = false;
     const inspector = new Inspector(app, panel, splitter);
 
@@ -1196,6 +1324,7 @@ describe("Inspector edit transactions", () => {
     app.newScene(); app.world.gravity = 0; app.adaptiveDt = false;
     const body = new Body(new Vec2(0, 0.26), 0.2, 1);
     body.vel.y = -3; body.restitution = 1; body.friction = 0; body.showForceComponents = true;
+    body.showCollisionImpulses = false; // Explicit legacy interval-average view.
     const wall = new Wall(new Vec2(-3, 0), new Vec2(3, 0), 0.04);
     wall.name = "Impact floor"; wall.restitution = 1; wall.friction = 0;
     app.world.bodies.push(body); app.world.walls.push(wall); app.setSelection([body]);
@@ -1284,6 +1413,54 @@ describe("Inspector edit transactions", () => {
   });
 });
 
+describe("Inspector tutorial navigation", () => {
+  it("reveals the referenced controls and restores selection, tab, scroll, collapse and preferences", () => {
+    const { app, panel, inspector } = makeInspector();
+    app.newScene();
+    const body = new Body(new Vec2(1, 2));
+    const wall = new Wall(new Vec2(-2, 0), new Vec2(2, 0));
+    app.world.bodies.push(body); app.world.walls.push(wall);
+    app.setSelection([wall]);
+    [...panel.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(tab => tab.textContent === "World")!.click();
+    const content = panel.querySelector<HTMLElement>("#inspector-panel")!;
+    content.scrollTop = 75;
+    panel.querySelector<HTMLButtonElement>(".collapse-btn")!.click();
+    const preferences = JSON.stringify(app.settings), world = app.world.toDict();
+    const session = inspector.beginTour();
+    expect(session.canShow("forces")).toBe(true);
+    expect(session.reveal("particle")!.classList.contains("inspector-object-head")).toBe(true);
+    expect(panel.classList.contains("collapsed")).toBe(false);
+    expect(app.selection).toEqual([body]);
+    expect(session.reveal("forces")!.matches(".force-toggle")).toBe(true);
+    expect(body.showForceComponents).toBe(true);
+    expect(session.reveal("graphs")!.getAttribute("aria-label")).toBe("Graph shown in the dock");
+    expect(inspector.tabRecoveryState().tab).toBe("View");
+    expect(session.reveal("fields")!.classList.contains("field-actions")).toBe(true);
+    expect(inspector.tabRecoveryState().tab).toBe("World");
+    session.restore();
+    expect(app.selection).toEqual([wall]);
+    expect(inspector.tabRecoveryState().tab).toBe("World");
+    expect(content.scrollTop).toBe(75);
+    expect(panel.classList.contains("collapsed")).toBe(true);
+    expect(body.showForceComponents).toBe(false);
+    expect(JSON.stringify(app.settings)).toBe(preferences);
+    expect(app.world.toDict()).toEqual(world);
+  });
+
+  it("keeps graph and field guidance available without inventing a particle in an empty scene", () => {
+    const { app, inspector } = makeInspector(); app.newScene();
+    const session = inspector.beginTour();
+    expect(session.canShow("particle")).toBe(false);
+    expect(session.canShow("forces")).toBe(false);
+    expect(session.canShow("graphs")).toBe(true);
+    expect(session.canShow("fields")).toBe(true);
+    expect(session.reveal("graphs")).not.toBeNull();
+    expect(session.reveal("fields")).not.toBeNull();
+    session.restore();
+    expect(app.world.bodies).toHaveLength(0);
+  });
+});
+
 describe("Inspector tab checkpoint", () => {
   it("captures the live force disclosure before its deferred native toggle event", () => {
     const { app, panel, inspector } = makeInspector();
@@ -1296,5 +1473,62 @@ describe("Inspector tab checkpoint", () => {
     expect(inspector.tabRecoveryState().forceValuesOpen).toBe(true);
     details.open = false;
     expect(inspector.tabRecoveryState().forceValuesOpen).toBe(false);
+  });
+});
+
+
+describe("rod-mounted particle position controls", () => {
+  it("retains an immediate free-position draft through the first refresh after detaching", () => {
+    const { app, panel, inspector } = makeInspector();
+    const a = new Body(new Vec2(0, 0)), b = new Body(new Vec2(2, 0));
+    const rod = new DistanceLink(a, b, 2), mass = new Body(new Vec2(1, 0));
+    mass.rodAttachmentId = rod.id; mass.rodAttachmentT = 0.5;
+    app.world.bodies.push(a, b, mass); app.world.links.push(rod);
+    app.undoStack.reset(app.world); app.setSelection([mass]); inspector.refresh();
+    [...panel.querySelectorAll<HTMLButtonElement>(".rod-attachment-editor button")]
+      .find(button => button.textContent === "Detach from rod")!.click();
+    const free = panel.querySelector<HTMLInputElement>('[aria-label="x (m)"]')!;
+    expect(free.readOnly).toBe(false);
+    free.focus(); free.value = "4.125";
+    inspector.refresh();
+    expect(free.isConnected).toBe(true); expect(document.activeElement).toBe(free);
+    expect(free.value).toBe("4.125");
+    free.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(mass.pos.x).toBe(4.125); expect(mass.rodAttachmentId).toBeNull();
+    app.undo();
+    expect(app.world.bodies.find(body => body.id === mass.id)!.pos.x).toBe(1);
+    expect(app.world.bodies.find(body => body.id === mass.id)!.rodAttachmentId).toBeNull();
+    app.undo();
+    expect(app.world.bodies.find(body => body.id === mass.id)!.rodAttachmentId).toBe(rod.id);
+    app.redo(); app.redo();
+    expect(app.world.bodies.find(body => body.id === mass.id)!.pos.x).toBe(4.125);
+  });
+
+  it("keeps coordinates observable but immutable through focus, text and keyboard routes", () => {
+    const { app, panel, inspector } = makeInspector();
+    const a = new Body(new Vec2(0, 0)), b = new Body(new Vec2(2, 0));
+    const rod = new DistanceLink(a, b, 2), mass = new Body(new Vec2(1, 0));
+    mass.rodAttachmentId = rod.id; mass.rodAttachmentT = 0.5;
+    app.world.bodies.push(a, b, mass); app.world.links.push(rod);
+    app.setSelection([mass]); inspector.refresh();
+    const toast = vi.fn(); app.toastFn = toast;
+    const x = panel.querySelector<HTMLInputElement>('[aria-label="x (m)"]')!;
+    const y = panel.querySelector<HTMLInputElement>('[aria-label="y (m)"]')!;
+    expect(x.readOnly).toBe(true); expect(y.readOnly).toBe(true);
+    expect(x.disabled).toBe(false);
+    expect(x.closest(".num-row")!.querySelector(".numeric-scrub-handle")).toBeNull();
+    x.focus(); expect(toast).toHaveBeenCalledWith("Detach from the rod to edit position freely.");
+    x.value = "40"; x.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })); x.blur();
+    expect(mass.pos.x).toBe(1); expect(x.value).toBe("1.000");
+    y.focus(); mass.pos.y = 0.4; inspector.refresh(); expect(y.value).toBe("0.400"); y.blur();
+    const attachment = panel.querySelector('[aria-label="Rod attachment"]')!;
+    expect(x.closest(".row-half")!.nextElementSibling).toBe(attachment);
+    const input = attachment.querySelector<HTMLInputElement>('[aria-label="Position along rod (m)"]')!;
+    input.focus(); input.value = "0.75"; input.blur();
+    expect(mass.rodAttachmentT).toBe(0.375); expect(mass.pos.x).toBe(0.75); expect(mass.pos.y).toBe(0);
+    [...attachment.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Detach from rod")!.click();
+    inspector.refresh();
+    const free = panel.querySelector<HTMLInputElement>('[aria-label="x (m)"]')!;
+    expect(free.readOnly).toBe(false); free.focus(); free.value = "4"; free.blur(); expect(mass.pos.x).toBe(4);
   });
 });

@@ -1,11 +1,13 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RefreshGroup, fmt3dp, numEdit, slider, tunableNumEdit, type Control } from "../src/ui/dom";
-import { NUMERIC_EDIT_EVENT } from "../src/ui/numeric-scrub";
+import { NUMERIC_EDIT_EVENT, numericScrub } from "../src/ui/numeric-scrub";
 
 const controls: Control[] = [];
+let eventTime = 0, eventX = 0;
 beforeEach(() => {
-  document.body.replaceChildren(); vi.useFakeTimers();
+  document.body.replaceChildren(); delete document.documentElement.dataset.adaptiveScrub; delete document.documentElement.dataset.scrubSpeed;
+  delete document.documentElement.dataset.continuousScrub; vi.useFakeTimers();
   vi.stubGlobal("requestAnimationFrame", (fn: FrameRequestCallback) => setTimeout(() => fn(0), 1));
   vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
 });
@@ -15,10 +17,12 @@ afterEach(() => {
 });
 
 function send(target: EventTarget, type: string, x: number, extras: Record<string, unknown> = {}) {
+  if (type === "pointerdown" && extras.isPrimary !== false) eventX = x;
+  if (type === "pointermove") { eventTime += Math.abs(x - eventX) * 6.25; eventX = x; }
   const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x,
     button: 0, buttons: type === "pointerup" ? 0 : 1, ...extras });
-  Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: "mouse" },
-    ...Object.fromEntries(Object.entries(extras).filter(([key]) => key.startsWith("pointer")).map(([key, value]) => [key, { value }])) });
+  Object.defineProperties(event, { timeStamp: { value: extras.timeStamp ?? eventTime }, pointerId: { value: 1 }, pointerType: { value: "mouse" },
+    ...Object.fromEntries(Object.entries(extras).filter(([key]) => key.startsWith("pointer") || key === "isPrimary").map(([key, value]) => [key, { value }])) });
   target.dispatchEvent(event);
   return event;
 }
@@ -41,7 +45,60 @@ function fixture(initial = 5, custom?: (value: number) => boolean) {
     disable: () => { disabled = true; control.refresh?.(); } };
 }
 
+/** Drive the gesture handlers with native-like fields without bypassing trust in production. */
+function pendingAcquisition() {
+  const root = document.createElement("div"), label = document.createElement("span"), input = document.createElement("input");
+  root.append(label, input); document.body.append(root);
+  let value = 5, lock: Element | null = null;
+  const previousLock = Object.getOwnPropertyDescriptor(document, "pointerLockElement");
+  const previousExit = document.exitPointerLock;
+  Object.defineProperty(document, "pointerLockElement", { configurable: true, get: () => lock });
+  document.exitPointerLock = vi.fn(() => { lock = null; document.dispatchEvent(new Event("pointerlockchange")); });
+  label.requestPointerLock = vi.fn();
+  label.setPointerCapture = vi.fn(); label.hasPointerCapture = () => false;
+  const labelListeners = vi.spyOn(label, "addEventListener"), documentListeners = vi.spyOn(document, "addEventListener");
+  const commit = vi.fn();
+  document.documentElement.dataset.adaptiveScrub = "false";
+  document.documentElement.dataset.continuousScrub = "true";
+  const scrub = numericScrub({ root, handle: label, input, get: () => value, set: next => { value = next; },
+    refresh: () => { input.value = String(value); }, commit, disabled: () => false }, { sensitivity: .1, step: .01 });
+  controls.push({ root, dispose: () => {
+    scrub.dispose(); lock = null; document.dispatchEvent(new Event("pointerlockchange"));
+    if (previousLock) Object.defineProperty(document, "pointerLockElement", previousLock); else Reflect.deleteProperty(document, "pointerLockElement");
+    document.exitPointerLock = previousExit;
+  } });
+  const event = (extras: Record<string, unknown> = {}) => ({ button: 0, buttons: 1, pointerId: 1, pointerType: "mouse", isPrimary: true,
+    isTrusted: true, clientX: 100, movementX: 0, movementY: 0, timeStamp: 0,
+    shiftKey: false, altKey: false, preventDefault() {}, stopPropagation() {}, ...extras }) as unknown as PointerEvent;
+  const down = labelListeners.mock.calls.find(([type]) => type === "pointerdown")![1] as EventListener;
+  down(event());
+  const moveHandler = documentListeners.mock.calls.find(([type]) => type === "pointermove")![1] as EventListener;
+  const move = (extras: Record<string, unknown>) => { moveHandler(event(extras)); vi.advanceTimersByTime(1); };
+  move({ clientX: 106, movementX: 6, timeStamp: 16 });
+  expect(label.requestPointerLock).toHaveBeenCalledOnce(); expect(value).toBe(5.6);
+  return { commit, move, value: () => value, lock: () => lock,
+    grant: () => { lock = label; document.dispatchEvent(new Event("pointerlockchange")); },
+    release: () => send(document, "pointerup", 106) };
+}
+
 describe("quantity label scrubbing", () => {
+  it("keeps the gesture live when a zero-delta recenter precedes the pending lock grant", () => {
+    const f = pendingAcquisition();
+    f.move({ clientX: 500, buttons: 0, movementX: 0, movementY: 0, timeStamp: 17 });
+    expect(document.documentElement.classList.contains("numeric-scrubbing")).toBe(true);
+    expect(f.commit).not.toHaveBeenCalled(); expect(f.value()).toBe(5.6);
+    f.grant(); expect(document.querySelectorAll(".numeric-scrub-cursor")).toHaveLength(1);
+    f.move({ clientX: 500, movementX: 2, timeStamp: 32 }); expect(f.value()).toBe(5.8);
+    f.release(); expect(f.commit).toHaveBeenCalledOnce(); expect(f.lock()).toBeNull();
+    expect(document.querySelector(".numeric-scrub-cursor")).toBeNull();
+  });
+  it.each(["pointerup", "nonzero released motion"])("still ends a pending acquisition on genuine %s", reason => {
+    const f = pendingAcquisition();
+    if (reason === "pointerup") f.release();
+    else f.move({ clientX: 107, buttons: 0, movementX: 1, timeStamp: 17 });
+    expect(f.commit).toHaveBeenCalledOnce(); expect(document.documentElement.classList.contains("numeric-scrubbing")).toBe(false);
+    f.grant(); expect(f.lock()).toBeNull(); expect(document.querySelector(".numeric-scrub-cursor")).toBeNull();
+  });
   it("preserves clicks and ignores sub-threshold movement", () => {
     const f = fixture(); send(f.label, "pointerdown", 100); f.move(102); send(document, "pointerup", 102);
     expect(f.value()).toBe(5); expect(f.set).not.toHaveBeenCalled(); expect(f.commit).not.toHaveBeenCalled();
@@ -87,6 +144,25 @@ describe("quantity label scrubbing", () => {
     expect(f.value()).toBe(5); expect(f.commit).not.toHaveBeenCalled(); expect(f.phases.at(-1)).toBe("cancel");
     expect(document.documentElement.classList.contains("numeric-scrubbing")).toBe(false);
     f.move(40); expect(f.value()).toBe(5);
+  });
+  it("finishes if released-button motion arrives without a mouse-up event", () => {
+    const f = fixture(); send(f.label, "pointerdown", 0); f.move(20);
+    expect(f.value()).toBe(7);
+    f.move(40, { buttons: 0 });
+    expect(f.value()).toBe(7); expect(f.commit).toHaveBeenCalledOnce();
+    expect(document.documentElement.classList.contains("numeric-scrubbing")).toBe(false);
+    f.move(60, { buttons: 0 }); expect(f.value()).toBe(7);
+  });
+  it.each(["hidden", "pagehide", "inert"])("releases a scrub when its page becomes %s", reason => {
+    const f = fixture(); send(f.label, "pointerdown", 0); f.move(20);
+    expect(f.value()).toBe(7);
+    if (reason === "hidden") {
+      vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+      document.dispatchEvent(new Event("visibilitychange"));
+    } else if (reason === "pagehide") window.dispatchEvent(new Event("pagehide"));
+    else { f.control.root.setAttribute("inert", ""); f.move(21); }
+    expect(f.value()).toBe(5); expect(f.commit).not.toHaveBeenCalled();
+    expect(document.documentElement.classList.contains("numeric-scrubbing")).toBe(false);
   });
   it("cancels live scrubbing when disabled and prevents later writes", () => {
     const f = fixture(); send(f.label, "pointerdown", 0); f.move(20); f.disable();
@@ -135,5 +211,57 @@ describe("quantity label scrubbing", () => {
     send(label, "pointerdown", 0); send(document, "pointermove", 3.4); send(document, "pointerup", 3.4);
     expect(value).toBe(8); expect(commit).toHaveBeenCalledOnce();
     expect(control.root.querySelector('input[type="range"]')).not.toBeNull();
+  });
+});
+
+
+describe("scrub transaction boundaries", () => {
+  it("starts a replacement gesture from the restored value rather than the abandoned preview", () => {
+    const f = fixture(); send(f.label, "pointerdown", 0); f.move(20);
+    expect(f.value()).toBe(7);
+    send(f.label, "pointerdown", 100); f.move(110);
+    expect(f.value()).toBe(6);
+    send(document, "pointercancel", 110);
+    expect(f.value()).toBe(5); expect(f.commit).not.toHaveBeenCalled();
+    expect(f.phases.filter(p => p === "cancel")).toHaveLength(2);
+  });
+
+  it("ignores a secondary pen and an unrelated pointer cancellation during a primary drag", () => {
+    const f = fixture(); send(f.label, "pointerdown", 0); f.move(20);
+    send(f.label, "pointerdown", 100, { pointerId: 2, pointerType: "pen", isPrimary: false });
+    send(document, "pointercancel", 100, { pointerId: 2 });
+    f.move(30); expect(f.value()).toBe(8);
+    send(document, "pointerup", 30); expect(f.commit).toHaveBeenCalledOnce();
+    expect(f.phases.filter(p => p === "cancel")).toHaveLength(0);
+  });
+
+  it("uses the smallest permitted keyboard increment when Alt would round to no change", () => {
+    const f = fixture(); f.input.focus();
+    for (const key of ["ArrowUp", "ArrowUp", "ArrowDown"]) {
+      f.input.dispatchEvent(new KeyboardEvent("keydown", { key, altKey: true, bubbles: true }));
+    }
+    expect(f.value()).toBe(5.01); expect(f.input.value).toBe("5.010");
+    expect(f.commit).toHaveBeenCalledTimes(3);
+    f.input.blur(); expect(f.commit).toHaveBeenCalledTimes(3);
+  });
+});
+
+
+describe("adaptive scrub speed", () => {
+  it("makes the same movement finer when slow and coarser when fast", () => {
+    const slow = fixture(); send(slow.label, "pointerdown", 0, { timeStamp: 0 });
+    slow.move(10, { timeStamp: 250 }); send(document, "pointerup", 10);
+    const fast = fixture(); send(fast.label, "pointerdown", 0, { timeStamp: 0 });
+    fast.move(10, { timeStamp: 25 }); send(document, "pointerup", 10);
+    expect(slow.value()).toBe(5.5); expect(fast.value()).toBe(6.58);
+    expect(fast.value() - 5).toBeGreaterThan(slow.value() - 5);
+  });
+  it("honours a constant-speed preference and reverses immediately at a bound", () => {
+    document.documentElement.dataset.adaptiveScrub = "false";
+    document.documentElement.dataset.scrubSpeed = "0.5";
+    const f = fixture(); send(f.label, "pointerdown", 0, { timeStamp: 0 });
+    f.move(1000, { timeStamp: 5 }); expect(f.value()).toBe(10);
+    f.move(999, { timeStamp: 1005 }); expect(f.value()).toBe(9.95);
+    send(document, "pointerup", 999);
   });
 });

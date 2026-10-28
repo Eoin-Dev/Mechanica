@@ -193,13 +193,14 @@ describe("rod attachments", () => {
 
   it("round-trips pivot identity, attachment position, and rod origin", () => {
     const { world, mount, rod } = attachedWorld();
+    mount.name = "Fulcrum α";
     mount.rodAttachmentT = 0.3;
     rod.originAtA = false;
     const restored = World.fromDict(JSON.parse(JSON.stringify(world.toDict())));
     const pivot = restored.bodies.find((body) => body.isPivot)!;
     const restoredRod = restored.links.find((link): link is DistanceLink =>
       link instanceof DistanceLink)!;
-    expect(pivot.name).toBe("Anchor");
+    expect(pivot.name).toBe("Fulcrum α");
     expect(pivot.rodAttachmentId).toBe(restoredRod.id);
     expect(pivot.rodAttachmentT).toBeCloseTo(0.3);
     expect(restoredRod.originAtA).toBe(false);

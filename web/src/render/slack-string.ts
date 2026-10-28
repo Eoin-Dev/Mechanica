@@ -1,6 +1,6 @@
 /** Bounded visual slack only. Physics continues to use the authored straight
  * segments; picking follows the curve so the visible string remains selectable. */
-const MAX_BOW_PX = 72;
+const MAX_BOW_PX = 48;
 export const MAX_SLACK_EXTENT_PX = 3 * MAX_BOW_PX;
 
 /** Stable, allocation-free bowed segment with unchanged endpoints.
@@ -12,7 +12,7 @@ export function addSlackString(path: Path2D, ax: number, ay: number,
   path.moveTo(ax, ay);
   if (!(extraPx > 0) || !Number.isFinite(extraPx)) { path.lineTo(bx, by); return; }
   const dx = bx - ax, dy = by - ay, length = Math.hypot(dx, dy);
-  const bow = Math.min(MAX_BOW_PX, Math.sqrt(extraPx * (2 * length + extraPx)) * 0.5);
+  const bow = MAX_BOW_PX * (1 - Math.exp(-Math.sqrt(extraPx * (2 * length + extraPx)) / (2 * MAX_BOW_PX)));
   if (length < 1e-3) {
     // Coincident ends still need an identifiable loop, rather than a point.
     path.quadraticCurveTo(ax + bow * 2, ay + bow * 2, ax, ay + bow * 2);
@@ -20,16 +20,14 @@ export function addSlackString(path: Path2D, ax: number, ay: number,
     return;
   }
   const mx = (ax + bx) * 0.5, my = (ay + by) * 0.5;
-  let nx = -dy / length, ny = dx / length;
-  if (avoidX !== undefined && avoidY !== undefined ?
-      nx * (mx - avoidX) + ny * (my - avoidY) < 0 : ny < 0) { nx = -nx; ny = -ny; }
-  // A nearly vertical loose leg folds into an S as its excess length grows;
-  // horizontal legs sag downwards. Keep the shape deterministic, so pausing,
-  // rewinding and moving the pointer cannot make the string randomly flicker.
-  const fold = Math.abs(dy) / length * Math.min(1, extraPx / Math.max(24, length * 0.35));
-  const first = bow * (2 + fold), second = bow * (2 - 5 * fold);
-  path.bezierCurveTo(ax + dx / 3 + nx * first, ay + dy / 3 + ny * first,
-    ax + dx * 2 / 3 + nx * second, ay + dy * 2 / 3 + ny * second, bx, by);
+  // A single downward sag, gently outward for vertical pulley legs. Avoid
+  // the old S reversal and upward arch on a horizontal loose string.
+  const nx = avoidX !== undefined && avoidY !== undefined
+    ? (Math.sign(mx - avoidX) || 1) * Math.abs(dy) / length
+    : -Math.sign(dx || -1) * dy / length;
+  const ny = Math.abs(dx) / length;
+  path.quadraticCurveTo(mx + nx * bow * 2, my + ny * bow * 2, bx, by);
+
 }
 
 
@@ -55,37 +53,20 @@ function quadraticDistance(px: number, py: number, ax: number, ay: number,
   return nearest;
 }
 
-function cubicDistance(px: number, py: number, ax: number, ay: number,
-                       c1x: number, c1y: number, c2x: number, c2y: number,
-                       bx: number, by: number): number {
-  let nearest = Infinity, x = ax, y = ay;
-  for (let k = 1; k <= 32; k++) {
-    const t = k / 32, u = 1 - t;
-    const nextX = u ** 3 * ax + 3 * u * u * t * c1x + 3 * u * t * t * c2x + t ** 3 * bx;
-    const nextY = u ** 3 * ay + 3 * u * u * t * c1y + 3 * u * t * t * c2y + t ** 3 * by;
-    nearest = Math.min(nearest, segmentDistance(px, py, x, y, nextX, nextY));
-    x = nextX; y = nextY;
-  }
-  return nearest;
-}
-
 /** Picking follows the same bounded visual curve; physics stays straight. */
 export function slackStringDistance(px: number, py: number, ax: number, ay: number,
                                     bx: number, by: number, extraPx: number,
                                     avoidX?: number, avoidY?: number): number {
   if (!(extraPx > 0) || !Number.isFinite(extraPx)) return segmentDistance(px, py, ax, ay, bx, by);
   const dx = bx - ax, dy = by - ay, length = Math.hypot(dx, dy);
-  const bow = Math.min(MAX_BOW_PX, Math.sqrt(extraPx * (2 * length + extraPx)) * 0.5);
+  const bow = MAX_BOW_PX * (1 - Math.exp(-Math.sqrt(extraPx * (2 * length + extraPx)) / (2 * MAX_BOW_PX)));
   if (length < 1e-3) return Math.min(
     quadraticDistance(px, py, ax, ay, ax + bow * 2, ay + bow * 2, ax, ay + bow * 2),
     quadraticDistance(px, py, ax, ay + bow * 2, ax - bow * 2, ay + bow * 2, bx, by));
   const mx = (ax + bx) * 0.5, my = (ay + by) * 0.5;
-  let nx = -dy / length, ny = dx / length;
-  if (avoidX !== undefined && avoidY !== undefined ?
-      nx * (mx - avoidX) + ny * (my - avoidY) < 0 : ny < 0) { nx = -nx; ny = -ny; }
-  const fold = Math.abs(dy) / length * Math.min(1, extraPx / Math.max(24, length * 0.35));
-  const first = bow * (2 + fold), second = bow * (2 - 5 * fold);
-  return cubicDistance(px, py, ax, ay,
-    ax + dx / 3 + nx * first, ay + dy / 3 + ny * first,
-    ax + dx * 2 / 3 + nx * second, ay + dy * 2 / 3 + ny * second, bx, by);
+  const nx = avoidX !== undefined && avoidY !== undefined
+    ? (Math.sign(mx - avoidX) || 1) * Math.abs(dy) / length
+    : -Math.sign(dx || -1) * dy / length;
+  const ny = Math.abs(dx) / length;
+  return quadraticDistance(px, py, ax, ay, mx + nx * bow * 2, my + ny * bow * 2, bx, by);
 }

@@ -1,5 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 
+// Configure the setup size before creating the page; keep loaded-app resizes below.
+test.use({ viewport: { width: 1440, height: 900 } });
+
 async function loadRoughPlane(page: Page) {
   await page.getByRole("button", { name: "Library", exact: true }).click();
   await page.getByRole("button", { name: "Load Rough inclined plane", exact: true }).click();
@@ -38,7 +41,7 @@ async function checkpoint(page: Page) {
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("mechanica.settings",
     JSON.stringify({ tour_done: true, theme: "dark", studio_mode: true })));
-  await page.setViewportSize({ width: 1440, height: 900 });
+
   await page.goto("/");
 });
 

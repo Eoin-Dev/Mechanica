@@ -55,6 +55,16 @@ describe("toolbar and palette semantics", () => {
     expect(clock.value).toBe("0.00");
   });
 
+  it("sizes Studio's clock for long and collision-precision readouts", () => {
+    const app = appStub(); app.world.time = 1234567.89;
+    const root = document.createElement("div"); document.body.replaceChildren(root);
+    const toolbar = new Toolbar(app, root); toolbar.refresh();
+    const clock = root.querySelector<HTMLInputElement>('[aria-label="Simulation time in seconds"]')!;
+    expect(clock.style.getPropertyValue("--clock-ch")).toBe(String(clock.value.length));
+    Object.assign(app, { collisionFrame: true }); app.world.time = 0.25; toolbar.refresh();
+    expect(clock.value).toBe("0.250000"); expect(clock.style.getPropertyValue("--clock-ch")).toBe("8");
+  });
+
   it("only seeks when the clock text is changed and committed", () => {
     const app = appStub();
     app.world.time = 1.23456789;
@@ -83,9 +93,11 @@ describe("toolbar and palette semantics", () => {
     const toolbar = new Toolbar(app, root);
     toolbar.refresh();
 
-    const heading = root.querySelector<HTMLElement>("[role=heading]");
+    const heading = root.querySelector<HTMLElement>("h1");
     const play = root.querySelector<HTMLButtonElement>("[aria-pressed]")!;
-    expect(heading?.getAttribute("aria-level")).toBe("1");
+    expect(heading?.querySelector("button")?.textContent).toBe("Mechanica");
+    expect(heading?.querySelector(".studio-label")?.getAttribute("aria-hidden")).toBe("true");
+    expect(heading?.querySelector("button")?.getAttribute("title")).toBe("Restart Mechanica with a fresh starting scene");
     expect(play.getAttribute("aria-label")).toMatch(/^Start the simulation/);
     expect(play.getAttribute("aria-pressed")).toBe("false");
     expect(root.querySelector("#fps")?.textContent).toBe("Idle");
@@ -382,5 +394,56 @@ describe("graph dock retained state", () => {
       theme.setTheme(originalTheme);
       getContext.mockRestore();
     }
+  });
+});
+
+
+describe("right-pan history and resume", () => {
+  function fixture() {
+    const ctx = new Proxy({ measureText: (text: string) => ({ width: text.length * 6 }) } as Record<string, unknown>, {
+      get: (target, key) => key in target ? target[key as string] : () => {}, set() { return true; },
+    }) as unknown as CanvasRenderingContext2D;
+    const context = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx);
+    const app = { graphMode: "Energy", settings: {}, selection: [],
+      world: { gravity: 0, bodies: [], walls: [], links: [], fields: [], drivers: [],
+        dragLinear: 0, dragQuadratic: 0, globalDamping: 0 },
+      energySeries: new TimeSeries(["Total"]), momentumSeries: new TimeSeries(["px"]),
+      phasePlot: new PhasePlot(), resizeCanvas() {}, saveSettings() {},
+    } as unknown as App;
+    for (const t of [0, 10, 20, 30, 60]) app.energySeries.add(t, { Total: t });
+    const root = document.createElement("div"); document.body.replaceChildren(root);
+    const dock = new GraphDock(app, root, document.createElement("div"));
+    const canvas = root.querySelector("canvas")!;
+    Object.defineProperty(canvas, "clientWidth", { value: 500 });
+    Object.defineProperty(canvas, "clientHeight", { value: 180 });
+    canvas.setPointerCapture = vi.fn(); canvas.releasePointerCapture = vi.fn();
+    const view = dock as unknown as { viewSpan: number; viewEnd: number | null };
+    view.viewSpan = 10; dock.refresh();
+    const pointer = (type: string, x: number, button = 2) => {
+      const event = new MouseEvent(type, { clientX: x, clientY: 100, button, buttons: type === "pointerup" ? 0 : 2, cancelable: true });
+      Object.assign(event, { pointerId: 1 }); canvas.dispatchEvent(event); return event;
+    };
+    return { app, dock, canvas, root, view, pointer, context };
+  }
+  it("suppresses the native menu on the right-draggable plot", () => {
+    const f = fixture();
+    try {
+      const menu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      f.canvas.dispatchEvent(menu); expect(menu.defaultPrevented).toBe(true);
+    } finally { f.context.mockRestore(); }
+  });
+  it.each([0, 2])("keeps historical time fixed, releases lost capture and resumes current data (button %s)", button => {
+    const f = fixture();
+    try {
+      f.pointer("pointerdown", 100, button); f.pointer("pointermove", 200, button);
+      expect(f.view.viewEnd).toBeCloseTo(58, 12);
+      const live = f.root.querySelector<HTMLButtonElement>(".graph-live")!;
+      expect(live.textContent).toBe("Return to live"); expect(live.hidden).toBe(false);
+      f.app.energySeries.add(70, { Total: 70 }); f.dock.refresh();
+      expect(f.view.viewEnd).toBe(58);
+      f.pointer("lostpointercapture", 200, button); f.pointer("pointermove", 400, button);
+      expect(f.view.viewEnd).toBe(58);
+      live.click(); f.dock.refresh(); expect(f.view.viewEnd).toBeNull(); expect(live.hidden).toBe(true);
+    } finally { f.context.mockRestore(); }
   });
 });

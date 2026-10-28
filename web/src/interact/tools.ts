@@ -26,11 +26,12 @@ import { pulleyParticleDragPlan } from "./pulley-drag";
 import { Vec2 } from "../core/vec";
 import { sweepClearOfWalls } from "../engine/contacts";
 import { Body, Wall } from "../engine/body";
+import { DeleteZone, type DeleteZoneShape } from "../engine/delete-zone";
 import {
   DistanceLink, Link, PULLEY_PARTICLE_RADIUS, PULLEY_RADIUS, PulleyLink, SpringLink,
 } from "../engine/links";
 import { Driver } from "../engine/world";
-import { Selectable, VEL_ARROW_SCALE, distToSegment, drawVelocityHandle,
+import { Selectable, VEL_ARROW_SCALE, distToSegment, drawVelocityHandle, drawDeleteZone,
          pivotGlyphMetrics, snapStep } from "../render/draw";
 import { slackStringDistance } from "../render/slack-string";
 import { isTouch } from "../ui/dom";
@@ -70,7 +71,7 @@ export const TOOL_INFO: Record<Tool, [string, string]> = {
   pulley: ["Add pulley (P)", "Click near a wall end to mount a fixed pulley, or " +
            "click empty space to place one. It creates two particles and one " +
            "inextensible string with equal tension."],
-  eraser: ["Eraser (X)", "Click or hold and drag across bodies, walls or links to delete them."],
+  eraser: ["Eraser (X)", "Erase objects, or choose a persistent Delete zone shape in the Selection panel and drag to draw it."],
 };
 
 /** Touch wording for the hint bar (phones and tablets): short, tap-based,
@@ -89,7 +90,7 @@ export const TOOL_INFO_TOUCH: Record<Tool, string> = {
   spring: "Tap two bodies to join them with a spring.",
   pulley: "Tap near a wall end to mount a pulley with two particles and an " +
           "inextensible string.",
-  eraser: "Tap or drag across bodies, walls or links to delete them.",
+  eraser: "Erase objects, or choose a Delete zone shape in the Selection panel and drag to draw it.",
 };
 
 const ANCHOR_GREY: [number, number, number] = [120, 125, 135];
@@ -224,6 +225,10 @@ export class CanvasController {
   private erasing = false;
   private eraseChanged = false;
   private eraseLast: [number, number] | null = null;
+  eraserShape: "scrub" | DeleteZoneShape = "scrub";
+  private zoneStart: Vec2 | null = null;
+  private zoneDrawing: DeleteZone | null = null;
+  private zoneDrag: { zone: DeleteZone; offset: Vec2 } | null = null;
   /** Live wall-end latches use a wider release radius than acquisition so a
    * snapped wheel does not chatter at the threshold. */
   private pulleyDragMounts = new Map<Body, { wall: Wall; end: 0 | 1 }>();
@@ -238,12 +243,16 @@ export class CanvasController {
   setTool(tool: Tool): void {
     this.finishInterruptedGesture();
     this.tool = tool;
+    if (tool === "eraser") this.app.setSelection([]);
     this.rubber = null;
     this.app.invalidateCanvas();
   }
 
   /** Cancel an in-progress link or wall draw. Returns true if one was. */
   cancelPending(): boolean {
+    if (this.zoneDrawing !== null) {
+      this.zoneDrawing = null; this.zoneStart = null; this.app.invalidateCanvas(); return true;
+    }
     if (this.linkFirst !== null || this.wallStart !== null) {
       if (this.linkCreatedFirst !== null &&
           this.app.world.bodies.includes(this.linkCreatedFirst)) {
@@ -366,7 +375,7 @@ export class CanvasController {
             sweepClearOfWalls(app.world.walls, body.pos, t, body.radius);
           t = new Vec2(cx, cy);
         }
-        if (pulleyLink === null) t = this.planPulleyParticleDrag(body, t, solidPaused);
+        if (pulleyLink === null) t = this.planPulleyParticleDrag(body, t, solidPaused, worldP);
         if (pulleyLink !== null && pulleyTarget !== null) {
           app.world.movePulleyForEdit(pulleyLink, t, pulleyTarget.mount);
         } else if (this.movePivotForEdit(body, t)) {
@@ -405,7 +414,7 @@ export class CanvasController {
           sweepClearOfWalls(this.app.world.walls, body.pos, t, body.radius);
         t = new Vec2(cx, cy);
       }
-      if (pulleyLink === null) t = this.planPulleyParticleDrag(body, t, solid);
+      if (pulleyLink === null) t = this.planPulleyParticleDrag(body, t, solid, worldP);
       // Solver-facing hand velocity: permitted displacement / elapsed
       // pointer time, passed through a continuous response curve whose
       // gentling increases with hand speed. The first activation frame
@@ -507,10 +516,10 @@ export class CanvasController {
     return mount;
   }
 
-  private planPulleyParticleDrag(body: Body, proposed: Vec2, solid: boolean): Vec2 {
+  private planPulleyParticleDrag(body: Body, proposed: Vec2, solid: boolean, pointer: Vec2): Vec2 {
     const app = this.app;
     const plan = pulleyParticleDragPlan(app.world.links, body, proposed,
-      solid ? app.world.walls : [], app.perfMode ? 24 - 2 * app.performanceLevel : 40);
+      solid ? app.world.walls : [], app.perfMode ? 24 - 2 * app.performanceLevel : 40, pointer);
     if (plan === null) return proposed;
     for (const partner of plan.partners) partner.body.pos.setVec(partner.target);
     return plan.target;
@@ -709,6 +718,9 @@ export class CanvasController {
         return walls[i];
       }
     }
+    for (let i = app.world.deleteZones.length - 1; i >= 0; i--) {
+      const zone = app.world.deleteZones[i]; if (zone.contains(worldP, pickPad)) return zone;
+    }
     return null;
   }
 
@@ -754,6 +766,7 @@ export class CanvasController {
     this.erasing = false;
     this.eraseChanged = false;
     this.eraseLast = null;
+    this.zoneStart = null; this.zoneDrawing = null; this.zoneDrag = null;
     this.canvasPointer = null;
     this.pulleyDragMounts.clear();
     this.app.invalidateCanvas();
@@ -902,7 +915,7 @@ export class CanvasController {
     canvas.addEventListener("lostpointercapture", (e) => {
       if (this.pointers.has(e.pointerId) || this.dragActive ||
           this.wallDrag !== null || this.velDrag !== null || this.panning ||
-          this.erasing || this.wallStart !== null || this.rubber !== null) {
+          this.erasing || this.zoneDrawing !== null || this.zoneDrag !== null || this.wallStart !== null || this.rubber !== null) {
         this.finishInterruptedGesture();
       }
     });
@@ -1063,6 +1076,11 @@ export class CanvasController {
     }
 
     if (tool === "eraser") {
+      if (this.eraserShape !== "scrub") {
+        this.zoneStart = this.snap(worldP);
+        this.zoneDrawing = new DeleteZone(this.zoneStart.copy(), this.eraserShape, .01, .01);
+        return;
+      }
       this.erasing = true;
       this.eraseChanged = false;
       this.eraseLast = mouse;
@@ -1109,6 +1127,11 @@ export class CanvasController {
       return;
     }
 
+    if (picked instanceof DeleteZone) {
+      if (shift) { this.toggleInSelection(picked); return; }
+      app.setSelection([picked]); this.zoneDrag = { zone: picked, offset: picked.pos.sub(worldP) };
+      this.dragPress = mouse; return;
+    }
     if (picked instanceof Wall) {
       if (shift) {
         this.toggleInSelection(picked);
@@ -1165,6 +1188,21 @@ export class CanvasController {
   // ------------------------------------------------------------------ motion
   private motion(mouse: [number, number]): void {
     const app = this.app;
+    if (this.zoneDrawing !== null && this.zoneStart !== null) {
+      const end = this.snap(app.camera.toWorld(...mouse));
+      this.zoneDrawing.pos = this.zoneStart.add(end).mul(.5);
+      this.zoneDrawing.width = Math.max(.01, Math.abs(end.x - this.zoneStart.x));
+      this.zoneDrawing.height = Math.max(.01, Math.abs(end.y - this.zoneStart.y));
+      if (this.zoneDrawing.shape === "circle") this.zoneDrawing.width = this.zoneDrawing.height =
+        Math.max(this.zoneDrawing.width, this.zoneDrawing.height);
+      app.invalidateCanvas(); return;
+    }
+    if (this.zoneDrag !== null) {
+      if (!this.dragMoved && Math.hypot(mouse[0] - this.dragPress[0], mouse[1] - this.dragPress[1]) < 4) return;
+      if (!this.dragMoved) app.beginEdit();
+      this.zoneDrag.zone.pos = this.snap(app.camera.toWorld(...mouse).add(this.zoneDrag.offset));
+      this.dragMoved = true; app.invalidateCanvas(); return;
+    }
     if (this.dragItems.length > 0) {
       const now = performance.now();
       const previous = this.rodPointerLast;
@@ -1248,6 +1286,12 @@ export class CanvasController {
   // ----------------------------------------------------------------- release
   private release(mouse: [number, number]): void {
     const app = this.app;
+    if (this.zoneDrawing !== null) {
+      this.motion(mouse);
+      const zone = this.zoneDrawing; this.zoneDrawing = null; this.zoneStart = null;
+      this.setTool("select");
+      app.beginEdit(); app.world.deleteZones.push(zone); app.setSelection([zone]); app.commitEdit(); return;
+    }
     if (this.erasing) {
       if (this.eraseLast !== null &&
           (this.eraseLast[0] !== mouse[0] || this.eraseLast[1] !== mouse[1])) {
@@ -1260,7 +1304,7 @@ export class CanvasController {
       return;
     }
     if (this.panning) this.panning = false;
-    if (this.velDrag !== null || this.wallDrag !== null || this.dragItems.length > 0) {
+    if (this.velDrag !== null || this.wallDrag !== null || this.zoneDrag !== null || this.dragItems.length > 0) {
       // An inactive (never-moved) press was a pure inspect-click: the bodies
       // were never held, so there is nothing to undo. Either way the release
       // hands each dragged body back the velocity it was grabbed with, so a
@@ -1282,6 +1326,7 @@ export class CanvasController {
       this.velDrag = null;
       this.wallDrag = null;
       this.wallGrab = null;
+      this.zoneDrag = null;
       this.dragMoved = false;
     }
     if (this.rubber !== null) {
@@ -1331,6 +1376,11 @@ export class CanvasController {
       p[1] >= rect.y && p[1] <= rect.y + rect.h;
     const flt = app.boxFilter;
     const found: Selectable[] = [];
+    if (flt.zones) for (const zone of app.world.deleteZones) {
+      const halfW = zone.width / 2, halfH = (zone.shape === "circle" ? zone.width : zone.height) / 2;
+      if ([-1, 1].every(x => [-1, 1].every(y => inside(cam.toScreen(
+        zone.pos.add(new Vec2(x * halfW, y * halfH).rotated(zone.angle))))))) found.push(zone);
+    }
     if (flt.bodies || flt.anchors || flt.pulleys) {
       for (const body of app.world.bodies) {
         if (body.isRodEndpoint) continue;
@@ -1399,14 +1449,16 @@ export class CanvasController {
    * Found by the random operation fuzzer, not by inspection: both need a
    * delete to land in the middle of a multi-step gesture.
    */
-  private pruneDeleted(): void {
+  pruneDeleted(): void {
     const app = this.app;
     const w = app.world;
     const alive = (o: Selectable): boolean =>
       o instanceof Body ? w.bodies.includes(o)
         : o instanceof Wall ? w.walls.includes(o)
+          : o instanceof DeleteZone ? w.deleteZones.includes(o)
           : w.links.includes(o);
     if (this.hover !== null && !alive(this.hover)) this.hover = null;
+    if (this.zoneDrag !== null && !alive(this.zoneDrag.zone)) this.zoneDrag = null;
     if (this.dragItems.some(({ body }) => !alive(body))) this.abortDrag();
     if (this.linkFirst !== null && !alive(this.linkFirst)) this.linkFirst = null;
     if (this.velDrag !== null && !alive(this.velDrag)) this.velDrag = null;
@@ -1473,6 +1525,8 @@ export class CanvasController {
         app.trails.delete(o.id);
       } else if (o instanceof Wall) {
         walls.add(o);
+      } else if (o instanceof DeleteZone) {
+        app.world.deleteZones = app.world.deleteZones.filter(zone => zone !== o);
       } else {
         links.add(o);
       }
@@ -1498,19 +1552,27 @@ export class CanvasController {
     const app = this.app;
     app.beginEdit();
     const newSel: Selectable[] = [];
-    const bodies = app.selection.filter((o): o is Body =>
+    const selectedBodies = app.selection.filter((o): o is Body =>
       o instanceof Body && !o.isPulley && !o.isPivot);
+    const bodies = new Set(selectedBodies);
+    for (const selected of app.selection) {
+      if (!(selected instanceof DistanceLink) || selected.isRope ||
+          !selected.a.isRodEndpoint || !selected.b.isRodEndpoint) continue;
+      bodies.add(selected.a); bodies.add(selected.b);
+      for (const body of app.world.bodies) if (body.rodAttachmentId === selected.id) bodies.add(body);
+    }
+    const rodMapping = new Map<number, number>();
     const mapping = new Map<number, Body>();
     for (const body of bodies) {
       const clone = Body.fromDict(body.toDict());
       clone.id = Body.nextId++;
-      // anchors are always called "Anchor" - the generic rename would have
-      // produced a thing labelled "Body 12" that is still an anchor
-      if (!clone.isAnchor) clone.name = `Body ${clone.id}`;
+      // Visible particle copies get a generated name. Preserve anchors and
+      // hidden endpoint names so scene restoration does not rename the copy.
+      if (!clone.isAnchor && !clone.isRodEndpoint) clone.name = `Body ${clone.id}`;
       clone.pos = body.pos.add(new Vec2(0.3, -0.3));
       mapping.set(body.id, clone);
       app.world.bodies.push(clone);
-      newSel.push(clone);
+      if (!clone.isRodEndpoint) newSel.push(clone);
     }
     // duplicate links whose two ends were both duplicated
     for (const link of [...app.world.links]) {
@@ -1520,14 +1582,26 @@ export class CanvasController {
         if (link instanceof PulleyLink) {
           continue;
         } else if (link instanceof SpringLink) {
-          app.world.links.push(new SpringLink(a, b, link.restLength,
-                                              link.stiffness, link.damping,
-                                              link.tensionOnly));
+          const copy = new SpringLink(a, b, link.restLength,
+                                      link.stiffness, link.damping, link.tensionOnly);
+          copy.name = link.name;
+          app.world.links.push(copy);
+          if (app.selection.includes(link)) newSel.push(copy);
         } else {
-          app.world.links.push(new DistanceLink(a, b, link.length,
-                                                link.isRope, link.compliance));
+          const copy = new DistanceLink(a, b, link.length, link.isRope, link.compliance);
+          copy.name = link.name;
+          copy.originAtA = link.originAtA;
+          app.world.links.push(copy);
+          if (app.selection.includes(link)) newSel.push(copy);
+          if (!link.isRope) rodMapping.set(link.id, copy.id);
         }
       }
+    }
+    // A single mounted mass becomes a free particle. When its rod was copied
+    // as well, remap the attachment to the new assembly, never the old rod.
+    for (const body of bodies) {
+      const clone = mapping.get(body.id)!;
+      clone.rodAttachmentId = body.rodAttachmentId === null ? null : rodMapping.get(body.rodAttachmentId) ?? null;
     }
     // ...and the sinusoidal drivers of the duplicated bodies. A driver is
     // as much a property of its body as a link is of its endpoints, so
@@ -1542,6 +1616,10 @@ export class CanvasController {
       app.world.drivers.push(copy);
     }
     for (const obj of app.selection) {
+      if (obj instanceof DeleteZone) {
+        const clone = DeleteZone.fromDict(obj.toDict()); clone.id = DeleteZone.nextId++;
+        clone.pos = clone.pos.add(new Vec2(.3, -.3)); app.world.deleteZones.push(clone); newSel.push(clone);
+      }
       if (obj instanceof Wall) {
         const clone = Wall.fromDict(obj.toDict());
         clone.id = Wall.nextId++;
@@ -1563,6 +1641,7 @@ export class CanvasController {
   drawOverlays(ctx: CanvasRenderingContext2D): void {
     const app = this.app;
     const mouse = this.mouse;
+    if (this.zoneDrawing !== null) drawDeleteZone(ctx, app.camera, this.zoneDrawing, true);
     if (this.rubber !== null) {
       const x = Math.min(this.rubber[0], mouse[0]);
       const y = Math.min(this.rubber[1], mouse[1]);

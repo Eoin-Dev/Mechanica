@@ -1,7 +1,71 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+// Configure the setup size before creating the page; keep loaded-app resizes below.
+test.use({ viewport: { width: 1440, height: 900 } });
+
 type Caption = { text: string; left: number; right: number; top: number; bottom: number };
+
+test("caption leaders stay beneath independent pulley arrows as well as body arrows", async ({ page }, info) => {
+  await page.addInitScript(() => {
+    const frame = { order: [] as string[] };
+    Object.defineProperty(window, "combinedForcePaint", { value: frame });
+    const warn = new Set(["#e6c85a", "#ebc850", "#8e6500"]);
+    const fill = CanvasRenderingContext2D.prototype.fillRect;
+    CanvasRenderingContext2D.prototype.fillRect = function(x, y, w, h) {
+      if (this.canvas.id === "canvas" && x === 0 && y === 0 && w > 100 && h > 100) frame.order.length = 0;
+      fill.call(this, x, y, w, h);
+    };
+    const stroke: (this: CanvasRenderingContext2D, path?: Path2D) => void = CanvasRenderingContext2D.prototype.stroke;
+    CanvasRenderingContext2D.prototype.stroke = function(path?: Path2D) {
+      if (this.canvas.id === "canvas") {
+        if (this.getLineDash().length) frame.order.push("leader");
+        else if (path && this.lineWidth === 2 && warn.has(String(this.strokeStyle))) frame.order.push("link-force");
+        else if (path && this.lineWidth === 2.5) frame.order.push("body-force");
+      }
+      if (path) stroke.call(this, path); else stroke.call(this);
+    };
+  });
+  await page.reload();
+  await loadScene(page, { settings: { gravity: 9.81 }, bodies: [
+    { id: 1, name: "Left load", pos: [-1, -1], radius: 0.2, mass: 2, collides: false, color: [50, 170, 150] },
+    { id: 2, name: "Right load", pos: [1, -1], radius: 0.2, mass: 3, collides: false, color: [220, 130, 90] },
+    { id: 3, name: "Wheel", pos: [0, 1], is_pulley: true },
+  ], links: [{ type: "pulley", id: 1, a: 1, b: 2, pulley: 3,
+    show_tension_vectors: true, show_resultant_tension_vector: true }] });
+  const dismiss = page.getByRole("button", { name: "Dismiss notification", exact: true });
+  while (await dismiss.count()) await dismiss.first().click();
+  await pickParticle(page, [50, 170, 150]);
+  const diagrams = page.getByRole("checkbox", { name: "Free-body forces on canvas", exact: true });
+  await diagrams.check();
+  const saved = () => page.evaluate(() => {
+    window.dispatchEvent(new Event("pagehide"));
+    return JSON.parse(sessionStorage.getItem("mechanica.tab-recovery")!).scene as string;
+  });
+  const original = await saved();
+  const order = () => page.evaluate(() => (window as unknown as { combinedForcePaint: { order: string[] } }).combinedForcePaint.order);
+  for (const theme of ["Light", "Dark", "Void"] as const) {
+    await page.locator("#btn-settings").click();
+    await page.getByRole("dialog", { name: "Settings", exact: true }).getByRole("button", { name: theme, exact: true }).click();
+    await page.keyboard.press("Escape"); await page.mouse.move(5, 5);
+    await expect.poll(async () => {
+      const current = await order();
+      return ["leader", "link-force", "body-force"].every(kind => current.includes(kind));
+    }).toBe(true);
+    const current = await order();
+    await info.attach(`combined-force-order-${theme}.json`, { contentType: "application/json", body: JSON.stringify(current) });
+    await page.screenshot({ path: info.outputPath(`combined-forces-${theme}.png`) });
+    expect(current.lastIndexOf("leader")).toBeLessThan(current.indexOf("link-force"));
+    expect(current.lastIndexOf("leader")).toBeLessThan(current.indexOf("body-force"));
+    expect(await saved()).toBe(original);
+  }
+  await diagrams.uncheck();
+  await expect.poll(async () => {
+    const current = await order();
+    return current.includes("link-force") && !current.includes("body-force") && !current.includes("leader");
+  }).toBe(true);
+  expect(await saved()).toBe(original);
+});
 
 async function loadScene(page: Page, scene: unknown) {
   await page.getByRole("button", { name: "Library", exact: true }).click();
@@ -37,6 +101,94 @@ async function pickParticle(page: Page, colour: number[]) {
   await page.getByRole("tab", { name: "Selection", exact: true }).click();
 }
 
+test("decreasing static friction captions update continuously while the particle stays still", async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    const readings: Array<{ value: number; at: number }> = [];
+    Object.defineProperty(window, "frictionReadings", { value: readings });
+    const frames: Array<{ time: number; at: number }> = [];
+    Object.defineProperty(window, "frictionFrames", { value: frames });
+    const observeFrame = () => {
+      const clock = document.querySelector<HTMLInputElement>('input[aria-label="Simulation time in seconds"]');
+      if (clock) frames.push({ time: Number(clock.value), at: performance.now() });
+      requestAnimationFrame(observeFrame);
+    };
+    requestAnimationFrame(observeFrame);
+    const fill = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function(text, x, y, maxWidth) {
+      if (this.canvas.id === "canvas" && /^F \d+\.\d+ N$/.test(text)) {
+        const value = Number(text.slice(2, -2));
+        if (readings.at(-1)?.value !== value) readings.push({ value, at: performance.now() });
+      }
+      if (maxWidth === undefined) fill.call(this, text, x, y);
+      else fill.call(this, text, x, y, maxWidth);
+    };
+  });
+  await page.reload();
+  await loadScene(page, { settings: { gravity: 9.81, substeps: 8, iterations: 12 },
+    bodies: [{ id: 1, name: "Resting particle", pos: [0, 0.25], mass: 1, radius: 0.15,
+      no_rotation: true, friction: 1, restitution: 0, show_force_components: true, color: [50, 170, 150] }],
+    walls: [{ id: 1, a: [-4, 0], b: [4, 0], thickness: 0.2, friction: 1, restitution: 0 }],
+    fields: [{ name: "Decreasing push", fx: "max(0,4-2*t)", fy: "0", enabled: true }] });
+  await pickParticle(page, [50, 170, 150]);
+  await page.getByRole("checkbox", { name: "Free-body forces on canvas", exact: true }).check();
+  await expect.poll(() => page.evaluate(() => (window as unknown as {
+    frictionReadings: Array<{ value: number }> }).frictionReadings.at(-1)?.value)).toBe(4);
+  await page.evaluate(() => (window as unknown as { frictionReadings: unknown[] }).frictionReadings.length = 0);
+  const play = page.getByRole("group", { name: "Simulation playback", exact: true }).getByRole("button").first();
+  await play.click();
+  await expect.poll(async () => Number(await page.getByRole("textbox", {
+    name: "Simulation time in seconds", exact: true }).inputValue())).toBeGreaterThan(0.2);
+  const settledX = await page.evaluate(() => {
+    window.dispatchEvent(new Event("pagehide"));
+    return JSON.parse(JSON.parse(sessionStorage.getItem("mechanica.tab-recovery")!).scene).bodies[0].pos[0] as number;
+  });
+  await expect.poll(async () => Number(await page.getByRole("textbox", {
+    name: "Simulation time in seconds", exact: true }).inputValue())).toBeGreaterThan(1.2);
+  await play.click();
+  const readings = await page.evaluate(() => (window as unknown as {
+    frictionReadings: Array<{ value: number; at: number }> }).frictionReadings);
+  // Keep the observed cadence even when an assertion fails, so a caption
+  // regression can be distinguished from a slow or suspended browser run.
+  await testInfo.attach("decreasing-friction-captions", {
+    body: JSON.stringify(readings), contentType: "application/json" });
+  const frames = await page.evaluate(() => (window as unknown as {
+    frictionFrames: Array<{ time: number; at: number }> }).frictionFrames);
+  await testInfo.attach("available-friction-frames", {
+    body: JSON.stringify(frames), contentType: "application/json" });
+  const decreasing = readings.filter(reading => reading.value < 3.7 && reading.value > 1);
+  // Count updates against independently observed browser frames in an inner
+  // one-second interval. A 15 Hz browser cannot provide 21 distinct captions
+  // in the original 1.35-second force window. At normal/high refresh rates,
+  // require at least 60 updates; the force and latency bounds below still hold.
+  const available = frames.filter(frame => frame.time > .2 && frame.time < 1.2).length;
+  expect(available).toBeGreaterThan(5);
+  expect(decreasing.length).toBeGreaterThanOrEqual(Math.min(available, 60));
+  for (let i = 1; i < decreasing.length; i++) {
+    expect(decreasing[i].value).toBeLessThan(decreasing[i - 1].value);
+    const valueGap = decreasing[i - 1].value - decreasing[i].value;
+    const wallGap = decreasing[i].at - decreasing[i - 1].at;
+    if (valueGap >= .3 || wallGap >= 200) {
+      // An OS/browser pause offers no paint opportunity. Still reject a stale
+      // caption whenever independently observed frames were available between
+      // readings; one observation belongs to the frame drawing this reading.
+      const opportunities = frames.filter(frame => frame.at > decreasing[i - 1].at && frame.at < decreasing[i].at);
+      expect(opportunities.length, "caption skipped available presentation frames").toBeLessThanOrEqual(1);
+    } else {
+      expect(valueGap).toBeLessThan(.3);
+      expect(wallGap).toBeLessThan(200);
+    }
+  }
+  const scene = await page.evaluate(() => {
+    window.dispatchEvent(new Event("pagehide"));
+    return JSON.parse(JSON.parse(sessionStorage.getItem("mechanica.tab-recovery")!).scene);
+  });
+  // A cold contact first settles by a few micrometres; the following
+  // decreasing-force interval must retain the settled horizontal position.
+  expect(Math.abs(scene.bodies[0].pos[0] - settledX)).toBeLessThan(1e-9);
+  expect(Math.abs(scene.bodies[0].vel[0])).toBeLessThan(1e-7);
+  await page.screenshot({ path: testInfo.outputPath("decreasing-static-friction.png") });
+});
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem("mechanica.settings", JSON.stringify({ tour_done: true, theme: "light" }));
@@ -63,7 +215,7 @@ test.beforeEach(async ({ page }) => {
       else fill.call(this, text, x, y, maxWidth);
     };
   });
-  await page.setViewportSize({ width: 1440, height: 900 });
+
   await page.goto("/");
 });
 
@@ -85,7 +237,8 @@ test("current diagrams show all loaded slope contacts and update immediately thr
   await expect(summary).toBeVisible();
   await summary.focus(); await page.keyboard.press("Enter");
   const sources = page.getByRole("list", { name: "Force values and sources", exact: true });
-  await expect(sources.getByRole("listitem")).toHaveCount(5);
+  await expect(sources.getByRole("listitem")).toHaveCount(4);
+  await expect(page.locator(".force-resultant")).toBeVisible();
   for (const name of ["R₁: Reaction from Upper", "R₂: Reaction from Lower", "R₃: Reaction from Slope"]) {
     await expect(sources).toContainText(name);
   }
@@ -222,6 +375,8 @@ test("rewinding restores completed impact captions and their measured interval a
   const clock = page.getByRole("textbox", { name: "Simulation time in seconds", exact: true });
   const captions = () => page.evaluate(() =>
     (window as unknown as { contactCaptions: Caption[] }).contactCaptions.map(caption => caption.text));
+  // Exercise the raw interval-average view and its captions through rewind.
+  await page.getByRole("checkbox", { name: "Collision impulses", exact: true }).uncheck();
   const canvas = page.locator("#canvas");
   await canvas.focus(); await page.keyboard.press(".");
   await expect(clock).toHaveValue("0.013333");
@@ -250,7 +405,9 @@ test("surface forces start at the contact and identify their source across force
   await page.addInitScript(() => {
     type Segment = { x1: number; y1: number; x2: number; y2: number; colour: string; width: number };
     const frame = { width: 0, height: 0, segments: [] as Segment[],
-      circles: [] as { x: number; y: number; r: number }[], text: [] as string[] };
+      circles: [] as { x: number; y: number; r: number }[], text: [] as string[],
+      fills: [] as { colour: string; segments: Omit<Segment, "colour" | "width">[] }[],
+      paintOrder: [] as string[] };
     Object.defineProperty(window, "forceGeometry", { value: frame });
     const paths = new WeakMap<Path2D, { x: number; y: number; segments: Omit<Segment, "colour" | "width">[] }>();
     const move = Path2D.prototype.moveTo, line = Path2D.prototype.lineTo;
@@ -268,15 +425,29 @@ test("surface forces start at the contact and identify their source across force
       if (this.canvas.id === "canvas" && x === 0 && y === 0 && w > 100 && h > 100) {
         frame.width = w; frame.height = h;
         frame.segments.length = 0; frame.circles.length = 0; frame.text.length = 0;
+        frame.fills.length = 0; frame.paintOrder.length = 0;
       }
       fill.call(this, x, y, w, h);
     };
     const stroke: (this: CanvasRenderingContext2D, path?: Path2D) => void = CanvasRenderingContext2D.prototype.stroke;
     CanvasRenderingContext2D.prototype.stroke = function(path?: Path2D) {
+      if (this.canvas.id === "canvas") {
+        if (this.getLineDash().length) frame.paintOrder.push("leader");
+        else if (path && this.lineWidth === 2.5) frame.paintOrder.push("arrow");
+      }
       if (this.canvas.id === "canvas" && path) for (const segment of paths.get(path)?.segments ?? []) {
         frame.segments.push({ ...segment, colour: String(this.strokeStyle), width: this.lineWidth });
       }
       if (path === undefined) stroke.call(this); else stroke.call(this, path);
+    };
+    const paint = CanvasRenderingContext2D.prototype.fill;
+    CanvasRenderingContext2D.prototype.fill = function(path?: Path2D | CanvasFillRule, rule?: CanvasFillRule) {
+      if (this.canvas.id === "canvas" && path instanceof Path2D) {
+        const segments = paths.get(path)?.segments ?? [];
+        if (segments.length) frame.fills.push({ colour: String(this.fillStyle), segments: segments.slice() });
+      }
+      Reflect.apply(paint, this, path === undefined ? [] :
+        typeof path === "string" ? [path] : [path, rule ?? "nonzero"]);
     };
     const arc = CanvasRenderingContext2D.prototype.arc;
     CanvasRenderingContext2D.prototype.arc = function(x, y, r, a, b, anticlockwise) {
@@ -305,7 +476,9 @@ test("surface forces start at the contact and identify their source across force
   const canvas = page.locator("#canvas");
   type Frame = { width: number; height: number;
     segments: { x1: number; y1: number; x2: number; y2: number; colour: string; width: number }[];
-    circles: { x: number; y: number; r: number }[]; text: string[] };
+    circles: { x: number; y: number; r: number }[]; text: string[];
+    fills: { colour: string; segments: { x1: number; y1: number; x2: number; y2: number }[] }[];
+    paintOrder: string[] };
   const geometry = () => page.evaluate(() => (window as unknown as { forceGeometry: Frame }).forceGeometry);
   for (const [name, width, weightColour, reactionColour, frictionColour] of [
     ["Dark", 1440, "#ff74a5", "#50e1f5", "#e8b5ff"],
@@ -344,13 +517,24 @@ test("surface forces start at the contact and identify their source across force
     expect(r.y1 - w.y1).toBeCloseTo(circle.r, 6);
     expect(f.x1).toBeCloseTo(r.x1, 6); expect(f.y1).toBeCloseTo(r.y1, 6);
     expect(r.y2).toBeLessThan(r.y1); expect(f.x2).toBeLessThan(f.x1);
-    expect(frame.segments.some(s => s.width === 6)).toBe(true);
+    const head = frame.fills.find(fill => fill.colour === frictionColour)!.segments;
+    expect(head).toHaveLength(2);
+    const tip = { x: head[0].x1, y: head[0].y1 };
+    const base = { x: (head[0].x2 + head[1].x2) / 2, y: (head[0].y2 + head[1].y2) / 2 };
+    expect(f.x2).toBeLessThan(base.x); expect(f.x2).toBeGreaterThan(tip.x);
+    expect(base.y).toBeCloseTo(f.y2, 6);
+    expect(tip.x).toBeLessThan(base.x); expect(tip.y).toBeCloseTo(base.y, 6);
+    expect(Math.abs(head[0].y2 - tip.y)).toBeCloseTo(Math.abs(head[1].y2 - tip.y), 6);
+    // A wider, separately filled outer triangle supplies the sharp contour.
+    const outer = frame.fills.find(fill => fill.colour === (name === "Light" ? "#ffffff" : "#080808"))!;
+    expect(outer.segments.length).toBeGreaterThanOrEqual(8);
+    expect(frame.paintOrder.lastIndexOf("leader")).toBeLessThan(frame.paintOrder.indexOf("arrow"));
     const box = (await canvas.boundingBox())!;
     await page.mouse.move(box.x + (f.x1 + f.x2) / 2, box.y + f.y1);
-    await expect.poll(async () => (await geometry()).text).toContain("Friction from Rough floor");
+    await expect.poll(async () => (await geometry()).text.join(" ")).toContain("Friction from Rough floor on Sliding particle");
     await page.screenshot({ path: testInfo.outputPath(`contact-origin-hover-${name.toLowerCase()}.png`) });
     await page.mouse.move(5, 5);
-    await expect.poll(async () => (await geometry()).text).not.toContain("Friction from Rough floor");
+    await expect.poll(async () => (await geometry()).text.join(" ")).not.toContain("Friction from Rough floor on Sliding particle");
     await page.screenshot({ path: testInfo.outputPath(`contact-origin-${name.toLowerCase()}.png`) });
   }
   await expect(page.getByRole("textbox", { name: "Simulation time in seconds", exact: true })).toHaveValue("0.00");

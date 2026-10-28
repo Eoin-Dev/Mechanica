@@ -22,8 +22,8 @@ describe("visual slack cue geometry", () => {
     for (const extra of [0.00001, 0.001, 0.01, 0.1, 1, 5, 10, 100, 1e9, 1e300]) {
       const c = curve(10, 20, 110, 20, extra);
       expect(c[0]).toEqual([0, 10, 20]); expect(c.at(-1)!.slice(-2)).toEqual([110, 20]);
-      // Independent cubic midpoint evaluation from recorded controls.
-      const y = (20 + 3 * c[1][2] + 3 * c[1][4] + 20) / 8, depth = y - 20;
+      // Independent quadratic midpoint evaluation from recorded controls.
+      const y = (20 + 2 * c[1][2] + 20) / 4, depth = y - 20;
       expect(depth).toBeGreaterThanOrEqual(previous); expect(depth).toBeGreaterThan(0);
       expect(depth).toBeLessThanOrEqual(MAX_SLACK_EXTENT_PX / 2); previous = depth;
       expect(c.flat().every(Number.isFinite)).toBe(true);
@@ -33,10 +33,17 @@ describe("visual slack cue geometry", () => {
   it("keeps the outward cue clear of either side of a pulley", () => {
     for (const side of [-1, 1]) {
       const x = side * 22, c = curve(x, 100, x, 0, 30, 0, 0);
-      const midpointX = (x + 3 * c[1][1] + 3 * c[1][3] + x) / 8;
+      const midpointX = (x + 2 * c[1][1] + x) / 4;
       expect(midpointX * side).toBeGreaterThan(22);
       expect(c.at(-1)!.slice(-2)).toEqual([x, 0]);
     }
+  });
+
+  it("sags downward on a horizontal pulley leg", () => {
+    const c = curve(0, 0, 200, 0, 100, 200, 20);
+    expect(c).toHaveLength(2); expect(c[1][0]).toBe(2);
+    expect(c[1][2]).toBeGreaterThan(0); expect(c[1][1]).toBe(100);
+    expect(slackStringDistance(100, c[1][2] / 2, 0, 0, 200, 0, 100, 200, 20)).toBeLessThan(0.01);
   });
 
   it("shows coincident ends as a finite loop with exact closing endpoints", () => {

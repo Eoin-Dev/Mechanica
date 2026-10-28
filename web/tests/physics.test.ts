@@ -417,11 +417,12 @@ describe("soft bodies", () => {
     b.speedCap = Infinity;
   });
 
-  const whipJelly = (speed: number): { maxSpeed: number; parts: Body[]; w: World } => {
+  const whipJelly = (speed: number, configure?: (w: World) => void): { maxSpeed: number; parts: Body[]; w: World } => {
     // Drive one particle round a circle at `speed` m/s while its neighbours
     // simulate under the chase clamp the controller applies. Returns the
     // peak neighbour speed seen and the settled world.
     const w = preset("Jelly block");
+    configure?.(w);
     const parts = w.bodies.filter((b) => !b.locked);
     const grab = parts[Math.floor(parts.length / 2)];
     grab.held = true;
@@ -487,6 +488,20 @@ describe("soft bodies", () => {
     return n;
   }
 
+  function sustainsRecoveredShape(w: World): boolean {
+    // A fresh floor impact can compress a healthy mesh at the old exact
+    // six-second sample. Keep the 10% strain/zero-inversion contract, but
+    // require it continuously for half a second within the next four seconds.
+    let stableSamples = 0;
+    const needed = Math.round(0.5 / DT) + 1;
+    for (let step = 0; step <= Math.round(4 / DT); step++) {
+      stableSamples = worstStrain(w) < 0.10 && invertedCells(w) === 0 ? stableSamples + 1 : 0;
+      if (stableSamples >= needed) return true;
+      w.step(DT);
+    }
+    return false;
+  }
+
   // Swept, not sampled, and over the whole range the drag clamp allows.
   //
   // This assertion used to whip at exactly 9 m/s and require 25% strain,
@@ -502,11 +517,26 @@ describe("soft bodies", () => {
   // only stable one (see softGrid), so recovery is now a real property at
   // every speed rather than a coin toss below 7.
   it.each([1, 2, 4, 6, 8, 10, 12, 15, 20, 30])(
-    "a %d m/s jelly drag jiggles and springs back to shape", (speed) => {
+    "a %d m/s jelly drag sustains an unfolded recovered shape", (speed) => {
       const { w } = whipJelly(speed);
+      expect(sustainsRecoveredShape(w)).toBe(true);
       expect(worstStrain(w)).toBeLessThan(0.10);
       expect(invertedCells(w)).toBe(0);
     });
+
+  it("rejects the former bend-free mesh when it remains folded after a drag", () => {
+    const { w } = whipJelly(10, world => {
+      const parts = world.bodies.filter(body => body.softBody);
+      const index = new Map(parts.map((body, i) => [body, i]));
+      // Only second-neighbour links are removed; structural/shear links,
+      // no-rotation defaults, contact physics and all oracle limits remain.
+      world.links = world.links.filter(link => !(link instanceof SpringLink &&
+        [2, 18].includes(Math.abs(index.get(link.a)! - index.get(link.b)!))));
+    });
+    expect(w.bodies.every(body => body.noRotation)).toBe(true);
+    expect(sustainsRecoveredShape(w)).toBe(false);
+    expect(invertedCells(w)).toBeGreaterThan(0);
+  });
 
   it("starts from a lattice that is not already folded", () => {
     // the inversion count means nothing unless zero is the ground truth

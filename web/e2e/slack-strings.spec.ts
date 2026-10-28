@@ -54,35 +54,40 @@ async function ropeInk(page: Page) {
 }
 
 for (const theme of ["dark", "light"]) {
-  test(`slack grows visibly, stays selectable and disappears in Performance (${theme})`, async ({ page }, testInfo) => {
-    const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
-    await page.addInitScript(theme => localStorage.setItem("mechanica.settings",
-      JSON.stringify({ tour_done: true, theme, adaptive_dt: false, perf_mode: false })), theme);
-    await page.setViewportSize({ width: 1440, height: 900 }); await page.goto("/");
-    let previous = 0;
-    for (const extra of [0.005, 0.03, 0.2]) {
-      await load(page, extra);
-      await expect.poll(async () => (await ropeInk(page)).count).toBeGreaterThan(10);
-      const before = await state(page), ink = await ropeInk(page);
-      expect(ink.depth).toBeGreaterThan(previous + 1); previous = ink.depth;
-      expect(ink.depth).toBeLessThanOrEqual(110); // 108 px sag plus antialiasing
-      await page.screenshot({ path: testInfo.outputPath(`slack-${extra}-${theme}.png`) });
-      const after = await state(page); expect(after.scene).toEqual(before.scene);
-      expect(after.presentation.camera).toEqual(before.presentation.camera);
-    }
-    const ink = await ropeInk(page), canvas = page.locator("#canvas");
-    await canvas.click({ position: { x: ink.middleX, y: ink.baseY + ink.depth - 0.5 } });
-    await expect(page.locator("#inspector").getByRole("slider", { name: "Nat. len", exact: true })).toBeVisible();
-    await page.mouse.move(0, 0);
-    await page.locator("#btn-settings").click();
-    await page.getByRole("dialog", { name: "Settings", exact: true })
-      .getByRole("checkbox", { name: "Performance mode", exact: true }).check();
-    await page.keyboard.press("Escape");
-    // Deselect the string so the same gold ink can be measured in both modes.
-    await canvas.click({ position: { x: 30, y: 30 } }); await page.mouse.move(0, 0);
-    await expect.poll(async () => (await ropeInk(page)).depth).toBeLessThan(2);
-    await page.screenshot({ path: testInfo.outputPath(`slack-performance-${theme}.png`) });
-    expect((await state(page)).scene.settings.time).toBe(0);
-    expect(errors).toEqual([]);
+  test.describe(() => {
+    test.use({ viewport: { width: 1440, height: 900 } });
+
+    test(`slack grows visibly, stays selectable and disappears in Performance (${theme})`, async ({ page }, testInfo) => {
+      const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+      await page.addInitScript(theme => localStorage.setItem("mechanica.settings",
+        JSON.stringify({ tour_done: true, theme, adaptive_dt: false, perf_mode: false })), theme);
+      await page.goto("/");
+      let previous = 0;
+      for (const extra of [0.005, 0.03, 0.2]) {
+        await load(page, extra);
+        await expect.poll(async () => (await ropeInk(page)).count).toBeGreaterThan(10);
+        const before = await state(page), ink = await ropeInk(page);
+        expect(ink.depth).toBeGreaterThan(previous + 1); previous = ink.depth;
+        expect(ink.depth).toBeLessThanOrEqual(110); // 108 px sag plus antialiasing
+        await page.screenshot({ path: testInfo.outputPath(`slack-${extra}-${theme}.png`) });
+        const after = await state(page); expect(after.scene).toEqual(before.scene);
+        expect(after.presentation.camera).toEqual(before.presentation.camera);
+      }
+      const ink = await ropeInk(page), canvas = page.locator("#canvas");
+      await canvas.click({ position: { x: ink.middleX, y: ink.baseY + ink.depth - 0.5 } });
+      await expect(page.locator("#inspector").getByRole("slider", { name: "Nat. len", exact: true })).toBeVisible();
+      await page.mouse.move(0, 0);
+      await page.locator("#btn-settings").click();
+      const settings = page.getByRole("dialog", { name: "Settings", exact: true });
+      await settings.getByRole("tab", { name: "Simulation", exact: true }).click();
+      await settings.getByRole("checkbox", { name: "Performance mode", exact: true }).check();
+      await page.keyboard.press("Escape");
+      // Deselect the string so the same gold ink can be measured in both modes.
+      await canvas.click({ position: { x: 30, y: 30 } }); await page.mouse.move(0, 0);
+      await expect.poll(async () => (await ropeInk(page)).depth).toBeLessThan(2);
+      await page.screenshot({ path: testInfo.outputPath(`slack-performance-${theme}.png`) });
+      expect((await state(page)).scene.settings.time).toBe(0);
+      expect(errors).toEqual([]);
+    });
   });
 }

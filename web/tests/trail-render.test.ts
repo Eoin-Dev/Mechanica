@@ -7,14 +7,14 @@ import { Body, Wall } from "../src/engine/body";
 import { DistanceLink, PulleyLink, SpringLink } from "../src/engine/links";
 import { World } from "../src/engine/world";
 import { Camera } from "../src/render/camera";
-import { ViewSettings, drawGrid, drawWorld } from "../src/render/draw";
+import { ViewSettings, drawGrid, drawWorld, drawScaleBar, scaleBarBounds } from "../src/render/draw";
 import { snapshot } from "../src/scene/snapshot";
 import { Trail } from "../src/render/trail";
 import { analysisForceColour } from "../src/render/analysis-overlays";
 import { ACC_COLOR, FORCE_COLOR, VEL_COLOR, WARN, css } from "../src/ui/theme";
 import { setTheme, THEME_NAMES } from "../src/ui/theme";
 
-interface Op { op: string; style?: string; x?: number; y?: number;
+interface Op { op: string; style?: string; width?: number; x?: number; y?: number;
                cx?: number; cy?: number; text?: string; }
 
 /** Stand-in for the DOM Path2D, which Node does not provide.
@@ -46,11 +46,12 @@ class FakePath2D {
 function recCtx(): { ctx: CanvasRenderingContext2D; ops: Op[] } {
   const ops: Op[] = [];
   let strokeStyle = "";
+  let lineWidth = 1;
   const base: Record<string, unknown> = {
     beginPath() {},
     stroke(path?: FakePath2D) {
       if (path !== undefined) ops.push(...path.ops.map(op => ({ ...op, style: strokeStyle })));
-      ops.push({ op: "stroke", style: strokeStyle });
+      ops.push({ op: "stroke", style: strokeStyle, width: lineWidth });
     },
     fill(path?: FakePath2D) {
       if (path !== undefined) ops.push(...path.ops);
@@ -76,10 +77,15 @@ function recCtx(): { ctx: CanvasRenderingContext2D; ops: Op[] } {
   const ctx = new Proxy(base, {
     get(t, p) {
       if (p === "strokeStyle") return strokeStyle;
+      if (p === "lineWidth") return lineWidth;
       if (p in t) return t[p as string];
       return () => {}; // no-op any other canvas method
     },
-    set(_t, p, v) { if (p === "strokeStyle") strokeStyle = v as string; return true; },
+    set(_t, p, v) {
+      if (p === "strokeStyle") strokeStyle = v as string;
+      if (p === "lineWidth") lineWidth = v as number;
+      return true;
+    },
   }) as unknown as CanvasRenderingContext2D;
   return { ctx, ops };
 }
@@ -423,7 +429,29 @@ describe("link rendering", () => {
     expect(denseSegments).toBe(96 * 6 + 2); // plus one spin marker per body
   });
 
-  it("draws four pulley tension arrows only when enabled and exposes a column vector", () => {
+  it.each([false, true])("paints the wrapped rope at full width above the wheel (slack=%s)", slack => {
+    const a = new Body(new Vec2(-1, -1), 0.12, 1);
+    const b = new Body(new Vec2(1, -1), 0.12, 1);
+    const wheel = new Body(new Vec2(0, 0), 0.22, Infinity);
+    wheel.isPulley = true;
+    const link = new PulleyLink(a, b, wheel), world = worldWith(a, b, wheel);
+    if (slack) link.length += 0.25;
+    world.links.push(link);
+    const cam = new Camera(800, 600), settings = new ViewSettings();
+    settings.grid = false; settings.labels = false;
+    const { ctx, ops } = recCtx();
+    drawWorld(ctx, cam, world, settings, [], null, new Map(), 800, 600);
+    const lastDisc = ops.map(op => op.op).lastIndexOf("fill");
+    const wrap = ops.findIndex((op, i) => i > lastDisc && op.op === "arc" &&
+      op.cx === 400 && op.cy === 300 && op.x === wheel.radius * cam.zoom);
+    expect(wrap).toBeGreaterThan(lastDisc);
+    const rimStroke = ops.slice(wrap).find(op => op.op === "stroke")!;
+    expect(rimStroke.width).toBe(slack ? 1 : 2);
+    expect(ops.slice(0, lastDisc).some(op => op.op === "stroke" &&
+      op.style === rimStroke.style && op.width === rimStroke.width)).toBe(true);
+  });
+
+  it("draws four string tension arrows only when enabled and exposes a column vector", () => {
     const a = new Body(new Vec2(-1, -1), 0.12, 1);
     const b = new Body(new Vec2(1, -1), 0.12, 1);
     const wheel = new Body(new Vec2(0, 0), 0.22, Infinity);
@@ -459,6 +487,42 @@ describe("link rendering", () => {
     expect(ops.filter((op) => op.op === "fillText").map((op) => op.text))
       .toEqual([expect.stringContaining("F ="), expect.stringContaining("⎣")]);
   });
+
+  it.each([[false, false, 0], [true, false, 4], [false, true, 1], [true, true, 5]] as const)(
+    "separates string-leg and wheel-resultant arrows (legs=%s, wheel=%s)", (legs, resultant, count) => {
+      const a = new Body(new Vec2(-0.22, -2), 0.12, 2);
+      const b = new Body(new Vec2(0.22, -2), 0.12, 1);
+      const wheel = new Body(new Vec2(), 0.22);
+      const link = new PulleyLink(a, b, wheel), world = worldWith(a, b, wheel);
+      world.links.push(link); link.showTensionVectors = legs; link.showResultantTensionVector = resultant;
+      const cam = new Camera(800, 600), settings = new ViewSettings(); settings.grid = false;
+      const pointer = cam.toScreen(wheel.pos), capture = recCtx();
+      drawWorld(capture.ctx, cam, world, settings, [], null, new Map(), 800, 600,
+        1, false, false, pointer);
+      const shafts = capture.ops.filter(op => op.op === "lineTo" && op.style === css(WARN));
+      const starts = capture.ops.filter(op => op.op === "moveTo" && op.style === css(WARN));
+      expect(shafts).toHaveLength(count); expect(starts).toHaveLength(count);
+      const origins = starts.map(op => [op.x, op.y]);
+      if (legs) {
+        expect(origins).toContainEqual(cam.toScreen(a.pos)); expect(origins).toContainEqual(cam.toScreen(b.pos));
+        const geometry = link.geometry();
+        expect(origins).toContainEqual(cam.toScreen(geometry.ga)); expect(origins).toContainEqual(cam.toScreen(geometry.gb));
+        for (const [particle, rim] of [[0, 2], [1, 3]]) {
+          expect(shafts[particle].x! - starts[particle].x!).toBeCloseTo(-(shafts[rim].x! - starts[rim].x!), 10);
+          expect(shafts[particle].y! - starts[particle].y!).toBeCloseTo(-(shafts[rim].y! - starts[rim].y!), 10);
+        }
+      }
+      if (resultant) {
+        expect(origins).toContainEqual(pointer);
+        // Each leg has T=2*mA*mB*g/(mA+mB)=13.08 N. The pure string
+        // resultant on the vertical axle is (0,-2T), never an upward reaction.
+        const strings = capture.ops.filter(op => op.op === "fillText").map(op => op.text).join(" ");
+        expect(strings).toContain("-26.16");
+        const shaft = shafts.at(-1)!;
+        expect(shaft.x).toBe(pointer[0]); expect(shaft.y).toBeGreaterThan(pointer[1]);
+      }
+      expect(world.time).toBe(0); expect(world.stepCount).toBe(0);
+    });
 
   it("retains sub-four-pixel link-force arrows only in Normal mode", () => {
     const a = new Body(new Vec2(-1, 0), 0.12, 1);
@@ -815,7 +879,7 @@ describe("adaptive slack strings", () => {
       drawWorld(normal.ctx, cam, world, new ViewSettings(), [], null, new Map(), 800, 600);
       drawWorld(repeated.ctx, cam, world, new ViewSettings(), [], null, new Map(), 800, 600);
       expect(snapshot(world)).toBe(before); expect(repeated.ops).toEqual(normal.ops);
-      const curves = normal.ops.filter(op => op.op === "bezierCurveTo" && op.style === "rgb(140,125,100)");
+      const curves = normal.ops.filter(op => op.op === "quadraticCurveTo" && op.style === "rgb(140,125,100)");
       expect(curves).toHaveLength(kind === "pulley" ? 2 : 1);
       // With these fixed horizontal/angled endpoints, increased excess moves
       // the control further from the taut segment. No solver quantity changes.
@@ -827,7 +891,7 @@ describe("adaptive slack strings", () => {
   it.each(kinds)("leaves a taut %s straight", kind => {
     const { world } = scene(kind, 0), recorder = recCtx();
     drawWorld(recorder.ctx, new Camera(800, 600), world, new ViewSettings(), [], null, new Map(), 800, 600);
-    expect(recorder.ops.some(op => op.op === "quadraticCurveTo" || op.op === "bezierCurveTo")).toBe(false);
+    expect(recorder.ops.some(op => op.op === "quadraticCurveTo" || op.op === "quadraticCurveTo")).toBe(false);
   });
 
   it.each([false, true])("draws a released slack pulley as one string (performance=%s)", performance => {
@@ -841,7 +905,7 @@ describe("adaptive slack strings", () => {
     const recorder = recCtx(), before = snapshot(world);
     drawWorld(recorder.ctx, new Camera(800, 600), world, new ViewSettings(), [], null,
       new Map(), 800, 600, 1, performance);
-    expect(recorder.ops.filter(op => op.op === "bezierCurveTo")).toHaveLength(performance ? 0 : 1);
+    expect(recorder.ops.filter(op => op.op === "quadraticCurveTo")).toHaveLength(performance ? 0 : 1);
     expect(snapshot(world)).toBe(before);
   });
 
@@ -851,7 +915,7 @@ describe("adaptive slack strings", () => {
       const recorder = recCtx();
       drawWorld(recorder.ctx, new Camera(800, 600), world, new ViewSettings(), [], null,
         new Map(), 800, 600, 1, true, level === 3);
-      expect(recorder.ops.some(op => op.op === "quadraticCurveTo" || op.op === "bezierCurveTo")).toBe(false);
+      expect(recorder.ops.some(op => op.op === "quadraticCurveTo" || op.op === "quadraticCurveTo")).toBe(false);
       expect(recorder.ops.some(op => op.op === "lineTo" && op.style === "rgb(140,125,100)")).toBe(true);
     }
   });
@@ -861,8 +925,8 @@ describe("adaptive slack strings", () => {
     world.links.push(new DistanceLink(a, b, 2.2, true));
     const cam = new Camera(400, 300); cam.zoom = 100; const recorder = recCtx();
     drawWorld(recorder.ctx, cam, world, new ViewSettings(), [], null, new Map(), 400, 300);
-    const q = recorder.ops.find(op => op.op === "bezierCurveTo" && op.style === "rgb(140,125,100)")!;
-    expect(q).toBeDefined(); expect(-20 + 0.75 * (q.cy! + 20)).toBeGreaterThan(0);
+    const q = recorder.ops.find(op => op.op === "quadraticCurveTo" && op.style === "rgb(140,125,100)")!;
+    expect(q).toBeDefined(); expect(-20 + 0.5 * (q.cy! + 20)).toBeGreaterThan(0);
   });
 
   it.each([false, true])("retains the wrapped wheel arc at the viewport edge (simplify=%s)", simplify => {
@@ -873,5 +937,79 @@ describe("adaptive slack strings", () => {
     expect(link.geometry().wrapped).toBe(true);
     drawWorld(recorder.ctx, cam, world, new ViewSettings(), [], null, new Map(), 400, 300, 1, simplify);
     expect(recorder.ops.some(op => op.op === "arc" && op.style === "rgb(170,150,115)")).toBe(true);
+  });
+});
+
+
+describe("combined force-overlay layering", () => {
+  for (const kind of ["pulley", "rope", "spring"] as const) for (const diagrams of [false, true]) {
+    it(`paints ${kind} force ink above caption leaders (body diagrams=${diagrams})`, () => {
+      setTheme("dark");
+      const a = new Body(new Vec2(-1, -1), 0.12, 1);
+      const b = new Body(new Vec2(1, -1), 0.12, 2);
+      const wheel = new Body(new Vec2(0, 1), 0.22, Infinity);
+      const world = worldWith(a, b, wheel);
+      const link = kind === "pulley" ? new PulleyLink(a, b, wheel)
+        : kind === "rope" ? new DistanceLink(a, b, 2, true) : new SpringLink(a, b, 1, 10);
+      if (link instanceof SpringLink) link.axialForce = 10; else link.mu = 10;
+      link.showTensionVectors = true;
+      if (link instanceof PulleyLink) link.showResultantTensionVector = true;
+      world.links.push(link); a.showForceComponents = diagrams;
+      const before = snapshot(world), capture = recCtx(), order: string[] = [];
+      let dashed = false;
+      const ctx = new Proxy(capture.ctx, {
+        get(target, key) {
+          if (key === "setLineDash") return (pattern: number[]) => { dashed = pattern.length > 0; };
+          if (key === "stroke") return (path?: FakePath2D) => {
+            if (dashed) order.push("leader");
+            else if (path && target.strokeStyle === css(WARN)) order.push("link-force");
+            target.stroke(path as unknown as Path2D);
+          };
+          return Reflect.get(target, key);
+        },
+      });
+      const draw = () => drawWorld(ctx, new Camera(800, 600), world, view(), [], null, new Map(), 800, 600);
+      draw();
+      expect(order).toContain("link-force");
+      if (diagrams) {
+        expect(order).toContain("leader");
+        expect(order.lastIndexOf("leader")).toBeLessThan(order.indexOf("link-force"));
+      } else expect(order).not.toContain("leader");
+      expect(snapshot(world)).toBe(before);
+      // Frame-local paths must be flushed even when no captions are present.
+      link.showTensionVectors = false;
+      if (link instanceof PulleyLink) link.showResultantTensionVector = false;
+      order.length = 0; draw();
+      expect(order).not.toContain("link-force");
+    });
+  }
+});
+
+describe("scale-marker obstacles", () => {
+  it.each([4, 9.99, 100, 5000])("bounds both the scale ticks and metre/millimetre label at zoom %s", zoom => {
+    const cam = new Camera(400, 300); cam.zoom = zoom;
+    const { ctx, ops } = recCtx(), bounds = scaleBarBounds(ctx, cam, 400, 300);
+    drawScaleBar(ctx, cam, 400, 300);
+    for (const op of ops) {
+      if (op.op === "moveTo" || op.op === "lineTo") {
+        expect(op.x! - 1).toBeGreaterThanOrEqual(bounds.x);
+        expect(op.x! + 1).toBeLessThanOrEqual(bounds.x + bounds.width);
+        expect(op.y! - 1).toBeGreaterThanOrEqual(bounds.y);
+        expect(op.y! + 1).toBeLessThanOrEqual(bounds.y + bounds.height);
+      } else if (op.op === "fillText") {
+        const halfWidth = op.text!.length * 7 / 2;
+        expect(op.x! - halfWidth).toBeGreaterThanOrEqual(bounds.x);
+        expect(op.x! + halfWidth).toBeLessThanOrEqual(bounds.x + bounds.width);
+        expect(op.y! - 11).toBeGreaterThanOrEqual(bounds.y);
+      }
+    }
+    expect(ops.some(op => op.op === "fillText")).toBe(true);
+  });
+
+  it.each([0, 1, 2, 3])("does not measure force/HUD annotation text in Performance tier %s", tier => {
+    const body = new Body(new Vec2(0, 0)); body.showForceComponents = true;
+    const world = worldWith(body); world.performance = true; world.performanceLevel = tier;
+    const { ctx } = recCtx(); ctx.measureText = () => { throw new Error("Unexpected diagram/HUD measurement"); };
+    drawWorld(ctx, new Camera(400, 300), world, new ViewSettings(), [], null, new Map(), 400, 300, 1, true, tier === 3);
   });
 });

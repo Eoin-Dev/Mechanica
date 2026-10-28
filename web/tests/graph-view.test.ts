@@ -29,7 +29,7 @@ function view() {
 }
 
 describe("detached graph rendering and inspection", () => {
-  it("drags a zoomed viewport, clamps at its edges and releases the gesture", () => {
+  it.each([0, 2])("drags a zoomed viewport with button %s, clamps and releases", button => {
     const { chart, data, surface, key } = view();
     const rows = JSON.stringify(data.rows);
     const path = () => chart.root.querySelector('[data-channel="speed"]')!.getAttribute("d");
@@ -43,7 +43,7 @@ describe("detached graph rendering and inspection", () => {
     vi.stubGlobal("cancelAnimationFrame", vi.fn());
     const pointer = (type: string, x: number, y: number, id = 1) => {
       const event = new Event(type, { bubbles: true, cancelable: true });
-      Object.assign(event, { pointerId: id, button: 0, clientX: x, clientY: y });
+      Object.assign(event, { pointerId: id, button, clientX: x, clientY: y });
       surface.dispatchEvent(event); return event;
     };
     const capture = vi.fn(); surface.setPointerCapture = capture;
