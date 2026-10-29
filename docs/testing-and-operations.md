@@ -649,6 +649,16 @@ Both workflows also run `check:docs` before building. `playwright-core` is pinne
 to the same version as `@playwright/test` to satisfy axe's direct peer dependency
 without a second browser-library version during clean installation.
 
+Both workflows use `ubuntu-24.04` explicitly so an automatic `ubuntu-latest`
+upgrade cannot silently change the browser system dependencies or font metrics.
+Before marking a release ready, run the complete acceptance suite on Ubuntu
+24.04 with the repository's Node pin and a clean `npm ci`, then install the
+browser engines with `npx playwright install --with-deps chromium firefox webkit`.
+Use `CI=true npm run test:e2e` so retry-only passes remain failures. Windows
+results complement this Linux run; they do not replace it. Runner image patches,
+dependency updates and genuine application regressions can still cause failures:
+inspect their retained reports and repair the cause rather than relaxing checks.
+
 On validation failure, both workflows retain the unit JSON report, browser HTML
 report, screenshots and traces for 14 days. Artifacts include the job and run
 attempt in their name. Missing reports are ignored when an earlier step failed.

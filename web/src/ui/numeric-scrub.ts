@@ -120,6 +120,7 @@ export function numericScrub(control: NumericScrubControl, options: ScrubOptions
   const move = (event: PointerEvent): void => {
     if (gesture === null || event.pointerId !== gesture.id) return;
     if (unavailable()) { end(true); return; }
+    if (pointer?.consumeRecenter(event)) return;
     // A browser recenter can precede the lock-change event as well as follow
     // it. Empty recenter motion is not evidence that the user released.
     if (pointer?.acquiring && event.buttons === 0 && event.movementX === 0 && event.movementY === 0) return;

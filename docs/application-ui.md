@@ -1135,9 +1135,13 @@ Tunable quantities opt into `numericScrub` through their existing slider or
 field, and a horizontal movement of three CSS pixels starts relative adjustment.
 Mouse, trackpad and pen use pointer capture with document fallback. Continuous
 mouse scrubbing consumes relative pointer events once, including browsers that
-suppress compatibility mouse events after capture. A zero-motion lock recenter
-is ignored both while acquisition is pending and after the lock is granted;
-actual release or nonzero released-button motion ends the edit. Touch retains
+suppress compatibility mouse events after capture. Zero-motion lock recentres
+are ignored while acquisition is pending and after the lock is granted. Linux
+Chromium may also report nonzero internal recentres with released buttons and
+fixed client coordinates. Their deltas return the native pointer to its origin;
+they are excluded from adjustment and the virtual cursor, including repeated
+recentres between held moves. Actual release or other nonzero released-button
+motion ends the edit. Touch retains
 ordinary direct entry and scrolling. Live writes are coalesced to animation
 frames; release flushes the final value through the canonical setter and commits
 once. Shift scales subsequent motion by ten, Alt by one tenth. Clamping discards

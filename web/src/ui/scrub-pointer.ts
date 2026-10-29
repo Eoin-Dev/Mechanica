@@ -4,8 +4,16 @@ export class ScrubPointer {
   private ended = false;
   private locked = false;
   private cursor: HTMLElement | null = null;
+  private acquisitionMotion = true;
+  private recentering = false;
+  private nativeX: number;
+  private nativeY: number;
+  private readonly originX: number;
+  private readonly originY: number;
   constructor(private handle: HTMLElement, private x: number, private y: number,
-              private onExit: () => void) {}
+              private onExit: () => void) {
+    this.originX = this.nativeX = x; this.originY = this.nativeY = y;
+  }
 
   request(): void {
     if (this.ended || this.pending || this.locked || !this.handle.requestPointerLock || document.pointerLockElement) return;
@@ -22,8 +30,25 @@ export class ScrubPointer {
   get active(): boolean { return this.locked && document.pointerLockElement === this.handle; }
   get acquiring(): boolean { return this.pending; }
 
+  consumeRecenter(event: PointerEvent): boolean {
+    // Linux Chromium reports internal warps to (0, 0) with buttons=0 and
+    // the client coordinates still fixed at the lock origin. After the first
+    // acquisition warp it may repeat between held moves. Track native motion
+    // separately from the wrapped display cursor to recognise that signature.
+    if ((!this.acquisitionMotion && !this.recentering) || (!this.pending && !this.active) || !event.isTrusted || event.buttons !== 0 ||
+        (event.movementX === 0 && event.movementY === 0) ||
+        Math.abs(event.clientX - this.originX) > 0.5 || Math.abs(event.clientY - this.originY) > 0.5 ||
+        Math.abs(event.movementX + this.nativeX) > 0.5 || Math.abs(event.movementY + this.nativeY) > 0.5) return false;
+    this.acquisitionMotion = false;
+    this.recentering = true;
+    this.nativeX = this.nativeY = 0;
+    return true;
+  }
+
   move(dx: number, dy: number): void {
     if (!this.active || !this.cursor) return;
+    if (dx !== 0 || dy !== 0) this.acquisitionMotion = false;
+    this.nativeX += dx; this.nativeY += dy;
     const width = Math.max(1, window.innerWidth), height = Math.max(1, window.innerHeight);
     this.x = ((this.x + dx) % width + width) % width;
     this.y = ((this.y + dy) % height + height) % height;

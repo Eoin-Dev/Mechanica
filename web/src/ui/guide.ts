@@ -390,6 +390,11 @@ export class FormulaGuide {
         void card.offsetWidth;
         card.classList.add("guide-added");
       }, { style: "primary", class: "card-load" });
+      // Firefox may leave a partially visible button in place on focus.
+      // Reveal the complete action when tabbing through an enlarged recipe.
+      add.root.addEventListener("focus", () => {
+        add.root.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+      });
       card.append(fx, fy, el("p", { text: r.blurb }), add.root);
       grid.append(card);
     }

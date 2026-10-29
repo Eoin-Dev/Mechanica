@@ -14,7 +14,8 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Keep browser/font behaviour aligned with pull-request validation.
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: web
@@ -59,7 +60,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       pages: write
       id-token: write

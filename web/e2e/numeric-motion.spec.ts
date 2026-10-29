@@ -246,6 +246,24 @@ test("a lost mouse-up cannot keep numeric pointer lock or apply an extra value c
   const { label, mass } = await massControl(page, false, true);
   const initial = await mass();
   await page.evaluate(() => {
+    // A changed preview precedes the asynchronous lock grant. Observe its
+    // actual outcome before deciding whether this tests locked or fallback
+    // cleanup; otherwise a late grant can be misclassified as fallback.
+    const request = HTMLElement.prototype.requestPointerLock;
+    const supported = "requestPointerLock" in HTMLElement.prototype;
+    const state = { outcome: supported ? "pending" : "unsupported" };
+    Object.defineProperty(window, "__lostReleaseLock", { value: state, configurable: true });
+    document.addEventListener("pointerlockchange", () => {
+      if (document.pointerLockElement) state.outcome = "locked";
+    });
+    document.addEventListener("pointerlockerror", () => { state.outcome = "rejected"; });
+    if (supported) HTMLElement.prototype.requestPointerLock = function(this: HTMLElement, ...args: Parameters<HTMLElement["requestPointerLock"]>) {
+      try {
+        const result = request.apply(this, args) as Promise<void> | undefined;
+        if (result) void result.catch(() => { state.outcome = "rejected"; });
+        return result as Promise<void>;
+      } catch (error) { state.outcome = "rejected"; throw error; }
+    };
     // Deliberately lose release delivery to the app while preserving trusted
     // mouse input and the browser's own pointer/capture lifecycle.
     for (const type of ["pointerup", "mouseup"]) document.addEventListener(type,
@@ -254,6 +272,8 @@ test("a lost mouse-up cannot keep numeric pointer lock or apply an extra value c
   const box = (await label.boundingBox())!, x = box.x + box.width / 2, y = box.y + box.height / 2;
   await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + 16, y);
   await expect.poll(mass).toBeGreaterThan(initial);
+  await expect.poll(() => page.evaluate(() =>
+    (window as unknown as { __lostReleaseLock: { outcome: string } }).__lostReleaseLock.outcome)).not.toBe("pending");
   const preview = await mass(), locked = await page.evaluate(() => Boolean(document.pointerLockElement));
   await page.mouse.up();
   await page.mouse.move(x + 40, y + 4);

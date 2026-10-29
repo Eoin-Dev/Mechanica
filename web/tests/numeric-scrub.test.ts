@@ -46,7 +46,7 @@ function fixture(initial = 5, custom?: (value: number) => boolean) {
 }
 
 /** Drive the gesture handlers with native-like fields without bypassing trust in production. */
-function pendingAcquisition() {
+function pendingAcquisition(originX = 106, originY = 0) {
   const root = document.createElement("div"), label = document.createElement("span"), input = document.createElement("input");
   root.append(label, input); document.body.append(root);
   let value = 5, lock: Element | null = null;
@@ -68,20 +68,61 @@ function pendingAcquisition() {
     document.exitPointerLock = previousExit;
   } });
   const event = (extras: Record<string, unknown> = {}) => ({ button: 0, buttons: 1, pointerId: 1, pointerType: "mouse", isPrimary: true,
-    isTrusted: true, clientX: 100, movementX: 0, movementY: 0, timeStamp: 0,
+    isTrusted: true, clientX: originX - 6, clientY: originY, movementX: 0, movementY: 0, timeStamp: 0,
     shiftKey: false, altKey: false, preventDefault() {}, stopPropagation() {}, ...extras }) as unknown as PointerEvent;
   const down = labelListeners.mock.calls.find(([type]) => type === "pointerdown")![1] as EventListener;
   down(event());
   const moveHandler = documentListeners.mock.calls.find(([type]) => type === "pointermove")![1] as EventListener;
   const move = (extras: Record<string, unknown>) => { moveHandler(event(extras)); vi.advanceTimersByTime(1); };
-  move({ clientX: 106, movementX: 6, timeStamp: 16 });
+  move({ clientX: originX, movementX: 6, timeStamp: 16 });
   expect(label.requestPointerLock).toHaveBeenCalledOnce(); expect(value).toBe(5.6);
   return { commit, move, value: () => value, lock: () => lock,
     grant: () => { lock = label; document.dispatchEvent(new Event("pointerlockchange")); },
-    release: () => send(document, "pointerup", 106) };
+    release: () => send(document, "pointerup", originX) };
 }
 
 describe("quantity label scrubbing", () => {
+  it("retains held motion across repeated native recentres without counting their deltas", () => {
+    const f = pendingAcquisition(750, 325); f.grant();
+    f.move({ clientX: 750, movementX: -750, movementY: -325, buttons: 0 });
+    f.move({ clientX: 750, movementX: 20, movementY: 5 });
+    expect(f.value()).toBe(7.6);
+    f.move({ clientX: 750, movementX: -20, movementY: -5, buttons: 0 });
+    expect(f.value()).toBe(7.6); expect(f.commit).not.toHaveBeenCalled();
+    f.move({ clientX: 750, movementX: -5, movementY: 3 });
+    f.move({ clientX: 750, movementX: 5, movementY: -3, buttons: 0 });
+    expect(f.value()).toBe(7.1); expect(f.commit).not.toHaveBeenCalled();
+    // A real nonmatching released-button motion must still recover a lost up.
+    f.move({ clientX: 750, movementX: 1, buttons: 0 });
+    expect(f.value()).toBe(7.1); expect(f.commit).toHaveBeenCalledOnce(); expect(f.lock()).toBeNull();
+  });
+  it.each(["before", "after"])("ignores the Linux origin warp %s the native lock grant", timing => {
+    const f = pendingAcquisition(750, 325);
+    if (timing === "after") f.grant();
+    // Captured from Chromium on Ubuntu: the client remains at the handle,
+    // while an internal warp to (0, 0) reports a released button and delta.
+    f.move({ clientX: 750, clientY: 325, movementX: -750, movementY: -325, buttons: 0, timeStamp: 17 });
+    expect(f.value()).toBe(5.6); expect(f.commit).not.toHaveBeenCalled();
+    expect(document.documentElement.classList.contains("numeric-scrubbing")).toBe(true);
+    if (timing === "before") f.grant();
+    f.move({ clientX: 750, movementX: 2, timeStamp: 32 });
+    expect(f.value()).toBe(5.8);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(f.value()).toBe(5); expect(f.commit).not.toHaveBeenCalled(); expect(f.lock()).toBeNull();
+    expect(document.querySelector(".numeric-scrub-cursor")).toBeNull();
+  });
+  it.each(["untrusted warp", "ordinary release", "release at window origin", "release after held motion"])("still finishes on %s during native locking", reason => {
+    const f = pendingAcquisition(750, 325); f.grant();
+    if (reason === "release after held motion") f.move({ clientX: 750, movementX: 2, timeStamp: 20 });
+    f.move({ clientX: reason === "release at window origin" ? 0 : 750,
+      clientY: reason === "release at window origin" ? 0 : 325, buttons: 0,
+      movementX: reason === "ordinary release" ? 1 : -750,
+      movementY: reason === "ordinary release" ? 0 : -325,
+      isTrusted: reason !== "untrusted warp", timeStamp: 32 });
+    expect(f.commit).toHaveBeenCalledOnce(); expect(f.lock()).toBeNull();
+    expect(f.value()).toBe(reason === "release after held motion" ? 5.8 : 5.6);
+    expect(document.documentElement.classList.contains("numeric-scrubbing")).toBe(false);
+  });
   it("keeps the gesture live when a zero-delta recenter precedes the pending lock grant", () => {
     const f = pendingAcquisition();
     f.move({ clientX: 500, buttons: 0, movementX: 0, movementY: 0, timeStamp: 17 });

@@ -8,7 +8,8 @@ permissions:
 
 jobs:
   build-and-browser-test:
-    runs-on: ubuntu-latest
+    # Match the release reproduction environment; review OS upgrades explicitly.
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: web
