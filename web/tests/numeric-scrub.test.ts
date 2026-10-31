@@ -82,6 +82,18 @@ function pendingAcquisition(originX = 106, originY = 0) {
 }
 
 describe("quantity label scrubbing", () => {
+  it("retains a held drag when Chromium reports a zero-coordinate warp before lock grant", () => {
+    const f = pendingAcquisition(756, 325);
+    f.move({ clientX: 0, clientY: 0, movementX: -756, movementY: -325, buttons: 0 });
+    expect(f.value()).toBe(5.6); expect(f.commit).not.toHaveBeenCalled();
+    f.grant();
+    f.move({ clientX: 0, clientY: 0, movementX: 20, movementY: 5, buttons: 1 });
+    expect(f.value()).toBe(7.6);
+    expect(f.commit).not.toHaveBeenCalled();
+    // A button-free move without the inverse native delta is a real lost up.
+    f.move({ clientX: 0, clientY: 0, movementX: 1, movementY: 0, buttons: 0 });
+    expect(f.commit).toHaveBeenCalledOnce(); expect(f.lock()).toBeNull();
+  });
   it("retains held motion across repeated native recentres without counting their deltas", () => {
     const f = pendingAcquisition(750, 325); f.grant();
     f.move({ clientX: 750, movementX: -750, movementY: -325, buttons: 0 });

@@ -38,6 +38,76 @@ function rendered(panel: HTMLElement): string {
   return panel.textContent ?? "";
 }
 
+describe("force-field source editing lifecycle", () => {
+  function setup() {
+    const state = makeInspector(); state.app.newScene();
+    const field = new ForceField("Editable", "x%2", "y%2");
+    state.app.world.fields.push(field); state.app.undoStack.reset(state.app.world);
+    [...state.panel.querySelectorAll<HTMLButtonElement>(".tab-list button")].find(b => b.textContent === "World")!.click();
+    state.inspector.refresh();
+    const input = (axis: "Fx" | "Fy") => state.panel.querySelector<HTMLInputElement>(`input[aria-label="${axis} formula"]`)!;
+    const enter = (target: HTMLInputElement, source: string) => {
+      target.focus(); target.value = source;
+      target.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    };
+    return { ...state, field, input, enter };
+  }
+
+  it.each(["Fx", "Fy"] as const)("retains the %s editor and a following draft after a same-mode source edit", axis => {
+    const f = setup(), attr = axis === "Fx" ? "fxSrc" : "fySrc";
+    const original = f.input(axis), next = axis === "Fx" ? "x%3" : "y%3";
+    f.enter(original, next); expect(f.field[attr]).toBe(next);
+    const live = f.input(axis); live.focus(); live.value = "5%2";
+    f.inspector.refresh();
+    expect(f.input(axis)).toBe(live); expect(document.activeElement).toBe(live);
+    expect(live.value).toBe("5%2"); expect(f.field[attr]).toBe(next);
+    f.enter(live, "5%2"); expect(f.field[attr]).toBe("5%2");
+    f.app.undo(); expect(f.app.world.fields[0][attr]).toBe(next);
+    f.app.redo(); expect(f.app.world.fields[0][attr]).toBe("5%2");
+  });
+
+  it.each(["Fx", "Fy"] as const)("does not detach the new %s editor after an invalid-source rebuild", axis => {
+    const f = setup(), attr = axis === "Fx" ? "fxSrc" : "fySrc";
+    const old = f.input(axis); f.enter(old, "sqrt(");
+    expect(f.field[attr]).toBe("sqrt("); expect(f.field.error).not.toBe("");
+    const replacement = f.input(axis); expect(replacement).not.toBe(old);
+    replacement.focus(); replacement.value = "5%2";
+    f.inspector.refresh();
+    expect(f.input(axis)).toBe(replacement); expect(document.activeElement).toBe(replacement);
+    expect(replacement.value).toBe("5%2"); expect(f.field[attr]).toBe("sqrt(");
+    f.enter(replacement, "5%2"); expect(f.field[attr]).toBe("5%2"); expect(f.field.error).toBe("");
+  });
+
+  it.each(["Fx", "Fy"] as const)("still updates the %s editor when a valid source becomes typeset arithmetic", axis => {
+    const f = setup(), attr = axis === "Fx" ? "fxSrc" : "fySrc";
+    f.enter(f.input(axis), "3*m"); f.inspector.refresh();
+    expect(f.field[attr]).toBe("3*m"); expect(f.field.error).toBe("");
+    expect(f.panel.querySelectorAll(".math-edit")).toHaveLength(1);
+    expect(f.panel.querySelector('button[title="Edit as plain text."]')).not.toBeNull();
+  });
+
+  it.each(["Fx", "Fy"] as const)("keeps the saved %s error accessible after rebuild and Escape, and clears it after correction", axis => {
+    const f = setup(); f.enter(f.input(axis), "sqrt("); f.inspector.refresh();
+    const replacement = f.input(axis);
+    const description = replacement.getAttribute("aria-describedby");
+    expect(description).not.toBeNull();
+    const error = f.panel.querySelector(`#${description}`)!;
+    expect(error.getAttribute("role")).toBe("alert"); expect(error.textContent).toBe(f.field.error);
+    for (const component of ["Fx", "Fy"] as const) {
+      expect(f.input(component).getAttribute("aria-invalid")).toBe("true");
+      expect(f.input(component).getAttribute("aria-describedby")).toBe(description);
+    }
+    replacement.focus(); replacement.value = "draft";
+    replacement.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    f.inspector.refresh();
+    expect(replacement.value).toBe("sqrt("); expect(replacement.getAttribute("aria-invalid")).toBe("true");
+    f.enter(replacement, "5%2"); f.inspector.refresh();
+    expect(f.field.error).toBe(""); expect(f.panel.querySelector(`#${description}`)).toBeNull();
+    expect(f.input(axis).hasAttribute("aria-invalid")).toBe(false);
+    expect(f.input(axis).hasAttribute("aria-describedby")).toBe(false);
+  });
+});
+
 describe("editable object identity headers", () => {
   it.each(["particle", "anchor", "wheel", "wall", "rod", "rope", "spring", "elastic", "pulley"])(
     "renames a %s through its single upper editor and retains the name through history and scene reload", kind => {

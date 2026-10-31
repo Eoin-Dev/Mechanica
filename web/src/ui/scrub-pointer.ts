@@ -32,12 +32,15 @@ export class ScrubPointer {
 
   consumeRecenter(event: PointerEvent): boolean {
     // Linux Chromium reports internal warps to (0, 0) with buttons=0 and
-    // the client coordinates still fixed at the lock origin. After the first
-    // acquisition warp it may repeat between held moves. Track native motion
-    // separately from the wrapped display cursor to recognise that signature.
+    // the client coordinates fixed at the lock origin or moved to (0, 0).
+    // The latter can arrive before the lock grant. After acquisition the warp
+    // may repeat between held moves. Require the exact inverse native delta
+    // so ordinary released-button motion still ends the gesture.
+    const atOrigin = Math.abs(event.clientX - this.originX) <= 0.5 && Math.abs(event.clientY - this.originY) <= 0.5;
+    const atAcquisitionZero = this.pending && Math.abs(event.clientX) <= 0.5 && Math.abs(event.clientY) <= 0.5;
     if ((!this.acquisitionMotion && !this.recentering) || (!this.pending && !this.active) || !event.isTrusted || event.buttons !== 0 ||
         (event.movementX === 0 && event.movementY === 0) ||
-        Math.abs(event.clientX - this.originX) > 0.5 || Math.abs(event.clientY - this.originY) > 0.5 ||
+        (!atOrigin && !atAcquisitionZero) ||
         Math.abs(event.movementX + this.nativeX) > 0.5 || Math.abs(event.movementY + this.nativeY) > 0.5) return false;
     this.acquisitionMotion = false;
     this.recentering = true;

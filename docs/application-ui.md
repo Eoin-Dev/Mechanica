@@ -706,6 +706,13 @@ Formula edits retain invalid source and the resulting actionable error. The
 field's compiled axes are updated atomically by the engine, while the retained
 source change is committed as an ordinary undoable edit so the user can either
 repair or undo it.
+The replacement editor keeps keyboard focus through subsequent refreshes. A
+compiler error is announced as an alert and describes both formula controls,
+since either invalid component disables the whole field. Plain-text editing
+remains available when the optional typeset editor cannot download; a normal
+reload after connectivity returns preserves the scene and restores typesetting.
+The formula guide likewise keeps readable source after a failed typesetting
+stylesheet download, including when switching sections or adding recipes.
 
 The bottom of the World tab contains Playback events. The selector can keep
 recording without pausing or pause at the first collision, selected-particle

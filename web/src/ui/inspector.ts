@@ -2056,6 +2056,7 @@ export class Inspector implements Panel {
       nameEd.root.style.flex = "1";
       nameRow.append(chk.root, nameEd.root);
       this.body.append(nameRow);
+      const formulaRows: HTMLElement[] = [];
       for (const attr of ["fxSrc", "fySrc"] as const) {
         const row = el("div", { class: "num-row" });
         row.append(el("span", { class: "lbl", text: attr === "fxSrc" ? "Fx" : "Fy" }));
@@ -2068,7 +2069,11 @@ export class Inspector implements Panel {
           // place. It is still an edit and must be undoable just like a
           // valid formula; the compiled field remains atomically disabled.
           app.pushUndo();
-          this.markDirty();
+          // Error changes already rebuild synchronously through pushUndo.
+          // A second queued rebuild would discard a correction started in
+          // that replacement editor. Same-mode values refresh in place;
+          // only a still-mounted row changing math/text mode needs rebuilding.
+          if (row.isConnected && isMathRenderable(field[attr]) !== renderable) this.markDirty();
           return ok;
         };
         // Formulas in the "clean" arithmetic subset get the typeset math
@@ -2098,10 +2103,25 @@ export class Inspector implements Panel {
               "uses if/else, comparisons, logic, // or %.",
         }));
         row.append(edit.root, toggle.root);
+        formulaRows.push(row);
         this.body.append(row);
       }
       if (field.error) {
-        this.body.append(el("div", { class: "error-text", text: field.error }));
+        const error = el("div", { id: `force-field-error-${fieldIndex}`,
+          class: "error-text", role: "alert", text: field.error });
+        this.body.append(error);
+        // The two formulas compile atomically: an invalid component disables
+        // the whole field. Each visible editor retains that state even when
+        // its error message has scrolled outside the refreshed region.
+        for (const row of formulaRows) {
+          const describeError = (): void => {
+            const input = row.querySelector("input, math-field");
+            input?.setAttribute("aria-invalid", "true");
+            input?.setAttribute("aria-describedby", error.id);
+          };
+          describeError();
+          this.group.add({ root: row, refresh: describeError });
+        }
       }
       const remove = this.group.add(button("Remove field", () => {
         world.fields = world.fields.filter((f) => f !== field);

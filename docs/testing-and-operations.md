@@ -241,6 +241,19 @@ with the behavior it protects rather than an exact assertion count.
 
 ### Expressions and math editing
 
+The Inspector source-editing tests also retain following drafts through same-mode
+commits and invalid-source rebuilds, check Undo/Redo and math/text transitions,
+and preserve accessible compiler errors after Escape. The native
+[`formula-editing.spec.ts`](../web/e2e/formula-editing.spec.ts) cases exercise
+both components with normal downloads, a blocked MathLive script, and blocked
+font styles. Separate guide cases block its static stylesheet and retain source
+through section changes and recipe insertion. They verify real keyboard focus
+through panel refreshes, visible and associated errors, retained physics state,
+and reload recovery after the network returns in all three browser engines.
+Numeric regressions cover both Linux Chromium recenter variants: fixed client
+coordinates and a trusted warp to `(0, 0)` before lock acquisition.
+Both require the inverse native-motion delta; genuine release still commits.
+
 | Test file | Protected behavior |
 | --- | --- |
 | [`expr-semantics.test.ts`](../web/tests/expr-semantics.test.ts) | Python-like modulo/division/logic/comparisons, precedence/associativity, variables/constants/functions/arity, prototype sandbox, invalid/deep input behavior, closure purity, and compiler/typesetter table agreement. |

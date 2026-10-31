@@ -18,10 +18,11 @@ function loadMathlive(): Promise<Mathlive> {
       m.MathfieldElement.fontsDirectory = null;  // fonts come from the css
       m.MathfieldElement.soundsDirectory = null; // no keypress plonks
       return m;
-    }).catch((error) => {
-      loading = null;
-      throw error;
     });
+    // Keep a failed import cached for this document. Vite's CSS preload cache
+    // can treat a rejected stylesheet as already loaded on a later attempt,
+    // attaching an unstyled math field and interrupting a fallback text edit.
+    // Reloading after connectivity returns retries both assets together.
   }
   return loading;
 }

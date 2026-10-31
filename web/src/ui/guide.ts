@@ -28,10 +28,10 @@ function loadTypeset(): Promise<Typeset> {
     ]).then(([m]) => {
       m.MathfieldElement.fontsDirectory = null;
       return (latex: string) => m.convertLatexToMarkup(latex);
-    }).catch((error) => {
-      typesetLoading = null;
-      throw error;
     });
+    // A failed CSS preload is cached by Vite. Retrying on another guide
+    // section can then render markup without its stylesheet. Keep readable
+    // source for this document; a normal reload retries all required assets.
   }
   return typesetLoading;
 }
